@@ -33,6 +33,7 @@ members = [
   "crates/tabula-sapiens",
   "crates/tisch",
   "crates/htan",
+  "crates/kpmp",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

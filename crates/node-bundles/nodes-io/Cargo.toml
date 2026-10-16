@@ -27,6 +27,7 @@ hubmap = { path = "../../hubmap" }
 tabula-sapiens = { path = "../../tabula-sapiens" }
 tisch = { path = "../../tisch" }
 htan = { path = "../../htan" }
+kpmp = { path = "../../kpmp" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }

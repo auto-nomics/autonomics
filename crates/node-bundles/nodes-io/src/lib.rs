@@ -99,6 +99,13 @@ pub use hubmap::nodes::{
     HubmapGlobusSpec, HubmapSearchNode, HubmapSearchNodeFactory, HubmapSearchSpec,
 };
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
+pub use kpmp::nodes::{
+    KpmpDataTypesNode, KpmpDataTypesNodeFactory, KpmpDataTypesSpec, KpmpParticipantDatasetsNode,
+    KpmpParticipantDatasetsNodeFactory, KpmpParticipantDatasetsSpec, KpmpParticipantNode,
+    KpmpParticipantNodeFactory, KpmpParticipantRepositoryNode,
+    KpmpParticipantRepositoryNodeFactory, KpmpParticipantRepositorySpec, KpmpParticipantSpec,
+    KpmpRepositoryNode, KpmpRepositoryNodeFactory, KpmpRepositorySpec,
+};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use protocolio::nodes::materials::{ProtocolioMaterialsNode, ProtocolioMaterialsNodeFactory};
@@ -296,6 +303,11 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(HtanAtlasesNodeFactory));
         registry.register(Box::new(HtanDatasetsNodeFactory));
         registry.register(Box::new(HtanFilesNodeFactory));
+        registry.register(Box::new(KpmpDataTypesNodeFactory));
+        registry.register(Box::new(KpmpRepositoryNodeFactory));
+        registry.register(Box::new(KpmpParticipantNodeFactory));
+        registry.register(Box::new(KpmpParticipantDatasetsNodeFactory));
+        registry.register(Box::new(KpmpParticipantRepositoryNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -554,6 +566,29 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing HTAN query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_kpmp_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_kpmp_data_types",
+            "source_kpmp_repository",
+            "source_kpmp_participant",
+            "source_kpmp_participant_datasets",
+            "source_kpmp_participant_repository",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing KPMP query node: {kind}"
             );
         }
     }

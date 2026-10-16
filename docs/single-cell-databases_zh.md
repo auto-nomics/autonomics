@@ -2,7 +2,7 @@
 
 本文是单细胞外部数据源的统一接入路线图。目标是为每个数据库补齐四层能力：调研文档、Rust SDK、非下载查询 DAG 节点、可选的数据/文件下载节点。查询节点输出 DataFrame；矩阵、FASTQ、H5AD、AnnData 等大文件统一走 VFS/FileSet 下载路径，不与查询 API 混在同一节点。
 
-当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP、Tabula Sapiens、TISCH 与 HTAN 已完成查询接入，Enrichr 复用现有能力，其余 18 项按后续批次推进。第一批参考图谱主通道已全部完成，第二批疾病专题持续推进。
+当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP、Tabula Sapiens、TISCH、HTAN 与 KPMP 已完成查询接入，Enrichr 复用现有能力，其余 17 项按后续批次推进。第一批参考图谱主通道已全部完成，第二批疾病专题持续推进。
 
 ## 接入状态
 
@@ -36,7 +36,7 @@
 |---|---|---|---|---|---|
 | `tisch` | TISCH2 | 肿瘤微环境 scRNA-seq/scATAC-seq | 降级接入 | 当前部署无 JSON API：结构化解析官方 Dataset HTML（190 个数据集）与 Documentation 细胞类型表；旧 AJAX 端点已静态化 | `source_tisch_datasets/cell_types/assets` 已注册；dataset 归档与 marker 查询受官方部署限制，待官方接口恢复 |
 | `htan` | Human Tumor Atlas Network | 肿瘤单细胞与空间图谱 | 查询层已接入 | Portal 前端使用的公开只读 ClickHouse；默认 `htan_2026_932`，覆盖 14 个 Atlas、221,253 个文件行 | `source_htan_atlases/datasets/files` 已注册；Synapse `download_htan_file` 待实现 |
-| `kpmp` | Kidney Precision Medicine Project | 肾脏疾病与参考图谱 | 待接入 | sample、assay、single-cell reference、spatial 数据 | `source_kpmp_samples/datasets`，`download_kpmp_reference` |
+| `kpmp` | Kidney Precision Medicine Project | 肾脏疾病与参考图谱 | 查询层已接入 | Atlas GraphQL `atlas.kpmp.org/graphql`：数据类型/参与者计数、repository 汇总、participant 临床样本、Explorer/Spatial 数据集、participant 文件清单 | `source_kpmp_data_types/repository/participant/participant_datasets/participant_repository` 已注册；受控文件下载待实现 |
 | `hcl` | Human Cell Landscape | 人体多组织单细胞景观 | 待接入 | 版本化矩阵与细胞类型参考；注意项目数据可能托管于 Zenodo/科学技术数据库 | `source_hcl_versions/references`，`download_hcl_reference` |
 
 ## P1：器官与神经系统专题
