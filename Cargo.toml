@@ -28,6 +28,7 @@ members = [
   "crates/cellxgene",
   "crates/hca",
   "crates/scea",
+  "crates/scp",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

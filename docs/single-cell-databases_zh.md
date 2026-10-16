@@ -2,7 +2,7 @@
 
 本文是单细胞外部数据源的统一接入路线图。目标是为每个数据库补齐四层能力：调研文档、Rust SDK、非下载查询 DAG 节点、可选的数据/文件下载节点。查询节点输出 DataFrame；矩阵、FASTQ、H5AD、AnnData 等大文件统一走 VFS/FileSet 下载路径，不与查询 API 混在同一节点。
 
-当前总控清单共 28 项：GEO、CELLxGENE、HCA 与 SCEA 已完成查询接入，Enrichr 复用现有能力，其余 23 项按五个批次推进。
+当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA 与 SCP 已完成查询接入，Enrichr 复用现有能力，其余 22 项按五个批次推进。
 
 ## 接入状态
 
@@ -24,7 +24,7 @@
 | `cellxgene` | CZ CELLxGENE Discover / Census | 图谱、H5AD、细胞类型标注 | 查询层已接入 | Discover `collections/index`、`collections/{id}`、`datasets/index`、`datasets/{id}/assets`；Census Python/TileDB 查询待后续扩展 | `source_cellxgene_collections/collection/datasets/assets` 已注册；`download_cellxgene_h5ad` 待实现 |
 | `hca` | Human Cell Atlas Data Portal / Azul | 人类细胞图谱项目、样本与文件索引 | 查询层已接入 | Azul `/index/projects`、`/index/projects/{id}`、`/index/files`、`/index/samples`；catalog 可用 `HCA_CATALOG` 指定 | `source_hca_projects/project/files/samples` 已注册；`download_hca_matrix` 待实现 |
 | `scea` | EBI Single Cell Expression Atlas | 已处理表达矩阵与实验元数据 | 查询层已接入 | `/json/experiments` 索引、实验页内容 JSON、`marker-genes/clusters`；实验设计端点目前在前端代码中标注 TBC | `source_scea_experiments/experiment/markers` 已注册；`download_scea_matrix` 待实现 |
-| `scp` | Broad Single Cell Portal | 研究门户与矩阵/元数据 | 待接入 | 研究、文件、metadata 下载；部分能力可能只有 web/文件接口 | `source_scp_studies/files`，`download_scp_study` |
+| `scp` | Broad Single Cell Portal | 研究门户与矩阵/元数据 | 查询层已接入 | 公开 `site/studies`、`search`、`site/studies/{accession}`；受保护 `/studies` 系列后续按认证需求扩展 | `source_scp_studies/search/study/files` 已注册；`download_scp_study` 待实现 |
 | `hubmap` | HuBMAP | 人体图谱、空间与单细胞数据 | 待接入 | HuBMAP Search/Entity/Portal API；donor/sample/dataset 元数据 | `source_hubmap_search/dataset/files`，`download_hubmap_dataset` |
 | `tabula_sapiens` | Tabula Sapiens | 人体多器官参考图谱 | 待接入 | 版本化 H5AD/Seurat 对象；组织与细胞类型元数据 | `source_tabula_sapiens_versions/cell_types`，`download_tabula_sapiens_reference` |
 

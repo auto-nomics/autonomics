@@ -22,6 +22,7 @@ eutils = { path = "../../eutils" }
 cellxgene = { path = "../../cellxgene" }
 hca = { path = "../../hca" }
 scea = { path = "../../scea" }
+scp = { path = "../../scp" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }

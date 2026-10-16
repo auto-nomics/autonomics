@@ -115,6 +115,11 @@ pub use scea::nodes::{
     SceaExperimentsNodeFactory, SceaExperimentsSpec, SceaMarkersNode, SceaMarkersNodeFactory,
     SceaMarkersSpec,
 };
+pub use scp::nodes::{
+    ScpFilesNode, ScpFilesNodeFactory, ScpFilesSpec, ScpSearchNode, ScpSearchNodeFactory,
+    ScpSearchSpec, ScpStudiesNode, ScpStudiesNodeFactory, ScpStudiesSpec, ScpStudyNode,
+    ScpStudyNodeFactory, ScpStudySpec,
+};
 pub use script_nodes::builtin_script_images;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
@@ -255,6 +260,10 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(SceaExperimentsNodeFactory));
         registry.register(Box::new(SceaExperimentNodeFactory));
         registry.register(Box::new(SceaMarkersNodeFactory));
+        registry.register(Box::new(ScpStudiesNodeFactory));
+        registry.register(Box::new(ScpSearchNodeFactory));
+        registry.register(Box::new(ScpStudyNodeFactory));
+        registry.register(Box::new(ScpFilesNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -406,6 +415,28 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing SCEA query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_scp_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_scp_studies",
+            "source_scp_search",
+            "source_scp_study",
+            "source_scp_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Single Cell Portal query node: {kind}"
             );
         }
     }
