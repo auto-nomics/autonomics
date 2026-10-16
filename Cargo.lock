@@ -4245,8 +4245,12 @@ dependencies = [
 name = "eutils"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "async-trait",
  "bib-types",
+ "dag-core",
+ "datafusion",
  "reqwest",
  "schemars",
  "serde",
@@ -7852,6 +7856,7 @@ dependencies = [
  "encoding_rs",
  "enrichr-sdk",
  "errno",
+ "eutils",
  "flate2",
  "futures",
  "glob",

@@ -58,6 +58,14 @@ pub use enrichr_sdk::nodes::{
     EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
     EnrichrViewListNodeFactory,
 };
+pub use eutils::nodes::geo::{
+    GeoEGQueryNode, GeoEGQuerySpec, GeoEInfoNode, GeoEInfoSpec, GeoELinkNode, GeoELinkSpec,
+    GeoESearchNode, GeoESearchSpec, GeoESpellNode, GeoESpellSpec, GeoESummaryNode, GeoESummarySpec,
+};
+pub use eutils::nodes::geo::{
+    GeoEGQueryNodeFactory, GeoEInfoNodeFactory, GeoELinkNodeFactory, GeoESearchNodeFactory,
+    GeoESpellNodeFactory, GeoESummaryNodeFactory,
+};
 pub use gwascatalog_sdk::nodes::associations::{
     AssociationsNode, AssociationsNodeFactory, StudyAssociationsNode, StudyAssociationsNodeFactory,
 };
@@ -214,6 +222,12 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        registry.register(Box::new(GeoEInfoNodeFactory));
+        registry.register(Box::new(GeoESearchNodeFactory));
+        registry.register(Box::new(GeoESummaryNodeFactory));
+        registry.register(Box::new(GeoELinkNodeFactory));
+        registry.register(Box::new(GeoEGQueryNodeFactory));
+        registry.register(Box::new(GeoESpellNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -276,6 +290,30 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing protocol.io node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_geo_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_geo_einfo",
+            "source_geo_esearch",
+            "source_geo_esummary",
+            "source_geo_elink",
+            "source_geo_egquery",
+            "source_geo_espell",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing GEO query node: {kind}"
             );
         }
     }
