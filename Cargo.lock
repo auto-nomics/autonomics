@@ -7887,6 +7887,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nemo"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "reqwest",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8066,6 +8083,7 @@ dependencies = [
  "libc",
  "liblzma",
  "lzf-sys",
+ "nemo",
  "nhanes",
  "openalex",
  "opendal",

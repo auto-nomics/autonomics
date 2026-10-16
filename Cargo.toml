@@ -36,6 +36,7 @@ members = [
   "crates/tisch",
   "crates/htan",
   "crates/kpmp",
+  "crates/nemo",
   "crates/chembl",
   "crates/opentargets",
   "crates/runtime",

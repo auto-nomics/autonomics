@@ -2,7 +2,7 @@
 
 本文是单细胞外部数据源的统一接入路线图。目标是为每个数据库补齐四层能力：调研文档、Rust SDK、非下载查询 DAG 节点、可选的数据/文件下载节点。查询节点输出 DataFrame；矩阵、FASTQ、H5AD、AnnData 等大文件统一走 VFS/FileSet 下载路径，不与查询 API 混在同一节点。
 
-当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP、Tabula Sapiens、TISCH、HTAN、KPMP、HCL 与 Allen Brain 已完成查询接入，Enrichr 复用现有能力，其余 15 项按后续批次推进。第一批参考图谱主通道、第二批疾病专题与第三批 Allen Brain 已完成。
+当前总控清单共 28 项：GEO、CELLxGENE、HCA、SCEA、SCP、HuBMAP、Tabula Sapiens、TISCH、HTAN、KPMP、HCL、Allen Brain 与 NeMO 已完成查询接入，Enrichr 复用现有能力，其余 14 项按后续批次推进。第一批参考图谱主通道、第二批疾病专题与第三批 Allen Brain/NeMO 已完成。
 
 ## 接入状态
 
@@ -44,7 +44,7 @@
 | ID | 数据库 | 层次 | 状态 | 接入重点 | 预期节点 |
 |---|---|---|---|---|---|
 | `allen_brain` | Allen Brain Cell Types | 脑细胞类型与转录组/电生理 | 查询层已接入 | RMA API `Structure/Gene` 支持脑区分页与基因 symbol 查询；官方 taxonomy index 当前发布 14 个版本化 H5AD 参考，解析 species/assay/region/release date/URL | `source_allen_brain_areas/types/genes` 已注册；`download_allen_brain_matrix/reference` 待实现 |
-| `nemo` | NeMO Analytics | 神经系统单细胞与空间组学 | 待接入 | dataset、collection、expression matrix、分析入口 | `source_nemo_collections/datasets/matrices` |
+| `nemo` | NeMO Analytics | 神经系统单细胞与空间组学 | 查询层已接入 | 官方 Dataset Explorer 使用的公开接口：collection 清单、dataset 搜索分页、矩阵形状/H5AD/tarball 元数据；当前公开索引约 2168 个数据集 | `source_nemo_collections/datasets/matrices` 已注册；`download_nemo_matrix` 待实现 |
 | `heart_cell_atlas` | Heart Cell Atlas | 心脏细胞图谱 | 待接入 | 版本化 cell type、组织区域、参考矩阵 | `source_heart_cell_atlas_versions/cell_types` |
 | `lung_cell_atlas` | Lung Cell Atlas | 肺细胞图谱与整合参考 | 待接入 | atlas 版本、物种、疾病/健康队列、细胞类型 | `source_lung_cell_atlas_versions/references` |
 | `gut_cell_atlas` | Gut Cell Atlas | 肠道细胞图谱 | 待接入 | 组织、发育阶段、健康/疾病样本与矩阵 | `source_gut_cell_atlas_datasets/references` |

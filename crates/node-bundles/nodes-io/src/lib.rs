@@ -115,6 +115,11 @@ pub use kpmp::nodes::{
     KpmpParticipantRepositoryNodeFactory, KpmpParticipantRepositorySpec, KpmpParticipantSpec,
     KpmpRepositoryNode, KpmpRepositoryNodeFactory, KpmpRepositorySpec,
 };
+pub use nemo::nodes::{
+    NemoCollectionsNode, NemoCollectionsNodeFactory, NemoCollectionsSpec, NemoDatasetsNode,
+    NemoDatasetsNodeFactory, NemoDatasetsSpec, NemoMatricesNode, NemoMatricesNodeFactory,
+    NemoMatricesSpec,
+};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use protocolio::nodes::materials::{ProtocolioMaterialsNode, ProtocolioMaterialsNodeFactory};
@@ -287,6 +292,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(AllenBrainAreasNodeFactory));
         registry.register(Box::new(AllenBrainGenesNodeFactory));
         registry.register(Box::new(AllenBrainTypesNodeFactory));
+        registry.register(Box::new(NemoCollectionsNodeFactory));
+        registry.register(Box::new(NemoDatasetsNodeFactory));
+        registry.register(Box::new(NemoMatricesNodeFactory));
         registry.register(Box::new(CellxgeneCollectionsNodeFactory));
         registry.register(Box::new(CellxgeneCollectionNodeFactory));
         registry.register(Box::new(CellxgeneDatasetsNodeFactory));
@@ -560,6 +568,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing Allen Brain query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_nemo_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_nemo_collections",
+            "source_nemo_datasets",
+            "source_nemo_matrices",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing NeMO Analytics query node: {kind}"
             );
         }
     }

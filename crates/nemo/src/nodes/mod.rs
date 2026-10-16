@@ -1,0 +1,65 @@
+//! NeMO Analytics source nodes.
+
+mod query;
+
+pub use query::*;
+
+pub(crate) mod util {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, RecordBatch, StringArray, UInt8Array, UInt64Array};
+    use arrow_schema::{DataType, Field};
+    use dag_core::dag::{DagError, NodePorts, graph::PortOutputs};
+    use dag_core::registry::NodeCtx;
+
+    pub fn dataframe_port() -> NodePorts {
+        NodePorts::new().add_output_port(None)
+    }
+
+    pub fn utf8(name: &str) -> Field {
+        Field::new(name, DataType::Utf8, true)
+    }
+
+    pub fn u64(name: &str) -> Field {
+        Field::new(name, DataType::UInt64, true)
+    }
+
+    pub fn u8(name: &str) -> Field {
+        Field::new(name, DataType::UInt8, true)
+    }
+
+    pub fn str_array(rows: Vec<Option<String>>) -> Arc<dyn Array> {
+        let refs: Vec<Option<&str>> = rows.iter().map(|row| row.as_deref()).collect();
+        Arc::new(StringArray::from(refs))
+    }
+
+    pub fn u64_array(rows: Vec<Option<u64>>) -> Arc<dyn Array> {
+        Arc::new(UInt64Array::from(rows))
+    }
+
+    pub fn u8_array(rows: Vec<Option<u8>>) -> Arc<dyn Array> {
+        Arc::new(UInt8Array::from(rows))
+    }
+
+    pub fn schedule_error(kind: &str, error: impl std::fmt::Display) -> DagError {
+        DagError::Schedule(format!("{kind}: {error}"))
+    }
+
+    pub fn request_error(error: crate::NemoError, kind: &str) -> DagError {
+        DagError::Schedule(format!("{kind} request failed: {error}"))
+    }
+
+    pub fn dataframe_output(
+        ctx: &NodeCtx,
+        batch: RecordBatch,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let dataframe = ctx
+            .session()
+            .read_batch(batch)
+            .map_err(|error| schedule_error(kind, format!("failed to read batch: {error}")))?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, dataframe);
+        Ok(outputs)
+    }
+}

@@ -30,6 +30,7 @@ tabula-sapiens = { path = "../../tabula-sapiens" }
 tisch = { path = "../../tisch" }
 htan = { path = "../../htan" }
 kpmp = { path = "../../kpmp" }
+nemo = { path = "../../nemo" }
 nhanes = { path = "../../nhanes" }
 uniprot = { path = "../../uniprot" }
 reactome = { path = "../../reactome" }
