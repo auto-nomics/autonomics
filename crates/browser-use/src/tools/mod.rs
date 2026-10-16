@@ -16,6 +16,7 @@ use crate::error::Error;
 
 pub mod click;
 pub mod close_tab;
+pub mod download;
 pub mod evaluate;
 pub mod extract_html;
 pub mod extract_text;
@@ -57,6 +58,9 @@ pub fn registrations(session: Arc<BrowserSession>) -> Vec<ToolRegistration> {
         ToolRegistration::from(screenshot::ScreenshotTool::new(session.clone())),
         ToolRegistration::from(evaluate::EvaluateTool::new(session.clone())),
         ToolRegistration::from(wait_for_selector::WaitForSelectorTool::new(session.clone())),
+        ToolRegistration::from(download::DownloadTool::new(session.clone())),
+        ToolRegistration::from(download::WaitForDownloadTool::new(session.clone())),
+        ToolRegistration::from(download::ListDownloadsTool::new(session.clone())),
         ToolRegistration::from(get_url::GetUrlTool::new(session.clone())),
         ToolRegistration::from(get_title::GetTitleTool::new(session.clone())),
         ToolRegistration::from(scroll::ScrollTool::new(session.clone())),
@@ -94,5 +98,21 @@ mod tests {
             "tab_index description missing: {tab_desc}"
         );
         assert_eq!(props["tab_index"]["default"], serde_json::json!(0));
+
+        let download = super::download::DownloadInput::definition();
+        let download_props = &download.input_schema.properties;
+        assert!(
+            download_props["url"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("https://")
+        );
+        assert_eq!(
+            download_props["timeout_ms"]["default"],
+            serde_json::json!(120000)
+        );
+
+        let wait = super::download::WaitForDownloadInput::definition();
+        assert!(wait.input_schema.properties.contains_key("timeout_ms"));
     }
 }
