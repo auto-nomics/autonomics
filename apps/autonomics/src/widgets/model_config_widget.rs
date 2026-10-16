@@ -427,7 +427,8 @@ impl ModelConfigState {
                             } else {
                                 Some(key_val.clone())
                             };
-                            p.configured = p.api_key.is_some();
+                            p.configured =
+                                p.api_key.is_some() || p.provider_type == ProviderType::Ollama;
                             p.expanded = p.configured;
                             if !url_val.is_empty() {
                                 p.selected_base_url = url_val.clone();
@@ -1221,8 +1222,10 @@ pub fn build_catalog(
             let db_match = db_providers
                 .iter()
                 .find(|(pt, _, _)| pt.eq_ignore_ascii_case(type_str));
+            let requires_api_key = provider_type != ProviderType::Ollama;
             let (configured, api_key) = match db_match {
                 Some((_, key, _)) if !key.is_empty() => (true, Some(key.clone())),
+                Some((_, key, _)) if !requires_api_key && key.is_empty() => (true, None),
                 _ => (false, None),
             };
             // openai 行的 api_key 是 token blob：解析成功记录登录摘要

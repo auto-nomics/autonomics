@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agentik_sdk::model::{Model, ModelInfo, ProviderType};
+use agentik_sdk::provider::ollama::OllamaProvider;
 use agentik_sdk::provider::openai::OpenaiProvider;
 use agentik_sdk::provider::openai::oauth::{self, TokenBlob};
 use agentik_sdk::provider::openrouter::OpenrouterProvider;
@@ -775,6 +776,17 @@ impl ModelWorker {
         } else {
             None
         };
+        let ollama_key = if matches!(provider_type, ProviderType::Ollama) {
+            self.storage
+                .provider_auth(&provider)
+                .await
+                .ok()
+                .flatten()
+                .map(|auth| auth.api_key)
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = if matches!(provider_type, ProviderType::Openai) {
@@ -789,6 +801,8 @@ impl ModelWorker {
                     }
                     None => Err("openai model catalogue requires a ChatGPT login".to_string()),
                 }
+            } else if matches!(provider_type, ProviderType::Ollama) {
+                OllamaProvider::fetch_remote_catalog_with_auth(&base_url, &ollama_key).await
             } else {
                 OpenrouterProvider::fetch_remote_catalog(&base_url).await
             };

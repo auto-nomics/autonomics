@@ -14,6 +14,7 @@ pub mod deepseek;
 pub mod mimo;
 pub mod minimax;
 pub mod moonshot;
+pub mod ollama;
 pub mod openai;
 pub mod openrouter;
 pub mod registry;

@@ -567,7 +567,8 @@ pub fn resolve_model_spec(conn: &Connection, spec: &str) -> Option<Model> {
 /// row fallback (so custom providers whose models only exist in the DB
 /// also resolve), then build the provider config + client stack.
 ///
-/// Returns `None` for an empty API key or an unknown model.
+/// Returns `None` for an empty API key (except Ollama, which is local by
+/// default) or an unknown model.
 pub fn resolve_from_parts(
     provider_name: &str,
     model_name: &str,
@@ -576,7 +577,7 @@ pub fn resolve_from_parts(
 ) -> Option<Model> {
     use agentik_sdk::provider::registry;
 
-    if auth.api_key.is_empty() {
+    if auth.api_key.is_empty() && provider_name != "ollama" {
         return None;
     }
 
@@ -678,6 +679,27 @@ mod tests {
         )
         .unwrap();
         assert!(resolve_model_spec(&conn, "Custom:db-only-model").is_none());
+    }
+
+    #[test]
+    fn ollama_resolves_without_an_api_key() {
+        let conn = conn();
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES ('ollama', 'ollama', 'http://localhost:11434', '', 'None')",
+            (),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO models (model_name, provider_id, context_length, max_output_tokens)
+             VALUES ('llama3.2', (SELECT id FROM providers WHERE name = 'ollama'), 8192, 4096)",
+            (),
+        )
+        .unwrap();
+
+        let model = resolve_model_spec(&conn, "ollama:llama3.2")
+            .expect("local Ollama provider should resolve without credentials");
+        assert_eq!(model.provider_name(), "ollama");
     }
 
     /// 两个 provider 的 preset 含同名模型（zai / bailian 都有 glm-5.3）：
