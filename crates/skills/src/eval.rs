@@ -286,23 +286,26 @@ fn evaluate_check(check: &Check, report: Option<&Value>) -> (bool, String) {
         }
     }
     if let Some(files) = check.files {
+        // `output_files` was the flat, unkeyed spelling removed when
+        // `run_dag` switched to its minimal-index return. `port_assignments`
+        // is now the sole per-node file-output surface, so count its values.
         let got = report
-            .get("output_files")
-            .and_then(Value::as_array)
+            .get("port_assignments")
+            .and_then(Value::as_object)
             .map(|a| a.len() as i64);
         if got != Some(files) {
             return (
                 false,
-                format!("output_files count is {got:?}, expected {files}"),
+                format!("port_assignments count is {got:?}, expected {files}"),
             );
         }
     }
     if let Some(needle) = &check.file_path_contains {
         let hit = report
-            .get("output_files")
-            .and_then(Value::as_array)
+            .get("port_assignments")
+            .and_then(Value::as_object)
             .is_some_and(|files| {
-                files.iter().any(|f| {
+                files.values().any(|f| {
                     f.get("path")
                         .and_then(Value::as_str)
                         .is_some_and(|p| p.contains(needle.as_str()))
@@ -325,10 +328,11 @@ mod tests {
             "id": id,
             "status": status,
             "output_rows": rows,
-            "output_files": files
+            "port_assignments": files
                 .iter()
-                .map(|p| json!({ "path": p }))
-                .collect::<Vec<_>>(),
+                .enumerate()
+                .map(|(port, p)| (port.to_string(), json!({ "path": p })))
+                .collect::<serde_json::Map<_, _>>(),
         })
     }
 

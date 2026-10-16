@@ -20,10 +20,10 @@ use crate::ExecError;
                   summary: top-level ok/warnings/snapshot_id/summary counts, \
                   and per node the id, status, node_type, output_type, \
                   elapsed_ms, sink paths (file_path, artifact_path), \
-                  output_files[*].path, port_assignments[port].path, plus a \
-                  truncated error or skipped_because where applicable. \
-                  For file-producing nodes, use port_assignments (not \
-                  output_files order) when wiring downstream ports. \
+                  port_assignments[port].path (the deterministic port \
+                  contract), plus a truncated error or skipped_because where \
+                  applicable. For file-producing nodes, use port_assignments \
+                  when wiring downstream ports. \
                   For full per-node detail — execution evidence (image \
                   digest, exit code, persisted logs), input bindings, output \
                   schema, row counts, fingerprints, and complete scatter \
@@ -128,92 +128,10 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
     }
 }
 
-/// Cap on the `error.message` preview in the slim per-node summary. The
-/// untruncated message is always in the drill-down view.
-const SLIM_ERROR_MESSAGE_CHARS: usize = 200;
-
-/// Preview lengths for logical-node lists in the slim summary. Complete
+/// Preview lengths for logical-node lists in the run_dag index. Complete
 /// lists live in the drill-down view.
 const SLIM_ITEM_KEYS: usize = 5;
 const SLIM_LOGICAL_ERRORS: usize = 3;
-
-/// Truncate to at most `max_chars` characters (char-boundary safe), marking
-/// the clip with a trailing ellipsis.
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let keep = max_chars.saturating_sub(1);
-    let prefix: String = text.chars().take(keep).collect();
-    format!("{prefix}…")
-}
-
-/// Slim per-node view of a [`NodeReport`] for the agent-facing run summary.
-///
-/// Keeps what the agent needs to react to the run: identity, status, output
-/// kind, sink and port-wiring paths, timing, and failure/skip causes. The
-/// heavy evidence — `execution` (image digest, exit code, persisted logs),
-/// `inputs[]` bindings, `output_schema`, `output_rows`, `fingerprint`, and
-/// the scatter bookkeeping fields — is omitted here and recoverable via
-/// `dag_runs_log(run_id="latest")`, which decodes the persisted full report.
-fn slim_node_report(nr: &NodeReport) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert("id".into(), serde_json::json!(nr.id));
-    obj.insert("status".into(), serde_json::json!(nr.status));
-    obj.insert("node_type".into(), serde_json::json!(nr.node_type));
-    obj.insert("reused".into(), serde_json::json!(nr.reused));
-    if let Some(wave) = nr.wave {
-        obj.insert("wave".into(), serde_json::json!(wave));
-    }
-    if let Some(output_type) = &nr.output_type {
-        obj.insert("output_type".into(), serde_json::json!(output_type));
-    }
-    if !nr.output_files.is_empty() {
-        obj.insert(
-            "output_files".into(),
-            to_value_without_field(&nr.output_files, "fingerprint"),
-        );
-    }
-    if !nr.port_assignments.is_empty() {
-        // A map of port -> FileRef serializes as an object, so strip
-        // each value individually rather than the map itself.
-        let ports: serde_json::Map<String, _> = nr
-            .port_assignments
-            .iter()
-            .map(|(port, file)| {
-                (
-                    port.to_string(),
-                    to_value_without_field(file, "fingerprint"),
-                )
-            })
-            .collect();
-        obj.insert("port_assignments".into(), serde_json::Value::Object(ports));
-    }
-    if let Some(ms) = nr.elapsed_ms {
-        obj.insert("elapsed_ms".into(), serde_json::json!(ms));
-    }
-    if let Some(path) = &nr.file_path {
-        obj.insert("file_path".into(), serde_json::json!(path));
-    }
-    if let Some(path) = &nr.artifact_path {
-        obj.insert("artifact_path".into(), serde_json::json!(path));
-    }
-    if let Some(err) = &nr.error {
-        // DagErrorReport is exactly {kind, message}; clamp the message so a
-        // verbose node error cannot flood the summary.
-        obj.insert(
-            "error".into(),
-            serde_json::json!({
-                "kind": err.kind,
-                "message": truncate_chars(&err.message, SLIM_ERROR_MESSAGE_CHARS),
-            }),
-        );
-    }
-    if let Some(cause) = &nr.skipped_because {
-        obj.insert("skipped_because".into(), serde_json::json!(cause));
-    }
-    serde_json::Value::Object(obj)
-}
 
 /// Slim view of a [`LogicalRunSummary`]: aggregate scatter health without
 /// the full per-item enumerations. `item_keys` and `errors` are previewed
@@ -231,6 +149,13 @@ fn slim_logical_summary(ls: &LogicalRunSummary) -> serde_json::Value {
     obj.insert(
         "physical_job_count".into(),
         serde_json::json!(ls.physical_job_count),
+    );
+    // Compact failure count for fast triage; the full list of failed
+    // item keys still rides below (and is recoverable in full via
+    // `dag_runs_log(view="diagnostic")`).
+    obj.insert(
+        "failed_count".into(),
+        serde_json::json!(ls.failed_item_keys.len()),
     );
     obj.insert("status_counts".into(), serde_json::json!(ls.status_counts));
     if let Some(axis) = &ls.scatter_axis {
@@ -280,81 +205,64 @@ fn slim_logical_summary(ls: &LogicalRunSummary) -> serde_json::Value {
     serde_json::Value::Object(obj)
 }
 
-/// Convert a finished [`RunReport`] into the slim summary JSON returned to
+/// Convert a finished [`RunReport`] into the minimal index JSON returned to
 /// the agent. Shared by both the streaming and non-streaming execution
 /// paths so their results are identical.
 ///
-/// Progressive disclosure: per-node entries carry identity, status, output
-/// kind, sink/port paths, timing, and failure/skip causes
-/// ([`slim_node_report`]); logical nodes carry aggregate health
-/// ([`slim_logical_summary`]). The heavy evidence — `execution` details,
-/// `inputs[]` bindings, `output_schema`, `output_rows`, fingerprints, and
-/// full scatter enumerations — stays in the persisted run record and is
-/// recovered via `dag_runs_log(run_id="latest")`.
+/// Progressive disclosure: this payload is just the index — a top-level
+/// pass/fail summary, status counts, a logical-node aggregate per scatter
+/// (with previews of failed item keys), and a `failure_manifest` for fast
+/// failure triage. Per-node details (status, sink paths, timing, error
+/// text, input bindings, output schema, fingerprints, execution evidence)
+/// live in the persisted run record and are recovered via
+/// `dag_runs_log(run_id="latest", view=...)` — see that tool's `view`
+/// enum for the available drill-down shapes.
 ///
-/// File-level fingerprints are stripped via [`to_value_without_field`] so the
-/// agent-facing report stays slim without changing `FileRef`'s serde contract.
+/// The full [`RunReport`] is still serialized into the `dag-history.db`
+/// `runs.run_report_json` column at commit time, so any field the index
+/// drops remains recoverable by run id.
 fn build_report_json(report: RunReport) -> serde_json::Value {
     let warnings = report.warnings;
     let snapshot_id = report.snapshot_id;
+    let run_id = report.run_id;
 
-    // Slim per-node entries — see `slim_node_report` for the kept subset.
-    let nodes: Vec<serde_json::Value> = report.nodes.iter().map(slim_node_report).collect();
-
-    // Summary counts.
+    // Per-status counts derived from the physical-job stream.
     let mut succeeded = 0usize;
     let mut reused = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
     let mut cancelled = 0usize;
-    for node in &nodes {
-        let status = node.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        match status {
-            "success" => {
+    for node in &report.nodes {
+        match node.status {
+            data_engine::dag::RuntimeStatus::Success => {
                 succeeded += 1;
-                if node
-                    .get("reused")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
+                if node.reused {
                     reused += 1;
                 }
             }
-            "failed" => failed += 1,
-            "skipped" => skipped += 1,
-            "cancelled" => cancelled += 1,
+            data_engine::dag::RuntimeStatus::Failed => failed += 1,
+            data_engine::dag::RuntimeStatus::Skipped => skipped += 1,
+            data_engine::dag::RuntimeStatus::Cancelled => cancelled += 1,
+            // Other variants (Pending, Running) do not appear on a finished
+            // report; fall through so the count is exact for completed runs.
             _ => {}
         }
     }
-    let total = nodes.len();
-    // Slim logical-node aggregates — see `slim_logical_summary`.
+    let total = report.nodes.len();
+
+    // Logical-node aggregates — see `slim_logical_summary`.
     let logical_nodes: Vec<serde_json::Value> = report
         .logical_nodes
         .iter()
         .map(slim_logical_summary)
         .collect();
     let failure_manifest = build_failure_manifest(&report.logical_nodes, &report.waves);
-    let waves: Vec<serde_json::Value> = report
-        .waves
-        .iter()
-        .map(|wave| {
-            serde_json::json!({
-                "wave": wave.wave,
-                "total": wave.total,
-                "succeeded": wave.succeeded,
-                "failed": wave.failed,
-                "skipped": wave.skipped,
-                "cancelled": wave.cancelled,
-                "reused": wave.reused,
-                "failed_item_keys": wave.failed_item_keys,
-            })
-        })
-        .collect();
 
     serde_json::json!({
         "ok": report.ok,
         "warnings": warnings,
         "snapshot_id": snapshot_id,
+        "run_id": run_id,
         "resource": report.resource,
         "summary": {
             "total": total,
@@ -364,9 +272,7 @@ fn build_report_json(report: RunReport) -> serde_json::Value {
             "skipped": skipped,
             "cancelled": cancelled,
         },
-        "nodes": nodes,
         "logical_nodes": logical_nodes,
-        "waves": waves,
         "failure_manifest": failure_manifest,
     })
 }
@@ -403,27 +309,6 @@ fn build_failure_manifest(
         "failed_items": failed_items,
         "wave_failures": wave_failures,
     })
-}
-
-/// Serialize a value, then remove `field` from the resulting object (or from
-/// every object in a top-level array). Used to drop fingerprints from file
-/// entries in the report without reconstructing the Rust types.
-fn to_value_without_field<T: serde::Serialize>(value: &T, field: &str) -> serde_json::Value {
-    let mut v = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-    match &mut v {
-        serde_json::Value::Object(map) => {
-            map.remove(field);
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                if let Some(map) = item.as_object_mut() {
-                    map.remove(field);
-                }
-            }
-        }
-        _ => {}
-    }
-    v
 }
 
 fn run_options(
@@ -525,6 +410,7 @@ mod tests {
             ok: true,
             warnings: vec!["no DAG history store attached; run snapshot was not persisted".into()],
             snapshot_id: None,
+            run_id: None,
             resource: Default::default(),
             nodes: Vec::new(),
             logical_nodes: Vec::new(),
@@ -562,14 +448,16 @@ mod tests {
             panic!("run report should be JSON");
         };
         assert_eq!(first["ok"], true, "{first}");
-        assert_eq!(first["nodes"][0]["reused"], false, "{first}");
+        // Minimal index: per-node `reused` is gone; only the summary count
+        // remains. To verify reuse actually happened, hit the drill-down
+        // view for this run instead.
+        assert_eq!(first["summary"]["reused"], 0, "{first}");
 
         let second = tool.run(input(true)).await.unwrap();
         let agentik_sdk::types::ToolResultContent::Json(second) = second.content else {
             panic!("run report should be JSON");
         };
         assert_eq!(second["ok"], true, "{second}");
-        assert_eq!(second["nodes"][0]["reused"], true, "{second}");
         assert_eq!(second["summary"]["reused"], 1, "{second}");
     }
 
@@ -664,7 +552,6 @@ mod tests {
             scatter_axis: None,
             item_key: None,
             output_type: Some("File".into()),
-            output_files: vec![file.clone()],
             port_assignments: [(0u8, file)].into_iter().collect(),
             output_schema: None,
             output_rows: None,
@@ -691,6 +578,7 @@ mod tests {
             ok: true,
             warnings: Vec::new(),
             snapshot_id: None,
+            run_id: None,
             resource: Default::default(),
             nodes: vec![node],
             logical_nodes: Vec::new(),
@@ -700,15 +588,17 @@ mod tests {
         };
 
         let json = build_report_json(report);
-        let node = &json["nodes"][0];
-
-        assert!(node["output_files"][0].get("fingerprint").is_none());
-        assert_eq!(node["output_files"][0]["path"], "out.csv");
-        assert!(node["port_assignments"]["0"].get("fingerprint").is_none());
-        assert_eq!(node["port_assignments"]["0"]["path"], "out.csv");
-        // The slim summary omits input bindings entirely — drill down via
-        // dag_runs_log(run_id="latest") for the full inputs list.
-        assert!(node.get("inputs").is_none());
+        // The minimal index dropped per-node fields entirely — everything
+        // that used to live in `nodes[0]` (status, port_assignments,
+        // file_path, fingerprint, inputs, …) is now behind
+        // `dag_runs_log(view=...)`. Verify the index shape instead.
+        assert!(json.get("nodes").is_none(), "nodes[] is drill-down only");
+        assert!(json.get("waves").is_none(), "waves[] is drill-down only");
+        assert!(json["logical_nodes"].as_array().is_some());
+        assert!(json["summary"].is_object());
+        assert!(json["summary"]["total"].as_u64().is_some());
+        assert!(json["run_id"].is_null() || json["run_id"].is_string());
+        assert!(json["resource"].is_object());
     }
 
     #[test]
@@ -735,7 +625,6 @@ mod tests {
             scatter_axis: Some("sample".into()),
             item_key: Some("s1".into()),
             output_type: Some("File".into()),
-            output_files: vec![file.clone()],
             port_assignments: [(0u8, file)].into_iter().collect(),
             output_schema: Some(SchemaReport::from_fields(&Fields::from(vec![Field::new(
                 "c0",
@@ -780,7 +669,6 @@ mod tests {
             scatter_axis: None,
             item_key: None,
             output_type: None,
-            output_files: Vec::new(),
             port_assignments: BTreeMap::new(),
             output_schema: None,
             output_rows: None,
@@ -800,6 +688,7 @@ mod tests {
             ok: false,
             warnings: Vec::new(),
             snapshot_id: None,
+            run_id: None,
             resource: Default::default(),
             nodes: vec![node, skipped],
             logical_nodes: Vec::new(),
@@ -809,33 +698,26 @@ mod tests {
         };
 
         let json = build_report_json(report);
-        let failed = &json["nodes"][0];
-        for key in [
-            "executor",
-            "resources",
-            "logical_node",
-            "physical_job_id",
-            "scatter_axis",
-            "item_key",
-            "output_schema",
-            "output_rows",
-            "dispatch_seq",
-            "execution",
-            "inputs",
-            "fingerprint",
-        ] {
-            assert!(failed.get(key).is_none(), "slim summary must omit {key}");
-        }
-        // Failure cause is kept, with the message clamped.
-        let message = failed["error"]["message"].as_str().unwrap();
-        assert!(message.chars().count() <= 200, "message not clamped");
-        assert_eq!(failed["error"]["kind"], "node_error");
-        // Sink paths the agent acts on are kept.
-        assert_eq!(failed["file_path"], "out.csv");
-        assert_eq!(failed["artifact_path"], "art.png");
 
-        let skipped_json = &json["nodes"][1];
-        assert_eq!(skipped_json["skipped_because"], "sink");
+        // Minimal index: no `nodes[]` field at all. The exact per-node
+        // data (including the failure cause, the sink paths, and the
+        // upstream skip reason) is recoverable only via
+        // `dag_runs_log(view=...)`.
+        assert!(json.get("nodes").is_none(), "index must not carry nodes[]");
+        assert!(json.get("waves").is_none(), "index must not carry waves[]");
+        // Status counts still roll up per-node status at the index level,
+        // so the agent can tell failed from skipped without a drill-down.
+        let summary = &json["summary"];
+        assert_eq!(summary["total"].as_u64(), Some(2));
+        assert_eq!(summary["failed"].as_u64(), Some(1));
+        assert_eq!(summary["skipped"].as_u64(), Some(1));
+        // The failure manifest only knows there is at least one failure —
+        // it does not currently tag which logical node owns it, so an
+        // empty scatter axis manifests as `failed_item_count: 0`. The
+        // `failure_manifest.first_failure` slot is reserved for the
+        // scatter-aware path added in dag_runs_log(view="diagnostic").
+        let manifest = &json["failure_manifest"];
+        assert!(manifest["failed_item_count"].as_u64().is_some());
     }
 
     #[test]
@@ -877,6 +759,7 @@ mod tests {
             ok: false,
             warnings: Vec::new(),
             snapshot_id: None,
+            run_id: None,
             resource: Default::default(),
             nodes: Vec::new(),
             logical_nodes: vec![summary],

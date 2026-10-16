@@ -287,21 +287,6 @@ impl DAG {
                         })
                     })
                     .unwrap_or_default();
-                let output_files = self
-                    .outputs
-                    .get(id)
-                    .map(|outputs| {
-                        outputs
-                            .values()
-                            .flat_map(|value| match value {
-                                NodeValue::File(file) => vec![file.clone()],
-                                NodeValue::FileSet(files) => files.clone(),
-                                NodeValue::DataFrame(_) => Vec::new(),
-                                NodeValue::Channel(_) => Vec::new(),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
 
                 // Extract output schema from the first output port's DataFrame.
                 // `schema()` only inspects the LogicalPlan — it does NOT trigger
@@ -366,7 +351,6 @@ impl DAG {
                     scatter_axis: physical_job.and_then(|job| job.axis.clone()),
                     item_key: physical_job.and_then(|job| job.item_key.clone()),
                     output_type,
-                    output_files,
                     port_assignments,
                     output_schema,
                     output_rows,

@@ -1584,7 +1584,7 @@ impl DataEngine {
         }
         if let Some(warning) = self
             .persist_run_record(
-                run_id,
+                run_id.clone(),
                 started_at,
                 recorded_manifest_hash,
                 message,
@@ -1595,6 +1595,10 @@ impl DataEngine {
         {
             report.warnings.push(warning);
         }
+        // Backfill the run id so the agent's `run_dag` tool result can be
+        // used directly as `dag_runs_log(run_id=<that value>)` without
+        // re-listing runs to discover the id.
+        report.run_id = Some(run_id);
         Ok(report)
     }
 

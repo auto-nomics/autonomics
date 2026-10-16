@@ -395,12 +395,10 @@ pub struct NodeReport {
     pub item_key: Option<String>,
     /// Payload type of the first output value, when the node produced output.
     pub output_type: Option<String>,
-    /// File outputs carried by File and FileSet values.
-    pub output_files: Vec<crate::value::FileRef>,
     /// File outputs keyed by the declared output port that produced them.
     ///
-    /// Unlike `output_files`, this is the deterministic port contract and must
-    /// be used when wiring artifacts into downstream nodes.
+    /// This is the deterministic port contract and must be used when wiring
+    /// artifacts into downstream nodes.
     pub port_assignments: BTreeMap<u8, crate::value::FileRef>,
     /// Output column schema. Narrow schemas list every column; wide schemas
     /// are folded to a leading-column sample + type distribution (see
@@ -460,6 +458,13 @@ pub struct RunReport {
     /// Snapshot id committed after this run. `None` when history is absent,
     /// the snapshot commit failed, or an unchanged manifest was skipped.
     pub snapshot_id: Option<String>,
+    /// Engine-minted run id, populated by the data engine after the run
+    /// record is persisted. Lets the agent's `run_dag` return carry the
+    /// same id `dag_runs_log` queries against, so drill-down is one tool
+    /// call away without re-listing runs. `None` for runs that never
+    /// reached persistence (engine embedder without history, errored
+    /// before commit).
+    pub run_id: Option<String>,
     pub resource: ResourceRunReport,
     /// Rich per-node reports (serializable, agent-friendly).
     pub nodes: Vec<NodeReport>,
@@ -479,10 +484,13 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 9)?;
+        let mut st = serializer.serialize_struct("RunReport", 10)?;
         st.serialize_field("ok", &self.ok)?;
         st.serialize_field("warnings", &self.warnings)?;
         st.serialize_field("snapshot_id", &self.snapshot_id)?;
+        if let Some(run_id) = &self.run_id {
+            st.serialize_field("run_id", run_id)?;
+        }
         st.serialize_field("resource", &self.resource)?;
         st.serialize_field("nodes", &self.nodes)?;
         st.serialize_field("logical_nodes", &self.logical_nodes)?;
