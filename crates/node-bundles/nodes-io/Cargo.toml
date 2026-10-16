@@ -19,6 +19,7 @@ crossref = { path = "../../crossref" }
 bib-base = { path = "../../bib-base" }
 bib-types = { path = "../../bib-types" }
 eutils = { path = "../../eutils" }
+allen-brain = { path = "../../allen-brain" }
 cellxgene = { path = "../../cellxgene" }
 hca = { path = "../../hca" }
 hcl = { path = "../../hcl" }

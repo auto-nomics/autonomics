@@ -25,6 +25,7 @@ members = [
   "apps/autonomics",
   "crates/opengwas",
   "crates/eutils",
+  "crates/allen-brain",
   "crates/cellxgene",
   "crates/hca",
   "crates/hcl",

@@ -23,6 +23,11 @@ pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
+pub use allen_brain::nodes::{
+    AllenBrainAreasNode, AllenBrainAreasNodeFactory, AllenBrainAreasSpec, AllenBrainGenesNode,
+    AllenBrainGenesNodeFactory, AllenBrainGenesSpec, AllenBrainTypesNode,
+    AllenBrainTypesNodeFactory, AllenBrainTypesSpec,
+};
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use bib_base::nodes::bib_save::{
     BibSaveCollectionSpec, BibSaveNode, BibSaveNodeFactory, BibSaveSpec,
@@ -279,6 +284,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(GeoELinkNodeFactory));
         registry.register(Box::new(GeoEGQueryNodeFactory));
         registry.register(Box::new(GeoESpellNodeFactory));
+        registry.register(Box::new(AllenBrainAreasNodeFactory));
+        registry.register(Box::new(AllenBrainGenesNodeFactory));
+        registry.register(Box::new(AllenBrainTypesNodeFactory));
         registry.register(Box::new(CellxgeneCollectionsNodeFactory));
         registry.register(Box::new(CellxgeneCollectionNodeFactory));
         registry.register(Box::new(CellxgeneDatasetsNodeFactory));
@@ -531,6 +539,27 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing Tabula Sapiens query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_allen_brain_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_allen_brain_areas",
+            "source_allen_brain_genes",
+            "source_allen_brain_types",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Allen Brain query node: {kind}"
             );
         }
     }
