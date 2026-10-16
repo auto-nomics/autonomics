@@ -23,6 +23,11 @@ pub mod source_openalex;
 pub mod source_opentargets;
 pub mod source_semantic_scholar;
 pub mod spreadsheet;
+pub use allen_brain::nodes::{
+    AllenBrainAreasNode, AllenBrainAreasNodeFactory, AllenBrainAreasSpec, AllenBrainGenesNode,
+    AllenBrainGenesNodeFactory, AllenBrainGenesSpec, AllenBrainTypesNode,
+    AllenBrainTypesNodeFactory, AllenBrainTypesSpec,
+};
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
 pub use bib_base::nodes::bib_save::{
     BibSaveCollectionSpec, BibSaveNode, BibSaveNodeFactory, BibSaveSpec,
@@ -49,6 +54,12 @@ pub use bib_base::nodes::literature_search::{
 pub use bib_base::nodes::s2_recommendations::{
     S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
 };
+pub use cellxgene::nodes::{
+    CellxgeneAssetsNode, CellxgeneAssetsNodeFactory, CellxgeneAssetsSpec, CellxgeneCollectionNode,
+    CellxgeneCollectionNodeFactory, CellxgeneCollectionSpec, CellxgeneCollectionsNode,
+    CellxgeneCollectionsNodeFactory, CellxgeneCollectionsSpec, CellxgeneDatasetsNode,
+    CellxgeneDatasetsNodeFactory, CellxgeneDatasetsSpec,
+};
 pub use clinicaltrials::nodes::study::{ClinicalTrialsStudyNode, ClinicalTrialsStudyNodeFactory};
 pub use crossref::nodes::works::{CrossrefWorksNode, CrossrefWorksNodeFactory};
 pub use enrichr_sdk::nodes::Plugin as EnrichrPlugin;
@@ -57,6 +68,14 @@ pub use enrichr_sdk::nodes::{
     EnrichrEnrichmentNodeFactory, EnrichrGeneMapNode, EnrichrGeneMapNodeFactory,
     EnrichrLibrariesNode, EnrichrLibrariesNodeFactory, EnrichrViewListNode,
     EnrichrViewListNodeFactory,
+};
+pub use eutils::nodes::geo::{
+    GeoEGQueryNode, GeoEGQuerySpec, GeoEInfoNode, GeoEInfoSpec, GeoELinkNode, GeoELinkSpec,
+    GeoESearchNode, GeoESearchSpec, GeoESpellNode, GeoESpellSpec, GeoESummaryNode, GeoESummarySpec,
+};
+pub use eutils::nodes::geo::{
+    GeoEGQueryNodeFactory, GeoEInfoNodeFactory, GeoELinkNodeFactory, GeoESearchNodeFactory,
+    GeoESpellNodeFactory, GeoESummaryNodeFactory,
 };
 pub use gwascatalog_sdk::nodes::associations::{
     AssociationsNode, AssociationsNodeFactory, StudyAssociationsNode, StudyAssociationsNodeFactory,
@@ -70,7 +89,37 @@ pub use gwascatalog_sdk::nodes::summary_associations::{
     SummaryAssociationsNode, SummaryAssociationsNodeFactory,
 };
 pub use gwascatalog_sdk::nodes::unpublished::{UnpublishedNode, UnpublishedNodeFactory};
+pub use hca::nodes::{
+    HcaFilesNode, HcaFilesNodeFactory, HcaFilesSpec, HcaProjectNode, HcaProjectNodeFactory,
+    HcaProjectSpec, HcaProjectsNode, HcaProjectsNodeFactory, HcaProjectsSpec, HcaSamplesNode,
+    HcaSamplesNodeFactory, HcaSamplesSpec,
+};
+pub use hcl::nodes::{
+    HclFilesNode, HclFilesNodeFactory, HclFilesSpec, HclReleaseNode, HclReleaseNodeFactory,
+    HclReleaseSpec, HclVersionsNode, HclVersionsNodeFactory, HclVersionsSpec,
+};
+pub use htan::nodes::{
+    HtanAtlasesNode, HtanAtlasesNodeFactory, HtanAtlasesSpec, HtanDatasetsNode,
+    HtanDatasetsNodeFactory, HtanDatasetsSpec, HtanFilesNode, HtanFilesNodeFactory, HtanFilesSpec,
+};
+pub use hubmap::nodes::{
+    HubmapDatasetNode, HubmapDatasetNodeFactory, HubmapDatasetSpec, HubmapFilesNode,
+    HubmapFilesNodeFactory, HubmapFilesSpec, HubmapGlobusNode, HubmapGlobusNodeFactory,
+    HubmapGlobusSpec, HubmapSearchNode, HubmapSearchNodeFactory, HubmapSearchSpec,
+};
 pub use interpro::nodes::entry::{InterProEntryNode, InterProEntryNodeFactory};
+pub use kpmp::nodes::{
+    KpmpDataTypesNode, KpmpDataTypesNodeFactory, KpmpDataTypesSpec, KpmpParticipantDatasetsNode,
+    KpmpParticipantDatasetsNodeFactory, KpmpParticipantDatasetsSpec, KpmpParticipantNode,
+    KpmpParticipantNodeFactory, KpmpParticipantRepositoryNode,
+    KpmpParticipantRepositoryNodeFactory, KpmpParticipantRepositorySpec, KpmpParticipantSpec,
+    KpmpRepositoryNode, KpmpRepositoryNodeFactory, KpmpRepositorySpec,
+};
+pub use nemo::nodes::{
+    NemoCollectionsNode, NemoCollectionsNodeFactory, NemoCollectionsSpec, NemoDatasetsNode,
+    NemoDatasetsNodeFactory, NemoDatasetsSpec, NemoMatricesNode, NemoMatricesNodeFactory,
+    NemoMatricesSpec,
+};
 pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
 pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use protocolio::nodes::materials::{ProtocolioMaterialsNode, ProtocolioMaterialsNodeFactory};
@@ -91,12 +140,32 @@ pub use reactome::nodes::participants::{
     ReactomeParticipantsNode, ReactomeParticipantsNodeFactory,
 };
 pub use reactome::nodes::pathways::{ReactomePathwaysNode, ReactomePathwaysNodeFactory};
+pub use scea::nodes::{
+    SceaExperimentNode, SceaExperimentNodeFactory, SceaExperimentSpec, SceaExperimentsNode,
+    SceaExperimentsNodeFactory, SceaExperimentsSpec, SceaMarkersNode, SceaMarkersNodeFactory,
+    SceaMarkersSpec,
+};
+pub use scp::nodes::{
+    ScpFilesNode, ScpFilesNodeFactory, ScpFilesSpec, ScpSearchNode, ScpSearchNodeFactory,
+    ScpSearchSpec, ScpStudiesNode, ScpStudiesNodeFactory, ScpStudiesSpec, ScpStudyNode,
+    ScpStudyNodeFactory, ScpStudySpec,
+};
 pub use script_nodes::builtin_script_images;
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
 };
 pub use string_sdk::nodes::{StringPpiEnrichmentNode, StringPpiEnrichmentNodeFactory};
+pub use tabula_sapiens::nodes::{
+    TabulaSapiensFilesNode, TabulaSapiensFilesNodeFactory, TabulaSapiensFilesSpec,
+    TabulaSapiensReleaseNode, TabulaSapiensReleaseNodeFactory, TabulaSapiensReleaseSpec,
+    TabulaSapiensVersionsNode, TabulaSapiensVersionsNodeFactory, TabulaSapiensVersionsSpec,
+};
+pub use tisch::nodes::{
+    TischAssetsNode, TischAssetsNodeFactory, TischAssetsSpec, TischCellTypesNode,
+    TischCellTypesNodeFactory, TischCellTypesSpec, TischDatasetsNode, TischDatasetsNodeFactory,
+    TischDatasetsSpec,
+};
 pub use uniprot::nodes::idmap::{UniprotIdmapNode, UniprotIdmapNodeFactory};
 pub use uniprot::nodes::search::{UniprotSearchNode, UniprotSearchNodeFactory};
 pub use uniprot::nodes::stream::{UniprotStreamNode, UniprotStreamNodeFactory};
@@ -214,6 +283,54 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        registry.register(Box::new(GeoEInfoNodeFactory));
+        registry.register(Box::new(GeoESearchNodeFactory));
+        registry.register(Box::new(GeoESummaryNodeFactory));
+        registry.register(Box::new(GeoELinkNodeFactory));
+        registry.register(Box::new(GeoEGQueryNodeFactory));
+        registry.register(Box::new(GeoESpellNodeFactory));
+        registry.register(Box::new(AllenBrainAreasNodeFactory));
+        registry.register(Box::new(AllenBrainGenesNodeFactory));
+        registry.register(Box::new(AllenBrainTypesNodeFactory));
+        registry.register(Box::new(NemoCollectionsNodeFactory));
+        registry.register(Box::new(NemoDatasetsNodeFactory));
+        registry.register(Box::new(NemoMatricesNodeFactory));
+        registry.register(Box::new(CellxgeneCollectionsNodeFactory));
+        registry.register(Box::new(CellxgeneCollectionNodeFactory));
+        registry.register(Box::new(CellxgeneDatasetsNodeFactory));
+        registry.register(Box::new(CellxgeneAssetsNodeFactory));
+        registry.register(Box::new(HcaProjectsNodeFactory));
+        registry.register(Box::new(HcaProjectNodeFactory));
+        registry.register(Box::new(HcaFilesNodeFactory));
+        registry.register(Box::new(HcaSamplesNodeFactory));
+        registry.register(Box::new(HclVersionsNodeFactory));
+        registry.register(Box::new(HclReleaseNodeFactory));
+        registry.register(Box::new(HclFilesNodeFactory));
+        registry.register(Box::new(SceaExperimentsNodeFactory));
+        registry.register(Box::new(SceaExperimentNodeFactory));
+        registry.register(Box::new(SceaMarkersNodeFactory));
+        registry.register(Box::new(ScpStudiesNodeFactory));
+        registry.register(Box::new(ScpSearchNodeFactory));
+        registry.register(Box::new(ScpStudyNodeFactory));
+        registry.register(Box::new(ScpFilesNodeFactory));
+        registry.register(Box::new(HubmapSearchNodeFactory));
+        registry.register(Box::new(HubmapDatasetNodeFactory));
+        registry.register(Box::new(HubmapFilesNodeFactory));
+        registry.register(Box::new(HubmapGlobusNodeFactory));
+        registry.register(Box::new(TabulaSapiensVersionsNodeFactory));
+        registry.register(Box::new(TabulaSapiensReleaseNodeFactory));
+        registry.register(Box::new(TabulaSapiensFilesNodeFactory));
+        registry.register(Box::new(TischDatasetsNodeFactory));
+        registry.register(Box::new(TischCellTypesNodeFactory));
+        registry.register(Box::new(TischAssetsNodeFactory));
+        registry.register(Box::new(HtanAtlasesNodeFactory));
+        registry.register(Box::new(HtanDatasetsNodeFactory));
+        registry.register(Box::new(HtanFilesNodeFactory));
+        registry.register(Box::new(KpmpDataTypesNodeFactory));
+        registry.register(Box::new(KpmpRepositoryNodeFactory));
+        registry.register(Box::new(KpmpParticipantNodeFactory));
+        registry.register(Box::new(KpmpParticipantDatasetsNodeFactory));
+        registry.register(Box::new(KpmpParticipantRepositoryNodeFactory));
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
         registry.register(Box::new(BibSaveNodeFactory {}));
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
@@ -276,6 +393,288 @@ mod tests {
             assert!(
                 registry.list_nodes().iter().any(|node| node.kind == kind),
                 "missing protocol.io node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_geo_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_geo_einfo",
+            "source_geo_esearch",
+            "source_geo_esummary",
+            "source_geo_elink",
+            "source_geo_egquery",
+            "source_geo_espell",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing GEO query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_cellxgene_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_cellxgene_collections",
+            "source_cellxgene_collection",
+            "source_cellxgene_datasets",
+            "source_cellxgene_assets",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing CELLxGENE query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hca_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hca_projects",
+            "source_hca_project",
+            "source_hca_files",
+            "source_hca_samples",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HCA query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_scea_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_scea_experiments",
+            "source_scea_experiment",
+            "source_scea_markers",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing SCEA query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_scp_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_scp_studies",
+            "source_scp_search",
+            "source_scp_study",
+            "source_scp_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Single Cell Portal query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hubmap_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hubmap_search",
+            "source_hubmap_dataset",
+            "source_hubmap_files",
+            "source_hubmap_globus",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HuBMAP query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_tabula_sapiens_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_tabula_sapiens_versions",
+            "source_tabula_sapiens_release",
+            "source_tabula_sapiens_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Tabula Sapiens query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_allen_brain_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_allen_brain_areas",
+            "source_allen_brain_genes",
+            "source_allen_brain_types",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing Allen Brain query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_nemo_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_nemo_collections",
+            "source_nemo_datasets",
+            "source_nemo_matrices",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing NeMO Analytics query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_tisch_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_tisch_datasets",
+            "source_tisch_cell_types",
+            "source_tisch_assets",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing TISCH query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_htan_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_htan_atlases",
+            "source_htan_datasets",
+            "source_htan_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HTAN query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_hcl_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_hcl_versions",
+            "source_hcl_release",
+            "source_hcl_files",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing HCL query node: {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_registers_kpmp_query_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_kpmp_data_types",
+            "source_kpmp_repository",
+            "source_kpmp_participant",
+            "source_kpmp_participant_datasets",
+            "source_kpmp_participant_repository",
+        ];
+        for kind in expected {
+            assert!(
+                registry.list_nodes().iter().any(|node| node.kind == kind),
+                "missing KPMP query node: {kind}"
             );
         }
     }

@@ -16,6 +16,12 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 
 schemars.workspace = true
+# DAG node dependencies
+dag-core = { path = "../dag-core" }
+arrow-array.workspace = true
+arrow-schema.workspace = true
+datafusion.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

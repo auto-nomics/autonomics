@@ -1,0 +1,61 @@
+//! KPMP Kidney Tissue Atlas source nodes.
+
+mod atlas;
+
+pub use atlas::*;
+
+pub(crate) mod util {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, BooleanArray, Int64Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType, Field};
+    use dag_core::dag::{DagError, NodePorts, graph::PortOutputs};
+    use dag_core::registry::NodeCtx;
+
+    pub fn dataframe_port() -> NodePorts {
+        NodePorts::new().add_output_port(None)
+    }
+
+    pub fn utf8(name: &str) -> Field {
+        Field::new(name, DataType::Utf8, true)
+    }
+
+    pub fn i64(name: &str) -> Field {
+        Field::new(name, DataType::Int64, true)
+    }
+
+    pub fn str_array(rows: Vec<Option<String>>) -> Arc<dyn Array> {
+        let refs: Vec<Option<&str>> = rows.iter().map(|row| row.as_deref()).collect();
+        Arc::new(StringArray::from(refs))
+    }
+
+    pub fn i64_array(rows: Vec<i64>) -> Arc<dyn Array> {
+        Arc::new(Int64Array::from(rows))
+    }
+
+    pub fn bool_array(rows: Vec<bool>) -> Arc<dyn Array> {
+        Arc::new(BooleanArray::from(rows))
+    }
+
+    pub fn schedule_error(kind: &str, error: impl std::fmt::Display) -> DagError {
+        DagError::Schedule(format!("{kind}: {error}"))
+    }
+
+    pub fn request_error(error: crate::KpmpError, kind: &str) -> DagError {
+        DagError::Schedule(format!("{kind} request failed: {error}"))
+    }
+
+    pub fn dataframe_output(
+        ctx: &NodeCtx,
+        batch: RecordBatch,
+        kind: &str,
+    ) -> Result<PortOutputs, DagError> {
+        let dataframe = ctx
+            .session()
+            .read_batch(batch)
+            .map_err(|error| schedule_error(kind, format!("failed to read batch: {error}")))?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, dataframe);
+        Ok(outputs)
+    }
+}
