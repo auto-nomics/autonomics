@@ -1,0 +1,23 @@
+[package]
+name = "browser-use"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+chromiumoxide.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+serde = { workspace = true }
+tokio = { workspace = true, features = ["time", "sync"] }
+async-trait.workspace = true
+schemars.workspace = true
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+base64 = "0.22"
+
+[lints]
+workspace = true
