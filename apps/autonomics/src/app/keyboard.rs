@@ -16,6 +16,10 @@ impl App {
                     self.state.model_config_state.insert_paste(s);
                     return 0;
                 }
+                if self.state.embedding_config_visible {
+                    self.state.embedding_config_state.insert_paste(s);
+                    return 0;
+                }
 
                 if self.state.name_input.visible {
                     self.state.name_input.paste(s);
@@ -74,6 +78,7 @@ impl App {
             || state.message_picker.is_visible()
             || state.dag_view_visible
             || state.model_config_visible
+            || state.embedding_config_visible
             || state.agent_config.visible
         {
             return 0;
@@ -233,6 +238,11 @@ impl App {
         // Skill-evolution dashboard captures keys when visible.
         if self.state.skill_evolution.visible {
             self.handle_skill_evolution_key(key);
+            return;
+        }
+
+        if self.state.embedding_config_visible {
+            self.handle_embedding_config_key(key);
             return;
         }
 

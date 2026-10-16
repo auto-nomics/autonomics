@@ -509,6 +509,24 @@ impl GatewayClient {
         .await
     }
 
+    pub async fn embedding_config(&self) -> Result<EmbeddingConfigView> {
+        self.get("/embedding-config").await
+    }
+
+    pub async fn save_embedding_config(
+        &self,
+        config: &EmbeddingConfigView,
+    ) -> Result<EmbeddingConfigView> {
+        self.send(
+            reqwest::Method::PUT,
+            "/embedding-config",
+            Some(&SaveEmbeddingConfigRequest {
+                config: config.clone(),
+            }),
+        )
+        .await
+    }
+
     // ── settings ──
 
     pub async fn settings(&self) -> Result<std::collections::HashMap<String, String>> {

@@ -19,10 +19,9 @@
 //! - [`provider`] — the [`TextEmbedder`] contract every embedder
 //!   implements, plus the providers under it as modules:
 //!   [`Bm25TextEmbedder`] (the offline deterministic default) and
-//!   [`OnnxTextEmbedder`] (the local ONNX model). A new provider
+//!   [`OllamaEmbedder`] (the remote Ollama API). A new provider
 //!   (remote API) is a new module under it implementing the contract
-//! - [`service`] — install the default ONNX model from the Hub and
-//!   serve it as a [`LocalEmbeddingService`]
+//! - [`service`] — construct the remote Ollama provider
 //! - [`vector_map`] — precomputed-vector wrapper for substitution
 //! - [`vector`] — dimension-checked vector math used by clustering
 //! - [`input`] / [`output`] / [`error`] — the input record, the
@@ -39,10 +38,10 @@ pub mod vector_map;
 pub use error::{Error, Result};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
-pub use provider::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OnnxTextEmbedder, TextEmbedder};
-pub use service::local_embedding_service::{
-    DEFAULT_MODEL_FILES, InstallAction, LocalEmbeddingService, MODEL_COMPLETE_MARKER,
-    ModelCompleteMarker, ModelVerification, default_model_dir, ensure_installed, verify_install,
+pub use provider::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OllamaEmbedder, TextEmbedder};
+pub use service::remote_embedding_service::{
+    DEFAULT_BASE_URL, DEFAULT_BATCH_SIZE, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS, EmbeddingConfig,
+    RemoteEmbeddingService,
 };
 pub use vector::{cosine, mean_vector};
 pub use vector_map::VectorMapTextEmbedder;

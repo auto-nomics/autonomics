@@ -928,6 +928,7 @@ pub struct AppState {
     /// non-empty, the active session's `tab_state` is used instead.
     pub agent_tab_state: AgentTabState,
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
+    pub embedding_config_state: crate::widgets::embedding_config_widget::EmbeddingConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
     pub agent_profile_picker: crate::widgets::agent_profile_picker::AgentProfilePickerState,
@@ -957,6 +958,7 @@ pub struct AppState {
     pub pending_profile: Option<agentik_core::AgentKind>,
     /// Model config popup visibility.
     pub model_config_visible: bool,
+    pub embedding_config_visible: bool,
     /// Per-agent runtime config popup state.
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,
     /// Interactive DAG view visibility.

@@ -110,7 +110,10 @@ impl ObservationHub {
             let mut slot = self.embedder.write().expect("embedder lock poisoned");
             *slot = embedder;
         }
-        let signature = self.embedding_signature();
+        let signature = {
+            let slot = self.embedder.read().expect("embedder lock poisoned");
+            slot.signature()
+        };
         let observations = self.storage.list().await;
         let mut to_embed = Vec::new();
         for observation in observations {
@@ -138,11 +141,10 @@ impl ObservationHub {
                 text: observation_text(observation),
             })
             .collect::<Vec<_>>();
-        let outputs = self
-            .embedder
-            .read()
-            .expect("embedder lock poisoned")
+        let embedder = Arc::clone(&*self.embedder.read().expect("embedder lock poisoned"));
+        let outputs = embedder
             .batch_embed(&inputs)
+            .await
             .map_err(|e| crate::Error::Embedding(e.to_string()))?;
         for (id, output) in outputs {
             self.storage
@@ -202,6 +204,7 @@ impl ObservationHub {
                 id: observation.id.clone(),
                 text: observation_text(observation),
             })
+            .await
             .map_err(|e| crate::Error::Embedding(e.to_string()))?;
         self.storage
             .save_embedding(&observation.id, &signature, &output.vector)

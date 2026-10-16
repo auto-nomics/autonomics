@@ -134,7 +134,7 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
   `InstanceLockHeld` 友好报错退出)→ profile seed + 默认模型槽 → ChatGPT
   ensure-fresh → axum bind(成功后才写 token/pid 文件,探活即用)→ driver 循环。
 - **`autonomics serve`**:启动前先跑离线诊断门(`prepare --check` 同款检查:
-  插件 rev 就位、嵌入模型就绪、镜像在本地;致命缺口即 exit 1 提示 `prepare`);
+  插件 rev 就位、嵌入配置有效、镜像在本地;致命缺口即 exit 1 提示 `prepare`);
   前台(stderr+文件日志,Ctrl+C=优雅停);`--daemon`:stdio 绑定就绪后脱离;
   `status` / `stop` 子命令。
 - **优雅停机**(POST /gateway/shutdown):断 SSE → `shutdown_all_agents_and_wait`

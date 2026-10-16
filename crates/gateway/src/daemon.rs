@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
-use runtime::model_bootstrap::{ModelStorageError, SqliteModelStorage};
+use runtime::model_bootstrap::{ModelStorage, ModelStorageError, SqliteModelStorage};
 use runtime::{RuntimeConfig, RuntimeHost};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -96,7 +96,7 @@ pub async fn run_daemon(
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
     let DaemonOptions {
-        config,
+        mut config,
         addr,
         env_token,
         detach_stdio_on_ready,
@@ -106,6 +106,17 @@ pub async fn run_daemon(
     // The worker lives in the runtime crate; this is only the wiring:
     // storage in, model events bridged onto the hub.
     let models_storage = Arc::new(SqliteModelStorage::open(&config.app_db_path)?);
+    if let Ok(Some(json)) = models_storage
+        .get_setting(runtime::model_actor::EMBEDDING_CONFIG_KEY)
+        .await
+    {
+        match serde_json::from_str::<text_embedding::EmbeddingConfig>(&json) {
+            Ok(embedding) => config.embedding = embedding,
+            Err(error) => {
+                tracing::warn!(%error, "invalid persisted embedding config; using startup default")
+            }
+        }
+    }
     let hub = EventHub::new();
 
     // ── RuntimeHost (takes the instance lock) ────────────────────────

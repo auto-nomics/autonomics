@@ -573,18 +573,9 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
-    /// Serve observation embeddings from a local ONNX model. On by
-    /// default: the model must already be installed (`autonomics
-    /// prepare` downloads the ~363 MB snapshot from the Hugging Face
-    /// Hub); a missing or unopenable model aborts daemon startup.
-    /// Set `false` to skip the model (network download, ONNX session)
-    /// and run on BM25 fitted over the observation corpus instead.
-    #[serde(default = "default_true")]
-    pub enable_local_embedding: bool,
-    /// Model directory for the local embedding service. `None` uses
-    /// the service default (`~/.autonomics/model/embedding_model`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub embedding_model_dir: Option<std::path::PathBuf>,
+    /// Text-embedding provider used by observation clustering.
+    #[serde(default)]
+    pub embedding: text_embedding::EmbeddingConfig,
     /// Run the skill-evolution service: background worker that
     /// distills observations into skill changes (creating or revising
     /// auto-skills) on observation events and a periodic sweep.
@@ -767,8 +758,7 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
-            enable_local_embedding: resolve_flag(base, |b| b.enable_local_embedding, true),
-            embedding_model_dir: base.and_then(|b| b.embedding_model_dir.clone()).flatten(),
+            embedding: base.and_then(|b| b.embedding.clone()).unwrap_or_default(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_interval_secs: base
                 .and_then(|b| b.skill_evolution_interval_secs)
@@ -1344,8 +1334,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
-    pub(crate) enable_local_embedding: Option<bool>,
-    pub(crate) embedding_model_dir: Option<Option<std::path::PathBuf>>,
+    pub(crate) embedding: Option<text_embedding::EmbeddingConfig>,
     pub(crate) enable_skill_evolution: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
@@ -1514,13 +1503,8 @@ impl RuntimeConfigBuilder {
         self
     }
 
-    pub fn enable_local_embedding(mut self, enabled: bool) -> Self {
-        self.enable_local_embedding = Some(enabled);
-        self
-    }
-
-    pub fn embedding_model_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
-        self.embedding_model_dir = Some(Some(dir.into()));
+    pub fn embedding(mut self, config: text_embedding::EmbeddingConfig) -> Self {
+        self.embedding = Some(config);
         self
     }
 
@@ -1654,9 +1638,8 @@ mod tests {
         assert!(cfg.use_memory);
         assert!(cfg.generate_memory);
         assert!(!cfg.enable_kms);
-        // The local embedding model is on by default; the config
-        // field is the explicit opt-out.
-        assert!(cfg.enable_local_embedding);
+        // Remote Ollama embeddings are on by default.
+        assert!(cfg.embedding.enabled);
 
         // Restore env vars.
         // SAFETY: single-threaded within this test fn.
