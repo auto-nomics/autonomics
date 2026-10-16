@@ -17,7 +17,7 @@ use crate::tools::tool_err;
                   matter. Returns base64-encoded PNG bytes."
 )]
 pub struct ScreenshotInput {
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

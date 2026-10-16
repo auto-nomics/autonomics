@@ -327,7 +327,7 @@ impl HostControl {
                 Some(kind) => kind,
                 None => {
                     return Err(format!(
-                        "Unknown role '{seg}'. Use researcher or developer."
+                        "Unknown role '{seg}'. Use researcher, developer, or browser."
                     ));
                 }
             },

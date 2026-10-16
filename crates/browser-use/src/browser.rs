@@ -575,6 +575,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_browser_lanch() {
+        if std::env::var("BROWSER_USE_HEADED").is_err() {
+            eprintln!("set BROWSER_USE_HEADED=1 to run; skipping");
+            return;
+        }
         let mut browser_option = BrowserOptions::default();
         browser_option.headless = false;
         let mut browser = Browser::launch(browser_option).await.unwrap();

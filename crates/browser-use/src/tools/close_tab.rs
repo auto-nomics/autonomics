@@ -16,7 +16,7 @@ use crate::tools::tool_err;
                   is shifted down by one (clamped to 0)."
 )]
 pub struct CloseTabInput {
-    /// Zero-based index of the tab to close. Defaults to the active tab.
+    #[desc = "Zero-based index of the tab to close. Defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

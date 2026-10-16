@@ -20,9 +20,9 @@ use crate::tools::tool_err;
                   `Value::Null`."
 )]
 pub struct EvaluateInput {
-    /// JavaScript expression to evaluate. The return value is serialized to JSON.
+    #[desc = "JavaScript expression to evaluate. The return value is serialized to JSON."]
     pub expression: String,
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

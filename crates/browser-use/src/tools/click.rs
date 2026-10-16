@@ -19,12 +19,12 @@ use crate::tools::tool_err;
                   or call `browser_wait_for_selector` if the page should change."
 )]
 pub struct ClickInput {
-    /// CSS selector of the element to click.
+    #[desc = "CSS selector of the element to click."]
     pub selector: String,
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
-    /// Maximum time to wait for the selector to appear, in milliseconds.
+    #[desc = "Maximum time to wait for the selector to appear, in milliseconds."]
     #[default = 10000]
     pub timeout_ms: Option<u64>,
 }

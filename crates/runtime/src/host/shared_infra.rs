@@ -2,7 +2,8 @@
 //! resource opened once per process and reused by all agents, plus the
 //! per-agent spawn path and tool assembly.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Weak};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
@@ -10,6 +11,7 @@ use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGro
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
 use arc_swap::ArcSwapOption;
+use browser_use::{BrowserOptions, BrowserSession};
 use container_runtime::ContainerExecutionInfra;
 use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
@@ -26,6 +28,36 @@ use super::gc::{
     spawn_container_gc, spawn_dag_task_gc, spawn_environment_distiller, spawn_plugin_distiller,
 };
 use super::vfs_setup::{agent_vfs_principal, build_vfs_with_catalog};
+
+/// Cache of per-agent [`BrowserSession`]s.
+///
+/// Each browser-kind agent owns a strong `Arc<BrowserSession>` through the
+/// tool registrations it carries; the pool holds only a `Weak` so the
+/// strong count going to zero is what actually closes the browser (via
+/// the inner `Browser`'s `kill_on_drop`). A re-spawn of the same agent
+/// path finds the dangling `Weak` (after the previous run ended),
+/// upgrades to `None`, and just allocates a fresh session.
+#[derive(Default)]
+pub(super) struct BrowserPool {
+    by_path: HashMap<String, Weak<BrowserSession>>,
+}
+
+impl BrowserPool {
+    /// Drop any `Weak` entries whose strong Arc has been freed (i.e. the
+    /// previous browser agent at that path has exited and its session
+    /// dropped). Cheap; only called when we are about to allocate.
+    fn prune_dead(&mut self) {
+        self.by_path.retain(|_, weak| weak.strong_count() > 0);
+    }
+
+    /// Whether the agent at `path` still holds a live session.
+    /// Test-only: used by the session-lifecycle test to observe the
+    /// Weak-dangling transition after agent shutdown.
+    #[cfg(test)]
+    pub(super) fn session_alive(&self, path: &str) -> bool {
+        self.by_path.get(path).is_some_and(|w| w.strong_count() > 0)
+    }
+}
 
 // AgentKind carries the same tool-capability flags as RuntimeConfig, so we
 // can build a dynamic system prompt that only mentions tools the kind
@@ -60,6 +92,9 @@ impl PromptCapabilities for agentik_core::AgentKind {
     }
     fn enable_plugin_rsi(&self) -> bool {
         (*self).enable_plugin_rsi()
+    }
+    fn enable_browser(&self) -> bool {
+        (*self).enable_browser()
     }
 }
 
@@ -131,6 +166,15 @@ pub struct SharedInfra {
     /// available. When `Some`, spawned agents receive host management tools
     /// (spawn_agent, delegate_to, etc.).
     pub host_control: Option<crate::control::HostControl>,
+    /// Per-agent Chromium session cache. `Weak` entries so the agent's
+    /// tool list owns the strong Arc and browser process dies with the
+    /// agent — see [`BrowserPool`].
+    pub(super) browsers: Arc<tokio::sync::Mutex<BrowserPool>>,
+    /// Effective Chromium launch template, derived from the global
+    /// `RuntimeConfig` at `open` time. Each browser agent clones this
+    /// template and tweaks it (today: nothing — per-agent overrides
+    /// belong on `AgentProfileConfig` once we have a use case).
+    pub(super) browser_options_template: BrowserOptions,
 }
 
 impl SharedInfra {
@@ -472,6 +516,10 @@ impl SharedInfra {
             None
         };
 
+        let mut browser_options = BrowserOptions::default();
+        browser_options.headless = config.browser_headless;
+        browser_options.no_sandbox = config.browser_no_sandbox;
+
         Ok(Self {
             engine_manager,
             file_storage,
@@ -492,6 +540,8 @@ impl SharedInfra {
             skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
+            browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
+            browser_options_template: browser_options,
         })
     }
 
@@ -595,6 +645,33 @@ impl SharedInfra {
         })
     }
 
+    /// Look up or create the per-agent [`BrowserSession`] for a browser-kind
+    /// agent. Returns the strong `Arc`; the agent's tool list owns it for
+    /// the agent's lifetime, and the pool only retains a `Weak` so the
+    /// Chromium process exits when the agent does.
+    ///
+    /// `agent_path` is the canonical agent identifier (e.g. `/root/browser`).
+    /// `options` overrides the default `BrowserOptions` — most callers pass
+    /// `BrowserOptions::default()` and tweak `headless` / `no_sandbox` from
+    /// the global `RuntimeConfig`.
+    pub(super) async fn browser_session_for(
+        &self,
+        agent_path: &str,
+        options: BrowserOptions,
+    ) -> Result<Arc<BrowserSession>> {
+        let mut pool = self.browsers.lock().await;
+        pool.prune_dead();
+        if let Some(existing) = pool.by_path.get(agent_path).and_then(Weak::upgrade) {
+            return Ok(existing);
+        }
+        let session = BrowserSession::launch(options)
+            .await
+            .map_err(|e| Error::Other(format!("launching browser: {e}")))?;
+        pool.by_path
+            .insert(agent_path.to_string(), Arc::downgrade(&session));
+        Ok(session)
+    }
+
     /// Assemble the tool set for an agent kind, respecting its feature flags.
     pub(super) async fn tools_from_profile(
         &self,
@@ -614,7 +691,19 @@ impl SharedInfra {
         // other agent's DAG.
         let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
 
-        let mut tools: Vec<ToolRegistration> = vfs::vbash_registrations(file_storage.clone());
+        let mut tools: Vec<ToolRegistration> = Vec::new();
+
+        // Browser-kind agents get a private BrowserSession allocated on
+        // their first tool assembly; the session Arc is cloned into every
+        // browser_* tool's struct, so the pool only needs to keep a Weak.
+        if kind.enable_browser() {
+            let session = self
+                .browser_session_for(agent_path.as_str(), self.browser_options_template.clone())
+                .await?;
+            tools.extend(browser_use::tools::registrations(session));
+        }
+
+        tools.extend(vfs::vbash_registrations(file_storage.clone()));
         tools.push(crate::evolution_tools::evo_observe_registration(
             (*self.rsi).clone(),
             self.skill_evolution.clone(),

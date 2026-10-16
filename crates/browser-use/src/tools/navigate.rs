@@ -16,9 +16,9 @@ use crate::tools::tool_err;
                   Returns the final URL the tab landed on."
 )]
 pub struct NavigateInput {
-    /// URL to navigate to. `https://` is prepended if the scheme is missing.
+    #[desc = "URL to navigate to. `https://` is prepended if the scheme is missing."]
     pub url: String,
-    /// Zero-based index of the tab to use; defaults to the active tab.
+    #[desc = "Zero-based index of the tab to use; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

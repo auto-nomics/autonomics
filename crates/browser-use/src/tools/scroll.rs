@@ -17,11 +17,11 @@ use crate::tools::tool_err;
                   target content is rendered, then extract."
 )]
 pub struct ScrollInput {
-    /// Horizontal pixels to scroll (negative = left).
+    #[desc = "Horizontal pixels to scroll (negative = left)."]
     pub x: i32,
-    /// Vertical pixels to scroll (negative = up).
+    #[desc = "Vertical pixels to scroll (negative = up)."]
     pub y: i32,
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }

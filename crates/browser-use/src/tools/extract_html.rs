@@ -16,7 +16,7 @@ use crate::tools::tool_err;
                   does not expose (attributes, hidden nodes, ARIA roles, etc.)."
 )]
 pub struct ExtractHtmlInput {
-    /// Zero-based tab index; defaults to the active tab.
+    #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
     pub tab_index: Option<usize>,
 }
