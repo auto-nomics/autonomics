@@ -246,8 +246,9 @@ struct NodeEntry {
     image_digest: Option<String>,
     exit_code: Option<i64>,
     inputs: Vec<NodeInput>,
-    /// File outputs, deduplicated by path — `output_files` and
-    /// `port_assignments` carry the same artifacts under two spellings.
+    /// File outputs, deduplicated by path. `port_assignments` is the
+    /// canonical port-keyed spelling; older run records also carried a flat
+    /// `output_files` array, which export still tolerates as a fallback.
     outputs: Vec<FileEntry>,
     logs: Vec<FileEntry>, // stdout/stderr captures
     /// Output column schema (`NodeReport.output_schema`), when reported.
@@ -280,10 +281,10 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
         .iter()
         .map(|node| {
             let execution = node.get("execution");
-            // `output_files` and `port_assignments` are two spellings of the
-            // same artifacts — collect by path so relations are emitted once.
-            // The port-keyed spelling lands first so the output port is
-            // retained; the unkeyed one only fills gaps.
+            // `port_assignments` is the single source of file output paths
+            // keyed by their declared output port. Earlier revisions also
+            // emitted a flat `output_files` spelling; tolerating it as a
+            // fallback keeps historical run records readable.
             let mut outputs: BTreeMap<String, FileEntry> = BTreeMap::new();
             for (port, value) in node
                 .get("port_assignments")
@@ -574,7 +575,8 @@ pub fn build_prov_document(run: &RunRecord, report: &Value, manifest: Option<&st
     let mut entities: BTreeMap<String, Value> = BTreeMap::new();
     let mut activities: BTreeMap<String, Value> = BTreeMap::new();
     // Relation sets: structural dedup so two spellings of the same artifact
-    // (output_files / port_assignments) can never double-emit. `used` /
+    // (legacy flat `output_files` array vs. the port-keyed `port_assignments`)
+    // can never double-emit. `used` /
     // `generated` / `informed` carry `prov:role` literals — a set, because
     // one (activity, entity) pair can be wired through several ports.
     let mut used: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();

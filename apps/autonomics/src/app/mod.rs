@@ -34,6 +34,7 @@ mod agents;
 mod chat;
 mod commands;
 mod dag_view;
+mod embedding_config;
 mod event_loop;
 mod history;
 mod keyboard;

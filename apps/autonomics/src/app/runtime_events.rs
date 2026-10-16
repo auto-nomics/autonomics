@@ -470,6 +470,12 @@ impl App {
                     self.state.toasts.error("Save failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::EmbeddingConfigLoaded { result } => {
+                self.handle_embedding_config_event(result, false);
+            }
+            crate::app_event::AppEvent::EmbeddingConfigSaved { result } => {
+                self.handle_embedding_config_event(result, true);
+            }
             crate::app_event::AppEvent::AgentConfigLoaded { agent, result } => {
                 if self.state.agent_config.visible && self.state.agent_config.agent_path == agent {
                     match result {

@@ -114,6 +114,7 @@ impl App {
                 // ● 标记对齐当前 agent 的真实模型（provider 精确）。
                 self.sync_model_config_marker();
             }
+            CommandAction::EmbeddingConfig => self.open_embedding_config(),
             CommandAction::AgentConfig => {
                 self.open_agent_config();
             }

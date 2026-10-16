@@ -143,7 +143,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 
 ## 插件家族
 
-所有容器化分析节点都以 **manifest 插件** 形式发布：每个家族一个目录，内含 `manifest.toml`（节点契约：参数、端口、面板、镜像出处）、执行脚本与镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，由守护进程启动时的插件预检加载——格式与工作流见[容器插件编写](docs/plugins/README_zh.md)；替换既有硬编码 wrapper 时使用[迁移工作流](docs/plugin-node-migration_zh.md)。面板数据包由 `autonomics panels sync` 供给：它下载并对校验和验证本地目录缓存中缺失的每一个 `[[panels]]` 数据集引用；启动预检只在本地做有界、离线安全的存在性检查，守护进程就绪从不等待网络。插件检出、本地嵌入模型与全部钉死镜像的预置统一由 `autonomics prepare` 完成；启动门只做本地离线检查，发现致命缺口即终止启动并提示运行 prepare（面板数据包保持仅告警）。
+所有容器化分析节点都以 **manifest 插件** 形式发布：每个家族一个目录，内含 `manifest.toml`（节点契约：参数、端口、面板、镜像出处）、执行脚本与镜像构建树。插件从钉死 commit SHA 的 git 仓库安装，由守护进程启动时的插件预检加载——格式与工作流见[容器插件编写](docs/plugins/README_zh.md)；替换既有硬编码 wrapper 时使用[迁移工作流](docs/plugin-node-migration_zh.md)。面板数据包由 `autonomics panels sync` 供给：它下载并对校验和验证本地目录缓存中缺失的每一个 `[[panels]]` 数据集引用；启动预检只在本地做有界、离线安全的存在性检查，守护进程就绪从不等待网络。插件检出、Ollama 嵌入配置校验与全部钉死镜像的预置统一由 `autonomics prepare` 完成；启动门只做本地离线检查，发现致命缺口即终止启动并提示运行 prepare（面板数据包保持仅告警）。
 
 当前发布 28 个精选家族 / 99 个节点类型，在注册表中以 `family/node_kind` 寻址（内置节点使用 `core/` 命名空间）：
 

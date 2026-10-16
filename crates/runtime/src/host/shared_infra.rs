@@ -110,13 +110,10 @@ pub struct SharedInfra {
     /// eval auto-capture, gateway handlers — shares one notification
     /// invariant.
     pub skills: Arc<skills::SkillManager>,
-    /// Local ONNX embedding service, opened inline during startup
-    /// when `enable_local_embedding` is set (the default). `None`
-    /// when the feature is off — the observation hub then serves
-    /// corpus-fitted BM25 vectors. A missing or unopenable model is a
-    /// hard startup error (`autonomics prepare` installs it), never a
-    /// silent downgrade.
-    pub embedding: Option<Arc<text_embedding::LocalEmbeddingService>>,
+    /// Remote Ollama embedding service constructed from startup
+    /// configuration. `None` when disabled — the observation hub then
+    /// serves corpus-fitted BM25 vectors.
+    pub embedding: Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>,
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
@@ -134,6 +131,30 @@ pub struct SharedInfra {
 }
 
 impl SharedInfra {
+    /// Hot-swap the observation hub's remote embedding provider and
+    /// publish the service handle. A disabled config installs the
+    /// corpus-fitted BM25 fallback.
+    pub fn configure_embedding<'a>(
+        &'a self,
+        config: &'a text_embedding::EmbeddingConfig,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            if config.enabled {
+                let service = text_embedding::RemoteEmbeddingService::init(config)
+                    .await
+                    .map_err(|error| {
+                        Error::Other(format!("Ollama embedding service unavailable: {error}"))
+                    })?;
+                swap_embedder(&self.observations, &service).await;
+                self.embedding.store(Some(Arc::new(service)));
+            } else {
+                install_bm25_fallback(&self.observations).await;
+                self.embedding.store(None);
+            }
+            Ok(())
+        })
+    }
+
     /// Open all shared resources from a global [`RuntimeConfig`].
     ///
     /// The config's `data_dir`, `state_dir`, `agent_db`, and feature flags
@@ -155,7 +176,7 @@ impl SharedInfra {
         let observations = skills.observation_hub();
         skills.load_usage();
 
-        // ── Local embedding model (fail-fast) ──────────────────────
+        // ── Remote Ollama embedding model ──────────────────────────
         // The hub embeds every observation at record time, so the
         // model is opened inline — BEFORE the evolution service
         // starts — and the swap backfills vectors recorded under
@@ -168,31 +189,21 @@ impl SharedInfra {
         // observation corpus instead (pure local I/O, no session):
         // clustering keeps working on weighted lexical vectors, and
         // only a fit failure leaves the hub on the unfitted default.
-        let embedding = if config.enable_local_embedding {
-            let dir =
-                embedding_model_dir(config.embedding_model_dir.as_deref()).map_err(|error| {
-                    crate::error::Error::Other(format!(
-                        "cannot resolve the embedding model directory: {error} \
-                         — run `autonomics prepare`"
-                    ))
-                })?;
-            let service = text_embedding::LocalEmbeddingService::init_at(&dir)
+        let embedding = if config.embedding.enabled {
+            let service = text_embedding::RemoteEmbeddingService::init(&config.embedding)
                 .await
                 .map_err(|error| {
                     crate::error::Error::Other(format!(
-                        "local embedding model unavailable at {}: {error} \
-                         — run `autonomics prepare`",
-                        dir.display()
+                        "Ollama embedding service unavailable: {error}"
                     ))
                 })?;
             swap_embedder(&observations, &service).await;
-            Some(Arc::new(service))
+            Arc::new(ArcSwapOption::from_pointee(service))
         } else {
-            // No model requested (config off): keep network and the
-            // ONNX session out, but clustering still gets weighted
-            // lexical vectors from the local corpus.
+            // Disabled: keep the network provider out, but clustering
+            // still gets weighted lexical vectors from the local corpus.
             install_bm25_fallback(&observations).await;
-            None
+            Arc::new(ArcSwapOption::empty())
         };
         let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
         plugin_layout
@@ -718,22 +729,11 @@ impl SharedInfra {
     }
 }
 
-/// Resolve the model directory the config points at: an explicit
-/// override, or the service default (`~/.autonomics/model/embedding_model`).
-fn embedding_model_dir(
-    model_dir: Option<&std::path::Path>,
-) -> std::result::Result<std::path::PathBuf, text_embedding::Error> {
-    match model_dir {
-        Some(dir) => Ok(dir.to_path_buf()),
-        None => text_embedding::default_model_dir().map_err(text_embedding::Error::from),
-    }
-}
-
 /// Swap the service's provider into the observation hub. The swap
 /// backfills vectors recorded under the previous embedder.
 async fn swap_embedder(
     observations: &Arc<evolution_core::ObservationHub>,
-    service: &text_embedding::LocalEmbeddingService,
+    service: &text_embedding::RemoteEmbeddingService,
 ) {
     if let Some(provider) = service.text_embedder() {
         if let Err(error) = observations.set_embedder(provider).await {
@@ -802,7 +802,7 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
 }
 
 #[cfg(test)]
-mod local_embedding_tests {
+mod remote_embedding_tests {
     use super::super::RuntimeHost;
     use super::*;
     use crate::config::RuntimeConfig;
@@ -819,8 +819,12 @@ mod local_embedding_tests {
         config.kms_db_path = dir.path().join("knowledge.db");
         config.use_memory = false;
         config.generate_memory = false;
-        config.enable_local_embedding = true;
-        config.embedding_model_dir = Some(std::path::PathBuf::from(model_dir));
+        config.embedding = text_embedding::EmbeddingConfig {
+            enabled: true,
+            base_url: format!("http://{model_dir}"),
+            model: "test-model".into(),
+            ..Default::default()
+        };
         config
     }
 
@@ -832,20 +836,21 @@ mod local_embedding_tests {
     /// a full default-layout export; the test is a no-op when the
     /// variable is unset.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn local_embedding_service_installs_into_shared_infra() {
-        let Ok(model_dir) = std::env::var("TEXT_EMBEDDING_TEST_MODEL_DIR") else {
+    async fn remote_embedding_service_installs_into_shared_infra() {
+        let Ok(model_dir) = std::env::var("OLLAMA_EMBEDDING_TEST_MODEL") else {
             return;
         };
         let dir = tempfile::tempdir().unwrap();
         let mut host = RuntimeHost::open(&config(&dir, &model_dir)).await.unwrap();
         let infra = host.infra();
-        let service = infra.embedding.as_ref().expect("embedding service opened");
+        let service_guard = infra.embedding.load();
+        let service = service_guard.as_deref().expect("embedding service opened");
         let signature = service
-            .provider()
+            .text_embedder()
             .expect("provider opened")
             .signature()
             .to_string();
-        assert!(signature.contains("harrier"), "{signature}");
+        assert!(signature.contains("test-model"), "{signature}");
         host.shutdown_all_agents_and_wait().await;
     }
 
@@ -853,15 +858,20 @@ mod local_embedding_tests {
     /// naming `prepare` — the daemon never downloads and never
     /// silently downgrades to a lexical embedder.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn local_embedding_missing_model_fails_fast() {
-        let empty = tempfile::tempdir().unwrap();
+    async fn remote_embedding_service_disabled_installs_bm25() {
         let dir = tempfile::tempdir().unwrap();
-        let error = match RuntimeHost::open(&config(&dir, empty.path().to_str().unwrap())).await {
-            Ok(_) => panic!("a missing model must abort host open"),
-            Err(error) => error,
-        };
-        let message = error.to_string();
-        assert!(message.contains("autonomics prepare"), "{message}");
+        let mut cfg = config(&dir, "127.0.0.1:11434");
+        cfg.embedding.enabled = false;
+        let mut host = RuntimeHost::open(&cfg).await.unwrap();
+        assert!(host.infra.embedding.load().is_none());
+        assert_eq!(
+            host.infra
+                .observations
+                .embedding_signature()
+                .starts_with("bm25-"),
+            true
+        );
+        host.shutdown_all_agents_and_wait().await;
     }
 }
 
@@ -881,7 +891,7 @@ mod plugin_profile_tools_tests {
         config.kms_db_path = dir.path().join("knowledge.db");
         // Keep the embedding model (network install + ONNX session)
         // out of this test.
-        config.enable_local_embedding = false;
+        config.embedding.enabled = false;
         let host = RuntimeHost::open(&config).await.unwrap();
         let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
 

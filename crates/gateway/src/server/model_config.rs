@@ -105,3 +105,34 @@ pub(crate) async fn fetch_catalog(
     let _ = state.models.fetch_remote_catalog(name, url);
     StatusCode::ACCEPTED
 }
+
+#[utoipa::path(get, path = "/api/v1/embedding-config", tag = "model-config", responses((status = 200, body = EmbeddingConfigView)))]
+pub(crate) async fn get_embedding_config(
+    State(state): State<GatewayState>,
+) -> GatewayResult<Json<EmbeddingConfigView>> {
+    let config = state
+        .models
+        .embedding_config()
+        .await
+        .map_err(GatewayError::Message)?;
+    Ok(Json(config.0.into()))
+}
+
+#[utoipa::path(put, path = "/api/v1/embedding-config", tag = "model-config", request_body = SaveEmbeddingConfigRequest, responses((status = 200, body = EmbeddingConfigView), (status = 400, description = "Invalid embedding config")))]
+pub(crate) async fn put_embedding_config(
+    State(state): State<GatewayState>,
+    Json(req): Json<SaveEmbeddingConfigRequest>,
+) -> GatewayResult<Json<EmbeddingConfigView>> {
+    let config = text_embedding::EmbeddingConfig::from(req.config);
+    let saved = state
+        .models
+        .save_embedding_config(config)
+        .await
+        .map_err(GatewayError::Message)?;
+    state
+        .infra
+        .configure_embedding(&saved.0)
+        .await
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    Ok(Json(saved.0.into()))
+}

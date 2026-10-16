@@ -230,7 +230,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     config.generate_memory = false;
     // Keep the embedding model (network install + ONNX session) out
     // of every gateway/headless integration test.
-    config.enable_local_embedding = false;
+    config.embedding.enabled = false;
 
     let mut host = RuntimeHost::open(&config).await.unwrap();
     // One slot shared by the host and the gateway state — exactly like

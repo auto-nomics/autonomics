@@ -83,6 +83,11 @@ pub struct ModelCatalogData {
     pub openai_token: Option<OpenaiTokenHealth>,
 }
 
+/// Application-owned Ollama embedding settings. The persisted JSON is
+/// opaque to the settings table; this is its typed read/write view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddingConfigData(pub text_embedding::EmbeddingConfig);
+
 /// Health of the stored ChatGPT token.
 #[derive(Debug, Clone, Copy)]
 pub struct OpenaiTokenHealth {
@@ -96,6 +101,22 @@ pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
     pub collapse_tool_results: bool,
+}
+
+/// Settings-table key for the Ollama embedding JSON document.
+pub const EMBEDDING_CONFIG_KEY: &str = "embedding_config";
+
+fn validate_embedding_config(config: &text_embedding::EmbeddingConfig) -> Result<(), String> {
+    if config.enabled && (config.base_url.trim().is_empty() || config.model.trim().is_empty()) {
+        return Err("Ollama base URL and model must not be empty".into());
+    }
+    if config.batch_size == 0 {
+        return Err("Ollama batch size must be greater than zero".into());
+    }
+    if config.timeout_secs == 0 {
+        return Err("Ollama timeout must be greater than zero".into());
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -131,6 +152,13 @@ enum ModelCommand {
     },
     DisplaySettings {
         reply: oneshot::Sender<DisplaySettings>,
+    },
+    EmbeddingConfig {
+        reply: oneshot::Sender<std::result::Result<EmbeddingConfigData, String>>,
+    },
+    SaveEmbeddingConfig {
+        config: EmbeddingConfigData,
+        reply: oneshot::Sender<std::result::Result<EmbeddingConfigData, String>>,
     },
     StartLogin {
         reply: oneshot::Sender<std::result::Result<String, String>>,
@@ -272,6 +300,26 @@ impl ModelHandle {
             .unwrap_or_default()
     }
 
+    /// Typed Ollama embedding configuration from `settings`.
+    pub async fn embedding_config(&self) -> std::result::Result<EmbeddingConfigData, String> {
+        self.call(|reply| ModelCommand::EmbeddingConfig { reply })
+            .await
+            .ok_or_else(|| WORKER_GONE.to_string())?
+    }
+
+    /// Persist and return Ollama embedding configuration.
+    pub async fn save_embedding_config(
+        &self,
+        config: text_embedding::EmbeddingConfig,
+    ) -> std::result::Result<EmbeddingConfigData, String> {
+        self.call(|reply| ModelCommand::SaveEmbeddingConfig {
+            config: EmbeddingConfigData(config),
+            reply,
+        })
+        .await
+        .ok_or_else(|| WORKER_GONE.to_string())?
+    }
+
     /// Start a ChatGPT OAuth login: binds the local callback listener and
     /// returns the authorize URL immediately; the flow completes in the
     /// background (persist + event). One flow at a time — the mailbox
@@ -395,6 +443,12 @@ impl ModelWorker {
             }
             ModelCommand::DisplaySettings { reply } => {
                 let _ = reply.send(self.display_settings().await);
+            }
+            ModelCommand::EmbeddingConfig { reply } => {
+                let _ = reply.send(self.embedding_config().await);
+            }
+            ModelCommand::SaveEmbeddingConfig { config, reply } => {
+                let _ = reply.send(self.save_embedding_config(config.0).await);
             }
             ModelCommand::StartLogin { reply } => {
                 let _ = reply.send(self.start_login().await);
@@ -544,6 +598,31 @@ impl ModelWorker {
             collapse_tool_calls: get("collapse_tool_calls").await,
             collapse_tool_results: get("collapse_tool_results").await,
         }
+    }
+
+    async fn embedding_config(&self) -> std::result::Result<EmbeddingConfigData, String> {
+        match self.storage.get_setting(EMBEDDING_CONFIG_KEY).await {
+            Ok(Some(json)) => serde_json::from_str(&json)
+                .map(EmbeddingConfigData)
+                .map_err(|e| format!("invalid embedding settings: {e}")),
+            Ok(None) => Ok(EmbeddingConfigData(
+                text_embedding::EmbeddingConfig::default(),
+            )),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    async fn save_embedding_config(
+        &self,
+        config: text_embedding::EmbeddingConfig,
+    ) -> std::result::Result<EmbeddingConfigData, String> {
+        validate_embedding_config(&config)?;
+        let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        self.storage
+            .put_setting(EMBEDDING_CONFIG_KEY, &json)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(EmbeddingConfigData(config))
     }
 
     // ── ChatGPT OAuth ───────────────────────────────────────────────

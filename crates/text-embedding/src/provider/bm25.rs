@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 
 use crate::input::EmbeddingInput;
@@ -162,12 +163,13 @@ impl Bm25TextEmbedder {
     }
 }
 
+#[async_trait]
 impl TextEmbedder for Bm25TextEmbedder {
     fn signature(&self) -> String {
         self.signature.clone()
     }
 
-    fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
+    async fn embed(&self, input: &EmbeddingInput) -> Result<EmbeddingOutput> {
         let features = feature_counts(&input.text);
         let dl: f32 = features.values().map(|&tf| tf as f32).sum();
         let mut vector = vec![0.0_f32; self.dim];
@@ -253,15 +255,19 @@ mod tests {
     use super::*;
     use crate::provider::TextEmbedder as _;
 
-    #[test]
-    fn unfitted_embedder_is_deterministic_and_normalized() {
+    #[tokio::test]
+    async fn unfitted_embedder_is_deterministic_and_normalized() {
         let embedder = Bm25TextEmbedder::unfitted();
         let text = "restart the daemon after config change";
-        let first = embedder.embed(&EmbeddingInput::new("a", text)).unwrap();
+        let first = embedder
+            .embed(&EmbeddingInput::new("a", text))
+            .await
+            .unwrap();
         // Same text under a different id, fresh embedder instance —
         // the vector must not move.
         let second = Bm25TextEmbedder::unfitted()
             .embed(&EmbeddingInput::new("b", text))
+            .await
             .unwrap();
         assert_eq!(first, second);
         assert!(first.model_signature.starts_with("bm25-d2048"));
@@ -269,14 +275,16 @@ mod tests {
         assert!((norm - 1.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn different_texts_embed_differently() {
+    #[tokio::test]
+    async fn different_texts_embed_differently() {
         let embedder = Bm25TextEmbedder::unfitted();
         let out = embedder
             .embed(&EmbeddingInput::new("a", "restart the daemon"))
+            .await
             .unwrap();
         let other = embedder
             .embed(&EmbeddingInput::new("b", "quote mixed-case column names"))
+            .await
             .unwrap();
         assert_ne!(out.vector, other.vector);
     }
@@ -284,31 +292,34 @@ mod tests {
     /// The batch entry must agree with the single entry — clustering
     /// mixes both (bridge passes batches, remote providers may embed
     /// one at a time through the default loop).
-    #[test]
-    fn batch_embed_matches_single_embeds() {
+    #[tokio::test]
+    async fn batch_embed_matches_single_embeds() {
         let embedder = Bm25TextEmbedder::unfitted();
         let inputs = [
             EmbeddingInput::new("a", "restart the daemon"),
             EmbeddingInput::new("b", "bump the timeout"),
         ];
-        let batch = embedder.batch_embed(&inputs).unwrap();
+        let batch = embedder.batch_embed(&inputs).await.unwrap();
         assert_eq!(batch.len(), 2);
-        assert_eq!(batch["a"], embedder.embed(&inputs[0]).unwrap());
-        assert_eq!(batch["b"], embedder.embed(&inputs[1]).unwrap());
+        assert_eq!(batch["a"], embedder.embed(&inputs[0]).await.unwrap());
+        assert_eq!(batch["b"], embedder.embed(&inputs[1]).await.unwrap());
     }
 
-    #[test]
-    fn unfitted_with_dim_clamps_to_at_least_one_slot() {
+    #[tokio::test]
+    async fn unfitted_with_dim_clamps_to_at_least_one_slot() {
         let embedder = Bm25TextEmbedder::unfitted_with_dim(0);
-        let out = embedder.embed(&EmbeddingInput::new("a", "text")).unwrap();
+        let out = embedder
+            .embed(&EmbeddingInput::new("a", "text"))
+            .await
+            .unwrap();
         assert_eq!(out.vector.len(), 1);
     }
 
     /// The width and parameters are part of the model identity —
     /// vectors from different spaces cannot be compared, so the
     /// signature must say which.
-    #[test]
-    fn signature_names_the_width_and_parameters() {
+    #[tokio::test]
+    async fn signature_names_the_width_and_parameters() {
         assert!(
             Bm25TextEmbedder::unfitted_with_dim(64)
                 .signature_str()
@@ -316,6 +327,7 @@ mod tests {
         );
         let out = Bm25TextEmbedder::unfitted_with_dim(64)
             .embed(&EmbeddingInput::new("a", "text"))
+            .await
             .unwrap();
         assert!(out.model_signature.starts_with("bm25-d64-"));
     }
@@ -343,8 +355,8 @@ mod tests {
 
     /// The point of fitting: a term in every document stops pulling
     /// its hosts together, a rare term still does.
-    #[test]
-    fn fitted_idf_downweights_ubiquitous_terms() {
+    #[tokio::test]
+    async fn fitted_idf_downweights_ubiquitous_terms() {
         let mut corpus: Vec<String> = (0..20)
             .map(|i| format!("error routine failure {i}"))
             .collect();
@@ -354,10 +366,12 @@ mod tests {
         let ubiquitous = crate::cosine(
             &embedder
                 .embed(&EmbeddingInput::new("a", "error failure one"))
+                .await
                 .unwrap()
                 .vector,
             &embedder
                 .embed(&EmbeddingInput::new("b", "error failure two"))
+                .await
                 .unwrap()
                 .vector,
         )
@@ -365,10 +379,12 @@ mod tests {
         let rare = crate::cosine(
             &embedder
                 .embed(&EmbeddingInput::new("a", "zebra failure one"))
+                .await
                 .unwrap()
                 .vector,
             &embedder
                 .embed(&EmbeddingInput::new("b", "zebra failure two"))
+                .await
                 .unwrap()
                 .vector,
         )
@@ -385,14 +401,16 @@ mod tests {
     /// Signed projection: texts sharing nothing land near zero
     /// cosine — colliding features cancel rather than fabricate
     /// similarity.
-    #[test]
-    fn unrelated_texts_stay_near_zero_cosine() {
+    #[tokio::test]
+    async fn unrelated_texts_stay_near_zero_cosine() {
         let embedder = Bm25TextEmbedder::unfitted();
         let a = embedder
             .embed(&EmbeddingInput::new("a", "reboot the database cluster"))
+            .await
             .unwrap();
         let b = embedder
             .embed(&EmbeddingInput::new("b", "quote mixed-case column names"))
+            .await
             .unwrap();
         let similarity = crate::cosine(&a.vector, &b.vector).unwrap();
         assert!(

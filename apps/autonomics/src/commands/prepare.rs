@@ -128,32 +128,17 @@ async fn provision_panels(config: &gateway::RuntimeConfig) -> Result<()> {
     Ok(())
 }
 
-/// Install (or verify) the embedding model. No-op when the feature is
+/// Verify Ollama embedding configuration. No-op when the feature is
 /// off — the daemon then runs on the corpus-fitted BM25 fallback.
 async fn install_model(config: &gateway::RuntimeConfig) -> Result<()> {
-    if !config.enable_local_embedding {
-        println!("model: skipped — local embedding disabled");
+    if !config.embedding.enabled {
+        println!("model: skipped — Ollama embedding disabled");
         return Ok(());
     }
-    let dir: std::path::PathBuf = match config.embedding_model_dir.clone() {
-        Some(dir) => dir,
-        None => text_embedding::default_model_dir()?,
-    };
-    println!("model: verifying {}", dir.display());
-    match text_embedding::ensure_installed(&dir).await? {
-        text_embedding::InstallAction::AlreadyVerified => {
-            println!("model: already verified at {}", dir.display())
-        }
-        text_embedding::InstallAction::MarkedLegacyInstall => {
-            println!(
-                "model: legacy install at {} verified and stamped with a completion marker",
-                dir.display()
-            )
-        }
-        text_embedding::InstallAction::Installed => {
-            println!("model: installed at {}", dir.display())
-        }
-    }
+    println!(
+        "model: Ollama embedding configured — {} @ {}",
+        config.embedding.model, config.embedding.base_url
+    );
     Ok(())
 }
 

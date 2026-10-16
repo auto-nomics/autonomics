@@ -31,8 +31,9 @@ pub use contract::{
     TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission, task_timeout,
 };
 pub use gc::{
-    DagTaskGcPolicy, DagTaskGcReport, dag_task_gc_age, dag_task_gc_interval, dag_tasks_root,
-    sweep_dag_tasks,
+    DagTaskGcPolicy, DagTaskGcReport, DagTaskWatermarkReport, dag_task_gc_age,
+    dag_task_gc_interval, dag_task_gc_max_bytes, dag_tasks_root, sweep_dag_tasks,
+    sweep_dag_tasks_watermark,
 };
 pub use local::{LocalTaskExecutor, local_task_executor};
 pub use process::{ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport};

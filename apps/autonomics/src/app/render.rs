@@ -270,6 +270,29 @@ impl App {
             }
         }
 
+        // ── Embedding config popup ──
+        if self.state.embedding_config_visible {
+            use ratatui::widgets::StatefulWidgetRef as _;
+            let popup_width = frame.area().width * 7 / 10;
+            let popup_height = frame.area().height * 8 / 10;
+            let popup = crate::widgets::popup::Popup::new(
+                " Embedding Model ",
+                crate::widgets::popup::PopupControls::default(),
+            )
+            .width(popup_width)
+            .height(popup_height)
+            .accent(ratatui::style::Color::Magenta);
+            let inner = popup.render(frame.area(), frame.buffer_mut());
+            crate::widgets::embedding_config_widget::EmbeddingConfigWidget.render_ref(
+                inner,
+                frame.buffer_mut(),
+                &mut self.state.embedding_config_state,
+            );
+            if let Some((x, y)) = self.state.embedding_config_state.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x, y });
+            }
+        }
+
         // ── DAG view overlay ──
         if self.state.dag_view_visible {
             self.render_dag_view(frame.area(), frame.buffer_mut());
