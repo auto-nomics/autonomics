@@ -90,6 +90,7 @@ pub fn mock_model_info() -> ModelInfo {
         thinking_budget: None,
         input_token_price: 0.0,
         output_token_price: 0.0,
+        custom: false,
     }
 }
 

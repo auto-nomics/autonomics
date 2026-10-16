@@ -55,6 +55,10 @@ pub struct ModelInfo {
     pub thinking_budget: Option<u32>,
     pub input_token_price: f64,
     pub output_token_price: f64,
+    /// True for user-added or catalogue-imported entries persisted in app
+    /// storage. Built-in SDK presets remain immutable in the TUI.
+    #[serde(default)]
+    pub custom: bool,
 }
 
 impl Default for ModelInfo {
@@ -75,6 +79,7 @@ impl Default for ModelInfo {
             thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
+            custom: false,
         }
     }
 }
@@ -97,6 +102,7 @@ impl std::fmt::Debug for ModelInfo {
             .field("thinking_budget", &self.thinking_budget)
             .field("input_token_price", &self.input_token_price)
             .field("output_token_price", &self.output_token_price)
+            .field("custom", &self.custom)
             .finish()
     }
 }
@@ -124,6 +130,7 @@ impl PartialEq for ModelInfo {
             && self.thinking_budget == other.thinking_budget
             && self.input_token_price == other.input_token_price
             && self.output_token_price == other.output_token_price
+            && self.custom == other.custom
     }
 }
 
@@ -162,6 +169,7 @@ pub struct ModelInfoBuilder {
     thinking_budget: Option<u32>,
     input_token_price: f64,
     output_token_price: f64,
+    custom: bool,
 }
 
 impl ModelInfoBuilder {
@@ -182,6 +190,7 @@ impl ModelInfoBuilder {
             thinking_budget: None,
             input_token_price: 0.0,
             output_token_price: 0.0,
+            custom: false,
         }
     }
 
@@ -239,6 +248,12 @@ impl ModelInfoBuilder {
         self
     }
 
+    /// Mark this entry as editable application storage rather than an SDK preset.
+    pub fn custom(mut self, custom: bool) -> Self {
+        self.custom = custom;
+        self
+    }
+
     pub fn build(self) -> ModelInfo {
         ModelInfo {
             model_name: self.model_name,
@@ -256,6 +271,7 @@ impl ModelInfoBuilder {
             thinking_budget: self.thinking_budget,
             input_token_price: self.input_token_price,
             output_token_price: self.output_token_price,
+            custom: self.custom,
         }
     }
 }

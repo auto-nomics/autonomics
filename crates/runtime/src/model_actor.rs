@@ -39,7 +39,8 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model_bootstrap::{
-    ModelStorage, ModelStorageError, SaveProviderParams, StorageResult, resolve_from_parts,
+    ModelStorage, ModelStorageError, SaveModelParams, SaveProviderParams, StorageResult,
+    resolve_from_parts,
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -144,6 +145,10 @@ enum ModelCommand {
     },
     SaveProvider {
         params: SaveProviderParams,
+        reply: oneshot::Sender<StorageResult<()>>,
+    },
+    SaveModel {
+        params: SaveModelParams,
         reply: oneshot::Sender<StorageResult<()>>,
     },
     PutSetting {
@@ -277,6 +282,17 @@ impl ModelHandle {
     /// Insert or update a provider row (credentials + base URL).
     pub async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()> {
         self.call(|reply| ModelCommand::SaveProvider {
+            params: params.clone(),
+            reply,
+        })
+        .await
+        .ok_or_else(|| ModelStorageError::Message(WORKER_GONE.to_string()))?
+    }
+
+    /// Insert or update a custom model row. Built-in SDK presets are never
+    /// accepted here: edits must address an existing storage row.
+    pub async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()> {
+        self.call(|reply| ModelCommand::SaveModel {
             params: params.clone(),
             reply,
         })
@@ -438,6 +454,9 @@ impl ModelWorker {
             }
             ModelCommand::SaveProvider { params, reply } => {
                 let _ = reply.send(self.storage.save_provider(&params).await);
+            }
+            ModelCommand::SaveModel { params, reply } => {
+                let _ = reply.send(self.storage.save_model(&params).await);
             }
             ModelCommand::PutSetting { key, value, reply } => {
                 let _ = reply.send(self.storage.put_setting(&key, &value).await);

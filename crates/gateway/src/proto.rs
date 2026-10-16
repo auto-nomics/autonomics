@@ -295,6 +295,25 @@ pub struct SaveProviderRequest {
     pub api_key: String,
 }
 
+/// `PUT /api/v1/model-config/model` — add or update a custom model.
+/// `original_model_name` identifies the storage row being renamed.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct SaveModelRequest {
+    pub provider_name: String,
+    #[serde(default)]
+    pub original_model_name: Option<String>,
+    pub model_name: String,
+    pub context_length: u64,
+    pub max_output_tokens: u64,
+    pub vision_ability: bool,
+    pub supports_function_calling: bool,
+    pub supports_streaming: bool,
+    pub supports_thinking: bool,
+    pub thinking_enabled: bool,
+    pub input_token_price: f64,
+    pub output_token_price: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SetActiveModelRequest {
     pub spec: String,

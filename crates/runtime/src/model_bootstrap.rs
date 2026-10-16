@@ -57,7 +57,7 @@ pub fn ensure_app_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS models (
             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
-            model_name                  TEXT    NOT NULL UNIQUE,
+            model_name                  TEXT    NOT NULL,
             provider_id                 INTEGER NOT NULL,
             context_length              INTEGER NOT NULL DEFAULT 0,
             max_output_tokens           INTEGER NOT NULL DEFAULT 0,
@@ -68,6 +68,8 @@ pub fn ensure_app_schema(conn: &Connection) -> rusqlite::Result<()> {
             thinking_enabled            INTEGER NOT NULL DEFAULT 0,
             input_token_price           REAL    NOT NULL DEFAULT 0,
             output_token_price          REAL    NOT NULL DEFAULT 0,
+            is_custom                   INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(provider_id, model_name),
             FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
         )",
         (),
@@ -92,6 +94,8 @@ pub fn ensure_app_schema(conn: &Connection) -> rusqlite::Result<()> {
         );
     }
 
+    migrate_models_unique_to_provider(conn)?;
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS settings (
             key             TEXT PRIMARY KEY,
@@ -101,6 +105,103 @@ pub fn ensure_app_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Upgrade legacy model storage: add the built-in/custom origin and replace
+/// the old globally-unique model name with a per-provider identity.
+fn migrate_models_unique_to_provider(conn: &Connection) -> rusqlite::Result<()> {
+    let has_is_custom: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('models') WHERE name = 'is_custom'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    if !has_is_custom {
+        rebuild_models_table(conn, false)?;
+        return Ok(());
+    }
+    if models_unique_by_provider(conn)? {
+        return Ok(());
+    }
+    rebuild_models_table(conn, true)?;
+    Ok(())
+}
+
+fn models_unique_by_provider(conn: &Connection) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("PRAGMA index_list(models)")?;
+    let indexes = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    for (index, unique, origin) in indexes {
+        if unique == 0 || origin != "u" {
+            continue;
+        }
+        let mut info = conn.prepare(&format!("PRAGMA index_info({index})"))?;
+        let columns: Vec<String> = info
+            .query_map([], |row| row.get::<_, String>(2))?
+            .collect::<rusqlite::Result<_>>()?;
+        if columns == ["provider_id", "model_name"] {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn rebuild_models_table(conn: &Connection, preserve_is_custom: bool) -> rusqlite::Result<()> {
+    let foreign_keys_were_on: i64 = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    if foreign_keys_were_on != 0 {
+        conn.execute_batch("PRAGMA foreign_keys=OFF")?;
+    }
+    let copy_is_custom = if preserve_is_custom {
+        ", is_custom"
+    } else {
+        ""
+    };
+    let result = conn.execute_batch(&format!(
+        "BEGIN IMMEDIATE;
+         DROP TABLE IF EXISTS models_new;
+         CREATE TABLE models_new (
+             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+             model_name                  TEXT    NOT NULL,
+             provider_id                 INTEGER NOT NULL,
+             context_length              INTEGER NOT NULL DEFAULT 0,
+             max_output_tokens           INTEGER NOT NULL DEFAULT 0,
+             vision_ability              INTEGER NOT NULL DEFAULT 0,
+             supports_function_calling   INTEGER NOT NULL DEFAULT 1,
+             supports_streaming          INTEGER NOT NULL DEFAULT 1,
+             supports_thinking           INTEGER NOT NULL DEFAULT 0,
+             thinking_enabled            INTEGER NOT NULL DEFAULT 0,
+             input_token_price           REAL    NOT NULL DEFAULT 0,
+             output_token_price          REAL    NOT NULL DEFAULT 0,
+             is_custom                   INTEGER NOT NULL DEFAULT 1,
+             UNIQUE(provider_id, model_name),
+             FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+         );
+         INSERT INTO models_new (
+             id, model_name, provider_id, context_length, max_output_tokens,
+             vision_ability, supports_function_calling, supports_streaming,
+             supports_thinking, thinking_enabled, input_token_price, output_token_price
+         )
+         SELECT id, model_name, provider_id, context_length, max_output_tokens,
+                vision_ability, supports_function_calling, supports_streaming,
+                supports_thinking, thinking_enabled, input_token_price, output_token_price
+                {copy_is_custom}
+         FROM models;
+         DROP TABLE models;
+         ALTER TABLE models_new RENAME TO models;
+         COMMIT;",
+    ));
+    if foreign_keys_were_on != 0 {
+        conn.execute_batch("PRAGMA foreign_keys=ON")?;
+    }
+    result
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -139,11 +240,11 @@ impl ProviderRow {
     }
 }
 
-/// A row from the `models` table — a model imported from a provider's remote
-/// catalogue (e.g. OpenRouter's `/v1/models`). Mirrors the
+/// A row from the `models` table — a user-added model or a provider's
+/// remote-catalogue import (e.g. OpenRouter's `/v1/models`). Mirrors the
 /// [`ModelInfo`](agentik_sdk::model::ModelInfo) columns that survive a DB
 /// round-trip.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ModelRow {
     pub model_name: String,
     /// Owning provider's `name` (== its provider-type string).
@@ -157,6 +258,10 @@ pub struct ModelRow {
     pub thinking_enabled: bool,
     pub input_token_price: f64,
     pub output_token_price: f64,
+    /// True when the entry is user-added, edited, or catalogue-imported.
+    /// SDK presets are `false` and remain read-only in the TUI.
+    #[serde(default)]
+    pub custom: bool,
 }
 
 impl ModelRow {
@@ -167,6 +272,7 @@ impl ModelRow {
                     m.vision_ability, m.supports_function_calling, m.supports_streaming,
                     m.supports_thinking, m.thinking_enabled,
                     m.input_token_price, m.output_token_price
+                    , m.is_custom
              FROM models m JOIN providers p ON p.id = m.provider_id
              ORDER BY m.model_name",
         )?;
@@ -180,6 +286,7 @@ impl ModelRow {
                     m.vision_ability, m.supports_function_calling, m.supports_streaming,
                     m.supports_thinking, m.thinking_enabled,
                     m.input_token_price, m.output_token_price
+                    , m.is_custom
              FROM models m JOIN providers p ON p.id = m.provider_id
              WHERE p.name = ?1 AND m.model_name = ?2",
             rusqlite::params![provider_name, model_name],
@@ -204,6 +311,7 @@ impl ModelRow {
             thinking_enabled: self.thinking_enabled,
             input_token_price: self.input_token_price,
             output_token_price: self.output_token_price,
+            custom: self.custom,
             ..Default::default()
         }
     }
@@ -225,6 +333,7 @@ fn row_to_model(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelRow> {
         thinking_enabled: row.get::<_, i64>(8)? != 0,
         input_token_price: row.get(9)?,
         output_token_price: row.get(10)?,
+        custom: row.get::<_, i64>(11)? != 0,
     })
 }
 
@@ -301,6 +410,130 @@ pub struct SaveProviderParams {
     pub api_key: String,
 }
 
+/// Insert or update a user-owned model row. `original_model_name` identifies
+/// the row being renamed; `None` creates a new custom model.
+#[derive(Debug, Clone)]
+pub struct SaveModelParams {
+    pub provider_name: String,
+    pub original_model_name: Option<String>,
+    pub model: ModelRow,
+}
+
+pub fn save_model(conn: &Connection, params: &SaveModelParams) -> Result<(), ModelStorageError> {
+    let model_name = params.model.model_name.trim();
+    if model_name.is_empty() || model_name.contains(':') {
+        return Err(ModelStorageError::Message(
+            "model name must be non-empty and must not contain ':'".into(),
+        ));
+    }
+    if params.model.context_length == 0 || params.model.max_output_tokens == 0 {
+        return Err(ModelStorageError::Message(
+            "context length and max output must be greater than zero".into(),
+        ));
+    }
+    if params.model.thinking_enabled && !params.model.supports_thinking {
+        return Err(ModelStorageError::Message(
+            "thinking enabled requires thinking support".into(),
+        ));
+    }
+
+    let provider_id: i64 = conn
+        .query_row(
+            "SELECT id FROM providers WHERE name = ?1",
+            [&params.provider_name],
+            |row| row.get(0),
+        )
+        .map_err(|_| {
+            ModelStorageError::Message(format!(
+                "provider `{}` is not configured",
+                params.provider_name
+            ))
+        })?;
+
+    let original = params
+        .original_model_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    if let Some(original) = original {
+        if ModelRow::find(conn, &params.provider_name, original).is_none() {
+            return Err(ModelStorageError::Message(format!(
+                "custom model `{original}` was not found"
+            )));
+        }
+    }
+
+    let duplicate: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM models m JOIN providers p ON p.id = m.provider_id
+         WHERE p.name = ?1 AND m.model_name = ?2 AND (?3 IS NULL OR m.model_name <> ?3)",
+        rusqlite::params![params.provider_name, model_name, original],
+        |row| row.get(0),
+    )?;
+    if duplicate > 0 {
+        return Err(ModelStorageError::Message(format!(
+            "model `{model_name}` already exists for `{}`",
+            params.provider_name
+        )));
+    }
+
+    if let Some(original) = original {
+        conn.execute(
+            "UPDATE models SET
+                 model_name = ?1, context_length = ?2, max_output_tokens = ?3,
+                 vision_ability = ?4, supports_function_calling = ?5,
+                 supports_streaming = ?6, supports_thinking = ?7,
+                 thinking_enabled = ?8, input_token_price = ?9,
+                 output_token_price = ?10, is_custom = 1
+             WHERE provider_id = ?11 AND model_name = ?12",
+            rusqlite::params![
+                model_name,
+                params.model.context_length as i64,
+                params.model.max_output_tokens as i64,
+                params.model.vision_ability,
+                params.model.supports_function_calling,
+                params.model.supports_streaming,
+                params.model.supports_thinking,
+                params.model.thinking_enabled,
+                params.model.input_token_price,
+                params.model.output_token_price,
+                provider_id,
+                original
+            ],
+        )?;
+        if original != model_name {
+            let old_spec = format!("{}:{original}", params.provider_name);
+            let new_spec = format!("{}:{model_name}", params.provider_name);
+            conn.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'active_model' AND value = ?2",
+                rusqlite::params![new_spec, old_spec],
+            )?;
+        }
+    } else {
+        conn.execute(
+            "INSERT INTO models (
+                 model_name, provider_id, context_length, max_output_tokens,
+                 vision_ability, supports_function_calling, supports_streaming,
+                 supports_thinking, thinking_enabled, input_token_price,
+                 output_token_price, is_custom
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1)",
+            rusqlite::params![
+                model_name,
+                provider_id,
+                params.model.context_length as i64,
+                params.model.max_output_tokens as i64,
+                params.model.vision_ability,
+                params.model.supports_function_calling,
+                params.model.supports_streaming,
+                params.model.supports_thinking,
+                params.model.thinking_enabled,
+                params.model.input_token_price,
+                params.model.output_token_price
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 /// Read the ChatGPT token blob JSON stored in a provider row's `api_key`.
 pub fn chatgpt_blob_json(conn: &Connection, provider: &str) -> Option<String> {
     conn.query_row(
@@ -338,9 +571,9 @@ pub fn save_chatgpt_blob_json(conn: &Connection, blob_json: &str) -> rusqlite::R
     result.map(|_| ())
 }
 
-/// Replace a provider's model rows with a freshly fetched catalogue —
-/// atomically, in one transaction (a mid-loop failure must not leave the
-/// provider's catalogue half-deleted).
+/// Upsert a freshly fetched catalogue without deleting user-owned custom
+/// models. This is atomic, so a mid-loop failure cannot leave a partial
+/// refresh.
 pub fn replace_provider_models(
     conn: &mut Connection,
     provider_name: &str,
@@ -352,13 +585,24 @@ pub fn replace_provider_models(
         [provider_name],
         |r| r.get(0),
     )?;
-    tx.execute("DELETE FROM models WHERE provider_id = ?1", [provider_id])?;
     for m in models {
         tx.execute(
             "INSERT OR REPLACE INTO models (model_name, provider_id, context_length,
              max_output_tokens, vision_ability, supports_function_calling, supports_streaming,
-             supports_thinking, thinking_enabled, input_token_price, output_token_price)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+             supports_thinking, thinking_enabled, input_token_price, output_token_price,
+             is_custom)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+             ON CONFLICT(provider_id, model_name) DO UPDATE SET
+                 context_length = excluded.context_length,
+                 max_output_tokens = excluded.max_output_tokens,
+                 vision_ability = excluded.vision_ability,
+                 supports_function_calling = excluded.supports_function_calling,
+                 supports_streaming = excluded.supports_streaming,
+                 supports_thinking = excluded.supports_thinking,
+                 thinking_enabled = excluded.thinking_enabled,
+                 input_token_price = excluded.input_token_price,
+                 output_token_price = excluded.output_token_price,
+                 is_custom = excluded.is_custom",
             rusqlite::params![
                 m.model_name,
                 provider_id,
@@ -371,6 +615,7 @@ pub fn replace_provider_models(
                 m.thinking_enabled as i64,
                 m.input_token_price,
                 m.output_token_price,
+                1,
             ],
         )?;
     }
@@ -434,6 +679,7 @@ pub trait ModelStorage: Send + Sync {
     async fn active_model_spec(&self) -> StorageResult<Option<String>>;
     async fn set_active_model(&self, spec: &str) -> StorageResult<()>;
     async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()>;
+    async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()>;
     async fn replace_provider_models(
         &self,
         provider_name: &str,
@@ -507,6 +753,11 @@ impl ModelStorage for SqliteModelStorage {
         self.with_conn(|conn| save_provider(conn, params))
     }
 
+    async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()> {
+        let conn = self.conn.lock().expect("model store mutex poisoned");
+        save_model(&conn, params)
+    }
+
     async fn replace_provider_models(
         &self,
         provider_name: &str,
@@ -563,9 +814,8 @@ pub fn resolve_model_spec(conn: &Connection, spec: &str) -> Option<Model> {
     resolve_from_parts(provider_name, model_name, &auth, db_model)
 }
 
-/// Storage-independent model construction: preset catalogue first, DB
-/// row fallback (so custom providers whose models only exist in the DB
-/// also resolve), then build the provider config + client stack.
+/// Storage-independent model construction. Persisted custom metadata wins
+/// over the SDK preset, then build the provider config + client stack.
 ///
 /// Returns `None` for an empty API key (except Ollama, which is local by
 /// default) or an unknown model.
@@ -591,10 +841,11 @@ pub fn resolve_from_parts(
     };
     let auth_method = registry::default_auth_method(&provider_type);
     let preset_models = registry::preset_models(&provider_type).unwrap_or_default();
-    let mut model_info = preset_models
-        .into_iter()
-        .find(|m| m.model_name == model_name)
-        .or_else(|| db_model.map(|row| row.to_model_info()))?;
+    let mut model_info = db_model.map(|row| row.to_model_info()).or_else(|| {
+        preset_models
+            .into_iter()
+            .find(|m| m.model_name == model_name)
+    })?;
 
     let provider_config = ProviderConfig {
         id: Uuid::nil(),
@@ -639,6 +890,60 @@ mod tests {
         let conn = conn();
         ensure_app_schema(&conn).unwrap();
         ensure_app_schema(&conn).unwrap();
+    }
+
+    #[test]
+    fn migrates_legacy_model_schema_to_custom_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE providers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                provider_type TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                auth_method TEXT NOT NULL DEFAULT 'Anthropic'
+            )",
+            (),
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE models (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_name TEXT NOT NULL UNIQUE,
+                provider_id INTEGER NOT NULL,
+                context_length INTEGER NOT NULL DEFAULT 0,
+                max_output_tokens INTEGER NOT NULL DEFAULT 0,
+                vision_ability INTEGER NOT NULL DEFAULT 0,
+                supports_function_calling INTEGER NOT NULL DEFAULT 1,
+                supports_streaming INTEGER NOT NULL DEFAULT 1,
+                supports_thinking INTEGER NOT NULL DEFAULT 0,
+                input_token_price REAL NOT NULL DEFAULT 0,
+                output_token_price REAL NOT NULL DEFAULT 0,
+                FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
+            )",
+            (),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key)
+             VALUES ('ollama', 'ollama', 'http://localhost:11434', '')",
+            (),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO models (model_name, provider_id, context_length)
+             VALUES ('legacy-model', (SELECT id FROM providers WHERE name = 'ollama'), 4096)",
+            (),
+        )
+        .unwrap();
+
+        ensure_app_schema(&conn).unwrap();
+        assert!(models_unique_by_provider(&conn).unwrap());
+        let row = ModelRow::find(&conn, "ollama", "legacy-model")
+            .expect("legacy model should survive migration");
+        assert!(row.custom);
+        assert_eq!(row.context_length, 4096);
     }
 
     #[test]
@@ -700,6 +1005,142 @@ mod tests {
         let model = resolve_model_spec(&conn, "ollama:llama3.2")
             .expect("local Ollama provider should resolve without credentials");
         assert_eq!(model.provider_name(), "ollama");
+    }
+
+    #[test]
+    fn custom_models_save_edit_and_resolve() {
+        let mut conn = conn();
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES ('ollama', 'ollama', 'http://localhost:11434', '', 'None')",
+            (),
+        )
+        .unwrap();
+        let model = ModelRow {
+            provider_name: "ollama".into(),
+            model_name: "local-agent".into(),
+            context_length: 77_000,
+            max_output_tokens: 8_000,
+            vision_ability: false,
+            supports_function_calling: true,
+            supports_streaming: true,
+            supports_thinking: false,
+            thinking_enabled: false,
+            input_token_price: 0.0,
+            output_token_price: 0.0,
+            custom: true,
+        };
+        save_model(
+            &conn,
+            &SaveModelParams {
+                provider_name: "ollama".into(),
+                original_model_name: None,
+                model: model.clone(),
+            },
+        )
+        .expect("custom model should save");
+
+        let resolved =
+            resolve_model_spec(&conn, "ollama:local-agent").expect("custom model should resolve");
+        assert_eq!(resolved.context_length(), 77_000);
+
+        conn.execute(
+            "INSERT INTO models (model_name, provider_id, context_length, max_output_tokens)
+             VALUES ('preserve-me', (SELECT id FROM providers WHERE name = 'ollama'), 4096, 1024)",
+            (),
+        )
+        .unwrap();
+        replace_provider_models(
+            &mut conn,
+            "ollama",
+            &[agentik_sdk::model::ModelInfo {
+                model_name: "local-agent".into(),
+                context_length: 64_000,
+                max_output_tokens: 8_000,
+                ..Default::default()
+            }],
+        )
+        .expect("remote catalogue upsert should succeed");
+        let preserved = ModelRow::find(&conn, "ollama", "preserve-me")
+            .expect("user-owned custom model must survive refresh");
+        assert!(preserved.custom);
+        let refreshed = ModelRow::find(&conn, "ollama", "local-agent").unwrap();
+        assert!(refreshed.custom);
+        assert_eq!(refreshed.context_length, 64_000);
+
+        let renamed = ModelRow {
+            model_name: "local-agent-v2".into(),
+            context_length: 88_000,
+            ..model
+        };
+        save_model(
+            &conn,
+            &SaveModelParams {
+                provider_name: "ollama".into(),
+                original_model_name: Some("local-agent".into()),
+                model: renamed,
+            },
+        )
+        .expect("custom model rename should save");
+        let row = ModelRow::find(&conn, "ollama", "local-agent-v2").unwrap();
+        assert!(row.custom);
+        assert_eq!(row.context_length, 88_000);
+        assert!(ModelRow::find(&conn, "ollama", "local-agent").is_none());
+    }
+
+    #[test]
+    fn custom_storage_overrides_builtin_metadata_and_blocks_builtin_edits() {
+        let conn = conn();
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES ('deepseek', 'deepseek', 'https://api.deepseek.com', 'key', 'Bearer')",
+            (),
+        )
+        .unwrap();
+        let preset = agentik_sdk::provider::registry::preset_models(&ProviderType::Deepseek)
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("deepseek preset");
+        let custom = ModelRow {
+            provider_name: "deepseek".into(),
+            model_name: preset.model_name.clone(),
+            context_length: 123_456,
+            max_output_tokens: 8_192,
+            custom: true,
+            ..ModelRow::default()
+        };
+        save_model(
+            &conn,
+            &SaveModelParams {
+                provider_name: "deepseek".into(),
+                original_model_name: None,
+                model: custom,
+            },
+        )
+        .expect("custom override may shadow a preset name");
+
+        let model = resolve_model_spec(&conn, &format!("deepseek:{}", preset.model_name))
+            .expect("custom override should resolve");
+        assert_eq!(model.context_length(), 123_456);
+
+        let error = save_model(
+            &conn,
+            &SaveModelParams {
+                provider_name: "deepseek".into(),
+                original_model_name: Some("never-saved".into()),
+                model: ModelRow {
+                    provider_name: "deepseek".into(),
+                    model_name: "never-saved".into(),
+                    context_length: 8_192,
+                    max_output_tokens: 1_024,
+                    custom: true,
+                    ..ModelRow::default()
+                },
+            },
+        )
+        .expect_err("editing a missing row must not synthesize a custom model");
+        assert!(error.to_string().contains("was not found"));
     }
 
     /// 两个 provider 的 preset 含同名模型（zai / bailian 都有 glm-5.3）：

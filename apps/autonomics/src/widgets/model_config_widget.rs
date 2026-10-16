@@ -1,15 +1,14 @@
-//! Model selection widget: a **tree view** of built-in provider catalogues.
+//! Model selection widget: a tree view of built-in and custom provider models.
 //!
-//! Providers and models are **built-in** (from `agentik_sdk::provider::registry`).
-//! The database stores credentials (api_key) and the chosen base_url override.
-//! If a provider has a row in the `providers` table with a non-empty `api_key`,
-//! it is "configured" and its models become selectable.
+//! SDK registry entries are **built-in** and read-only. Database rows are
+//! **custom** entries (user-added or remote-catalogue imports) and can be
+//! edited. A configured provider exposes both kinds of models.
 //!
 //! **Tree layout**:
 //! ```text
 //! ▼ deepseek ✓                ← configured, expanded (top)
-//!   ● deepseek-v4-pro         ← model (indented)
-//!     deepseek-flash
+//!   ● deepseek-v4-pro [built-in]
+//!     deepseek-flash [custom]
 //! ▶ mimo ✓                    ← configured, collapsed
 //! ── minimax ✗                ← unconfigured (bottom, not expandable)
 //! ```
@@ -20,8 +19,9 @@
 //! field, `Up`/`Down` cycle through the provider's preset endpoints (leaving
 //! the textarea free for custom URL entry).
 //!
-//! **Data flow**: App builds [`ModelConfigState`] from the SDK registry +
-//! DB credentials. The widget only reads this state.
+//! **Data flow**: App builds [`ModelConfigState`] from the SDK registry + DB
+//! credentials/models. The widget renders the distinction and emits save
+//! commands; persistence stays in the daemon.
 
 use agentik_sdk::model::{ModelInfo, ProviderType};
 use agentik_sdk::provider::registry;
@@ -67,6 +67,12 @@ pub enum ConfigCommand {
         provider_name: String,
         base_url: String,
     },
+    /// Persist a user-owned model created from a configured provider.
+    SaveModel {
+        provider_name: String,
+        original_model_name: Option<String>,
+        draft: ModelDraft,
+    },
     /// Reload the provider catalogue from the DB and SDK registry.
     ReloadCatalog,
     /// 打开 ChatGPT 订阅 OAuth 浏览器登录（openai provider 专用面板发
@@ -91,7 +97,7 @@ pub struct CatalogProvider {
     /// Currently selected base URL — either a DB-stored override or the
     /// provider default. Drawn from the DB on `build_catalog`.
     pub selected_base_url: String,
-    /// Built-in model catalogue for this provider.
+    /// Built-in presets plus editable custom entries for this provider.
     pub models: Vec<ModelInfo>,
     /// Whether the user has configured credentials for this provider.
     pub configured: bool,
@@ -145,6 +151,282 @@ pub enum ProviderPanelState {
     Chatgpt { provider_name: String },
 }
 
+/// A validated custom-model payload handed from the widget to the App.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelDraft {
+    pub model_name: String,
+    pub context_length: u64,
+    pub max_output_tokens: u64,
+    pub vision_ability: bool,
+    pub supports_function_calling: bool,
+    pub supports_streaming: bool,
+    pub supports_thinking: bool,
+    pub thinking_enabled: bool,
+    pub input_token_price: f64,
+    pub output_token_price: f64,
+}
+
+/// Fields in the add/edit model editor.
+#[derive(Default, PartialEq, Eq, Copy, Clone)]
+pub enum ModelField {
+    #[default]
+    ModelName,
+    ContextLength,
+    MaxOutput,
+    InputPrice,
+    OutputPrice,
+    Vision,
+    FunctionCalling,
+    Streaming,
+    Thinking,
+    ThinkingEnabled,
+}
+
+/// TUI form state for custom models. Built-in presets never enter this state.
+pub struct ModelEditorState {
+    pub provider_name: String,
+    pub original_model_name: Option<String>,
+    model_name: TextArea,
+    context_length: TextArea,
+    max_output_tokens: TextArea,
+    input_price: TextArea,
+    output_price: TextArea,
+    model_name_state: TextAreaState,
+    context_length_state: TextAreaState,
+    max_output_tokens_state: TextAreaState,
+    input_price_state: TextAreaState,
+    output_price_state: TextAreaState,
+    vision: bool,
+    function_calling: bool,
+    streaming: bool,
+    thinking: bool,
+    thinking_enabled: bool,
+    focused_field: ModelField,
+    error: Option<String>,
+}
+
+impl ModelEditorState {
+    fn text_field(value: &str) -> (TextArea, TextAreaState) {
+        let mut area = TextArea::new();
+        area.show_scrollbar = false;
+        area.set_text(value);
+        (area, TextAreaState::default())
+    }
+
+    fn new_add(provider_name: String) -> Self {
+        let (model_name, model_name_state) = Self::text_field("");
+        let (context_length, context_length_state) = Self::text_field("131072");
+        let (max_output_tokens, max_output_tokens_state) = Self::text_field("32768");
+        let (input_price, input_price_state) = Self::text_field("0");
+        let (output_price, output_price_state) = Self::text_field("0");
+        Self {
+            provider_name,
+            original_model_name: None,
+            model_name,
+            context_length,
+            max_output_tokens,
+            input_price,
+            output_price,
+            model_name_state,
+            context_length_state,
+            max_output_tokens_state,
+            input_price_state,
+            output_price_state,
+            vision: false,
+            function_calling: true,
+            streaming: true,
+            thinking: false,
+            thinking_enabled: false,
+            focused_field: ModelField::ModelName,
+            error: None,
+        }
+    }
+
+    fn new_edit(provider_name: String, model: ModelInfo) -> Self {
+        let mut state = Self::new_add(provider_name);
+        state.original_model_name = Some(model.model_name.clone());
+        state.model_name.set_text(&model.model_name);
+        state
+            .context_length
+            .set_text(&model.context_length.to_string());
+        state
+            .max_output_tokens
+            .set_text(&model.max_output_tokens.to_string());
+        state
+            .input_price
+            .set_text(&format!("{}", model.input_token_price));
+        state
+            .output_price
+            .set_text(&format!("{}", model.output_token_price));
+        state.vision = model.vision_ability;
+        state.function_calling = model.supports_function_calling;
+        state.streaming = model.supports_streaming;
+        state.thinking = model.supports_thinking;
+        state.thinking_enabled = model.thinking_enabled;
+        state
+    }
+
+    fn cycle_focus(&mut self, reverse: bool) {
+        use ModelField::*;
+        let order = [
+            ModelName,
+            ContextLength,
+            MaxOutput,
+            InputPrice,
+            OutputPrice,
+            Vision,
+            FunctionCalling,
+            Streaming,
+            Thinking,
+            ThinkingEnabled,
+        ];
+        let current = order
+            .iter()
+            .position(|field| *field == self.focused_field)
+            .unwrap_or(0);
+        let next = if reverse {
+            (current + order.len() - 1) % order.len()
+        } else {
+            (current + 1) % order.len()
+        };
+        self.focused_field = order[next];
+    }
+
+    fn is_boolean(&self) -> bool {
+        matches!(
+            self.focused_field,
+            ModelField::Vision
+                | ModelField::FunctionCalling
+                | ModelField::Streaming
+                | ModelField::Thinking
+                | ModelField::ThinkingEnabled
+        )
+    }
+
+    fn toggle_boolean(&mut self) {
+        self.error = None;
+        match self.focused_field {
+            ModelField::Vision => self.vision = !self.vision,
+            ModelField::FunctionCalling => self.function_calling = !self.function_calling,
+            ModelField::Streaming => self.streaming = !self.streaming,
+            ModelField::Thinking => {
+                self.thinking = !self.thinking;
+                if !self.thinking {
+                    self.thinking_enabled = false;
+                }
+            }
+            ModelField::ThinkingEnabled => {
+                if self.thinking {
+                    self.thinking_enabled = !self.thinking_enabled;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        match self.focused_field {
+            ModelField::ModelName => self.model_name.insert_str(text),
+            ModelField::ContextLength => self.context_length.insert_str(text),
+            ModelField::MaxOutput => self.max_output_tokens.insert_str(text),
+            ModelField::InputPrice => self.input_price.insert_str(text),
+            ModelField::OutputPrice => self.output_price.insert_str(text),
+            _ => self.toggle_boolean(),
+        }
+    }
+
+    fn input(&mut self, key: crossterm::event::KeyEvent) {
+        self.error = None;
+        match self.focused_field {
+            ModelField::ModelName => self.model_name.input(key),
+            ModelField::ContextLength => self.context_length.input(key),
+            ModelField::MaxOutput => self.max_output_tokens.input(key),
+            ModelField::InputPrice => self.input_price.input(key),
+            ModelField::OutputPrice => self.output_price.input(key),
+            _ => {}
+        }
+    }
+
+    fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
+        value
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("{label} must be a non-negative integer"))
+            .and_then(|parsed| {
+                if parsed == 0 {
+                    Err(format!("{label} must be greater than zero"))
+                } else {
+                    Ok(parsed)
+                }
+            })
+    }
+
+    fn parse_price(value: &str, label: &str) -> Result<f64, String> {
+        let trimmed = value.trim();
+        let parsed = if trimmed.is_empty() {
+            0.0
+        } else {
+            trimmed
+                .parse::<f64>()
+                .map_err(|_| format!("{label} must be a number"))?
+        };
+        if !parsed.is_finite() || parsed < 0.0 {
+            return Err(format!("{label} cannot be negative"));
+        }
+        Ok(parsed)
+    }
+
+    fn save(&mut self) -> Option<ConfigCommand> {
+        let parsed = (|| -> Result<ModelDraft, String> {
+            let model_name = self.model_name.text().trim();
+            if model_name.is_empty() {
+                return Err("Model name is required".to_string());
+            }
+            if model_name.contains(':') {
+                return Err("Model name cannot contain ':'".to_string());
+            }
+            Ok(ModelDraft {
+                model_name: model_name.to_string(),
+                context_length: Self::parse_u64(self.context_length.text(), "Context length")?,
+                max_output_tokens: Self::parse_u64(self.max_output_tokens.text(), "Max output")?,
+                vision_ability: self.vision,
+                supports_function_calling: self.function_calling,
+                supports_streaming: self.streaming,
+                supports_thinking: self.thinking,
+                thinking_enabled: self.thinking_enabled,
+                input_token_price: Self::parse_price(self.input_price.text(), "Input price")?,
+                output_token_price: Self::parse_price(self.output_price.text(), "Output price")?,
+            })
+        })();
+
+        match parsed {
+            Ok(draft) => {
+                let provider_name = self.provider_name.clone();
+                let original = self.original_model_name.clone();
+                Some(ConfigCommand::SaveModel {
+                    provider_name,
+                    original_model_name: original,
+                    draft,
+                })
+            }
+            Err(error) => {
+                self.error = Some(error);
+                None
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub enum ModelPanelState {
+    #[default]
+    Preview,
+    Edit(Box<ModelEditorState>),
+}
+
 /// In-memory state for the model config widget.
 pub struct ModelConfigState {
     /// Providers sorted: configured first, then alphabetical.
@@ -156,6 +438,7 @@ pub struct ModelConfigState {
     /// different providers never share the active marker.
     pub active_model_spec: Option<String>,
     pub provider_panel_state: ProviderPanelState,
+    pub model_panel_state: ModelPanelState,
     /// Quick-filter search query. When non-empty, the tree auto-expands to
     /// show only providers/models whose names match (case-insensitive
     /// substring). Editing is backed by `xai_textarea`; Esc clears the query
@@ -178,6 +461,7 @@ impl Default for ModelConfigState {
             cursor: 0,
             active_model_spec: None,
             provider_panel_state: Default::default(),
+            model_panel_state: Default::default(),
             query: String::new(),
             search_textarea,
             search_textarea_state: Default::default(),
@@ -242,8 +526,8 @@ impl ModelConfigState {
     }
 
     /// Insert a terminal bracketed paste into the currently focused model
-    /// config field: the search editor in preview mode, or the credential
-    /// editor when provider configuration is open.
+    /// config field: the search editor in preview mode, provider credential
+    /// editor, or custom-model editor when one is open.
     pub fn insert_paste(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -266,6 +550,10 @@ impl ModelConfigState {
         ) {
             // 登录面板无可输入字段；粘贴落到搜索框反而干扰，直接忽略。
         } else {
+            if let ModelPanelState::Edit(editor) = &mut self.model_panel_state {
+                editor.insert_paste(text);
+                return;
+            }
             self.search_textarea.insert_str(text);
             self.sync_search_query();
         }
@@ -309,6 +597,27 @@ impl ModelConfigState {
     }
 
     /// The model info at the cursor position, if the cursor is on a model row.
+    fn open_add_model(&mut self, pi: usize) -> ConfigCommand {
+        if !self.providers[pi].configured {
+            return ConfigCommand::None;
+        }
+        self.model_panel_state = ModelPanelState::Edit(Box::new(ModelEditorState::new_add(
+            self.providers[pi].name.clone(),
+        )));
+        ConfigCommand::None
+    }
+
+    fn open_edit_model(&mut self, pi: usize, mi: usize) -> ConfigCommand {
+        let model = &self.providers[pi].models[mi];
+        if !model.custom {
+            return ConfigCommand::None;
+        }
+        self.model_panel_state = ModelPanelState::Edit(Box::new(ModelEditorState::new_edit(
+            self.providers[pi].name.clone(),
+            model.clone(),
+        )));
+        ConfigCommand::None
+    }
 
     /// Handle keys and return any command the App should execute.
     ///
@@ -332,6 +641,51 @@ impl ModelConfigState {
             // Mark as consumed by not returning None.
             cc
         };
+
+        // Custom-model editor owns the keyboard while it is open.
+        if let ModelPanelState::Edit(editor) = &mut self.model_panel_state {
+            return match key.code {
+                KeyCode::Esc => {
+                    self.model_panel_state = ModelPanelState::Preview;
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Tab => {
+                    editor.cycle_focus(false);
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::BackTab => {
+                    editor.cycle_focus(true);
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Up => {
+                    editor.cycle_focus(true);
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Down => {
+                    editor.cycle_focus(false);
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Char(' ') if editor.is_boolean() => {
+                    editor.toggle_boolean();
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Enter if editor.is_boolean() => {
+                    editor.toggle_boolean();
+                    consumed(ConfigCommand::None)
+                }
+                KeyCode::Enter => {
+                    let command = editor.save();
+                    if command.is_some() {
+                        self.model_panel_state = ModelPanelState::Preview;
+                    }
+                    command.unwrap_or(ConfigCommand::None)
+                }
+                _ => {
+                    editor.input(key);
+                    consumed(ConfigCommand::None)
+                }
+            };
+        }
 
         // ── ChatGPT 登录面板 ──
         if let ProviderPanelState::Chatgpt { provider_name } = &self.provider_panel_state {
@@ -569,6 +923,22 @@ impl ModelConfigState {
                 }
                 consumed(ConfigCommand::None)
             }
+            // Add a custom model rooted at the focused provider.
+            KeyCode::Char('a') if ctrl => {
+                let flat = self.flat_items();
+                if let Some(FlatItem::Provider(pi)) = flat.get(self.cursor).copied() {
+                    return self.open_add_model(pi);
+                }
+                consumed(ConfigCommand::None)
+            }
+            // Edit custom models only. SDK presets are intentionally immutable.
+            KeyCode::Char('m') if ctrl => {
+                let flat = self.flat_items();
+                if let Some(FlatItem::Model(pi, mi)) = flat.get(self.cursor).copied() {
+                    return self.open_edit_model(pi, mi);
+                }
+                consumed(ConfigCommand::None)
+            }
             // Fetch the provider's live remote catalogue. Only meaningful
             // for providers with a public catalogue endpoint; the app layer
             // re-checks support and toasts on failure.
@@ -637,6 +1007,12 @@ impl StatefulWidgetRef for ModelConfigWidget {
         // Tree is always rendered on the left.
         render_tree(chunks[0], buf, state);
 
+        if let ModelPanelState::Edit(editor) = &mut state.model_panel_state {
+            ratatui::widgets::Clear.render(chunks[1], buf);
+            render_model_editor(chunks[1], buf, editor, &mut state.cursor_pos);
+            return;
+        }
+
         match &mut state.provider_panel_state {
             ProviderPanelState::Preview => {
                 render_detail(chunks[1], buf, state);
@@ -699,7 +1075,7 @@ fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState)
         let placeholder_style = Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM);
-        let placeholder = "search…  Ctrl+D default  Ctrl+E configure provider  Ctrl+R reload";
+        let placeholder = "search…  Ctrl+A add custom  Ctrl+M edit custom";
         let truncated = placeholder.chars().take(textarea_area.width as usize);
         let text: String = truncated.collect();
         buf.set_string(textarea_area.x, textarea_area.y, text, placeholder_style);
@@ -764,6 +1140,12 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     Color::DarkGray
                 };
                 let indent = "    "; // 4 spaces under provider
+                let origin = if m.custom { "[custom]" } else { "[built-in]" };
+                let origin_color = if m.custom {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                };
 
                 ListItem::new(Line::from(vec![
                     Span::raw(indent),
@@ -772,6 +1154,8 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                         m.model_name.clone(),
                         Style::default().fg(if active { Color::White } else { Color::Gray }),
                     ),
+                    Span::raw("  "),
+                    Span::styled(origin, Style::default().fg(origin_color)),
                 ]))
             }
         })
@@ -841,6 +1225,18 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 
             vec![
                 Line::from(vec![label("Provider"), val(p.name.clone())]),
+                Line::from(vec![
+                    label("Custom Models"),
+                    val(format!(
+                        "{}/{}",
+                        p.models.iter().filter(|m| m.custom).count(),
+                        p.models.len()
+                    )),
+                ]),
+                Line::from(vec![
+                    label("Shortcut"),
+                    dim("Ctrl+A add custom model".to_string()),
+                ]),
                 Line::from(vec![label("Type"), dim(format!("{:?}", p.provider_type))]),
                 Line::from(vec![label("Base URL"), dim(p.selected_base_url.clone())]),
                 Line::from(vec![
@@ -894,6 +1290,14 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     },
                 ]),
                 Line::from(vec![label("Provider"), val(p.name.clone())]),
+                Line::from(vec![
+                    label("Origin"),
+                    if m.custom {
+                        val("custom (editable)".to_string())
+                    } else {
+                        dim("built-in (read-only)".to_string())
+                    },
+                ]),
                 Line::from(vec![
                     label("Context Len"),
                     val(format!("{}", m.context_length)),
@@ -1015,6 +1419,240 @@ fn render_chatgpt_panel(
 
     let p = Paragraph::new(lines).block(Block::default().padding(Padding::vertical(1)));
     ratatui::widgets::Widget::render(p, inner, buf);
+}
+
+fn render_model_editor(
+    area: Rect,
+    buf: &mut Buffer,
+    editor: &mut ModelEditorState,
+    cursor_pos: &mut Option<(u16, u16)>,
+) {
+    let title = if editor.original_model_name.is_some() {
+        " Edit Custom Model "
+    } else {
+        " Add Custom Model "
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Line::from(vec![
+            Span::styled(title, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!(" {} ", editor.provider_name),
+                Style::default().fg(Color::White),
+            ),
+        ]))
+        .title_bottom(
+            Line::from("[Tab/↑↓] field  [Space] toggle  [Enter] save  [Esc] cancel")
+                .alignment(Alignment::Center),
+        );
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    if inner.width < 36 || inner.height < 14 {
+        Paragraph::new("  Increase terminal height to edit models.")
+            .style(Style::default().fg(Color::DarkGray))
+            .render(inner, buf);
+        *cursor_pos = None;
+        return;
+    }
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .split(inner);
+
+    let label_style = Style::default().fg(Color::Cyan);
+    let focused_label_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(Color::DarkGray);
+    let label = |name: &str| format!(" {name:<18}: ");
+    let input_area = |row: Rect| Rect {
+        x: inner.x + 20,
+        width: inner.width.saturating_sub(20),
+        ..row
+    };
+    let focused = |field: ModelField| editor.focused_field == field;
+    let text_style = |field: ModelField| {
+        if focused(field) {
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    Paragraph::new(Line::from(vec![
+        Span::styled(label("Provider"), label_style),
+        Span::styled(
+            editor.provider_name.clone(),
+            Style::default().fg(Color::White),
+        ),
+    ]))
+    .render(rows[0], buf);
+
+    let mut render_text =
+        |row: usize, field: ModelField, name: &str, area: &TextArea, state: &mut TextAreaState| {
+            Paragraph::new(Line::from(Span::styled(
+                label(name),
+                if focused(field) {
+                    focused_label_style
+                } else {
+                    label_style
+                },
+            )))
+            .render(rows[row], buf);
+            let target = input_area(rows[row]);
+            Paragraph::new(Span::styled(" ", text_style(field))).render(target, buf);
+            let text_area = Rect {
+                x: target.x + 1,
+                width: target.width.saturating_sub(1),
+                ..target
+            };
+            if text_area.width > 0 {
+                ratatui::widgets::StatefulWidgetRef::render_ref(&area, text_area, buf, state);
+            }
+        };
+
+    render_text(
+        1,
+        ModelField::ModelName,
+        "Model",
+        &editor.model_name,
+        &mut editor.model_name_state,
+    );
+    render_text(
+        2,
+        ModelField::ContextLength,
+        "Context Length",
+        &editor.context_length,
+        &mut editor.context_length_state,
+    );
+    render_text(
+        3,
+        ModelField::MaxOutput,
+        "Max Output",
+        &editor.max_output_tokens,
+        &mut editor.max_output_tokens_state,
+    );
+    render_text(
+        4,
+        ModelField::InputPrice,
+        "Input $/M Tok",
+        &editor.input_price,
+        &mut editor.input_price_state,
+    );
+    render_text(
+        5,
+        ModelField::OutputPrice,
+        "Output $/M Tok",
+        &editor.output_price,
+        &mut editor.output_price_state,
+    );
+
+    let mut render_bool = |row: usize, field: ModelField, name: &str, value: bool| {
+        let selected = focused(field);
+        Paragraph::new(Line::from(vec![Span::styled(
+            label(name),
+            if selected {
+                focused_label_style
+            } else {
+                label_style
+            },
+        )]))
+        .render(rows[row], buf);
+        let mark = if value { "[yes]" } else { "[no ]" };
+        let style = if value {
+            Style::default().fg(Color::Green)
+        } else {
+            dim_style
+        };
+        let target = Rect {
+            x: inner.x + 20,
+            width: inner.width.saturating_sub(20),
+            ..rows[row]
+        };
+        Paragraph::new(Line::from(Span::styled(
+            mark,
+            if selected {
+                style.add_modifier(Modifier::BOLD)
+            } else {
+                style
+            },
+        )))
+        .render(target, buf);
+    };
+
+    render_bool(7, ModelField::Vision, "Vision", editor.vision);
+    render_bool(
+        8,
+        ModelField::FunctionCalling,
+        "Function Calling",
+        editor.function_calling,
+    );
+    render_bool(9, ModelField::Streaming, "Streaming", editor.streaming);
+    render_bool(10, ModelField::Thinking, "Thinking", editor.thinking);
+    render_bool(
+        11,
+        ModelField::ThinkingEnabled,
+        "Thinking Enabled",
+        editor.thinking_enabled,
+    );
+
+    match &editor.error {
+        Some(error) => {
+            Paragraph::new(Line::from(Span::styled(
+                format!(" {error}"),
+                Style::default().fg(Color::Red),
+            )))
+            .render(rows[12], buf);
+        }
+        None => {
+            Paragraph::new(Line::from(Span::styled(
+                " Custom models override built-in metadata.",
+                dim_style,
+            )))
+            .render(rows[12], buf);
+        }
+    }
+
+    *cursor_pos = match editor.focused_field {
+        ModelField::ModelName => editor
+            .model_name
+            .cursor_pos_with_state(input_area(rows[1]), editor.model_name_state),
+        ModelField::ContextLength => editor
+            .context_length
+            .cursor_pos_with_state(input_area(rows[2]), editor.context_length_state),
+        ModelField::MaxOutput => editor
+            .max_output_tokens
+            .cursor_pos_with_state(input_area(rows[3]), editor.max_output_tokens_state),
+        ModelField::InputPrice => editor
+            .input_price
+            .cursor_pos_with_state(input_area(rows[4]), editor.input_price_state),
+        ModelField::OutputPrice => editor
+            .output_price
+            .cursor_pos_with_state(input_area(rows[5]), editor.output_price_state),
+        _ => None,
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1170,16 +1808,15 @@ fn yn(b: bool) -> String {
 
 // ── Catalog builder (called by App) ────────────────────
 
-/// Build the full provider catalogue from the SDK registry, marking each
-/// provider's configured state based on the DB rows passed in.
+/// Build the full provider catalogue from persisted custom models and the SDK
+/// registry, marking each provider's configured state based on the DB rows.
 ///
 /// `db_providers` is a map of `provider_type` string →
 /// `(api_key, base_url_override)`. Providers present in this map with a
 /// non-empty `api_key` are "configured".
 ///
-/// `db_models` are rows persisted in the `models` table — entries imported
-/// from a provider's remote catalogue. They are merged into the provider's
-/// model list after the presets (presets first, imports sorted by name).
+/// `db_models` are custom entries persisted in the `models` table. They win
+/// over same-named SDK presets; remaining built-in presets are appended.
 ///
 /// The selected base URL is the DB-stored override when present, otherwise
 /// the provider default. The full list of preset endpoints
@@ -1197,17 +1834,22 @@ pub fn build_catalog(
         .into_iter()
         .map(|type_str| {
             let provider_type = ProviderType::from(type_str);
-            let mut models = registry::preset_models(&provider_type).unwrap_or_default();
-            // Merge DB-persisted models (remote-catalogue imports) not
-            // already covered by the preset list.
-            let mut extras: Vec<ModelInfo> = db_models
+            // Persisted custom entries win over SDK presets. This lets users
+            // edit context/capability metadata without modifying SDK source.
+            let mut models: Vec<ModelInfo> = db_models
                 .iter()
                 .filter(|m| m.provider_name == type_str)
-                .filter(|m| !models.iter().any(|p| p.model_name == m.model_name))
                 .map(|m| m.to_model_info())
                 .collect();
-            extras.sort_by(|a, b| a.model_name.cmp(&b.model_name));
-            models.extend(extras);
+            let presets = registry::preset_models(&provider_type).unwrap_or_default();
+            let db_names: std::collections::HashSet<String> =
+                models.iter().map(|m| m.model_name.clone()).collect();
+            models.extend(
+                presets
+                    .into_iter()
+                    .filter(|preset| !db_names.contains(preset.model_name.as_str())),
+            );
+            models.sort_by(|a, b| a.model_name.cmp(&b.model_name));
             let preset_urls: Vec<String> = registry::known_base_urls(&provider_type)
                 .into_iter()
                 .map(|s| s.to_string())
@@ -1409,6 +2051,167 @@ mod tests {
             .position(|p| p.name == name)
             .unwrap_or_else(|| panic!("provider {name} in catalog"));
         state.cursor = pi;
+    }
+
+    fn cursor_on_model(state: &mut ModelConfigState, provider: &str, model: &str) {
+        cursor_on_provider(state, provider);
+        state
+            .providers
+            .iter_mut()
+            .find(|p| p.name == provider)
+            .expect("provider exists")
+            .configured = true;
+        state
+            .providers
+            .iter_mut()
+            .find(|p| p.name == provider)
+            .expect("provider exists")
+            .expanded = true;
+        state.cursor = state
+            .flat_items()
+            .iter()
+            .position(|item| match item {
+                FlatItem::Model(pi, mi) => {
+                    state.providers[*pi].name == provider
+                        && state.providers[*pi].models[*mi].model_name == model
+                }
+                FlatItem::Provider(_) => false,
+            })
+            .unwrap_or_else(|| panic!("model {provider}:{model} should be visible"));
+    }
+
+    fn buffer_text(_area: Rect, buf: &Buffer) -> String {
+        buf.content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn ctrl_a_adds_custom_model_while_builtin_is_read_only() {
+        let mut state = build_catalog(&[], &[]);
+        cursor_on_provider(&mut state, "ollama");
+        assert!(matches!(
+            state.handle_key(key('a', true)),
+            ConfigCommand::None,
+        ));
+
+        let pi = state
+            .providers
+            .iter()
+            .position(|p| p.name == "ollama")
+            .unwrap();
+        state.providers[pi].configured = true;
+        state.providers[pi].models.push(ModelInfo {
+            model_name: "builtin-model".into(),
+            custom: false,
+            ..Default::default()
+        });
+        state.handle_key(key('a', true));
+        let ModelPanelState::Edit(editor) = &state.model_panel_state else {
+            panic!("Ctrl+A on a configured provider should open the add-model editor");
+        };
+        assert_eq!(editor.provider_name, "ollama");
+        assert_eq!(editor.original_model_name, None);
+
+        state.handle_key(key('c', false));
+        state.handle_key(key('u', false));
+        let ConfigCommand::SaveModel {
+            provider_name,
+            original_model_name,
+            draft,
+        } = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        else {
+            panic!("Enter should submit the custom model form");
+        };
+        assert_eq!(provider_name, "ollama");
+        assert_eq!(original_model_name, None);
+        assert_eq!(draft.model_name, "cu");
+        assert_eq!(draft.context_length, 131_072);
+        assert!(matches!(state.model_panel_state, ModelPanelState::Preview));
+
+        let builtin = state
+            .providers
+            .iter()
+            .find(|p| p.configured && !p.models.is_empty())
+            .map(|p| (p.name.clone(), p.models[0].model_name.clone()))
+            .expect("a configured provider with a built-in model");
+        cursor_on_model(&mut state, &builtin.0, &builtin.1);
+        assert!(matches!(
+            state.handle_key(key('m', true)),
+            ConfigCommand::None
+        ));
+        assert!(matches!(state.model_panel_state, ModelPanelState::Preview));
+    }
+
+    #[test]
+    fn model_editor_shows_origin_and_inline_validation() {
+        let db_model = gateway::model_bootstrap::ModelRow {
+            provider_name: "ollama".into(),
+            model_name: "local-model".into(),
+            context_length: 32_768,
+            max_output_tokens: 4_096,
+            supports_function_calling: true,
+            supports_streaming: true,
+            custom: true,
+            ..Default::default()
+        };
+        let mut state = build_catalog(
+            &[(
+                "ollama".to_string(),
+                String::new(),
+                "http://localhost:11434".to_string(),
+            )],
+            &[db_model],
+        );
+        let pi = state
+            .providers
+            .iter()
+            .position(|p| p.name == "ollama")
+            .expect("ollama provider exists");
+        state.providers[pi].configured = true;
+        state.providers[pi].expanded = true;
+        state.providers[pi].models.push(ModelInfo {
+            model_name: "builtin-model".into(),
+            custom: false,
+            ..Default::default()
+        });
+        state.providers[pi]
+            .models
+            .sort_by(|a, b| a.model_name.cmp(&b.model_name));
+        cursor_on_model(&mut state, "ollama", "local-model");
+
+        let area = Rect::new(0, 0, 80, 40);
+        let mut buf = Buffer::empty(area);
+        ModelConfigWidget.render_ref(area, &mut buf, &mut state);
+        let rendered = buffer_text(area, &buf);
+        assert!(rendered.contains("[built-in]"));
+        assert!(rendered.contains("[custom]"));
+
+        assert!(matches!(
+            state.handle_key(key('m', true)),
+            ConfigCommand::None
+        ));
+        let ModelPanelState::Edit(editor) = &state.model_panel_state else {
+            panic!("Ctrl+M on a custom model should open the editor");
+        };
+        assert_eq!(editor.original_model_name.as_deref(), Some("local-model"));
+
+        ModelConfigWidget.render_ref(area, &mut buf, &mut state);
+        let rendered = buffer_text(area, &buf);
+        assert!(rendered.contains("Edit Custom Model"));
+        assert!(rendered.contains("Context Length"));
+        assert!(rendered.contains("[yes]"));
+
+        let ModelPanelState::Edit(editor) = &mut state.model_panel_state else {
+            unreachable!("editor remains open before validation");
+        };
+        editor.model_name.set_text("");
+
+        state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(state.model_panel_state, ModelPanelState::Edit(_)));
+        ModelConfigWidget.render_ref(area, &mut buf, &mut state);
+        assert!(buffer_text(area, &buf).contains("Model name is required"));
     }
 
     #[test]

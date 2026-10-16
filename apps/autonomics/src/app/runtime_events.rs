@@ -470,6 +470,22 @@ impl App {
                     self.state.toasts.error("Save failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::ModelSaved {
+                provider_name,
+                result,
+            } => match result {
+                Ok(()) => {
+                    tracing::info!("saved custom model: {provider_name}");
+                    self.spawn_catalog_reload();
+                    self.state
+                        .toasts
+                        .success("Custom model saved", Some(provider_name));
+                }
+                Err(e) => {
+                    tracing::error!("failed to save custom model: {e}");
+                    self.state.toasts.error("Model save failed", Some(e));
+                }
+            },
             crate::app_event::AppEvent::EmbeddingConfigLoaded { result } => {
                 self.handle_embedding_config_event(result, false);
             }

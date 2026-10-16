@@ -206,7 +206,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 41);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 42);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -230,6 +230,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/storage/agents/{id}/sessions",
         "/api/v1/model-config",
         "/api/v1/model-config/provider",
+        "/api/v1/model-config/model",
         "/api/v1/model-config/active-model",
         "/api/v1/model-config/chatgpt/login",
         "/api/v1/model-config/chatgpt/refresh",

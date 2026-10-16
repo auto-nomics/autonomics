@@ -458,6 +458,12 @@ impl GatewayClient {
         .await
     }
 
+    /// Add or update a custom model; built-in SDK presets are read-only.
+    pub async fn save_model(&self, request: &SaveModelRequest) -> Result<()> {
+        self.fire(reqwest::Method::PUT, "/model-config/model", Some(request))
+            .await
+    }
+
     /// Validate, persist, and activate the default model. On success the
     /// daemon broadcasts `ModelChanged`.
     pub async fn set_active_model(&self, spec: &str) -> Result<()> {
