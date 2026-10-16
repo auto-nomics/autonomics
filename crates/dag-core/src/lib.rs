@@ -18,11 +18,13 @@ pub mod value;
 
 pub use dag::{
     ChannelBranch, ChannelNode, ChannelOperator, DagTaskGcPolicy, DagTaskGcReport,
+    DagTaskWatermarkReport,
     LocalDirectoryArtifactStore, LocalTaskExecutor, ProcessTaskOutput, ProcessTaskSpec,
     ProcessTaskTransport, RemoteTaskExecutor, TaskArtifactStore, TaskAttemptReceipt, TaskDispatch,
     TaskExecution, TaskExecutor, TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding,
     TaskResources, TaskSpec, TaskSubmission, TaskTransport, dag_task_gc_age, dag_task_gc_interval,
-    dag_tasks_root, local_task_executor, sweep_dag_tasks,
+    dag_task_gc_max_bytes, dag_tasks_root, local_task_executor, sweep_dag_tasks,
+    sweep_dag_tasks_watermark,
 };
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,

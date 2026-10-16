@@ -74,7 +74,14 @@ pub(super) fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
 /// Receipt directories hold run evidence only — manifests, statuses, logs,
 /// and materialized DataFrame artifacts that are never read back as data —
 /// so age-based deletion is always safe. Directories owned by a live
-/// process are retained regardless of age.
+/// process are retained regardless of age by the age sweep.
+///
+/// Each cycle then enforces a total-size ceiling
+/// (`AUTONOMICS_DAG_TASKS_GC_MAX_BYTES`, default 32 GiB, `0` disables):
+/// when the tree grows past it, receipts are deleted oldest-first —
+/// dead-owner first, then live-owner ones past a 6h grace, so a long-lived
+/// daemon's history cannot grow without bound either — back down to 75% of
+/// the ceiling.
 pub(super) fn spawn_dag_task_gc() {
     let root = dag_core::dag_tasks_root();
     let policy = dag_core::DagTaskGcPolicy {
@@ -82,6 +89,7 @@ pub(super) fn spawn_dag_task_gc() {
         dry_run: false,
     };
     let interval = dag_core::dag_task_gc_interval();
+    let max_bytes = dag_core::dag_task_gc_max_bytes();
     tokio::spawn(async move {
         loop {
             let report = dag_core::sweep_dag_tasks(&root, &policy).await;
@@ -96,6 +104,20 @@ pub(super) fn spawn_dag_task_gc() {
                 foreign = report.foreign_entries,
                 "dag task GC"
             );
+            let watermark = dag_core::sweep_dag_tasks_watermark(&root, max_bytes).await;
+            if !watermark.errors.is_empty() {
+                tracing::warn!(errors = ?watermark.errors, "dag task watermark GC errors");
+            }
+            if watermark.removed > 0 {
+                tracing::warn!(
+                    removed = watermark.removed,
+                    bytes_freed = watermark.total_bytes_before - watermark.total_bytes_after,
+                    before = watermark.total_bytes_before,
+                    after = watermark.total_bytes_after,
+                    ceiling = max_bytes,
+                    "dag task GC watermark exceeded, oldest receipts reclaimed"
+                );
+            }
             let Some(interval) = interval else {
                 break;
             };

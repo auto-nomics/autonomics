@@ -22,9 +22,21 @@ const DAG_TASKS_ROOT_ENV: &str = "AUTONOMICS_DAG_TASKS_ROOT";
 const DAG_TASKS_GC_AGE_ENV: &str = "AUTONOMICS_DAG_TASKS_GC_AGE_SECS";
 /// Delay between sweeps (seconds); `0` sweeps once at startup and stops.
 const DAG_TASKS_GC_INTERVAL_ENV: &str = "AUTONOMICS_DAG_TASKS_GC_INTERVAL_SECS";
+/// Total-size ceiling for the dag-tasks tree (bytes); `0` disables the
+/// watermark sweep.
+const DAG_TASKS_GC_MAX_BYTES_ENV: &str = "AUTONOMICS_DAG_TASKS_GC_MAX_BYTES";
 
 const DEFAULT_GC_AGE_SECS: u64 = 7 * 24 * 3600;
 const DEFAULT_GC_INTERVAL_SECS: u64 = 6 * 3600;
+const DEFAULT_GC_MAX_BYTES: u64 = 32 * 1024 * 1024 * 1024;
+/// Headroom left below the ceiling once the watermark sweep has run, so one
+/// sweep buys the next interval its budget back.
+const WATERMARK_HEADROOM_DIVISOR: u64 = 4;
+/// Live-owner receipts become watermark candidates only after this age: a
+/// long-lived daemon owns every receipt it ever wrote, so pid liveness alone
+/// cannot exempt them forever, but an in-flight task's workspace must not be
+/// pulled out from under it either.
+const WATERMARK_LIVE_OWNER_GRACE: Duration = Duration::from_secs(6 * 3600);
 
 /// Prefix for directories renamed by a sweep that died mid-delete.
 const GC_PENDING_PREFIX: &str = ".gc-";
@@ -75,6 +87,147 @@ pub struct DagTaskGcReport {
     pub errors: Vec<String>,
 }
 
+/// Outcome of one watermark sweep.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct DagTaskWatermarkReport {
+    /// Receipt directories considered.
+    pub scanned: usize,
+    /// Directories removed.
+    pub removed: usize,
+    /// Total bytes under the root before the sweep.
+    pub total_bytes_before: u64,
+    /// Total bytes under the root after the sweep.
+    pub total_bytes_after: u64,
+    /// Ceiling the sweep targets; `None` when the sweep is disabled.
+    pub max_bytes: Option<u64>,
+    /// Live-owner directories skipped because they are younger than the
+    /// watermark grace window.
+    pub retained_live_recent: usize,
+    /// Best-effort failures encountered during the sweep.
+    pub errors: Vec<String>,
+}
+
+/// Enforce a total-size ceiling on the dag-tasks tree.
+///
+/// Runs after the age sweep in the same loop. When the tree exceeds
+/// `max_bytes`, receipts are deleted oldest-first — dead-owner directories
+/// first, then live-owner ones past the grace window (a long-lived daemon
+/// owns every receipt it wrote, so pid liveness cannot exempt them forever) —
+/// until the tree is back at 75% of the ceiling. Pending `.gc-` leftovers
+/// count toward the total and are cleared first.
+pub async fn sweep_dag_tasks_watermark(root: &Path, max_bytes: Option<u64>) -> DagTaskWatermarkReport {
+    let (root, max_bytes) = (root.to_path_buf(), max_bytes);
+    tokio::task::spawn_blocking(move || {
+        sweep_dag_tasks_watermark_blocking(&root, max_bytes)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        let mut report = DagTaskWatermarkReport::default();
+        report
+            .errors
+            .push(format!("dag task watermark sweep task failed: {join_error}"));
+        report
+    })
+}
+
+fn sweep_dag_tasks_watermark_blocking(
+    root: &Path,
+    max_bytes: Option<u64>,
+) -> DagTaskWatermarkReport {
+    let mut report = DagTaskWatermarkReport {
+        max_bytes,
+        ..Default::default()
+    };
+    let Some(max_bytes) = max_bytes else {
+        return report;
+    };
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return report,
+        Err(error) => {
+            report
+                .errors
+                .push(format!("cannot read `{}`: {error}", root.display()));
+            return report;
+        }
+    };
+
+    let now = SystemTime::now();
+    let mut total = 0u64;
+    let mut candidates = Vec::<(bool, SystemTime, PathBuf, u64)>::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if name.starts_with(GC_PENDING_PREFIX) {
+            // Never added to the running total; just reclaim it.
+            if let Err(error) = fs::remove_dir_all(&path) {
+                report.errors.push(format!(
+                    "cannot clear pending sweep target `{}`: {error}",
+                    path.display()
+                ));
+            }
+            continue;
+        }
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Some(pid) = parse_receipt_pid(&name) else {
+            continue;
+        };
+        report.scanned += 1;
+        let live = owner_is_live(pid);
+        let modified = fs::metadata(&path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let age = modified
+            .and_then(|modified| now.duration_since(modified).ok())
+            .unwrap_or_default();
+        let bytes = dir_size(&path);
+        total = total.saturating_add(bytes);
+        // Dead owners are always candidates; live owners only once past the
+        // grace window, so an in-flight workspace is never pulled mid-run.
+        let eligible = !live || age >= WATERMARK_LIVE_OWNER_GRACE;
+        if eligible {
+            if let Some(modified) = modified {
+                candidates.push((live, modified, path, bytes));
+            }
+        } else {
+            report.retained_live_recent += 1;
+        }
+    }
+
+    let target = max_bytes - max_bytes / WATERMARK_HEADROOM_DIVISOR;
+    if total <= max_bytes {
+        report.total_bytes_before = total;
+        report.total_bytes_after = total;
+        return report;
+    }
+
+    // Dead-owner first, then oldest-first within each class.
+    candidates.sort_by(|a, b| {
+        a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1))
+    });
+    report.total_bytes_before = total;
+    for (_, _, path, _) in candidates {
+        if total <= target {
+            break;
+        }
+        match remove_dir_atomically(root, &path) {
+            Ok(bytes_removed) => {
+                report.removed += 1;
+                total = total.saturating_sub(bytes_removed);
+            }
+            Err(error) => {
+                report
+                    .errors
+                    .push(format!("cannot remove `{}`: {error}", path.display()));
+            }
+        }
+    }
+    report.total_bytes_after = total;
+    report
+}
+
 /// Retention window for dead-owner receipt directories.
 pub fn dag_task_gc_age() -> Duration {
     parse_env_secs(
@@ -91,6 +244,14 @@ pub fn dag_task_gc_interval() -> Option<Duration> {
         .and_then(|value| value.to_string_lossy().trim().parse::<u64>().ok())
         .unwrap_or(DEFAULT_GC_INTERVAL_SECS);
     (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+/// Total-size ceiling for the dag-tasks tree; `None` disables the watermark
+/// sweep. Invalid values fall back to the default ceiling.
+pub fn dag_task_gc_max_bytes() -> Option<u64> {
+    std::env::var_os(DAG_TASKS_GC_MAX_BYTES_ENV)
+        .and_then(|value| value.to_string_lossy().trim().parse::<u64>().ok())
+        .map_or(Some(DEFAULT_GC_MAX_BYTES), |bytes| (bytes > 0).then_some(bytes))
 }
 
 fn parse_env_secs(raw: Option<&std::ffi::OsStr>, default: u64) -> Duration {
@@ -412,6 +573,80 @@ mod tests {
         .await;
         assert_eq!(report.scanned, 0);
         assert!(report.errors.is_empty());
+    }
+
+    fn make_sized_receipt(root: &Path, pid: u32, age: Duration, bytes: usize) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SIZED_SEQ: AtomicU64 = AtomicU64::new(0);
+        let sequence = SIZED_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = root.join(format!("{pid}-1791400000000000000-{sequence}"));
+        fs::create_dir_all(dir.join("outputs")).unwrap();
+        fs::write(dir.join("task.json"), "{}").unwrap();
+        fs::write(dir.join("outputs").join("port-0.arrow"), vec![b'x'; bytes]).unwrap();
+        set_age(&dir, age);
+        dir
+    }
+
+    #[tokio::test]
+    async fn watermark_noop_below_ceiling() {
+        let root = tempfile::tempdir().unwrap();
+        make_sized_receipt(root.path(), 4_000_000, Duration::from_secs(3600), 1024);
+        let report = sweep_dag_tasks_watermark(root.path(), Some(1 << 20)).await;
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.total_bytes_before, report.total_bytes_after);
+        assert!(report.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn watermark_disabled_is_a_noop() {
+        let root = tempfile::tempdir().unwrap();
+        make_sized_receipt(root.path(), 4_000_000, Duration::from_secs(3600), 1024);
+        let report = sweep_dag_tasks_watermark(root.path(), None).await;
+        assert_eq!(report.scanned, 0);
+        assert_eq!(report.removed, 0);
+    }
+
+    #[tokio::test]
+    async fn watermark_reclaims_oldest_dead_first_down_to_target() {
+        let root = tempfile::tempdir().unwrap();
+        let unit = 8192;
+        let oldest =
+            make_sized_receipt(root.path(), 4_000_000, Duration::from_secs(900), unit);
+        let middle =
+            make_sized_receipt(root.path(), 4_000_001, Duration::from_secs(600), unit);
+        let newest =
+            make_sized_receipt(root.path(), 4_000_002, Duration::from_secs(300), unit);
+
+        // Ceiling of three units (target 2.25): the ~3.01 units on disk push
+        // past it, so exactly the oldest receipt goes.
+        let report =
+            sweep_dag_tasks_watermark(root.path(), Some(unit as u64 * 3)).await;
+        assert_eq!(report.scanned, 3);
+        assert_eq!(report.removed, 1, "only enough receipts to reach the target");
+        assert!(!oldest.exists(), "the oldest receipt is reclaimed first");
+        assert!(middle.exists());
+        assert!(newest.exists());
+        assert!(report.total_bytes_after < report.total_bytes_before);
+    }
+
+    #[tokio::test]
+    async fn watermark_retains_young_live_owner_but_reclaims_old_live_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let unit = 4096;
+        let live = std::process::id();
+        let live_young =
+            make_sized_receipt(root.path(), live, Duration::from_secs(300), unit);
+        // Older than the 6h grace: eligible even though its owner is alive.
+        let live_old =
+            make_sized_receipt(root.path(), live, Duration::from_secs(7 * 3600), unit);
+
+        let report =
+            sweep_dag_tasks_watermark(root.path(), Some(unit as u64)).await;
+        assert_eq!(report.removed, 1);
+        assert!(live_young.exists(), "in-flight workspaces are never touched");
+        assert!(!live_old.exists(), "grace-expired live-owner receipts go");
+        assert_eq!(report.retained_live_recent, 1);
     }
 
     #[test]
