@@ -127,7 +127,7 @@ impl App {
         // context) from the catalog rows.
         state.active_model_spec = snapshot.active_model_spec.clone();
         state.active_model_display = snapshot.active_model_spec.as_deref().and_then(|spec| {
-            let (provider, name) = spec.split_once(':')?;
+            let (provider, name) = spec.rsplit_once(':')?;
             snapshot
                 .model_catalog
                 .models

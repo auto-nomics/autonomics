@@ -532,7 +532,9 @@ impl ModelWorker {
     /// override, per-agent hot-swap) so OAuth-backed models always
     /// persist refreshed tokens.
     async fn resolve(&self, spec: &str) -> std::result::Result<Model, String> {
-        let Some((provider_name, model_name)) = spec.split_once(':') else {
+        // Model names may contain colons; the provider name must not, so
+        // split on the LAST colon.
+        let Some((provider_name, model_name)) = spec.rsplit_once(':') else {
             return Err(Self::unavailable(spec));
         };
         let auth = self

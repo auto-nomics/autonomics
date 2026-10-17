@@ -162,7 +162,7 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     // Display name for run.started: --model's part after the colon, else
     // the daemon's active spec (informational only).
     let name_part = |spec: &str| {
-        spec.split_once(':')
+        spec.rsplit_once(':')
             .map(|(_, name)| name.to_string())
             .unwrap_or_else(|| spec.to_string())
     };

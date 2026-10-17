@@ -873,8 +873,9 @@ pub fn resolve_active_model(conn: &Connection) -> Option<Model> {
 /// malformed, the provider is not configured (or has an empty API key),
 /// or the model is unknown.
 pub fn resolve_model_spec(conn: &Connection, spec: &str) -> Option<Model> {
-    // Parse "provider_name:model_name"
-    let (provider_name, model_name) = spec.split_once(':')?;
+    // Parse "provider_name:model_name" — model names may themselves
+    // contain colons, so split on the LAST colon.
+    let (provider_name, model_name) = spec.rsplit_once(':')?;
     let auth = provider_auth(conn, provider_name)?;
     let db_model = ModelRow::find(conn, provider_name, model_name);
     resolve_from_parts(provider_name, model_name, &auth, db_model)
