@@ -547,19 +547,19 @@ impl StatefulWidget for ModelEditorWidget {
         state.cursor_pos = match state.focused_field {
             ModelField::ModelName => state
                 .model_name
-                .cursor_pos_with_state(input_area(rows[1]), state.model_name_state.clone()),
+                .cursor_pos_with_state(input_area(rows[1]), state.model_name_state),
             ModelField::ContextLength => state
                 .context_length
-                .cursor_pos_with_state(input_area(rows[2]), state.context_length_state.clone()),
+                .cursor_pos_with_state(input_area(rows[2]), state.context_length_state),
             ModelField::MaxOutput => state
                 .max_output_tokens
-                .cursor_pos_with_state(input_area(rows[3]), state.max_output_tokens_state.clone()),
+                .cursor_pos_with_state(input_area(rows[3]), state.max_output_tokens_state),
             ModelField::InputPrice => state
                 .input_price
-                .cursor_pos_with_state(input_area(rows[4]), state.input_price_state.clone()),
+                .cursor_pos_with_state(input_area(rows[4]), state.input_price_state),
             ModelField::OutputPrice => state
                 .output_price
-                .cursor_pos_with_state(input_area(rows[5]), state.output_price_state.clone()),
+                .cursor_pos_with_state(input_area(rows[5]), state.output_price_state),
             _ => None,
         };
     }

@@ -501,9 +501,7 @@ impl App {
                 }
                 Err(e) => {
                     tracing::error!("failed to delete custom model: {e}");
-                    self.state
-                        .toasts
-                        .error("Model delete failed", Some(e));
+                    self.state.toasts.error("Model delete failed", Some(e));
                 }
             },
             crate::app_event::AppEvent::EmbeddingConfigLoaded { result } => {

@@ -1373,8 +1373,7 @@ fn render_delete_confirm(
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
         .title_bottom(
-            Line::from("[Ctrl+X] confirm  [any other key] cancel")
-                .alignment(Alignment::Center),
+            Line::from("[Ctrl+X] confirm  [any other key] cancel").alignment(Alignment::Center),
         );
     let inner = block.inner(area);
     block.render(area, buf);
@@ -1808,10 +1807,7 @@ mod tests {
         assert!(rendered.contains("[yes]"));
 
         state.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        state.handle_key(KeyEvent::new(
-            KeyCode::Char('u'),
-            KeyModifiers::CONTROL,
-        ));
+        state.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
 
         state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(state.model_panel_state, ModelPanelState::Edit(_)));
