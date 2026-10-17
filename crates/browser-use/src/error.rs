@@ -32,6 +32,10 @@ pub enum Error {
     #[error("invalid url `{0}`")]
     InvalidUrl(String),
 
+    /// A newly created tab stayed on an internal page after navigation.
+    #[error("new tab failed to navigate away from its initial page")]
+    NewTabNavigation,
+
     /// Downloads were requested without a configured download directory.
     #[error("browser downloads are disabled; no download directory is configured")]
     DownloadsDisabled,

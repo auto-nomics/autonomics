@@ -6,21 +6,18 @@ use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;
 
 use crate::browser::BrowserSession;
-use crate::error::Error;
-use crate::tools::tool_err;
 
 /// Click an element and type text into it.
 #[tool(
     name = "browser_type_text",
-    description = "Click the first element matching a CSS selector, then type `text` \
-                  into it. Use for form fields and search boxes. Special key \
-                  sequences (e.g. Enter) are sent as keystrokes; for key chords \
-                  use `browser_press_key` instead."
+    description = "Focus the first element matching a CSS selector, set its value \
+                  using the native DOM setter, and dispatch input/change events. \
+                  Use browser_evaluate for form submission or special keys."
 )]
 pub struct TypeTextInput {
     #[desc = "CSS selector of the input element."]
     pub selector: String,
-    #[desc = "Text to type. Each character is sent as a separate key event."]
+    #[desc = "Text to enter into the field."]
     pub text: String,
     #[desc = "Zero-based tab index; defaults to the active tab."]
     #[default = 0]
@@ -47,13 +44,16 @@ impl ToolFunction for TypeTextTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let tab = self.session.tab(input.tab_index).await?;
         let timeout = input.timeout_ms.map(std::time::Duration::from_millis);
-        let element = tab.wait_for_selector(&input.selector, timeout).await?;
-        element.click().await.map_err(Error::from)?;
-        element.type_str(&input.text).await.map_err(Error::from)?;
+        tab.type_text_with_timeout(&input.selector, &input.text, timeout)
+            .await?;
         Ok(ToolResult::success(format!(
             "typed {} chars into `{}`",
             input.text.chars().count(),
             input.selector
         )))
+    }
+
+    fn timeout_seconds(&self) -> u64 {
+        15
     }
 }
