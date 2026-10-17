@@ -49,6 +49,7 @@ pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Default agent-visible download mount used when no runtime path is supplied.
 const DEFAULT_DOWNLOAD_VFS_PATH: &str = "/browser-downloads";
+static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Launch options
@@ -145,16 +146,43 @@ pub struct Browser {
     browser: CdpBrowser,
     /// Join handle of the spawned CDP handler driver.
     _handler: tokio::task::JoinHandle<()>,
+    /// Ephemeral profile directory owned by this browser, if it created one.
+    _profile_dir: Option<PathBuf>,
 }
 
 impl Browser {
     /// Launch a new browser process with the given options.
     pub async fn launch(options: BrowserOptions) -> Result<Self> {
-        let (browser, handler) = CdpBrowser::launch(options.to_cdp_config()?)
-            .await
-            .map_err(|e| Error::Launch(e.to_string()))?;
+        let mut options = options;
+        let profile_dir = match options.user_data_dir {
+            Some(_) => None,
+            None => {
+                let sequence = PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                let dir = std::env::temp_dir().join(format!(
+                    "browser-use-profile-{}-{sequence}",
+                    std::process::id()
+                ));
+                std::fs::create_dir_all(&dir)?;
+                options.user_data_dir = Some(dir.clone());
+                Some(dir)
+            }
+        };
+        let launched = CdpBrowser::launch(options.to_cdp_config()?).await;
+        let (browser, handler) = match launched {
+            Ok(launched) => launched,
+            Err(error) => {
+                if let Some(dir) = &profile_dir {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                return Err(Error::Launch(error.to_string()));
+            }
+        };
         let _handler = spawn_handler(handler);
-        Ok(Self { browser, _handler })
+        Ok(Self {
+            browser,
+            _handler,
+            _profile_dir: profile_dir,
+        })
     }
 
     /// Attach to an already running browser via its debugging URL
@@ -164,7 +192,11 @@ impl Browser {
             .await
             .map_err(|e| Error::Connect(e.to_string()))?;
         let _handler = spawn_handler(handler);
-        Ok(Self { browser, _handler })
+        Ok(Self {
+            browser,
+            _handler,
+            _profile_dir: None,
+        })
     }
 
     /// Open a new empty tab.
@@ -175,9 +207,33 @@ impl Browser {
 
     /// Open a new tab and navigate it to `url` in one step.
     pub async fn new_tab_at(&self, url: &str) -> Result<Tab> {
-        let tab = self.new_tab().await?;
-        tab.goto(url).await?;
-        Ok(tab)
+        let url = normalize_url(url)?;
+        let page = self.browser.new_page(url.as_str()).await?;
+        let tab = Tab { page };
+        let mut last_error = None;
+        for attempt in 0..3 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            match tab.goto(url.as_str()).await {
+                Ok(()) => {
+                    let current = tab.url().await?;
+                    let loaded = current.as_deref().is_some_and(|current| {
+                        current == url.as_str()
+                            || (!current.starts_with("about:blank")
+                                && !current.starts_with("chrome://new-tab-page"))
+                    });
+                    if loaded {
+                        return Ok(tab);
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        if let Some(error) = last_error {
+            return Err(error);
+        }
+        Err(Error::NewTabNavigation)
     }
 
     /// Handles to all currently open tabs.
@@ -214,6 +270,14 @@ impl Browser {
         self.browser.close().await?;
         self.browser.wait().await?;
         Ok(())
+    }
+}
+
+impl Drop for Browser {
+    fn drop(&mut self) {
+        if let Some(dir) = &self._profile_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -372,10 +436,60 @@ impl Tab {
 
     /// Click the first element matching `selector`, then type `input` into it.
     pub async fn type_text(&self, selector: &str, input: &str) -> Result<()> {
-        let element = self.wait_for_selector(selector, None).await?;
-        element.click().await?;
-        element.type_str(input).await?;
-        Ok(())
+        self.type_text_with_timeout(selector, input, None).await
+    }
+
+    /// Set a form field with native DOM events.
+    ///
+    /// Chrome 153 headless can stall in chromiumoxide's per-character keyboard
+    /// pipeline even for an attached, focused input. Writing through the native
+    /// value setter and dispatching `input`/`change` is deterministic and keeps
+    /// framework listeners working.
+    pub async fn type_text_with_timeout(
+        &self,
+        selector: &str,
+        input: &str,
+        timeout: Option<Duration>,
+    ) -> Result<()> {
+        self.wait_for_selector(selector, timeout).await?;
+        let selector = serde_json::to_string(selector)?;
+        let input = serde_json::to_string(input)?;
+        let script = format!(
+            r#"
+                (() => {{
+                    const element = document.querySelector({selector});
+                    element.focus();
+                    element.click();
+                    if (element instanceof HTMLInputElement ||
+                        element instanceof HTMLTextAreaElement
+                    ) {{
+                        const prototype = element instanceof HTMLInputElement
+                            ? HTMLInputElement.prototype
+                            : HTMLTextAreaElement.prototype;
+                        const setter = Object.getOwnPropertyDescriptor(
+                            prototype,
+                            "value"
+                        )?.set;
+                        if (setter) {{
+                            setter.call(element, {input});
+                        }} else {{
+                            element.value = {input};
+                        }}
+                    }} else if (element.isContentEditable) {{
+                        element.textContent = {input};
+                    }} else {{
+                        throw new TypeError("selector is not an input or contenteditable element");
+                    }}
+                    element.dispatchEvent(new InputEvent("input", {{
+                        bubbles: true,
+                        cancelable: true,
+                    }}));
+                    element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    return true;
+                }})()
+            "#
+        );
+        self.evaluate(&script).await.map(|_| ())
     }
 
     /// Scroll by `(x, y)` pixels relative to the current position.
@@ -962,6 +1076,99 @@ mod tests {
         }
 
         session.close().await.unwrap();
+    }
+
+    /// Cover the Chrome 153 regressions found by the browser-control audit:
+    /// typing through CDP keyboard events could hang, and a URL-bearing new
+    /// target could remain on Chrome's internal new-tab page.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn browser_type_text_and_new_tab_url_are_reliable() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+
+        use agentik_core::tools::ToolFunction;
+
+        if std::env::var("BROWSER_USE_E2E").is_err() {
+            eprintln!("set BROWSER_USE_E2E=1 to run; skipping");
+            return;
+        }
+
+        let server = std::sync::Arc::new(tiny_http::Server::http(("127.0.0.1", 0)).unwrap());
+        let address = server.server_addr().to_string();
+        let running = std::sync::Arc::new(AtomicBool::new(true));
+        let worker = {
+            let server = server.clone();
+            let running = running.clone();
+            std::thread::spawn(move || {
+                while running.load(std::sync::atomic::Ordering::SeqCst) {
+                    let Ok(request) = server.recv() else {
+                        break;
+                    };
+                    let body = r#"<!doctype html><input id="field">"#;
+                    let response = tiny_http::Response::from_string(body)
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"text/html; charset=utf-8"[..],
+                            )
+                            .unwrap(),
+                        )
+                        .with_header(
+                            tiny_http::Header::from_bytes(&b"Connection"[..], &b"close"[..])
+                                .unwrap(),
+                        );
+                    let _ = request.respond(response);
+                }
+            })
+        };
+
+        let mut options = BrowserOptions::default();
+        options.no_sandbox = true;
+        let session = super::BrowserSession::launch(options).await.unwrap();
+        let url = format!("http://{address}/form");
+        let tab = session.tab(None).await.unwrap();
+        tab.goto(&url).await.unwrap();
+
+        let typing = crate::tools::type_text::TypeTextTool::new(session.clone());
+        typing
+            .run(crate::tools::type_text::TypeTextInput {
+                selector: "#field".to_string(),
+                text: "headless browser test".to_string(),
+                tab_index: Some(0),
+                timeout_ms: Some(10_000),
+            })
+            .await
+            .unwrap();
+        let value = session
+            .tab(None)
+            .await
+            .unwrap()
+            .evaluate("document.querySelector('#field').value")
+            .await
+            .unwrap();
+        assert_eq!(value.as_str(), Some("headless browser test"));
+
+        let new_index = session.new_tab_at(&url).await.unwrap();
+        let mut new_url = None;
+        for _ in 0..100 {
+            new_url = session
+                .tab(Some(new_index))
+                .await
+                .unwrap()
+                .url()
+                .await
+                .unwrap();
+            if new_url.as_deref() == Some(url.as_str()) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(new_url.as_deref(), Some(url.as_str()));
+
+        session.close().await.unwrap();
+        running.store(false, std::sync::atomic::Ordering::SeqCst);
+        server.unblock();
+        worker.join().unwrap();
     }
 
     /// Download a real attachment through CDP and verify the completed path.
