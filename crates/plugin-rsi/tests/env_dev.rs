@@ -16,6 +16,7 @@ mod common;
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use async_trait::async_trait;
+
 use container_runtime::{
     ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, ImageBuildConnection,
     ImageBuildRequest, ImageBuildResult, ImagePushRequest, ImagePushResult, PodmanConnection,
@@ -26,6 +27,7 @@ use plugin_rsi::{
     PublishedImageReference, RequestIntent, RequestRecord, RequestSource, RequestStatus,
 };
 use serde_json::{Value, json};
+use tokio::sync::Mutex as AsyncMutex;
 
 const BASE_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
 const REMOTE_DIGEST: &str =
@@ -37,7 +39,7 @@ const DEFAULT_TESTS_BLOCK: &str = "[[tests]]\nname = \"base-interpreters\"\nargv
 
 /// The process-global toolset registry is shared state; environment tests
 /// reconfigure it per test, so the tests in this binary run sequentially.
-static SEQUENTIAL: Mutex<()> = Mutex::new(());
+static SEQUENTIAL: AsyncMutex<()> = AsyncMutex::const_new(());
 
 #[derive(Default)]
 struct FakeImageBuilder {
@@ -239,9 +241,7 @@ async fn json_result(tools: &[ToolRegistration], name: &str, input: Value) -> Va
 
 #[tokio::test]
 async fn environment_is_developed_activated_published_and_rolled_back() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(true);
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-dev-agent");
@@ -422,9 +422,7 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
 
 #[tokio::test]
 async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
@@ -547,9 +545,7 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
 
 #[tokio::test]
 async fn missing_builder_blocks_infrastructure_gates() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(false);
     let infra = harness.infra.clone();
     infra
@@ -586,9 +582,7 @@ async fn missing_builder_blocks_infrastructure_gates() {
 
 #[tokio::test]
 async fn failing_smoke_tests_repair_the_workspace() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(true);
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-smoke-agent");
@@ -638,9 +632,7 @@ async fn failing_smoke_tests_repair_the_workspace() {
 /// base, malformed interpreters — leaves manifest.toml byte-identical.
 #[tokio::test]
 async fn manifest_update_edits_are_validated_before_they_land() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(false);
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-manifest-agent");
@@ -766,9 +758,7 @@ async fn manifest_update_edits_are_validated_before_they_land() {
 /// replace-everywhere with it.
 #[tokio::test]
 async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(false);
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-twin-agent");
@@ -850,9 +840,7 @@ async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
 
 #[tokio::test]
 async fn dirty_workspaces_refuse_local_activation() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
@@ -893,9 +881,7 @@ async fn dirty_workspaces_refuse_local_activation() {
 
 #[tokio::test]
 async fn lifecycle_mutations_are_guarded_by_transitions() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra

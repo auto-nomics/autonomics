@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 mod common;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
@@ -20,7 +22,7 @@ const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:01234567890
 
 /// The process-global toolset registry is shared state; reconfigure per test
 /// and run this binary's tests sequentially.
-static SEQUENTIAL: Mutex<()> = Mutex::new(());
+static SEQUENTIAL: AsyncMutex<()> = AsyncMutex::const_new(());
 
 fn catalog() -> EnvironmentCatalog {
     let mut catalog = EnvironmentCatalog::default();
@@ -113,9 +115,7 @@ script_file = \"scripts/other.sh\"
 
 #[tokio::test]
 async fn manifest_edits_are_validated_before_they_land() {
-    let _guard = SEQUENTIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _guard = SEQUENTIAL.lock().await;
     let state = tempfile::tempdir().unwrap();
     let requests = RequestStore::open(state.path());
     let recorded = requests
