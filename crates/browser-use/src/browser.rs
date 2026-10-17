@@ -19,7 +19,7 @@
 //! # Ok(()) }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +31,7 @@ use chromiumoxide::cdp::browser_protocol::browser::{
     SetDownloadBehaviorParams,
 };
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+use chromiumoxide::cdp::browser_protocol::target::TargetId;
 use chromiumoxide::handler::Handler;
 use chromiumoxide::layout::Point;
 use chromiumoxide::page::ScreenshotParams;
@@ -294,6 +295,13 @@ pub struct Tab {
 }
 
 impl Tab {
+    /// CDP target id of this tab.
+    ///
+    /// IDs are stable regardless of how Chromium orders its page list.
+    pub fn target_id(&self) -> &TargetId {
+        self.page.target_id()
+    }
+
     /// The page's current URL, if any.
     pub async fn url(&self) -> Result<Option<String>> {
         Ok(self.page.url().await?)
@@ -677,7 +685,14 @@ async fn watch_downloads(
 /// while holding the mutex.
 pub struct BrowserSession {
     browser: Mutex<Browser>,
-    /// Index into [`Browser::tabs`] of the tab subsequent tools operate on
+    /// Stable insertion order for tab indices.
+    ///
+    /// `chromiumoxide` exposes pages by iterating a `HashMap`, so the order of
+    /// [`Browser::tabs`] changes whenever a target is added. Tools address tabs
+    /// by index, so the session keeps its own order and resolves indices by
+    /// target id.
+    tab_order: Mutex<Vec<TargetId>>,
+    /// Index into [`Self::tab_order`] of the tab subsequent tools operate on
     /// when no explicit `tab_index` is given.
     active: Mutex<usize>,
     downloads: DownloadMap,
@@ -694,11 +709,19 @@ impl BrowserSession {
     /// If the browser already has tabs, the first one is selected as
     /// active; otherwise a fresh `about:blank` tab is created.
     pub async fn new(browser: Browser) -> Result<Self> {
-        if browser.tabs().await?.is_empty() {
-            browser.new_tab().await?;
+        let mut tab_order: Vec<TargetId> = browser
+            .tabs()
+            .await?
+            .iter()
+            .map(|tab| tab.target_id().clone())
+            .collect();
+        if tab_order.is_empty() {
+            let tab = browser.new_tab().await?;
+            tab_order.push(tab.target_id().clone());
         }
         Ok(Self {
             browser: Mutex::new(browser),
+            tab_order: Mutex::new(tab_order),
             active: Mutex::new(0),
             downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             next_download_sequence: Arc::new(AtomicU64::new(0)),
@@ -750,6 +773,43 @@ impl BrowserSession {
         Ok(Arc::new(Self::new(browser).await?))
     }
 
+    /// Return live tabs in the session's stable index order.
+    ///
+    /// Tabs closed outside the session are dropped from the order, and tabs
+    /// created outside the session are appended. The caller must hold the
+    /// browser lock, which keeps the CDP snapshot and the order consistent.
+    async fn ordered_tabs(&self, browser: &Browser) -> Result<Vec<Tab>> {
+        let tabs = browser.tabs().await?;
+        let mut order = self.tab_order.lock().await;
+        let mut seen = HashSet::new();
+        order.retain(|id| tabs.iter().any(|tab| tab.target_id() == id) && seen.insert(id.clone()));
+        for tab in &tabs {
+            if seen.insert(tab.target_id().clone()) {
+                order.push(tab.target_id().clone());
+            }
+        }
+        let ordered = order
+            .iter()
+            .filter_map(|id| tabs.iter().find(|tab| tab.target_id() == id).cloned())
+            .collect();
+        Ok(ordered)
+    }
+
+    /// Make `target_id` the active tab, appending it to the stable order.
+    async fn activate_new_tab(&self, target_id: TargetId) -> usize {
+        let mut order = self.tab_order.lock().await;
+        let index = match order.iter().position(|id| id == &target_id) {
+            Some(index) => index,
+            None => {
+                order.push(target_id);
+                order.len() - 1
+            }
+        };
+        drop(order);
+        *self.active.lock().await = index;
+        index
+    }
+
     /// Resolve `tab_index` (defaults to the active tab) to a cloned `Tab`.
     pub async fn tab(&self, tab_index: Option<usize>) -> Result<Tab> {
         let idx = match tab_index {
@@ -757,39 +817,35 @@ impl BrowserSession {
             None => *self.active.lock().await,
         };
         let browser = self.browser.lock().await;
-        let tabs = browser.tabs().await?;
+        let tabs = self.ordered_tabs(&browser).await?;
+        let total = tabs.len();
         tabs.into_iter()
             .nth(idx)
-            .ok_or_else(|| Error::TabIndexOutOfRange {
-                index: idx,
-                total: 0,
-            })
+            .ok_or_else(|| Error::TabIndexOutOfRange { index: idx, total })
     }
 
     /// Open a new tab and make it the active one. Returns the new tab's index.
     pub async fn new_tab(&self) -> Result<usize> {
         let browser = self.browser.lock().await;
-        let total = browser.tabs().await?.len();
-        let _tab = browser.new_tab().await?;
+        let tab = browser.new_tab().await?;
+        let target_id = tab.target_id().clone();
         drop(browser);
-        *self.active.lock().await = total;
-        Ok(total)
+        Ok(self.activate_new_tab(target_id).await)
     }
 
     /// Open a new tab already navigated to `url` and make it active.
     pub async fn new_tab_at(&self, url: &str) -> Result<usize> {
         let browser = self.browser.lock().await;
-        let total = browser.tabs().await?.len();
-        let _tab = browser.new_tab_at(url).await?;
+        let tab = browser.new_tab_at(url).await?;
+        let target_id = tab.target_id().clone();
         drop(browser);
-        *self.active.lock().await = total;
-        Ok(total)
+        Ok(self.activate_new_tab(target_id).await)
     }
 
     /// Switch the active tab. Returns an error if the index is out of range.
     pub async fn switch_tab(&self, index: usize) -> Result<()> {
         let browser = self.browser.lock().await;
-        let total = browser.tabs().await?.len();
+        let total = self.ordered_tabs(&browser).await?.len();
         if index >= total {
             return Err(Error::TabIndexOutOfRange { index, total });
         }
@@ -800,10 +856,23 @@ impl BrowserSession {
     /// Close the tab at `index` and adjust the active index.
     pub async fn close_tab(&self, index: usize) -> Result<()> {
         let tab = self.tab(Some(index)).await?;
+        let target_id = tab.target_id().clone();
         tab.close().await?;
+        let mut order = self.tab_order.lock().await;
+        let removed = order.iter().position(|id| id == &target_id);
+        if let Some(position) = removed {
+            order.remove(position);
+        }
+        let remaining = order.len();
+        drop(order);
         let mut active = self.active.lock().await;
-        if *active >= index && *active > 0 {
-            *active -= 1;
+        if let Some(position) = removed {
+            if *active > position {
+                *active -= 1;
+            }
+            if *active >= remaining {
+                *active = remaining.saturating_sub(1);
+            }
         }
         Ok(())
     }
@@ -811,7 +880,7 @@ impl BrowserSession {
     /// List the URLs and titles of all open tabs.
     pub async fn list_tabs(&self) -> Result<Vec<TabInfo>> {
         let browser = self.browser.lock().await;
-        let tabs = browser.tabs().await?;
+        let tabs = self.ordered_tabs(&browser).await?;
         let mut out = Vec::with_capacity(tabs.len());
         for tab in tabs {
             let url = tab.url().await.unwrap_or(None);
@@ -1164,6 +1233,20 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert_eq!(new_url.as_deref(), Some(url.as_str()));
+
+        // Adding another tab must not shift indices that tools already hold.
+        let second_index = session.new_tab_at(&url).await.unwrap();
+        assert!(second_index > new_index);
+        let still_navigated = session
+            .tab(Some(new_index))
+            .await
+            .unwrap()
+            .url()
+            .await
+            .unwrap();
+        assert_eq!(still_navigated.as_deref(), Some(url.as_str()));
+        let first_tab = session.tab(Some(0)).await.unwrap().url().await.unwrap();
+        assert_eq!(first_tab.as_deref(), Some(url.as_str()));
 
         session.close().await.unwrap();
         running.store(false, std::sync::atomic::Ordering::SeqCst);
