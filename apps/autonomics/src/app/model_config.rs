@@ -153,6 +153,12 @@ impl App {
             } => {
                 self.save_model_config(&provider_name, original_model_name, draft);
             }
+            ConfigCommand::DeleteModel {
+                provider_name,
+                model_name,
+            } => {
+                self.delete_model_config(&provider_name, &model_name);
+            }
             ConfigCommand::StartChatgptLogin { provider_name } => {
                 self.start_chatgpt_login(&provider_name);
             }
@@ -226,6 +232,31 @@ impl App {
                 .map_err(|e| e.to_string());
             tx.send(crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
+                result,
+            });
+        });
+    }
+
+    /// Remove a custom model row (daemon-side). The widget gates by
+    /// `model.custom`; this is a best-effort call that surfaces errors as
+    /// toasts and triggers a catalog reload on success.
+    fn delete_model_config(&self, provider_name: &str, model_name: &str) {
+        let request = gateway::proto::DeleteModelRequest {
+            provider_name: provider_name.to_string(),
+            model_name: model_name.to_string(),
+        };
+        let client = self.client.clone();
+        let provider_name = provider_name.to_string();
+        let model_name = model_name.to_string();
+        let tx = self.app_event_tx.clone();
+        self.spawn_client_task("delete_model", move || async move {
+            let result = client
+                .delete_model(&request)
+                .await
+                .map_err(|e| e.to_string());
+            tx.send(crate::app_event::AppEvent::ModelDeleted {
+                provider_name,
+                model_name,
                 result,
             });
         });

@@ -1,7 +1,7 @@
 //! Model provider and active-model handlers.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 
 use super::error::{GatewayError, GatewayResult};
@@ -76,6 +76,38 @@ pub(crate) async fn put_model(
             error => GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(delete, path = "/api/v1/model-config/model", tag = "model-config", params(
+    ("provider_name" = String, Query, description = "Provider name (case-sensitive)"),
+    ("model_name" = String, Query, description = "Custom model row to remove"),
+), responses((status = 204, description = "Custom model removed"), (status = 400, description = "Invalid model name or built-in preset"), (status = 500, description = "Model delete failed")))]
+pub(crate) async fn delete_model(
+    State(state): State<GatewayState>,
+    Query(query): Query<DeleteModelQuery>,
+) -> GatewayResult<StatusCode> {
+    let params = runtime::model_bootstrap::DeleteModelParams {
+        provider_name: query.provider_name,
+        model_name: query.model_name,
+    };
+    state
+        .models
+        .delete_model(&params)
+        .await
+        .map_err(|e| match e {
+            runtime::model_bootstrap::ModelStorageError::Message(message) => {
+                GatewayError::Message(message)
+            }
+            error => GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Query parameters for `DELETE /model-config/model`.
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct DeleteModelQuery {
+    pub provider_name: String,
+    pub model_name: String,
 }
 
 #[utoipa::path(put, path = "/api/v1/model-config/active-model", tag = "model-config", request_body = SetActiveModelRequest, responses((status = 204, description = "Active model set"), (status = 400, description = "Model could not be resolved")))]

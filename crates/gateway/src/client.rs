@@ -464,6 +464,20 @@ impl GatewayClient {
             .await
     }
 
+    /// Remove a custom model row. Built-in SDK presets are protected by the
+    /// daemon-side guard and return an HTTP 400. The provider and model
+    /// names travel as query parameters so the wire form stays RESTful
+    /// even though DELETE has no body.
+    pub async fn delete_model(&self, request: &DeleteModelRequest) -> Result<()> {
+        let path = format!(
+            "/model-config/model?provider_name={}&model_name={}",
+            encode_segment(&request.provider_name),
+            encode_segment(&request.model_name),
+        );
+        self.fire(reqwest::Method::DELETE, &path, None::<&serde_json::Value>)
+            .await
+    }
+
     /// Validate, persist, and activate the default model. On success the
     /// daemon broadcasts `ModelChanged`.
     pub async fn set_active_model(&self, spec: &str) -> Result<()> {

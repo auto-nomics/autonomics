@@ -10,6 +10,7 @@ pub mod embedding_config_widget;
 pub mod input_area;
 pub mod message_picker;
 pub mod model_config_widget;
+pub mod model_editor_widget;
 pub mod name_input;
 pub mod observation_browser_widget;
 pub mod popup;
