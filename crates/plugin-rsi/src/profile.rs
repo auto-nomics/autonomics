@@ -136,6 +136,7 @@ mod tests {
                 "plugin_environment_bind",
                 "plugin_fork",
                 "plugin_install",
+                "engine_inspect_cache",
                 "plugin_uninstall",
                 "plugin_node_create",
                 "plugin_node_update",

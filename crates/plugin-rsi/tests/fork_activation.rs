@@ -328,6 +328,47 @@ script_file = \"scripts/forked.sh\"
     .unwrap();
     forked.refresh().unwrap();
     assert!(!forked.manifest().lifecycle.publication_pending);
+
+    // Development scripts are not runtime scripts. Keep an uncommitted edit
+    // long enough to prove cache inspection reports the stale active copy;
+    // a clean reinstall must then move the exact content into the new pin.
+    forked
+        .workspace()
+        .write_text(
+            "scripts/forked.sh",
+            "#!/bin/sh\nset -eu\ntest -s \"$AUTONOMICS_INPUT0\"\ncp \"$AUTONOMICS_INPUT0\" \"$AUTONOMICS_OUTPUT0\"\ncp \"$AUTONOMICS_INPUT1\" \"$AUTONOMICS_OUTPUT1\"\n",
+        )
+        .unwrap();
+    let stale_cache_result = execute(
+        &tools,
+        "engine_inspect_cache",
+        json!({"plugin_path": "/plugins/dev/forked-plugin"}),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(stale_cache) = stale_cache_result.content else {
+        panic!("engine_inspect_cache must return JSON");
+    };
+    assert_eq!(stale_cache["stale_scripts"], 1);
+    assert_eq!(stale_cache["active"]["kind"], "local_snapshot");
+    assert_eq!(
+        stale_cache["scripts"][0]["script_file"],
+        "scripts/forked.sh"
+    );
+    assert_eq!(stale_cache["scripts"][0]["identical"], false);
+    assert!(
+        stale_cache["scripts"][0]["diff"]
+            .to_string()
+            .contains("test -s")
+    );
+    assert!(
+        stale_cache["scripts"][0]["active_content"]
+            .as_str()
+            .unwrap()
+            .contains("cp \"$AUTONOMICS_INPUT0\"")
+    );
+    forked.snapshot("plugin: update runtime script").unwrap();
+
     let reinstall_result = execute(
         &tools,
         "plugin_install",
@@ -340,6 +381,18 @@ script_file = \"scripts/forked.sh\"
     };
     assert_eq!(reinstall_output["activated"], true);
     assert_eq!(reinstall_output["status"], "draft");
+    let refreshed_cache_result = execute(
+        &tools,
+        "engine_inspect_cache",
+        json!({"plugin_path": "/plugins/dev/forked-plugin"}),
+    )
+    .await
+    .unwrap();
+    let ToolResultContent::Json(refreshed_cache) = refreshed_cache_result.content else {
+        panic!("second engine_inspect_cache must return JSON");
+    };
+    assert_eq!(refreshed_cache["stale_scripts"], 0);
+    assert_eq!(refreshed_cache["scripts"][0]["identical"], true);
     forked.refresh().unwrap();
 
     let runtime_root = plugin_rsi::PluginStateLayout::v2(state.path()).runtime_root();

@@ -15,8 +15,9 @@ use evolution_core::routing::observation_route;
 use crate::{
     EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
     ObservationRequest, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
-    PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore,
-    RequestIntent, RequestRecord, RequestStatus, RequestStore, Result, ValidationOutcome,
+    PluginCacheReport, PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus,
+    PluginStore, RequestIntent, RequestRecord, RequestStatus, RequestStore, Result,
+    ValidationOutcome,
     distill::DistillationCandidate,
     feedback::{default_request_intent, observation_request},
 };
@@ -116,6 +117,15 @@ impl RsiInfra {
 
     pub fn store(&self) -> Arc<PluginStore> {
         Arc::clone(&self.store)
+    }
+
+    /// Inspect the immutable runtime source and compare it with development.
+    ///
+    /// The returned report is deliberately file-based rather than inferred
+    /// from in-memory factory state: callers see exactly what the plugin
+    /// loader reads from the active materialization.
+    pub fn inspect_plugin_cache(&self, plugin_name: &str) -> Result<PluginCacheReport> {
+        self.store.inspect_plugin_cache(plugin_name)
     }
 
     /// Return the host-owned mutable environment allow list.
