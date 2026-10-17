@@ -1424,6 +1424,9 @@ mod communication_policy_tests {
             "browser_type_text",
             "browser_screenshot",
             "browser_evaluate",
+            "browser_download",
+            "browser_wait_for_download",
+            "browser_list_downloads",
             "browser_list_tabs",
         ] {
             assert!(

@@ -19,11 +19,17 @@
 //! # Ok(()) }
 //! ```
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use chromiumoxide::browser::BrowserConfig;
+use chromiumoxide::cdp::browser_protocol::browser::{
+    EventDownloadProgress, EventDownloadWillBegin, SetDownloadBehaviorBehavior,
+    SetDownloadBehaviorParams,
+};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::handler::Handler;
 use chromiumoxide::layout::Point;
@@ -41,6 +47,8 @@ pub const DEFAULT_NAV_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Poll interval used while waiting for selectors to appear.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Default agent-visible download mount used when no runtime path is supplied.
+const DEFAULT_DOWNLOAD_VFS_PATH: &str = "/browser-downloads";
 
 // ---------------------------------------------------------------------------
 // Launch options
@@ -61,6 +69,13 @@ pub struct BrowserOptions {
     pub window_size: Option<(u32, u32)>,
     /// Pass `--no-sandbox` (needed in most containers).
     pub no_sandbox: bool,
+    /// Host directory where Chromium saves downloads.
+    ///
+    /// When set, the browser emits download events and [`BrowserSession`]
+    /// tracks them for browser tools.
+    pub download_dir: Option<PathBuf>,
+    /// Agent-visible root corresponding to `download_dir`.
+    pub download_vfs_path: Option<String>,
     /// Additional command-line arguments for the browser process.
     pub extra_args: Vec<String>,
 }
@@ -74,6 +89,8 @@ impl Default for BrowserOptions {
             port: None,
             window_size: None,
             no_sandbox: false,
+            download_dir: None,
+            download_vfs_path: None,
             extra_args: Vec::new(),
         }
     }
@@ -177,6 +194,19 @@ impl Browser {
     /// Browser version string (e.g. `"HeadlessChrome/129.0.6668.91"`).
     pub async fn version(&self) -> Result<String> {
         Ok(self.browser.version().await?.product)
+    }
+
+    /// Direct Chromium downloads to `download_dir` and emit CDP events.
+    pub async fn enable_downloads(&mut self, download_dir: &std::path::Path) -> Result<()> {
+        std::fs::create_dir_all(download_dir)?;
+        let params = SetDownloadBehaviorParams::builder()
+            .behavior(SetDownloadBehaviorBehavior::AllowAndName)
+            .download_path(download_dir.to_string_lossy().into_owned())
+            .events_enabled(true)
+            .build()
+            .map_err(Error::Launch)?;
+        self.browser.execute(params).await?;
+        Ok(())
     }
 
     /// Gracefully close the browser and wait for the process to exit.
@@ -431,6 +461,99 @@ fn normalize_url(raw: &str) -> Result<String> {
 // Session
 // ---------------------------------------------------------------------------
 
+/// Agent-visible metadata for one Chromium download.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DownloadInfo {
+    pub guid: String,
+    pub url: String,
+    pub suggested_filename: String,
+    pub state: String,
+    pub received_bytes: f64,
+    pub total_bytes: f64,
+    pub file_path: Option<String>,
+    pub vfs_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadEntry {
+    info: DownloadInfo,
+    sequence: u64,
+    delivered: bool,
+    full_length_polls: u32,
+}
+
+type DownloadMap = Arc<tokio::sync::Mutex<HashMap<String, DownloadEntry>>>;
+
+async fn watch_downloads(
+    mut will_begin: chromiumoxide::listeners::EventStream<EventDownloadWillBegin>,
+    mut progress: chromiumoxide::listeners::EventStream<EventDownloadProgress>,
+    downloads: DownloadMap,
+    next_sequence: Arc<AtomicU64>,
+    download_vfs_path: Option<String>,
+) {
+    loop {
+        tokio::select! {
+            event = will_begin.next() => {
+                let Some(event) = event else { break };
+                let sequence = next_sequence.fetch_add(1, Ordering::Relaxed);
+                let info = DownloadInfo {
+                    guid: event.guid.clone(),
+                    url: event.url.to_string(),
+                    suggested_filename: event.suggested_filename.to_string(),
+                    state: "in_progress".into(),
+                    received_bytes: 0.0,
+                    total_bytes: 0.0,
+                    file_path: None,
+                    vfs_path: None,
+                };
+                downloads.lock().await.insert(
+                    info.guid.clone(),
+                    DownloadEntry {
+                        info,
+                        sequence,
+                        delivered: false,
+                        full_length_polls: 0,
+                    },
+                );
+            }
+            event = progress.next() => {
+                let Some(event) = event else { break };
+                let mut downloads = downloads.lock().await;
+                let Some(entry) = downloads.get_mut(&event.guid) else {
+                    continue;
+                };
+                use chromiumoxide::cdp::browser_protocol::browser::DownloadProgressState;
+                entry.info.state = match event.state {
+                    DownloadProgressState::InProgress => "in_progress",
+                    DownloadProgressState::Completed => "completed",
+                    DownloadProgressState::Canceled => "canceled",
+                }.into();
+                entry.info.received_bytes = event.received_bytes;
+                entry.info.total_bytes = event.total_bytes;
+                if let Some(path) = event.file_path.as_ref() {
+                    entry.info.file_path = Some(path.to_string());
+                }
+                if entry.info.state == "completed" {
+                    entry.info.vfs_path = entry
+                        .info
+                        .file_path
+                        .as_deref()
+                        .and_then(|path| std::path::Path::new(path).file_name())
+                        .map(|name| {
+                            format!(
+                                "{}/{}",
+                                download_vfs_path
+                                    .clone()
+                                    .unwrap_or_else(|| DEFAULT_DOWNLOAD_VFS_PATH.to_string()),
+                                name.to_string_lossy()
+                            )
+                        });
+                }
+            }
+        }
+    }
+}
+
 /// Shared, agent-friendly handle to a [`Browser`].
 ///
 /// `Browser` itself is not `Clone` (the inner CDP `Browser` owns the
@@ -443,6 +566,11 @@ pub struct BrowserSession {
     /// Index into [`Browser::tabs`] of the tab subsequent tools operate on
     /// when no explicit `tab_index` is given.
     active: Mutex<usize>,
+    downloads: DownloadMap,
+    next_download_sequence: Arc<AtomicU64>,
+    downloads_enabled: bool,
+    download_dir: Option<PathBuf>,
+    download_vfs_path: Option<String>,
 }
 
 impl BrowserSession {
@@ -458,13 +586,48 @@ impl BrowserSession {
         Ok(Self {
             browser: Mutex::new(browser),
             active: Mutex::new(0),
+            downloads: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            next_download_sequence: Arc::new(AtomicU64::new(0)),
+            downloads_enabled: false,
+            download_dir: None,
+            download_vfs_path: None,
         })
     }
 
     /// Launch a new browser and immediately wrap it in a session.
     pub async fn launch(options: BrowserOptions) -> Result<Arc<Self>> {
-        let browser = Browser::launch(options).await?;
-        Ok(Arc::new(Self::new(browser).await?))
+        let download_vfs_path = options.download_vfs_path.clone();
+        let download_dir = options.download_dir.clone();
+        let mut browser = Browser::launch(options).await?;
+        let downloads: DownloadMap = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+        let next_download_sequence = Arc::new(AtomicU64::new(0));
+        let mut downloads_enabled = false;
+        if let Some(download_dir) = download_dir.clone() {
+            browser.enable_downloads(&download_dir).await?;
+            let will_begin = browser
+                .browser
+                .event_listener::<EventDownloadWillBegin>()
+                .await?;
+            let progress = browser
+                .browser
+                .event_listener::<EventDownloadProgress>()
+                .await?;
+            downloads_enabled = true;
+            tokio::spawn(watch_downloads(
+                will_begin,
+                progress,
+                downloads.clone(),
+                next_download_sequence.clone(),
+                download_vfs_path.clone(),
+            ));
+        }
+        let mut session = Self::new(browser).await?;
+        session.downloads = downloads;
+        session.next_download_sequence = next_download_sequence;
+        session.downloads_enabled = downloads_enabled;
+        session.download_dir = download_dir;
+        session.download_vfs_path = download_vfs_path;
+        Ok(Arc::new(session))
     }
 
     /// Connect to an already-running browser and wrap it in a session.
@@ -542,6 +705,106 @@ impl BrowserSession {
             out.push(TabInfo { url, title });
         }
         Ok(out)
+    }
+
+    /// Metadata for every download observed by this session, oldest first.
+    pub async fn download_infos(&self) -> Vec<DownloadInfo> {
+        let downloads = self.downloads.lock().await;
+        let mut entries: Vec<_> = downloads.values().cloned().collect();
+        entries.sort_by_key(|entry| entry.sequence);
+        entries.into_iter().map(|entry| entry.info).collect()
+    }
+
+    /// Start a download in a tab and wait until Chromium reports a final state.
+    pub async fn download(
+        &self,
+        url: &str,
+        tab_index: Option<usize>,
+        timeout: Duration,
+    ) -> Result<DownloadInfo> {
+        if !self.downloads_enabled {
+            return Err(Error::DownloadsDisabled);
+        }
+        let url = normalize_url(url)?;
+        self.downloads
+            .lock()
+            .await
+            .values_mut()
+            .for_each(|entry| entry.delivered = true);
+        let tab = self.tab(tab_index).await?;
+        let script = serde_json::to_string(&url)?;
+        tab.evaluate(&format!("location.assign({script})")).await?;
+        self.wait_for_download(timeout).await
+    }
+
+    /// Wait for the oldest unconsumed download and mark it consumed.
+    pub async fn wait_for_download(&self, timeout: Duration) -> Result<DownloadInfo> {
+        if !self.downloads_enabled {
+            return Err(Error::DownloadsDisabled);
+        }
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let selected_guid = {
+                let mut downloads = self.downloads.lock().await;
+                let mut selected = None;
+                let mut selected_sequence = u64::MAX;
+                for entry in downloads.values_mut() {
+                    if entry.delivered {
+                        continue;
+                    }
+                    let terminal =
+                        entry.info.state == "completed" || entry.info.state == "canceled";
+                    let fully_received = entry.info.state == "in_progress"
+                        && entry.info.total_bytes > 0.0
+                        && entry.info.received_bytes >= entry.info.total_bytes;
+                    if fully_received {
+                        entry.full_length_polls = entry.full_length_polls.saturating_add(1);
+                    }
+                    let ready = terminal || entry.full_length_polls >= 40;
+                    if ready && entry.sequence < selected_sequence {
+                        selected = Some(entry.info.guid.clone());
+                        selected_sequence = entry.sequence;
+                    }
+                }
+                selected
+            };
+            if let Some(guid) = selected_guid {
+                let mut downloads = self.downloads.lock().await;
+                if let Some(entry) = downloads.get_mut(&guid) {
+                    if entry.info.state == "in_progress" {
+                        // Some headless Chromium builds report full byte counts but
+                        // leave the documented GUID name in `.crdownload`. Once the
+                        // expected length is stable, finalize that name ourselves.
+                        let Some(dir) = &self.download_dir else {
+                            return Err(Error::DownloadsDisabled);
+                        };
+                        let final_path = dir.join(&entry.info.guid);
+                        let partial_path = dir.join(format!("{}.crdownload", entry.info.guid));
+                        if !final_path.exists() && partial_path.exists() {
+                            std::fs::rename(&partial_path, &final_path)?;
+                        }
+                        entry.info.state = "completed".into();
+                        entry.info.file_path = Some(final_path.to_string_lossy().into_owned());
+                        entry.info.vfs_path = Some(format!(
+                            "{}/{}",
+                            self.download_vfs_path
+                                .clone()
+                                .unwrap_or_else(|| DEFAULT_DOWNLOAD_VFS_PATH.to_string()),
+                            entry.info.guid
+                        ));
+                    }
+                    entry.delivered = true;
+                    return Ok(entry.info.clone());
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    operation: "browser_download",
+                    timeout_ms: timeout.as_millis() as u64,
+                });
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Currently active tab index.
@@ -698,6 +961,74 @@ mod tests {
             assert!(!reg.definition.name.is_empty());
         }
 
+        session.close().await.unwrap();
+    }
+
+    /// Download a real attachment through CDP and verify the completed path.
+    /// Set `BROWSER_USE_E2E=1` to opt in; the local HTTP server keeps this
+    /// test independent of the public internet.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn browser_download_lands_in_configured_directory() {
+        if std::env::var("BROWSER_USE_E2E").is_err() {
+            eprintln!("set BROWSER_USE_E2E=1 to run; skipping");
+            return;
+        }
+
+        let downloads = tempfile::tempdir().unwrap();
+        let mut options = BrowserOptions::default();
+        options.no_sandbox = true;
+        options.download_dir = Some(downloads.path().to_path_buf());
+        options.download_vfs_path = Some("/browser-downloads".to_string());
+        let session = super::BrowserSession::launch(options).await.unwrap();
+
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).unwrap();
+        let address = server.server_addr().to_string();
+        std::thread::spawn(move || {
+            if let Ok(request) = server.recv() {
+                let body = "browser download payload\n";
+                let response = tiny_http::Response::from_string(body)
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/octet-stream"[..],
+                        )
+                        .unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Disposition"[..],
+                            &b"attachment; filename=\"hello.txt\""[..],
+                        )
+                        .unwrap(),
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes(&b"Connection"[..], &b"close"[..]).unwrap(),
+                    );
+                let _ = request.respond(response);
+            }
+        });
+
+        let info = session
+            .download(
+                &format!("http://{address}/hello.txt"),
+                None,
+                std::time::Duration::from_secs(20),
+            )
+            .await
+            .unwrap();
+        assert_eq!(info.state, "completed");
+        assert_eq!(info.suggested_filename, "hello.txt");
+        assert_eq!(info.received_bytes, info.total_bytes);
+        let file_path = std::path::PathBuf::from(info.file_path.expect("download path"));
+        assert_eq!(
+            std::fs::read(&file_path).unwrap(),
+            b"browser download payload\n"
+        );
+        assert!(
+            info.vfs_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("/browser-downloads/"))
+        );
         session.close().await.unwrap();
     }
 }

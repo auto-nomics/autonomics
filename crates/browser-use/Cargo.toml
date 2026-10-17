@@ -19,5 +19,9 @@ agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 base64 = "0.22"
 
+[dev-dependencies]
+tempfile = "3.27"
+tiny_http = "0.12"
+
 [lints]
 workspace = true
