@@ -486,6 +486,26 @@ impl App {
                     self.state.toasts.error("Model save failed", Some(e));
                 }
             },
+            crate::app_event::AppEvent::ModelDeleted {
+                provider_name,
+                model_name,
+                result,
+            } => match result {
+                Ok(()) => {
+                    tracing::info!("deleted custom model: {provider_name}:{model_name}");
+                    self.spawn_catalog_reload();
+                    self.state.toasts.success(
+                        "Custom model deleted",
+                        Some(format!("{provider_name}:{model_name}")),
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("failed to delete custom model: {e}");
+                    self.state
+                        .toasts
+                        .error("Model delete failed", Some(e));
+                }
+            },
             crate::app_event::AppEvent::EmbeddingConfigLoaded { result } => {
                 self.handle_embedding_config_event(result, false);
             }

@@ -31,13 +31,6 @@ pub struct SkillEvolutionState {
     pub active_tab: EvolutionTab,
     pub last_report: Option<String>,
     pub error: Option<String>,
-    /// Generation seen on the last status snapshot — when it advances
-    /// the dashboard triggers a full refresh because the library /
-    /// proposals / observation counts have all potentially changed.
-    pub seen_generation: u64,
-    /// `cycles_completed` seen on the last status snapshot — same
-    /// auto-refresh trigger when a worker cycle has just finished.
-    pub seen_cycles_completed: u64,
 }
 impl SkillEvolutionState {
     pub fn open(&mut self) {

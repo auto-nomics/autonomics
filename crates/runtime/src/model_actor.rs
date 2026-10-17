@@ -39,8 +39,8 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::model_bootstrap::{
-    ModelStorage, ModelStorageError, SaveModelParams, SaveProviderParams, StorageResult,
-    resolve_from_parts,
+    DeleteModelParams, ModelStorage, ModelStorageError, SaveModelParams, SaveProviderParams,
+    StorageResult, resolve_from_parts,
 };
 
 // ─────────────────────────────────────────────────────────────────────
@@ -149,6 +149,10 @@ enum ModelCommand {
     },
     SaveModel {
         params: SaveModelParams,
+        reply: oneshot::Sender<StorageResult<()>>,
+    },
+    DeleteModel {
+        params: DeleteModelParams,
         reply: oneshot::Sender<StorageResult<()>>,
     },
     PutSetting {
@@ -293,6 +297,19 @@ impl ModelHandle {
     /// accepted here: edits must address an existing storage row.
     pub async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()> {
         self.call(|reply| ModelCommand::SaveModel {
+            params: params.clone(),
+            reply,
+        })
+        .await
+        .ok_or_else(|| ModelStorageError::Message(WORKER_GONE.to_string()))?
+    }
+
+    /// Remove a custom model row. The storage layer refuses built-in
+    /// presets (`is_custom = 0`) so this method is safe to expose to any
+    /// caller; the frontend still gates by `model.custom` to avoid an
+    /// extra round trip.
+    pub async fn delete_model(&self, params: &DeleteModelParams) -> StorageResult<()> {
+        self.call(|reply| ModelCommand::DeleteModel {
             params: params.clone(),
             reply,
         })
@@ -457,6 +474,9 @@ impl ModelWorker {
             }
             ModelCommand::SaveModel { params, reply } => {
                 let _ = reply.send(self.storage.save_model(&params).await);
+            }
+            ModelCommand::DeleteModel { params, reply } => {
+                let _ = reply.send(self.storage.delete_model(&params).await);
             }
             ModelCommand::PutSetting { key, value, reply } => {
                 let _ = reply.send(self.storage.put_setting(&key, &value).await);

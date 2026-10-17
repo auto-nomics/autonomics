@@ -419,6 +419,14 @@ pub struct SaveModelParams {
     pub model: ModelRow,
 }
 
+/// Parameters for removing a custom model row. Built-in SDK presets are
+/// protected at this layer; see [`delete_model`].
+#[derive(Debug, Clone)]
+pub struct DeleteModelParams {
+    pub provider_name: String,
+    pub model_name: String,
+}
+
 pub fn save_model(conn: &Connection, params: &SaveModelParams) -> Result<(), ModelStorageError> {
     let model_name = params.model.model_name.trim();
     if model_name.is_empty() || model_name.contains(':') {
@@ -530,6 +538,58 @@ pub fn save_model(conn: &Connection, params: &SaveModelParams) -> Result<(), Mod
                 params.model.output_token_price
             ],
         )?;
+    }
+    Ok(())
+}
+
+/// Remove a custom model row. Built-in SDK presets (`is_custom = 0`) are
+/// refused at this layer so the storage backend never silently deletes a
+/// read-only row, regardless of which caller triggered the request.
+///
+/// The active-model spec (if pointing at this row) is intentionally left
+/// dangling: `resolve_model_spec` treats an unknown spec as None and the
+/// next invocation falls back to the default model. A best-effort rewrite
+/// here would race against concurrent UI updates and bring no real
+/// recovery benefit.
+pub fn delete_model(
+    conn: &Connection,
+    params: &DeleteModelParams,
+) -> Result<(), ModelStorageError> {
+    let model_name = params.model_name.trim();
+    if model_name.is_empty() {
+        return Err(ModelStorageError::Message(
+            "model name must not be empty".into(),
+        ));
+    }
+    if model_name.contains(':') {
+        return Err(ModelStorageError::Message(
+            "model name must not contain ':'".into(),
+        ));
+    }
+
+    let row = ModelRow::find(conn, &params.provider_name, model_name).ok_or_else(|| {
+        ModelStorageError::Message(format!(
+            "custom model `{model_name}` was not found for provider `{}`",
+            params.provider_name
+        ))
+    })?;
+    if !row.custom {
+        return Err(ModelStorageError::Message(format!(
+            "model `{model_name}` is a built-in preset and cannot be deleted"
+        )));
+    }
+
+    let affected = conn.execute(
+        "DELETE FROM models
+         WHERE provider_id = (SELECT id FROM providers WHERE name = ?1)
+           AND model_name = ?2",
+        rusqlite::params![params.provider_name, model_name],
+    )?;
+    if affected == 0 {
+        return Err(ModelStorageError::Message(format!(
+            "custom model `{model_name}` was not found for provider `{}`",
+            params.provider_name
+        )));
     }
     Ok(())
 }
@@ -680,6 +740,7 @@ pub trait ModelStorage: Send + Sync {
     async fn set_active_model(&self, spec: &str) -> StorageResult<()>;
     async fn save_provider(&self, params: &SaveProviderParams) -> StorageResult<()>;
     async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()>;
+    async fn delete_model(&self, params: &DeleteModelParams) -> StorageResult<()>;
     async fn replace_provider_models(
         &self,
         provider_name: &str,
@@ -756,6 +817,11 @@ impl ModelStorage for SqliteModelStorage {
     async fn save_model(&self, params: &SaveModelParams) -> StorageResult<()> {
         let conn = self.conn.lock().expect("model store mutex poisoned");
         save_model(&conn, params)
+    }
+
+    async fn delete_model(&self, params: &DeleteModelParams) -> StorageResult<()> {
+        let conn = self.conn.lock().expect("model store mutex poisoned");
+        delete_model(&conn, params)
     }
 
     async fn replace_provider_models(
@@ -1141,6 +1207,100 @@ mod tests {
         )
         .expect_err("editing a missing row must not synthesize a custom model");
         assert!(error.to_string().contains("was not found"));
+    }
+
+    #[test]
+    fn delete_model_removes_custom_row_and_refuses_builtins() {
+        let conn = conn();
+        // Seed a built-in (custom=0) and a custom row under the same provider.
+        conn.execute(
+            "INSERT INTO providers (name, provider_type, base_url, api_key, auth_method)
+             VALUES ('ollama', 'ollama', 'http://localhost:11434', '', 'None')",
+            (),
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO models (model_name, provider_id, is_custom,
+                                  context_length, max_output_tokens)
+             VALUES ('preset-llama', (SELECT id FROM providers WHERE name='ollama'),
+                     0, 8192, 2048)",
+            (),
+        )
+        .unwrap();
+        save_model(
+            &conn,
+            &SaveModelParams {
+                provider_name: "ollama".into(),
+                original_model_name: None,
+                model: ModelRow {
+                    provider_name: "ollama".into(),
+                    model_name: "local-agent".into(),
+                    context_length: 32_768,
+                    max_output_tokens: 4_096,
+                    custom: true,
+                    ..ModelRow::default()
+                },
+            },
+        )
+        .expect("seed custom row");
+
+        // Built-in preset: refused even if the caller asks to remove it.
+        let err = delete_model(
+            &conn,
+            &DeleteModelParams {
+                provider_name: "ollama".into(),
+                model_name: "preset-llama".into(),
+            },
+        )
+        .expect_err("built-in preset must be protected");
+        assert!(err.to_string().contains("built-in preset"));
+        assert!(ModelRow::find(&conn, "ollama", "preset-llama").is_some());
+
+        // Custom row: removed.
+        delete_model(
+            &conn,
+            &DeleteModelParams {
+                provider_name: "ollama".into(),
+                model_name: "local-agent".into(),
+            },
+        )
+        .expect("custom row should delete");
+        assert!(ModelRow::find(&conn, "ollama", "local-agent").is_none());
+
+        // Second delete: "not found" error, no panic, no row mutation.
+        let err = delete_model(
+            &conn,
+            &DeleteModelParams {
+                provider_name: "ollama".into(),
+                model_name: "local-agent".into(),
+            },
+        )
+        .expect_err("already-deleted row must report not found");
+        assert!(err.to_string().contains("was not found"));
+    }
+
+    #[test]
+    fn delete_model_rejects_empty_name_and_colons() {
+        let conn = conn();
+        let err = delete_model(
+            &conn,
+            &DeleteModelParams {
+                provider_name: "ollama".into(),
+                model_name: "  ".into(),
+            },
+        )
+        .expect_err("blank model name rejected");
+        assert!(err.to_string().contains("must not be empty"));
+
+        let err = delete_model(
+            &conn,
+            &DeleteModelParams {
+                provider_name: "ollama".into(),
+                model_name: "a:b".into(),
+            },
+        )
+        .expect_err("':' in model name rejected");
+        assert!(err.to_string().contains("must not contain ':'"));
     }
 
     /// 两个 provider 的 preset 含同名模型（zai / bailian 都有 glm-5.3）：

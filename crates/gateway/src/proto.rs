@@ -314,6 +314,15 @@ pub struct SaveModelRequest {
     pub output_token_price: f64,
 }
 
+/// `DELETE /api/v1/model-config/model?provider_name=...&model_name=...` —
+/// remove a custom model row from storage. Built-in SDK presets are
+/// protected and rejected by the storage layer with an HTTP 400.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct DeleteModelRequest {
+    pub provider_name: String,
+    pub model_name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SetActiveModelRequest {
     pub spec: String,
