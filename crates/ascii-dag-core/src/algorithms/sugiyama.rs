@@ -34,6 +34,7 @@ impl<'a> Graph<'a> {
     /// Uses a fixed-point algorithm to assign each node to a level,
     /// where a node's level is one more than the maximum level of its parents.
     #[cfg(test)]
+    #[expect(dead_code)]
     pub(crate) fn calculate_levels(&self) -> Vec<(usize, usize)> {
         self.calculate_levels_with_back_edges(&[])
     }

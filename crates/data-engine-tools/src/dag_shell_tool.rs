@@ -204,7 +204,7 @@ mod tests {
         };
         assert_eq!(report["applied"], false);
         assert_eq!(report["graph"]["node_count"], 1);
-        assert_eq!(client.node_exists("dry".into()).await.unwrap(), false);
+        assert!(!client.node_exists("dry".into()).await.unwrap());
 
         let uncommitted = tool
             .run(input(r#"node("not_committed", "echo", #{}); "#, false))
@@ -214,10 +214,7 @@ mod tests {
             panic!("uncommitted result should be JSON");
         };
         assert_eq!(report["committed"], false);
-        assert_eq!(
-            client.node_exists("not_committed".into()).await.unwrap(),
-            false
-        );
+        assert!(!client.node_exists("not_committed".into()).await.unwrap());
     }
 
     #[tokio::test]

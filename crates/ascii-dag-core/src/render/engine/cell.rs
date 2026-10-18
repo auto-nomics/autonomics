@@ -220,6 +220,7 @@ impl Cell {
     /// Whether an edge label may occupy this cell — empty, or the edge's
     /// own vertical line (the legacy `can_place_label` rule, R1.8).
     #[cfg(test)]
+    #[expect(dead_code)]
     pub(crate) fn accepts_label(self) -> bool {
         self.is_empty() || self.is_pure_vertical()
     }

@@ -465,8 +465,7 @@ mod wilcoxon_paired_tests {
                 &dag_core::dag::node_event::NodeReporter::noop(),
             )
             .await
-            .err()
-            .expect("length mismatch must error");
+            .expect_err("length mismatch must error");
         assert!(
             err.to_string().contains("equal-length"),
             "error should name the mismatch: {err}"

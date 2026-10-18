@@ -1038,7 +1038,7 @@ mod tests {
             .run_aware_clean(&history, 1, 1, true)
             .await
             .unwrap();
-        assert_eq!(report.dry_run, true);
+        assert!(report.dry_run);
         assert_eq!(report.candidate_directories, 1);
         assert_eq!(report.removed, 1);
         assert!(report.bytes_freed > 0);

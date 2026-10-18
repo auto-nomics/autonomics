@@ -321,38 +321,6 @@ fn format_startup_tail(text: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod startup_tail_tests {
-    use super::*;
-
-    #[test]
-    fn empty_capture_renders_nothing() {
-        assert_eq!(format_startup_tail(""), String::new());
-        assert_eq!(format_startup_tail("\n"), String::new());
-    }
-
-    #[test]
-    fn short_capture_is_indented_under_header() {
-        let rendered = format_startup_tail("plugins  ok\ndaemon error: boom");
-        assert!(rendered.starts_with("\ndaemon startup output:\n"));
-        assert!(rendered.contains("  plugins  ok\n"));
-        assert!(rendered.contains("  daemon error: boom\n"));
-        assert!(rendered.ends_with('\n'));
-        assert!(!rendered.contains("cut"));
-    }
-
-    #[test]
-    fn long_capture_keeps_only_the_tail_and_counts_the_cut() {
-        let text: String = (0..STDERR_TAIL_LINES + 10)
-            .map(|i| format!("line {i}\n"))
-            .collect();
-        let rendered = format_startup_tail(&text);
-        assert!(rendered.contains("(first 10 lines cut)"));
-        assert!(!rendered.contains("line 9\n"));
-        assert!(rendered.contains(&format!("  line {}\n", STDERR_TAIL_LINES + 9)));
-    }
-}
-
 async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<()> {
     init_gateway_logging(&config.state_dir)?;
 
@@ -531,4 +499,36 @@ fn init_gateway_logging(state_dir: &std::path::Path) -> color_eyre::Result<()> {
         log_dir.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_tail_tests {
+    use super::*;
+
+    #[test]
+    fn empty_capture_renders_nothing() {
+        assert_eq!(format_startup_tail(""), String::new());
+        assert_eq!(format_startup_tail("\n"), String::new());
+    }
+
+    #[test]
+    fn short_capture_is_indented_under_header() {
+        let rendered = format_startup_tail("plugins  ok\ndaemon error: boom");
+        assert!(rendered.starts_with("\ndaemon startup output:\n"));
+        assert!(rendered.contains("  plugins  ok\n"));
+        assert!(rendered.contains("  daemon error: boom\n"));
+        assert!(rendered.ends_with('\n'));
+        assert!(!rendered.contains("cut"));
+    }
+
+    #[test]
+    fn long_capture_keeps_only_the_tail_and_counts_the_cut() {
+        let text: String = (0..STDERR_TAIL_LINES + 10)
+            .map(|i| format!("line {i}\n"))
+            .collect();
+        let rendered = format_startup_tail(&text);
+        assert!(rendered.contains("(first 10 lines cut)"));
+        assert!(!rendered.contains("line 9\n"));
+        assert!(rendered.contains(&format!("  line {}\n", STDERR_TAIL_LINES + 9)));
+    }
 }

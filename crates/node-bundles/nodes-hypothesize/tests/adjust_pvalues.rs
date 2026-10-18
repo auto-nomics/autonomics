@@ -169,7 +169,6 @@ fn collect_opt_f64(batch: &RecordBatch, col: &str) -> Vec<Option<f64>> {
         .downcast_ref::<Float64Array>()
         .unwrap()
         .iter()
-        .map(|v| v)
         .collect()
 }
 
@@ -181,7 +180,6 @@ fn collect_opt_i32(batch: &RecordBatch, col: &str) -> Vec<Option<i32>> {
         .downcast_ref::<Int32Array>()
         .unwrap()
         .iter()
-        .map(|v| v)
         .collect()
 }
 
@@ -223,12 +221,7 @@ async fn adjust_pvalues_two_batches_with_null_matches_r() {
         vec![Some(0.001), None, Some(0.02), Some(0.5)],
         "raw p column must pass through untouched"
     );
-    let expected = [
-        Some(0.004),
-        None,
-        Some(0.04),
-        Some(0.666_666_666_666_666_63),
-    ];
+    let expected = [Some(0.004), None, Some(0.04), Some(0.666_666_666_666_666_6)];
     for (got, exp) in p_adj.iter().zip(expected) {
         match (got, exp) {
             (Some(g), Some(e)) => assert!((g - e).abs() < 1e-14, "p_adj got {g}, expected {e}"),
@@ -262,10 +255,7 @@ async fn adjust_pvalues_n_total_override_matches_r() {
     // R: p.adjust(c(0.01, 0.02), "holm", n = 10) = c(0.1, 0.18)
     // R: p.adjust(c(0.01, 0.02), "bonferroni", n = 10) = c(0.1, 0.2)
     for (method, expected) in [
-        (
-            "BY",
-            vec![0.292_896_825_396_825_38, 0.292_896_825_396_825_38],
-        ),
+        ("BY", vec![0.292_896_825_396_825_4; 2]),
         ("holm", vec![0.1, 0.18]),
         ("bonferroni", vec![0.1, 0.2]),
     ] {
@@ -390,9 +380,6 @@ async fn adjust_pvalues_appended_columns_nullable() {
     )
     .await;
     let schema = out[0].schema();
-    assert_eq!(schema.field_with_name("p_adj").unwrap().is_nullable(), true);
-    assert_eq!(
-        schema.field_with_name("reject").unwrap().is_nullable(),
-        true
-    );
+    assert!(schema.field_with_name("p_adj").unwrap().is_nullable());
+    assert!(schema.field_with_name("reject").unwrap().is_nullable());
 }

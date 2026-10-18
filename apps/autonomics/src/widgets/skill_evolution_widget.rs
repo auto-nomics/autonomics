@@ -34,9 +34,11 @@ pub struct SkillEvolutionState {
     /// Generation seen on the last status snapshot — when it advances
     /// the dashboard triggers a full refresh because the library /
     /// proposals / observation counts have all potentially changed.
+    #[allow(dead_code)]
     pub seen_generation: u64,
     /// `cycles_completed` seen on the last status snapshot — same
     /// auto-refresh trigger when a worker cycle has just finished.
+    #[allow(dead_code)]
     pub seen_cycles_completed: u64,
 }
 impl SkillEvolutionState {

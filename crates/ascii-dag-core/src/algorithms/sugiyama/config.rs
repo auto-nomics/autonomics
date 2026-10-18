@@ -326,6 +326,7 @@ impl SugiyamaConfig {
 
     /// Quality preset — thorough reduction for complex graphs.
     #[cfg(test)]
+    #[expect(dead_code)]
     pub fn quality() -> Self {
         Self {
             cycle_breaking: CycleBreaking::DepthFirst,
@@ -340,6 +341,7 @@ impl SugiyamaConfig {
     ///
     /// Sets all other stages to standard defaults.
     #[cfg(test)]
+    #[expect(dead_code)]
     pub fn with_crossing(pipeline: &[CrossingReducer]) -> Self {
         Self {
             cycle_breaking: CycleBreaking::DepthFirst,

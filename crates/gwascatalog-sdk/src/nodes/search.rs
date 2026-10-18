@@ -307,6 +307,7 @@ mod tests {
         assert!(genes.is_null(0));
     }
 
+    #[expect(dead_code)]
     fn test_ctx() -> NodeCtx {
         NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),

@@ -281,7 +281,7 @@ mod tests {
         let observation = hub.record(input("restart the daemon")).await.unwrap();
 
         let embeddings = hub
-            .load_embeddings(&[observation.id.clone()])
+            .load_embeddings(std::slice::from_ref(&observation.id))
             .await
             .unwrap();
         let vector = embeddings.get(&observation.id).expect("vector persisted");

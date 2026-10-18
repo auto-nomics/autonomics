@@ -12,7 +12,7 @@ use crate::value::{NodeValue, PortType};
 
 #[tokio::test]
 async fn dynamic_fanout_materializes_file_items_for_file_input_ports() -> Result<()> {
-    let file_refs = vec![
+    let file_refs = [
         serde_json::json!({"path": "/tmp/a.tsv", "format": "tsv", "fingerprint": null}),
         serde_json::json!({"path": "/tmp/b.tsv", "format": null, "fingerprint": null}),
     ];
@@ -392,7 +392,7 @@ async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
         .find(|summary| summary.logical_node == "process")
         .unwrap();
     assert_eq!(process_summary.physical_job_count, 2);
-    let task_submissions = task_submissions.lock().unwrap();
+    let task_submissions = task_submissions.lock().unwrap().clone();
     let process_submission = task_submissions
         .iter()
         .find(|submission| submission.spec.id == "process#sample=a")
