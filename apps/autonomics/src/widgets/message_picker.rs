@@ -202,6 +202,7 @@ impl MessagePickerState {
     /// Close the picker and clear the search input.
     pub fn close(&mut self) {
         self.picker.close();
+        self.fork_mode = false;
         self.textarea.set_text("");
         self.textarea.clear_history();
         self.cursor_pos = None;
@@ -222,10 +223,6 @@ impl MessagePickerState {
         self.open_with(messages);
         self.fork_mode = true;
     }
-
-    /// Move the list selection up by one row.
-
-    /// Move the list selection down by one row.
 
     /// Clone of the currently selected item, if any.
     pub fn selected_item(&self) -> Option<MessageItem> {
@@ -1024,6 +1021,124 @@ mod tests {
         s.close();
         assert!(s.textarea.is_empty());
         assert!(!s.picker.visible);
+    }
+
+    // ── Fork mode ──
+
+    #[test]
+    fn fork_mode_enter_returns_fork_selected() {
+        let mut s = MessagePickerState::default();
+        s.open_fork_with(collect_text_messages(&make_messages()));
+        assert!(s.fork_mode);
+        let outcome = s.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(outcome, MessagePickerKeyOutcome::ForkSelected);
+    }
+
+    #[test]
+    fn fork_mode_esc_closes_and_resets_mode() {
+        let mut s = MessagePickerState::default();
+        s.open_fork_with(collect_text_messages(&make_messages()));
+        let outcome = s.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(outcome, MessagePickerKeyOutcome::Close);
+        s.close();
+        assert!(!s.fork_mode, "close must reset fork mode");
+    }
+
+    #[test]
+    fn fork_mode_reopen_as_copy_resets_mode() {
+        let mut s = MessagePickerState::default();
+        s.open_fork_with(collect_text_messages(&make_messages()));
+        s.open_with(collect_text_messages(&make_messages()));
+        assert!(!s.fork_mode);
+        let outcome = s.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(outcome, MessagePickerKeyOutcome::CopySelected);
+    }
+
+    #[test]
+    fn fork_mode_navigation_and_filtering_still_work() {
+        let mut s = MessagePickerState::default();
+        s.open_fork_with(collect_text_messages(&make_messages()));
+        s.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(s.picker.selected, 1);
+        let item = s.selected_item().unwrap();
+        assert_eq!(item.role, MessageRole::User);
+        for c in "hello".chars() {
+            s.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(s.picker.filtered.len(), 1);
+    }
+
+    // ── Backend-message items (fork picker data source) ──
+
+    fn sdk_message(
+        id: &str,
+        role: agentik_sdk::types::messages::Role,
+        content: Vec<agentik_sdk::types::messages::ContentBlock>,
+    ) -> agentik_sdk::types::messages::Message {
+        use agentik_sdk::types::messages::Message;
+        Message {
+            id: id.into(),
+            type_: "message".into(),
+            role,
+            content,
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        }
+    }
+
+    #[test]
+    fn collect_message_items_preserves_ids_and_reverses_order() {
+        use agentik_sdk::types::messages::{ContentBlock, Role};
+
+        let messages = vec![
+            sdk_message(
+                "m1",
+                Role::User,
+                vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            ),
+            sdk_message("empty", Role::User, Vec::new()),
+            sdk_message(
+                "m2",
+                Role::Assistant,
+                vec![ContentBlock::Text {
+                    text: "answer".into(),
+                }],
+            ),
+        ];
+        let items = collect_message_items(&messages);
+
+        // Empty-content messages are skipped; order is newest first.
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].message_id.as_deref(), Some("m2"));
+        assert_eq!(items[1].message_id.as_deref(), Some("m1"));
+        assert_eq!(items[0].index, 3);
+        assert_eq!(items[1].index, 1);
+        assert_eq!(items[0].role, MessageRole::Assistant);
+        assert_eq!(items[1].preview, "hello");
+    }
+
+    #[test]
+    fn collect_message_items_previews_non_text_blocks() {
+        use agentik_sdk::types::messages::{ContentBlock, Role};
+
+        let tool_msg = sdk_message(
+            "t1",
+            Role::Assistant,
+            vec![ContentBlock::ToolUse {
+                id: "call_1".into(),
+                name: "search".into(),
+                input: serde_json::json!({}),
+            }],
+        );
+        let items = collect_message_items(&[tool_msg]);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].preview, "Tool call: search");
+        assert!(items[0].full_text.contains("assistant"));
     }
 
     // ── Two-column render helpers ──

@@ -392,12 +392,17 @@ async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
         .find(|summary| summary.logical_node == "process")
         .unwrap();
     assert_eq!(process_summary.physical_job_count, 2);
-    let task_submissions = task_submissions.lock().unwrap().clone();
-    let process_submission = task_submissions
-        .iter()
-        .find(|submission| submission.spec.id == "process#sample=a")
-        .unwrap();
-    let process_spec = &process_submission.spec;
+    let (process_spec, submitted_resources) = {
+        let task_submissions = task_submissions.lock().unwrap();
+        let process_submission = task_submissions
+            .iter()
+            .find(|submission| submission.spec.id == "process#sample=a")
+            .unwrap();
+        (
+            process_submission.spec.clone(),
+            process_submission.resources.clone(),
+        )
+    };
     assert_eq!(process_spec.logical_node.as_deref(), Some("process"));
     assert_eq!(process_spec.item, Some(serde_json::json!("a")));
     assert_eq!(
@@ -409,7 +414,7 @@ async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
     assert_eq!(process_spec.outputs.len(), 1);
     assert_eq!(process_spec.outputs[0].name, "port_0");
     assert_eq!(process_spec.outputs[0].payload, "any");
-    assert_eq!(process_submission.resources, process_resources);
+    assert_eq!(submitted_resources, process_resources);
     assert_eq!(
         report
             .nodes
@@ -420,9 +425,11 @@ async fn dynamic_channel_fanout_expands_and_collects_jobs() -> Result<()> {
         Some("recording")
     );
     let collect_spec = task_submissions
+        .lock()
+        .unwrap()
         .iter()
         .find(|submission| submission.spec.id == "collect#0")
-        .map(|submission| &submission.spec)
+        .map(|submission| submission.spec.clone())
         .unwrap();
     assert!(collect_spec.inputs.iter().any(|input| matches!(
         &input.source,

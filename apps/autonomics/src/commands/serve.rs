@@ -302,10 +302,11 @@ impl StderrTap {
 /// marker header; empty capture renders as nothing at all so the
 /// failure message stays clean when the child died before logging.
 fn format_startup_tail(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    if lines.is_empty() {
+    if text.trim().is_empty() {
         return String::new();
     }
+
+    let lines: Vec<&str> = text.lines().collect();
     let skipped = lines.len().saturating_sub(STDERR_TAIL_LINES);
     let mut out = String::from("\ndaemon startup output");
     if skipped > 0 {

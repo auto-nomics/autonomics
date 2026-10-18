@@ -255,7 +255,7 @@ async fn adjust_pvalues_n_total_override_matches_r() {
     // R: p.adjust(c(0.01, 0.02), "holm", n = 10) = c(0.1, 0.18)
     // R: p.adjust(c(0.01, 0.02), "bonferroni", n = 10) = c(0.1, 0.2)
     for (method, expected) in [
-        ("BY", vec![0.292_896_825_396_825_4; 2]),
+        ("BY", vec![0.292_896_825_396_825_4, 0.292_896_825_396_825_4]),
         ("holm", vec![0.1, 0.18]),
         ("bonferroni", vec![0.1, 0.2]),
     ] {

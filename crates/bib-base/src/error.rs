@@ -12,6 +12,11 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error(
+        "bib-base storage actor stopped (all handles dropped or the actor task panicked); \
+         re-open the database for a fresh handle"
+    )]
+    ActorStopped,
 }
 
 impl From<&str> for Error {

@@ -51,6 +51,9 @@ test-util = [
 ]
 
 [dev-dependencies]
+# Self-reference so `cargo test -p gateway` enables `test-util` for the
+# integration tests too (workspace-wide runs get it via `headless`).
+gateway = { path = ".", features = ["test-util"] }
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

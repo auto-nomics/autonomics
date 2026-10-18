@@ -323,34 +323,6 @@ impl SugiyamaConfig {
             render_mode: RenderMode::default(),
         }
     }
-
-    /// Quality preset — thorough reduction for complex graphs.
-    #[cfg(test)]
-    #[expect(dead_code)]
-    pub fn quality() -> Self {
-        Self {
-            cycle_breaking: CycleBreaking::DepthFirst,
-            layering: Layering::LongestPath,
-            crossing_pipeline: QUALITY.to_vec(),
-            positioning: Positioning::Compact,
-            render_mode: RenderMode::default(),
-        }
-    }
-
-    /// Create a config from a custom crossing pipeline (convenience).
-    ///
-    /// Sets all other stages to standard defaults.
-    #[cfg(test)]
-    #[expect(dead_code)]
-    pub fn with_crossing(pipeline: &[CrossingReducer]) -> Self {
-        Self {
-            cycle_breaking: CycleBreaking::DepthFirst,
-            layering: Layering::LongestPath,
-            crossing_pipeline: pipeline.to_vec(),
-            positioning: Positioning::Compact,
-            render_mode: RenderMode::default(),
-        }
-    }
 }
 
 #[cfg(feature = "alloc")]

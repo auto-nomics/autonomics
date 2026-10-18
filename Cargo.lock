@@ -4827,6 +4827,7 @@ dependencies = [
  "eventsource-stream",
  "evolution-core",
  "futures",
+ "gateway",
  "http-body-util",
  "libc",
  "percent-encoding",

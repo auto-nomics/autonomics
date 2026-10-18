@@ -41,6 +41,9 @@ pub enum BibAction {
 
     /// Export articles in a citation format (BibTeX, RIS, Markdown).
     Export(ExportArgs),
+
+    /// Open the local bibliography library in a terminal UI.
+    Tui,
 }
 
 #[derive(Debug, Args)]

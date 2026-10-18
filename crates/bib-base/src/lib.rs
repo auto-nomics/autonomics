@@ -13,6 +13,7 @@
 //!
 //! Depends on [`bib_types`] for the canonical data model.
 
+mod actor;
 pub mod annotations;
 pub mod bib_base;
 pub mod collections;

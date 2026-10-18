@@ -147,6 +147,8 @@ mod tests {
             title: Some(title.into()),
             created_at: 0,
             last_active: 0,
+            parent_session_id: None,
+            fork_point_message_id: None,
             telemetry: Default::default(),
             parent_session_id: None,
             fork_point_message_id: None,
