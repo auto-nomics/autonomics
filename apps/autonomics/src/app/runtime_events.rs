@@ -261,7 +261,7 @@ impl App {
                 Self::load_model_config(&catalog, &mut self.state.model_config_state);
                 if let Some(spec) = catalog.active_model.clone() {
                     self.state.active_model_spec = Some(spec.clone());
-                    if let Some((provider, name)) = spec.split_once(':') {
+                    if let Some((provider, name)) = spec.rsplit_once(':') {
                         self.state.active_model_display = catalog
                             .models
                             .iter()

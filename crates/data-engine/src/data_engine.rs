@@ -765,7 +765,10 @@ impl DataEngine {
                 ok: false,
                 applied: false,
                 dry_run,
-                committed: true,
+                // The transaction rolled back. `committed` describes whether
+                // graph changes were committed, not whether a failure record
+                // was observed.
+                committed: false,
                 result: None,
                 operations: traces,
                 graph: graph_summary(&self.dag),

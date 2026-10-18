@@ -213,7 +213,13 @@ impl ToastManager {
         let mut y = frame_area.y + 1; // +1 margin from top
 
         for toast in self.toasts.iter() {
-            let h: u16 = if toast.description.is_some() { 4 } else { 3 };
+            let h: u16 = if let Some(description) = toast.description.as_deref() {
+                let content_width = usize::from(max_width.saturating_sub(2)).max(1);
+                let description_lines = description.chars().count().div_ceil(content_width).max(1);
+                u16::try_from(description_lines + 2).unwrap_or(u16::MAX)
+            } else {
+                3
+            };
             let x = frame_area.right().saturating_sub(max_width + 1); // +1 right margin
             let area = Rect {
                 x,

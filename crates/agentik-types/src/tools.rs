@@ -567,7 +567,7 @@ impl ToolResult {
                     ToolResultBlock::Text { text } => text.as_str(),
                     ToolResultBlock::Image { .. } => "[image omitted]",
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<&str>>()
                 .join(""),
         }
     }

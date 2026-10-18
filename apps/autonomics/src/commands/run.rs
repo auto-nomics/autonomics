@@ -148,7 +148,7 @@ async fn run_on_gateway(
     // `daemon_active_model_name` handles the not-running case itself.
     let model_used = match args.model.as_deref() {
         Some(spec) => Some(
-            spec.split_once(':')
+            spec.rsplit_once(':')
                 .map(|(_, name)| name.to_string())
                 .unwrap_or_else(|| spec.to_string()),
         ),
@@ -164,7 +164,7 @@ async fn daemon_active_model_name() -> Option<String> {
         gateway::GatewayClient::new(&gateway::daemon::env_addr(), token.as_deref()).ok()?;
     let spec = client.state().await.ok()?.active_model_spec?;
     Some(
-        spec.split_once(':')
+        spec.rsplit_once(':')
             .map(|(_, name)| name.to_string())
             .unwrap_or(spec),
     )
