@@ -1,6 +1,7 @@
 //! Annotation CRUD — notes, highlights, and comments attached to articles.
 //!
-//! All methods are on [`BibBase`] and share the same Turso connection.
+//! Storage methods are on [`BibCore`] (the actor-owned implementation)
+//! and reach callers through the [`BibBase`] handle delegators below.
 
 use chrono::Utc;
 use turso::{
@@ -8,11 +9,12 @@ use turso::{
     transaction::{Transaction, TransactionBehavior},
 };
 
-use crate::bib_base::BibBase;
+use crate::actor::BibCommand;
+use crate::bib_base::{BibBase, BibCore};
 use crate::error::Result;
 use crate::types::{Annotation, AnnotationKind};
 
-impl BibBase {
+impl BibCore {
     /// Add an annotation to an article.
     pub async fn add_annotation(
         &self,
@@ -24,7 +26,6 @@ impl BibBase {
         let id = format!("ann-{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let now = Utc::now().to_rfc3339();
 
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         tx.execute(
@@ -79,7 +80,6 @@ impl BibBase {
 
     /// Delete an annotation by ID.
     pub async fn delete_annotation(&self, id: &str) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut rows = tx
@@ -101,6 +101,48 @@ impl BibBase {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BibBase — thin handle methods, one command round-trip each
+// ---------------------------------------------------------------------------
+
+impl BibBase {
+    /// Add an annotation to an article.
+    pub async fn add_annotation(
+        &self,
+        article_id: &str,
+        kind: AnnotationKind,
+        content: &str,
+        page: Option<u32>,
+    ) -> Result<Annotation> {
+        self.call(|reply| BibCommand::AddAnnotation {
+            article_id: article_id.to_owned(),
+            kind,
+            content: content.to_owned(),
+            page,
+            reply,
+        })
+        .await
+    }
+
+    /// List all annotations for an article, ordered by creation time.
+    pub async fn list_annotations(&self, article_id: &str) -> Result<Vec<Annotation>> {
+        self.call(|reply| BibCommand::ListAnnotations {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Delete an annotation by ID.
+    pub async fn delete_annotation(&self, id: &str) -> Result<()> {
+        self.call(|reply| BibCommand::DeleteAnnotation {
+            id: id.to_owned(),
+            reply,
+        })
+        .await
     }
 }
 

@@ -5,6 +5,9 @@
 //! `OpendalFileStorage`; this table tracks the *path*, extracted
 //! plain-text content, and metadata so that agents can search and
 //! retrieve full text without touching the binary file.
+//!
+//! Storage methods are on [`BibCore`] (the actor-owned implementation)
+//! and reach callers through the [`BibBase`] handle delegators below.
 
 use chrono::Utc;
 use serde::Serialize;
@@ -13,7 +16,8 @@ use turso::{
     transaction::{Transaction, TransactionBehavior},
 };
 
-use crate::bib_base::BibBase;
+use crate::actor::BibCommand;
+use crate::bib_base::{BibBase, BibCore};
 use crate::error::Result;
 use bib_types::{ExtractStatus, FileFormat, FullText, FullTextSource, TextFormat};
 
@@ -39,7 +43,7 @@ pub struct PendingExtraction {
     pub file_format: FileFormat,
 }
 
-impl BibBase {
+impl BibCore {
     /// Insert or update a full-text record.
     ///
     /// As a side effect, all `collection_articles` rows referencing this
@@ -47,7 +51,6 @@ impl BibBase {
     /// Without this sync, collection-level status stays stale at
     /// `metadata_only` even after a full text is stored.
     pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut result: Result<()> = tx
@@ -125,7 +128,6 @@ impl BibBase {
     /// only happens once real text lands. The search index is resynced so a
     /// replaced upload immediately drops its stale full-text terms.
     pub async fn upsert_fulltext_pending(&self, ft: &FullText) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut result: Result<()> = tx
@@ -179,7 +181,6 @@ impl BibBase {
     ///
     /// Returns `false` when no full-text row exists for `article_id`.
     pub async fn restart_extraction(&self, article_id: &str) -> Result<bool> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let n = tx
@@ -206,7 +207,6 @@ impl BibBase {
     /// re-extract, CLI backfill, startup sweep) proceeds per row; the rest
     /// see `false` and skip. Returns whether this caller claimed the row.
     pub async fn mark_extraction_running(&self, article_id: &str) -> Result<bool> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let n = conn
             .execute(
@@ -228,7 +228,6 @@ impl BibBase {
         format: TextFormat,
         extracted_by: &str,
     ) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut result: Result<()> = tx
@@ -277,7 +276,6 @@ impl BibBase {
     /// restarts clear it before re-running), so a failure never destroys
     /// the last good extraction of a *different* run's row.
     pub async fn record_extraction_failure(&self, article_id: &str, error: &str) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         tx.execute(
@@ -296,7 +294,6 @@ impl BibBase {
     /// process — no live worker would leave them — so resetting them all
     /// is safe at startup, before any new task is spawned.
     pub async fn reset_stale_running(&self) -> Result<u64> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute(
             "UPDATE fulltexts SET extract_status = 'pending' WHERE extract_status = 'running'",
@@ -459,7 +456,6 @@ impl BibBase {
 
     /// Delete the full-text record for an article.
     pub async fn delete_fulltext(&self, article_id: &str) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         tx.execute(
@@ -489,6 +485,138 @@ impl BibBase {
             )
             .await?;
         Ok(rows.next().await?.is_some())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BibBase — thin handle methods, one command round-trip each
+// ---------------------------------------------------------------------------
+
+impl BibBase {
+    /// Insert or update a full-text record.
+    pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
+        self.call(|reply| BibCommand::UpsertFulltext {
+            ft: ft.clone(),
+            reply,
+        })
+        .await
+    }
+
+    /// Insert or update a full-text record whose text is not extracted yet.
+    pub async fn upsert_fulltext_pending(&self, ft: &FullText) -> Result<()> {
+        self.call(|reply| BibCommand::UpsertFulltextPending {
+            ft: ft.clone(),
+            reply,
+        })
+        .await
+    }
+
+    /// Reset a stored full text back to `pending`. Returns `false` when
+    /// no full-text row exists for `article_id`.
+    pub async fn restart_extraction(&self, article_id: &str) -> Result<bool> {
+        self.call(|reply| BibCommand::RestartExtraction {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Atomically claim a pending extraction (`pending → running`).
+    pub async fn mark_extraction_running(&self, article_id: &str) -> Result<bool> {
+        self.call(|reply| BibCommand::MarkExtractionRunning {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Persist a finished extraction.
+    pub async fn record_extraction_success(
+        &self,
+        article_id: &str,
+        text: &str,
+        format: TextFormat,
+        extracted_by: &str,
+    ) -> Result<()> {
+        self.call(|reply| BibCommand::RecordExtractionSuccess {
+            article_id: article_id.to_owned(),
+            text: text.to_owned(),
+            format,
+            extracted_by: extracted_by.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Persist a failed extraction with its error message.
+    pub async fn record_extraction_failure(&self, article_id: &str, error: &str) -> Result<()> {
+        self.call(|reply| BibCommand::RecordExtractionFailure {
+            article_id: article_id.to_owned(),
+            error: error.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Return every `running` extraction to `pending` (startup sweep).
+    pub async fn reset_stale_running(&self) -> Result<u64> {
+        self.call(|reply| BibCommand::ResetStaleRunning { reply })
+            .await
+    }
+
+    /// List full-text rows still needing extraction.
+    pub async fn list_articles_needing_extraction(&self) -> Result<Vec<PendingExtraction>> {
+        self.call(|reply| BibCommand::ListArticlesNeedingExtraction { reply })
+            .await
+    }
+
+    /// List `done` rows carrying extracted text, for the startup backfill.
+    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<(String, String, TextFormat)>> {
+        self.call(|reply| BibCommand::ListExtractedForBackfill { reply })
+            .await
+    }
+
+    /// Retrieve the full-text record for an article, if one exists.
+    pub async fn get_fulltext(&self, article_id: &str) -> Result<Option<FullText>> {
+        self.call(|reply| BibCommand::GetFulltext {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Read one bounded character page of a full text.
+    pub async fn get_fulltext_page(
+        &self,
+        article_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Option<FullTextPage>> {
+        self.call(|reply| BibCommand::GetFulltextPage {
+            article_id: article_id.to_owned(),
+            offset,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    /// Delete the full-text record for an article.
+    pub async fn delete_fulltext(&self, article_id: &str) -> Result<()> {
+        self.call(|reply| BibCommand::DeleteFulltext {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Check whether a full text exists for the given article.
+    pub async fn has_fulltext(&self, article_id: &str) -> Result<bool> {
+        self.call(|reply| BibCommand::HasFulltext {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
     }
 }
 
