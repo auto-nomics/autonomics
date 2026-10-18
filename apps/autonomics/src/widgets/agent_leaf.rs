@@ -262,12 +262,12 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let queued = ts.pending_queue_len();
         let placeholder: &str = if running {
             match ts.input_mode {
-                InputMode::Input => "Type to queue a message… (Ctrl+C cancels turn)",
+                InputMode::Input => "Type to queue a message… (Ctrl+P → Cancel agent to cancel)",
                 InputMode::Browse => {
                     if queued > 0 {
                         "Agent running — pending input waits for next request…"
                     } else {
-                        "Agent running… (Ctrl+C to cancel)"
+                        "Agent running… (Ctrl+P → Cancel agent to cancel)"
                     }
                 }
             }
@@ -284,7 +284,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         };
         let title: String = if running {
             let base = if ts.cancel_pending {
-                "⏹ cancelling… (Ctrl+C again to force quit)".to_string()
+                "⏹ cancelling…".to_string()
             } else {
                 match ts.status {
                     AgentStatus::Requesting => format!("{spinner} thinking…"),
@@ -558,20 +558,20 @@ fn render_footer_hint(
     } else if running {
         match mode {
             InputMode::Input => {
-                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+C cancel turn ".to_string()
+                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+P cancel agent ".to_string()
             }
             InputMode::Browse => {
                 if queued > 0 {
-                    format!(" {queued} pending  Enter compose  Ctrl+C cancel turn ")
+                    format!(" {queued} pending  Enter compose  Ctrl+P cancel agent ")
                 } else {
-                    " Enter compose  Ctrl+C cancel turn  Ctrl+R history ".to_string()
+                    " Enter compose  Ctrl+P cancel agent  Ctrl+R history ".to_string()
                 }
             }
         }
     } else {
         match mode {
             InputMode::Browse => {
-                " Enter edit  ↑↓ scroll  PageUp/PageDown  Home/End  Ctrl+G follow  Ctrl+C quit "
+                " Enter edit  ↑↓ scroll  PageUp/PageDown  Home/End  Ctrl+G follow  Ctrl+P quit "
                     .to_string()
             }
             InputMode::Input => {

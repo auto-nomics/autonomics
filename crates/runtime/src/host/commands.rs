@@ -1434,6 +1434,19 @@ mod communication_policy_tests {
                 "missing tool `{expected}`"
             );
         }
+
+        // Downloads routinely outlast a turn, so `browser_download` must be
+        // dispatched as a background task; a sync registration would block
+        // the agent on the toolset timeout and lose the transfer.
+        let download = tools
+            .iter()
+            .find(|t| t.definition.name == "browser_download")
+            .expect("browser_download tool is registered");
+        assert_eq!(
+            download.implementation.execution_mode(),
+            agentik_core::tools::ExecutionMode::Async,
+            "browser_download must run in the background"
+        );
         // This local tool list holds its own strong Arcs — drop it so the
         // agent's tool list is the only remaining owner before shutdown.
         drop(tools);
