@@ -3015,6 +3015,7 @@ dependencies = [
  "nodes-survey",
  "nodes-survival",
  "nodes-writing",
+ "parking_lot 0.12.5",
  "parquet",
  "rhai",
  "schemars",

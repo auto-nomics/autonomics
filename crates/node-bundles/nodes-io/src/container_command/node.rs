@@ -4,8 +4,9 @@
 //! mounted at `/work`: inputs are staged into it (symlinks to their sources
 //! by default, with source parents bind-mounted read-only), the command runs
 //! in an ephemeral image, and declared outputs are collected from the work
-//! dir as DAG values — they stay there and travel downstream by reference.
-//! An optional `artifact_prefix` additionally publishes them to VFS.
+//! dir as DAG values. They stay cache-local and travel downstream by
+//! reference unless an optional `artifact_prefix` publishes immutable VFS
+//! copies, which then become the node's downstream values.
 //! Construction validates the spec and resolves catalog panels.
 
 use std::collections::BTreeMap;
@@ -920,27 +921,33 @@ impl DagNode for ContainerCommandNode {
 
         // Collect declared outputs from the work dir — literal paths keep
         // the exactly-one-file contract, glob patterns must match exactly
-        // one file. Outputs travel downstream as work-dir `FileRef`s (mtime
-        // fingerprints, existence-checked on incremental reuse); an optional
-        // `artifact_prefix` additionally publishes them to VFS.
+        // one file. Without a publish prefix, outputs travel as work-dir
+        // `FileRef`s (mtime fingerprints, existence-checked on incremental
+        // reuse). With a prefix, immutable VFS copies travel downstream.
         let mut outputs = PortOutputs::new();
         for (index, (spec, _)) in declared_outputs.iter().enumerate() {
             let host_path = resolve_output(&spec.path, &workspace_path)
                 .map_err(|error| error.into_dag_error(self.kind))?;
-            if let Some(prefix) = &self.artifact_prefix {
+            // Keep the three storage roles explicit. The work-dir file is the
+            // cache-local source and remains available for resume; when a
+            // publish prefix is configured, the immutable VFS copy is the
+            // node output consumed downstream. Without a prefix the work-dir
+            // file itself is the only output (Nextflow without publishDir).
+            let file = if let Some(prefix) = &self.artifact_prefix {
                 publish_output(ctx, prefix, &request_name, spec, &host_path)
                     .await
                     .map_err(ContainerCommandError::Invalid)
-                    .map_err(|error| error.into_dag_error(self.kind))?;
-            }
-            let file = FileRef::local(&host_path, spec.format.clone())
-                .map_err(|error| {
-                    ContainerCommandError::Invalid(format!(
-                        "cannot fingerprint output `{}`: {error}",
-                        host_path.display()
-                    ))
-                })
-                .map_err(|error| error.into_dag_error(self.kind))?;
+                    .map_err(|error| error.into_dag_error(self.kind))?
+            } else {
+                FileRef::local(&host_path, spec.format.clone())
+                    .map_err(|error| {
+                        ContainerCommandError::Invalid(format!(
+                            "cannot fingerprint output `{}`: {error}",
+                            host_path.display()
+                        ))
+                    })
+                    .map_err(|error| error.into_dag_error(self.kind))?
+            };
             outputs.insert_file(index as u8, file);
         }
 

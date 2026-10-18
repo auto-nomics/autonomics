@@ -83,9 +83,10 @@ pub struct ContainerCommandSpec {
     #[serde(default)]
     pub stage_in_mode: StageInMode,
     /// Optional publishDir-style VFS prefix. When set, declared outputs are
-    /// additionally uploaded as immutable artifacts under
-    /// `{prefix}/{run_name}/{output-path}`. When omitted (default), outputs
-    /// stay in the work dir and are passed downstream by reference.
+    /// copied to immutable artifacts under
+    /// `{prefix}/{run_name}/{output-path}` and those VFS `FileRef`s are
+    /// returned to downstream nodes. When omitted (default), outputs stay in
+    /// the work dir and are passed downstream by reference.
     #[serde(default)]
     pub artifact_prefix: Option<String>,
     #[serde(default = "default_timeout")]
@@ -318,7 +319,9 @@ impl NodeFactory for ContainerCommandNodeFactory {
         from the shared panel cache. Declared outputs stay in the work dir and \
         travel downstream by reference; set `artifact_prefix` to additionally \
         publish them to VFS object storage with sha256 fingerprints. Production \
-        workflows should reference images by digest."
+        workflows should reference images by digest. Publishing is a copy: \
+        the work-dir remains the task cache, while the returned immutable VFS \
+        FileRef is the downstream deliverable."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -759,18 +762,23 @@ mod tests {
 
         let output = dir.join("result.txt");
         assert_eq!(std::fs::read_to_string(&output).unwrap(), "hello-container");
-        // The node output is the work-dir file itself, referenced by a local
-        // (mtime) fingerprint — not an uploaded VFS artifact.
-        let file = outputs.get(&0).unwrap().as_file().unwrap();
-        assert_eq!(Path::new(&file.path), output);
-        let fingerprint = file.fingerprint.as_ref().unwrap();
-        assert_eq!(fingerprint.size, "hello-container".len() as u64);
-        assert!(fingerprint.content_hash.is_none());
-        assert!(!fingerprint.immutable_remote);
-        // The declared `artifact_prefix` additionally publishes the same
-        // bytes to VFS under {prefix}/{run_name}/.
+        // The work-dir bytes remain the cache-local copy.
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), "hello-container");
+        // When `artifact_prefix` is configured, the downstream value is the
+        // immutable published artifact, not the mutable work-dir path.
         let run_name = request.name.clone();
         let published = format!("vfs:///artifacts/test/{run_name}/result.txt");
+        let file = outputs.get(&0).unwrap().as_file().unwrap();
+        assert_eq!(file.path, published);
+        let fingerprint = file.fingerprint.as_ref().unwrap();
+        assert_eq!(fingerprint.size, "hello-container".len() as u64);
+        assert!(
+            fingerprint
+                .content_hash
+                .as_deref()
+                .is_some_and(|hash| hash.starts_with("sha256:"))
+        );
+        assert!(fingerprint.immutable_remote);
         let storage = env.ctx.opendal.as_ref().unwrap();
         let virtual_path = published.strip_prefix("vfs://").unwrap();
         let length = storage.content_length(virtual_path).await.unwrap();
