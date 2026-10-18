@@ -2,9 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use agentik_core::tools::{
-    ExecutionMode, ProgressRecord, ToolContext, ToolError, ToolFunction,
-};
+use agentik_core::tools::{ExecutionMode, ProgressRecord, ToolContext, ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
 use async_trait::async_trait;

@@ -29,15 +29,6 @@ use alloc::{vec, vec::Vec};
 #[cfg(feature = "alloc")]
 #[allow(deprecated)]
 impl<'a> Graph<'a> {
-    /// Calculate hierarchical levels for all nodes in the graph.
-    ///
-    /// Uses a fixed-point algorithm to assign each node to a level,
-    /// where a node's level is one more than the maximum level of its parents.
-    #[cfg(test)]
-    pub(crate) fn calculate_levels(&self) -> Vec<(usize, usize)> {
-        self.calculate_levels_with_back_edges(&[])
-    }
-
     /// Calculate node levels, treating back edges as reversed.
     ///
     /// Back edges (identified by index in `back_edges`) have their direction

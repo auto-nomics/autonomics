@@ -344,8 +344,8 @@ mod tests {
         assert!((t.extra_f64("stderr").unwrap() - 3.5).abs() < 1e-14);
         assert!((t.stat - 1.2857142857142858).abs() < 1e-14);
         assert!((t.dof - 1.0).abs() < 1e-14);
-        assert!((t.p_value - 0.42083315167886859).abs() < 1e-14);
-        assert!((t.extra_f64("conf_low").unwrap() - (-39.971716576611428)).abs() < 1e-12);
+        assert!((t.p_value - 0.420_833_151_678_868_6).abs() < 1e-14);
+        assert!((t.extra_f64("conf_low").unwrap() - (-39.971_716_576_611_43)).abs() < 1e-12);
         assert!((t.extra_f64("conf_high").unwrap() - 48.971716576611435).abs() < 1e-12);
         assert_eq!(t.extra_f64("n"), Some(2.0));
     }
@@ -355,7 +355,7 @@ mod tests {
     #[test]
     fn paired_greater_matches_r() {
         let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], 0.0, Alternative::Greater, 0.95).unwrap();
-        assert!((t.p_value - 0.21041657583943429).abs() < 1e-14);
+        assert!((t.p_value - 0.210_416_575_839_434_3).abs() < 1e-14);
         assert!((t.extra_f64("conf_low").unwrap() - (-17.59813030136263)).abs() < 1e-12);
         assert_eq!(t.extra_f64("conf_high"), None); // +Inf → JSON null
     }
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn paired_conf_90_matches_r() {
         let t = t_test_paired(&[1.0, 10.0], &[0.0, 2.0], 0.0, Alternative::TwoSided, 0.9).unwrap();
-        assert!((t.p_value - 0.42083315167886859).abs() < 1e-14);
+        assert!((t.p_value - 0.420_833_151_678_868_6).abs() < 1e-14);
         assert!((t.extra_f64("conf_low").unwrap() - (-17.59813030136263)).abs() < 1e-12);
         assert!((t.extra_f64("conf_high").unwrap() - 26.59813030136263).abs() < 1e-12);
     }
@@ -427,7 +427,7 @@ mod tests {
     fn one_sample_less_matches_r() {
         let x = vec![2.1, 2.5, 1.8, 3.0, 2.7];
         let t = t_test_one(&x, 2.0, Alternative::Less, 0.95).unwrap();
-        assert!((t.p_value - 0.93999485990763687).abs() < 1e-14);
+        assert!((t.p_value - 0.939_994_859_907_636_9).abs() < 1e-14);
         assert_eq!(t.extra_f64("conf_low"), None); // -Inf → JSON null
         assert!((t.extra_f64("conf_high").unwrap() - 2.8742384733868933).abs() < 1e-12);
     }

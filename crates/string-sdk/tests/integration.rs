@@ -6,10 +6,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 
 use string_sdk::StringDbClient;
 use string_sdk::nodes::Plugin;
-use string_sdk::tools::{
-    FunctionalEnrichmentTool, NetworkImageTool, NetworkInteractionsTool, NetworkSummaryTool,
-    ResolveIdentifiersTool,
-};
+use string_sdk::tools::{NetworkImageTool, NetworkSummaryTool, ResolveIdentifiersTool};
 
 fn client() -> Arc<StringDbClient> {
     Arc::new(
@@ -32,8 +29,6 @@ fn tool_registrations_expose_unique_definitions() {
         names,
         vec![
             "string_resolve_identifiers",
-            "string_network_interactions",
-            "string_functional_enrichment",
             "string_network_summary",
             "string_network_image",
         ]
@@ -49,23 +44,6 @@ async fn tools_validate_inputs_before_network_calls() {
     let client = client();
     let resolve = ResolveIdentifiersTool::new(client.clone());
     let error = resolve
-        .execute(serde_json::json!({"identifiers": []}))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("at least one"));
-
-    let network = NetworkInteractionsTool::new(client.clone());
-    let error = network
-        .execute(serde_json::json!({
-            "identifiers": ["TP53"],
-            "network_type": "metabolic"
-        }))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("network_type"));
-
-    let enrichment = FunctionalEnrichmentTool::new(client.clone());
-    let error = enrichment
         .execute(serde_json::json!({"identifiers": []}))
         .await
         .unwrap_err();

@@ -626,7 +626,7 @@ impl Agent {
                         messages: session.messages.clone(),
                         summary: session.summary.clone(),
                         ancestor_summaries: session.ancestor_summaries.clone(),
-                        telemetry: session.telemetry.clone(),
+                        telemetry: session.telemetry,
                     };
                     let _ = storage
                         .replace_session_state(self.shared.id, id, &state)

@@ -1507,8 +1507,8 @@ mod tests {
         }
         let outcome = outcome.unwrap();
         println!("dag_shell outcome: {outcome:?}");
-        assert_eq!(outcome.ok, false);
-        assert_eq!(outcome.applied, false);
+        assert!(!outcome.ok);
+        assert!(!outcome.applied);
         assert_eq!(outcome.error.as_ref().unwrap().code, "dag_running");
 
         drop(_event_rx);

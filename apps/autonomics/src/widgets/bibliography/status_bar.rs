@@ -34,8 +34,9 @@ impl Widget for StatusBar<'_> {
             "Tab switch · / search · j/k move · h/l tabs · r reload · q quit · selected {selected}"
         );
         // Narrow terminals keep the key hints and drop the verbose wording.
-        let fits_full = focus.chars().count() + 1 + full.chars().count() + 2 + right.chars().count()
-            <= area.width as usize;
+        let fits_full =
+            focus.chars().count() + 1 + full.chars().count() + 2 + right.chars().count()
+                <= area.width as usize;
         let hints = if fits_full {
             full
         } else {
