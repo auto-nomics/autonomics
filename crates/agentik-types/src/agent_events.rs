@@ -168,6 +168,13 @@ pub struct SessionInfo {
     pub last_active: i64,
     #[serde(default)]
     pub telemetry: SessionTelemetry,
+    /// Parent session when this conversation was forked from another one.
+    #[serde(default)]
+    pub parent_session_id: Option<Uuid>,
+    /// ID of the parent transcript message through which this session was
+    /// forked. `None` means a whole-session fork or a new root conversation.
+    #[serde(default)]
+    pub fork_point_message_id: Option<String>,
 }
 
 /// Progress reporting for one context-compaction pass.

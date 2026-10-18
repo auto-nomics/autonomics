@@ -244,11 +244,18 @@ impl HostControl {
         self.fire(HostCommand::ListSessions { name: name.into() });
     }
 
-    pub fn create_session(&self, name: &str, title: Option<String>, fork_from: Option<uuid::Uuid>) {
+    pub fn create_session(
+        &self,
+        name: &str,
+        title: Option<String>,
+        fork_from: Option<uuid::Uuid>,
+        fork_message_id: Option<String>,
+    ) {
         self.fire(HostCommand::CreateSession {
             name: name.into(),
             title,
             fork_from,
+            fork_message_id,
         });
     }
 
@@ -555,6 +562,7 @@ pub enum HostCommand {
         name: String,
         title: Option<String>,
         fork_from: Option<uuid::Uuid>,
+        fork_message_id: Option<String>,
     },
 
     /// Switch the active session of a named agent.

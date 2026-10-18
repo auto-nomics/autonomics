@@ -28,6 +28,8 @@ pub struct SessionSummary {
     pub is_active: bool,
     /// Epoch-millis of creation. Used to order sessions (newest first).
     pub created_at: i64,
+    /// Set for conversations created by forking another session.
+    pub parent_session_id: Option<uuid::Uuid>,
 }
 
 /// Widget that renders a compact list of sub-sessions.
@@ -86,7 +88,10 @@ impl Widget for SessionList<'_> {
 
 /// Render a single session row.
 fn render_session_row(area: Rect, buf: &mut Buffer, session: &SessionSummary) {
-    let title_text = session.title.as_deref().unwrap_or("(untitled)");
+    let mut title_text = session.title.clone().unwrap_or_else(|| "(untitled)".into());
+    if session.parent_session_id.is_some() {
+        title_text.insert_str(0, "⑂ ");
+    }
 
     // Reserve space for: " ● " (3 chars) + title + right-aligned " N" (msg count).
     let msg_text = format!("{}", session.message_count);
@@ -150,12 +155,14 @@ mod tests {
                 message_count: 10,
                 is_active: true,
                 created_at: 1000,
+                parent_session_id: None,
             },
             SessionSummary {
                 title: Some("Inactive".into()),
                 message_count: 3,
                 is_active: false,
                 created_at: 2000,
+                parent_session_id: None,
             },
         ];
         let widget = SessionList {
@@ -177,18 +184,21 @@ mod tests {
                 message_count: 1,
                 is_active: false,
                 created_at: 9000,
+                parent_session_id: None,
             },
             SessionSummary {
                 title: Some("Middle".into()),
                 message_count: 1,
                 is_active: false,
                 created_at: 5000,
+                parent_session_id: None,
             },
             SessionSummary {
                 title: Some("Active-but-oldest".into()),
                 message_count: 1,
                 is_active: true,
                 created_at: 1000,
+                parent_session_id: None,
             },
         ];
         let widget = SessionList {

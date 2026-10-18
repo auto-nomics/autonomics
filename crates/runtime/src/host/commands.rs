@@ -428,8 +428,16 @@ impl RuntimeHost {
                 name,
                 title,
                 fork_from,
+                fork_message_id,
             } => {
-                self.send_agent_command(&name, AgentCommand::CreateSession { title, fork_from });
+                self.send_agent_command(
+                    &name,
+                    AgentCommand::CreateSession {
+                        title,
+                        fork_from,
+                        fork_message_id,
+                    },
+                );
             }
             HostCommand::SwitchSession { name, session_id } => {
                 self.send_agent_command(&name, AgentCommand::SwitchSession(session_id));

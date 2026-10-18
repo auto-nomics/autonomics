@@ -64,6 +64,8 @@ pub enum CommandAction {
     ToggleCollapseToolResults,
     /// Open the message picker to copy a chat message to the clipboard.
     CopyMessage,
+    /// Open the message picker and fork a session at the selected message.
+    ForkMessage,
     /// Manually compact the active agent's conversation history.
     Compact,
 }
@@ -435,6 +437,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "copy clipboard snippet transcript chat pick select text message".into(),
             category: "clipboard".into(),
             action: CommandAction::CopyMessage,
+        },
+        Command {
+            title: "Fork from message".into(),
+            keywords: "fork branch chat conversation message point history tree".into(),
+            category: "session".into(),
+            action: CommandAction::ForkMessage,
         },
         Command {
             title: "Reload config".into(),

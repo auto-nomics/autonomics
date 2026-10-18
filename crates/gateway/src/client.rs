@@ -340,11 +340,16 @@ impl GatewayClient {
         agent: &str,
         title: Option<String>,
         fork_from: Option<Uuid>,
+        fork_message_id: Option<String>,
     ) -> Result<()> {
         self.fire(
             reqwest::Method::POST,
             &format!("/agents/{}/sessions", encode_segment(agent)),
-            Some(&CreateSessionRequest { title, fork_from }),
+            Some(&CreateSessionRequest {
+                title,
+                fork_from,
+                fork_message_id,
+            }),
         )
         .await
     }

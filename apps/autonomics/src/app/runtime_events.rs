@@ -183,6 +183,13 @@ impl App {
             } => {
                 self.replay_history(agent_id, session_id, &messages);
             }
+            crate::app_event::AppEvent::ForkHistoryLoaded {
+                agent_id,
+                session_id,
+                messages,
+            } => {
+                self.handle_fork_history_loaded(agent_id, session_id, &messages);
+            }
             crate::app_event::AppEvent::PlanLoaded {
                 agent_id,
                 session_id,
@@ -716,6 +723,8 @@ impl App {
             let mut sub = state::SubSession::new(info.id, info.title.clone());
             sub.last_active = info.last_active;
             sub.created_at = info.created_at;
+            sub.parent_session_id = info.parent_session_id;
+            sub.fork_point_message_id = info.fork_point_message_id.clone();
             agent.sub_sessions.push(sub);
         }
     }

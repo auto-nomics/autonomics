@@ -126,6 +126,7 @@ impl App {
                         message_count: sub.tab_state.messages.len(),
                         is_active: i == s.active_sub_session_idx,
                         created_at: sub.created_at,
+                        parent_session_id: sub.parent_session_id,
                     })
                     .collect()
             })

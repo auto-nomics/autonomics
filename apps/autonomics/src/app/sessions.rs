@@ -50,7 +50,7 @@ impl App {
                         .map(|s| s.name.clone())
                     {
                         self.fire_session_command("create_session", move |client| async move {
-                            let _ = client.create_session(&an, Some(title), None).await;
+                            let _ = client.create_session(&an, Some(title), None, None).await;
                         });
                     }
                 } else {

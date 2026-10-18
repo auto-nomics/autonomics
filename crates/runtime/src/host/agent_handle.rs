@@ -155,11 +155,13 @@ impl AgentHandle {
         &self,
         title: Option<String>,
         fork_from: Option<uuid::Uuid>,
+        fork_message_id: Option<String>,
     ) -> uuid::Uuid {
         let id = uuid::Uuid::new_v4();
         let _ = self.internal_tx.send(InternalEvent::CreateSession {
             id,
             fork_from,
+            fork_message_id,
             title,
         });
         id

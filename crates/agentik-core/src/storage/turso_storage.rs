@@ -289,7 +289,9 @@ impl TursoAgentStorage {
                     ended_at   INTEGER,
                     title      TEXT,
                     last_active_at INTEGER,
-                    telemetry_json TEXT
+                    telemetry_json TEXT,
+                    parent_session_id TEXT,
+                    fork_point_message_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_sessions_agent
                     ON sessions(agent_id);
@@ -477,6 +479,17 @@ impl TursoAgentStorage {
         let _ = self
             .conn
             .execute("ALTER TABLE sessions ADD COLUMN telemetry_json TEXT", ())
+            .await;
+        let _ = self
+            .conn
+            .execute("ALTER TABLE sessions ADD COLUMN parent_session_id TEXT", ())
+            .await;
+        let _ = self
+            .conn
+            .execute(
+                "ALTER TABLE sessions ADD COLUMN fork_point_message_id TEXT",
+                (),
+            )
             .await;
         let _ = self
             .conn
@@ -1419,6 +1432,31 @@ impl AgentStorage for TursoAgentStorage {
         Ok(())
     }
 
+    async fn update_session_lineage(
+        &self,
+        session_id: Uuid,
+        parent_session_id: Option<Uuid>,
+        fork_point_message_id: Option<&str>,
+    ) -> Result<(), StorageError> {
+        self.conn
+            .execute(
+                "UPDATE sessions
+                 SET parent_session_id = ?1, fork_point_message_id = ?2
+                 WHERE id = ?3",
+                params_from_iter([
+                    parent_session_id
+                        .map(|id| Value::Text(id.to_string()))
+                        .unwrap_or(Value::Null),
+                    fork_point_message_id
+                        .map(|value| Value::Text(value.to_string()))
+                        .unwrap_or(Value::Null),
+                    Value::Text(session_id.to_string()),
+                ]),
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn list_session_records(
         &self,
         agent_id: Uuid,
@@ -1426,7 +1464,8 @@ impl AgentStorage for TursoAgentStorage {
         let mut rows = self
             .conn
             .query(
-                "SELECT id, title, started_at, ended_at, last_active_at, telemetry_json
+                "SELECT id, title, started_at, ended_at, last_active_at, telemetry_json,
+                        parent_session_id, fork_point_message_id
                  FROM sessions
                  WHERE agent_id = ?1
                  ORDER BY started_at ASC",
@@ -1459,6 +1498,18 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Text(json) => serde_json::from_str(&json)?,
                         _ => agentik_types::SessionTelemetry::default(),
                     };
+                    let parent_session_id = match row.get_value(6)? {
+                        Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
+                            StorageError::Other(
+                                format!("invalid parent session UUID '{value}': {e}").into(),
+                            )
+                        })?),
+                        _ => None,
+                    };
+                    let fork_point_message_id = match row.get_value(7)? {
+                        Value::Text(value) => Some(value),
+                        _ => None,
+                    };
                     let session_id = Uuid::parse_str(&id_str).map_err(|e| {
                         StorageError::Other(format!("invalid session UUID '{id_str}': {e}").into())
                     })?;
@@ -1469,6 +1520,8 @@ impl AgentStorage for TursoAgentStorage {
                         ended_at,
                         last_active,
                         telemetry,
+                        parent_session_id,
+                        fork_point_message_id,
                     });
                 }
                 Ok(None) => break,
@@ -2459,6 +2512,30 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].telemetry, telemetry);
         assert!(records[0].last_active >= records[0].started_at);
+    }
+
+    #[tokio::test]
+    async fn test_session_lineage_is_persisted_and_restored() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let parent_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+
+        store.start_session(agent_id, parent_id).await.unwrap();
+        store.start_session(agent_id, child_id).await.unwrap();
+        store
+            .update_session_lineage(child_id, Some(parent_id), Some("msg_42"))
+            .await
+            .unwrap();
+        store.end_session(child_id).await.unwrap();
+
+        let records = store.list_session_records(agent_id).await.unwrap();
+        let child = records
+            .iter()
+            .find(|record| record.session_id == child_id)
+            .unwrap();
+        assert_eq!(child.parent_session_id, Some(parent_id));
+        assert_eq!(child.fork_point_message_id.as_deref(), Some("msg_42"));
     }
 
     #[tokio::test]
