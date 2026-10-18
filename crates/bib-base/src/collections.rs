@@ -1,7 +1,8 @@
 //! Collection management — CRUD for [`Collection`] and the enriched
 //! [`CollectionArticle`] association that links articles to collections.
 //!
-//! All methods are on [`BibBase`] and share the same Turso connection.
+//! Storage methods are on [`BibCore`] (the actor-owned implementation)
+//! and reach callers through the [`BibBase`] handle delegators below.
 
 use chrono::Utc;
 use turso::{
@@ -9,7 +10,8 @@ use turso::{
     transaction::{Transaction, TransactionBehavior},
 };
 
-use crate::bib_base::BibBase;
+use crate::actor::BibCommand;
+use crate::bib_base::{BibBase, BibCore};
 use crate::error::{Error, Result};
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
@@ -77,11 +79,10 @@ pub struct CollectionAssignmentOutcome {
 // Collection CRUD
 // ---------------------------------------------------------------------------
 
-impl BibBase {
+impl BibCore {
     /// Insert or update a collection. Child rows (`collection_articles`)
     /// are **not** touched — use [`Self::add_to_collection`] for that.
     pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute(
             "INSERT INTO collections \
@@ -131,6 +132,12 @@ impl BibBase {
         col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
         col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
         col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
+
+        // Close the header cursor before the hydration query — an open
+        // turso cursor keeps statement state alive on the connection, and
+        // a second statement overlapping it trips the concurrent-use
+        // guard even on a single task.
+        drop(rows);
 
         // Hydrate article_ids in position order.
         col.article_ids = self.collection_article_ids(id).await?;
@@ -216,7 +223,6 @@ impl BibBase {
 
     /// Update the status of a collection.
     pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         conn.execute(
             "UPDATE collections SET status = ?1, updated_at = ?2 WHERE id = ?3",
@@ -228,7 +234,6 @@ impl BibBase {
 
     /// Delete a collection (FK CASCADE removes `collection_articles` rows).
     pub async fn delete_collection(&self, id: &str) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         self.write_conn()
             .execute("DELETE FROM collections WHERE id = ?1", turso::params![id])
             .await?;
@@ -257,7 +262,6 @@ impl BibBase {
         added_by: AddedBy,
         note: Option<&str>,
     ) -> Result<CollectionAddOutcome> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let outcome =
@@ -283,7 +287,6 @@ impl BibBase {
         collection_id: &str,
         assignments: &[CollectionAssignment],
     ) -> Result<Vec<CollectionAssignmentOutcome>> {
-        let _write = self.write_gate.lock().await;
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
 
@@ -294,13 +297,13 @@ impl BibBase {
             assignments: &[CollectionAssignment],
         ) -> Result<Vec<CollectionAssignmentOutcome>> {
             for article in articles {
-                BibBase::upsert_article_in_tx(tx, article).await?;
+                BibCore::upsert_article_in_tx(tx, article).await?;
                 crate::bib_base::sync_search_index(tx, &article.id).await?;
             }
 
             let mut outcomes = Vec::with_capacity(assignments.len());
             for assignment in assignments {
-                let outcome = BibBase::add_to_collection_in_tx(
+                let outcome = BibCore::add_to_collection_in_tx(
                     tx,
                     collection_id,
                     assignment.article_id.as_str(),
@@ -335,7 +338,6 @@ impl BibBase {
         collection_id: &str,
         article_id: &str,
     ) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         self.write_conn()
             .execute(
                 "DELETE FROM collection_articles \
@@ -353,7 +355,6 @@ impl BibBase {
         article_id: &str,
         role: ArticleRole,
     ) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         self.write_conn()
             .execute(
                 "UPDATE collection_articles SET role = ?1 \
@@ -371,7 +372,6 @@ impl BibBase {
         article_id: &str,
         status: FetchStatus,
     ) -> Result<()> {
-        let _write = self.write_gate.lock().await;
         self.write_conn()
             .execute(
                 "UPDATE collection_articles SET fetch_status = ?1 \
@@ -586,6 +586,169 @@ impl BibBase {
             ids.push(row.get::<String>(0)?);
         }
         Ok(ids)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BibBase — thin handle methods, one command round-trip each
+// ---------------------------------------------------------------------------
+
+impl BibBase {
+    /// Insert or update a collection.
+    pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
+        self.call(|reply| BibCommand::UpsertCollection {
+            collection: collection.clone(),
+            reply,
+        })
+        .await
+    }
+
+    /// Look up a single collection by ID, with its article IDs hydrated
+    /// in order.
+    pub async fn get_collection(&self, id: &str) -> Result<Option<Collection>> {
+        self.call(|reply| BibCommand::GetCollection {
+            id: id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// List collections, optionally filtered by status.
+    pub async fn list_collections(
+        &self,
+        status: Option<CollectionStatus>,
+    ) -> Result<Vec<Collection>> {
+        self.call(|reply| BibCommand::ListCollections { status, reply })
+            .await
+    }
+
+    /// Update the status of a collection.
+    pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
+        self.call(|reply| BibCommand::UpdateCollectionStatus {
+            id: id.to_owned(),
+            status,
+            reply,
+        })
+        .await
+    }
+
+    /// Delete a collection.
+    pub async fn delete_collection(&self, id: &str) -> Result<()> {
+        self.call(|reply| BibCommand::DeleteCollection {
+            id: id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Associate an article with a collection.
+    pub async fn add_to_collection(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+        role: ArticleRole,
+        added_by: AddedBy,
+        note: Option<&str>,
+    ) -> Result<CollectionAddOutcome> {
+        self.call(|reply| BibCommand::AddToCollection {
+            collection_id: collection_id.to_owned(),
+            article_id: article_id.to_owned(),
+            role,
+            added_by,
+            note: note.map(str::to_owned),
+            reply,
+        })
+        .await
+    }
+
+    /// Upsert articles and associate them with one collection atomically.
+    pub async fn upsert_articles_with_collection(
+        &self,
+        articles: &[Article],
+        collection_id: &str,
+        assignments: &[CollectionAssignment],
+    ) -> Result<Vec<CollectionAssignmentOutcome>> {
+        self.call(|reply| BibCommand::UpsertArticlesWithCollection {
+            articles: articles.to_vec(),
+            collection_id: collection_id.to_owned(),
+            assignments: assignments.to_vec(),
+            reply,
+        })
+        .await
+    }
+
+    /// Remove an article from a collection.
+    pub async fn remove_from_collection(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+    ) -> Result<()> {
+        self.call(|reply| BibCommand::RemoveFromCollection {
+            collection_id: collection_id.to_owned(),
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Update the role of an article within a collection.
+    pub async fn update_article_role(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+        role: ArticleRole,
+    ) -> Result<()> {
+        self.call(|reply| BibCommand::UpdateArticleRole {
+            collection_id: collection_id.to_owned(),
+            article_id: article_id.to_owned(),
+            role,
+            reply,
+        })
+        .await
+    }
+
+    /// Update the full-text fetch status of an article within a collection.
+    pub async fn update_fetch_status(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+        status: FetchStatus,
+    ) -> Result<()> {
+        self.call(|reply| BibCommand::UpdateFetchStatus {
+            collection_id: collection_id.to_owned(),
+            article_id: article_id.to_owned(),
+            status,
+            reply,
+        })
+        .await
+    }
+
+    /// List the enriched [`CollectionArticle`] associations for a collection.
+    pub async fn list_collection_articles(
+        &self,
+        collection_id: &str,
+        role_filter: Option<ArticleRole>,
+        fetch_filter: Option<FetchStatus>,
+    ) -> Result<Vec<CollectionArticle>> {
+        self.call(|reply| BibCommand::ListCollectionArticles {
+            collection_id: collection_id.to_owned(),
+            role_filter,
+            fetch_filter,
+            reply,
+        })
+        .await
+    }
+
+    /// List all collection-article entries waiting for a full-text upload.
+    pub async fn list_fulltext_requests(
+        &self,
+        collection_id: Option<&str>,
+    ) -> Result<Vec<CollectionArticle>> {
+        self.call(|reply| BibCommand::ListFulltextRequests {
+            collection_id: collection_id.map(str::to_owned),
+            reply,
+        })
+        .await
     }
 }
 

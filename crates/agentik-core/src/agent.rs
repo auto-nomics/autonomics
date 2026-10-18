@@ -626,7 +626,7 @@ impl Agent {
                         messages: session.messages.clone(),
                         summary: session.summary.clone(),
                         ancestor_summaries: session.ancestor_summaries.clone(),
-                        telemetry: session.telemetry.clone(),
+                        telemetry: session.telemetry,
                     };
                     let _ = storage
                         .replace_session_state(self.shared.id, id, &state)
@@ -767,8 +767,20 @@ pub struct TokenBudget {
 
 impl TokenBudget {
     /// Record real token usage from an API response.
+    ///
+    /// Uses [`Usage::total_input_tokens`] — `input_tokens` plus cache reads
+    /// and cache writes — **not** [`Usage::total_tokens`]. Anthropic reports
+    /// `input_tokens` as only the *newly added, uncached* portion, so with
+    /// prompt caching active (this codebase deliberately keeps the system
+    /// prompt byte-stable to maximise the cached prefix) `total_tokens()`
+    /// reads as a tiny fraction of the real prompt size. Compaction would
+    /// then never trigger while the UI correctly showed a nearly full
+    /// context window. `output_tokens` is included so a long reply nudges
+    /// the threshold slightly early — the safe direction.
     pub fn record_api_usage(&mut self, usage: &agentik_types::Usage) {
-        self.last_api_total = usage.total_tokens();
+        self.last_api_total = usage
+            .total_input_tokens()
+            .saturating_add(usage.output_tokens);
         self.pending_tokens = 0;
     }
 
@@ -816,11 +828,20 @@ impl TokenBudget {
     /// Prefers real API usage + pending estimates; falls back to pure
     /// message-level estimation when no API response has been received yet
     /// (e.g. first turn).
+    ///
+    /// Returns `false` when `context_length` is 0 — the threshold would
+    /// compute to 0 and `total >= 0` would hold unconditionally, compacting
+    /// on every request. Reachable via `ModelInfo::default()` and
+    /// user-defined models whose Context length was left unset. Matches the
+    /// unknown-window handling in [`context_fill_pct`](Self::context_fill_pct).
     pub fn should_compact(
         &self,
         messages: &[agentik_sdk::types::Message],
         context_length: u64,
     ) -> bool {
+        if context_length == 0 {
+            return false;
+        }
         let total = if self.last_api_total > 0 {
             self.current_total()
         } else {
@@ -947,6 +968,99 @@ mod tests {
             budget.should_compact(&msgs, context_length),
             "should_compact must fire for a 500K-char single-segment conversation"
         );
+    }
+
+    /// An unknown context window (`ModelInfo::default()`, or a user-defined
+    /// model whose Context length was left unset) must never trigger
+    /// compaction. The threshold would compute to 0, making `total >= 0`
+    /// hold unconditionally and compacting on every single request.
+    #[test]
+    fn should_compact_is_false_when_context_length_unknown() {
+        let msgs = vec![Message::user("x".repeat(500_000))];
+
+        // Estimate path (no API response recorded yet).
+        assert!(
+            !TokenBudget::default().should_compact(&msgs, 0),
+            "unknown window must not compact off the estimate path"
+        );
+
+        // API-usage path (last_api_total > 0) — same zero threshold.
+        // 125_000 tokens sits above 90% of a 128k window.
+        let mut budget = TokenBudget::default();
+        budget.record_api_usage(&agentik_types::Usage {
+            input_tokens: 120_000,
+            output_tokens: 5_000,
+            ..Default::default()
+        });
+        assert!(
+            !budget.should_compact(&msgs, 0),
+            "unknown window must not compact off the API-usage path"
+        );
+
+        // The display-side sibling agrees.
+        assert_eq!(budget.context_fill_pct(&msgs, 0), 0);
+
+        // And a known window still fires at the same usage.
+        assert!(
+            budget.should_compact(&msgs, 128_000),
+            "a known window above 90% must still trigger"
+        );
+    }
+
+    /// Regression: compaction must account for *cached* prompt tokens.
+    ///
+    /// Anthropic's `input_tokens` counts only newly added, uncached tokens.
+    /// With prompt caching on, a nearly-full 200k context reports a tiny
+    /// `input_tokens` and a huge `cache_read_input_tokens`. The budget used
+    /// to read `input_tokens + output_tokens`, so a session at 91% of its
+    /// window measured as ~1.4% and auto-compaction never fired — while
+    /// the TUI (which has always summed all three) showed the red
+    /// over-threshold warning. This pins the two views together.
+    #[test]
+    fn cached_prompt_tokens_count_toward_the_compaction_threshold() {
+        let usage = agentik_types::Usage {
+            input_tokens: 2_000,
+            output_tokens: 800,
+            cache_creation_input_tokens: Some(0),
+            cache_read_input_tokens: Some(180_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            usage.total_tokens(),
+            2_800,
+            "the naive sum is what used to drive the threshold"
+        );
+
+        let mut budget = TokenBudget::default();
+        budget.record_api_usage(&usage);
+
+        assert_eq!(budget.current_total(), 182_800);
+        assert_eq!(
+            budget.context_fill_pct(&[], 200_000),
+            91,
+            "the budget must agree with the UI's over-threshold reading"
+        );
+        assert!(
+            budget.should_compact(&[], 200_000),
+            "a 91%-full cached context must trigger compaction"
+        );
+
+        // A cache-miss first request (no cache fields) still behaves as
+        // before — the fix must not disturb the uncached path.
+        let uncached = agentik_types::Usage {
+            input_tokens: 190_000,
+            output_tokens: 500,
+            ..Default::default()
+        };
+        let mut budget = TokenBudget::default();
+        budget.record_api_usage(&uncached);
+        assert!(budget.should_compact(&[], 200_000));
+
+        // Pending messages still add on top of the cached baseline.
+        let mut budget = TokenBudget::default();
+        budget.record_api_usage(&usage);
+        budget.add_pending_message(&Message::user("x".repeat(40_000))); // ~10k tokens
+        assert_eq!(budget.current_total(), 192_800);
     }
 
     #[tokio::test]

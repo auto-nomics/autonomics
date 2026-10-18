@@ -29,6 +29,21 @@ use super::Session;
 
 const MAX_RETRY_BACKOFF_SECS: u64 = 30;
 
+/// What the session loop should do after one [`Session::run_turn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TurnOutcome {
+    /// Tool calls were executed; the agent needs another API round-trip.
+    Continue,
+    /// The agent went idle or errored — the session is over.
+    Finished,
+    /// The agent parked on a background `wait_task`. The session loop
+    /// exits without emitting `Done`; a watcher injects a message later
+    /// that re-enters [`Session::run_session`].
+    Paused,
+    /// Cancellation was observed during the turn.
+    Cancelled,
+}
+
 impl Session {
     // ── Turn lifecycle ─────────────────────────────────────
 
@@ -37,33 +52,38 @@ impl Session {
     /// # Auguments
     /// * `delegation_id` - ID of parent agent if existed.
     pub(crate) fn begin_turn(&mut self, delegation_id: Option<Uuid>) {
-        if self.active_turn_id.is_none() {
-            self.active_turn_id = Some(Uuid::new_v4());
-            self.active_delegation_id = delegation_id;
-            self.telemetry.turn_count += 1;
-            self.turn_baseline = Some(self.telemetry);
-            self.turn_timing = super::TurnTiming::default();
-        } else if delegation_id.is_some() {
-            self.active_delegation_id = delegation_id;
-        }
-        self.turn_timing.start();
+        let turn = match self.turn.as_mut() {
+            // Still inside the turn that a `Waiting` pause interrupted.
+            Some(turn) => {
+                if delegation_id.is_some() {
+                    turn.delegation_id = delegation_id;
+                }
+                turn
+            }
+            None => {
+                self.telemetry.turn_count += 1;
+                self.turn
+                    .insert(super::Turn::new(delegation_id, self.telemetry))
+            }
+        };
+        turn.timing.start();
 
         self.shared.send_event(AgentEvent::TurnStarted {
-            turn_id: self.active_turn_id.expect("turn id set above"),
+            turn_id: turn.id,
             session_id: self.id,
-            delegation_id: self.active_delegation_id,
+            delegation_id: turn.delegation_id,
         });
     }
 
     /// Close the current turn and emit its terminal status.
     pub(crate) fn finish_turn(&mut self, status: TurnExecutionStatus) {
-        let Some(turn_id) = self.active_turn_id.take() else {
+        let Some(mut turn) = self.turn.take() else {
             return;
         };
-        let delegation_id = self.active_delegation_id.take();
-        let telemetry = self.finish_telemetry();
+        let delegation_id = turn.delegation_id;
+        let telemetry = self.finish_telemetry_for(&mut turn);
         self.shared.send_event(AgentEvent::TurnCompleted {
-            turn_id,
+            turn_id: turn.id,
             session_id: self.id,
             delegation_id,
             status,
@@ -73,8 +93,13 @@ impl Session {
 
     // ── Session loop ──────────────────────────────────────
 
-    /// Run one "session": a sequence of LLM round-trips until the agent
-    /// goes idle, hits an error, or is cancelled.
+    /// Run one "session": a sequence of [`Session::run_turn`] iterations
+    /// until the agent goes idle, hits an error, or is cancelled.
+    ///
+    /// This is the **session** level of the `agent -> session -> turn`
+    /// hierarchy. It owns one-time setup (toolset cancel wiring, opening
+    /// the WAL session) and the loop itself; the per-iteration work lives
+    /// in [`Session::run_turn`], which owns the turn lifecycle.
     pub(crate) async fn run_session(
         &mut self,
         internal_event_tx: &UnboundedSender<InternalEvent>,
@@ -103,98 +128,20 @@ impl Session {
         let mut was_cancelled = false;
 
         loop {
-            // Check for cancellation before each iteration.
-            if self.cancel_token.is_cancelled() {
-                was_cancelled = true;
-                break;
-            }
-
-            // Drain queued events (retry feedback, bg-task notices, etc.)
-            let mut retry_feedback: Option<String> = None;
-            while let Ok(event) = rx.try_recv() {
-                if !self.apply_internal_event(event).await {
-                    // Terminal control event — stop the loop.
+            match self.run_turn(internal_event_tx, rx).await {
+                TurnOutcome::Continue => {}
+                TurnOutcome::Cancelled => {
+                    was_cancelled = true;
                     break;
                 }
-            }
-
-            // Run one iteration of the agent workflow.
-            let session_done = match self
-                .agent_workflow(internal_event_tx, retry_feedback.take())
-                .await
-            {
-                Ok(()) => {
-                    // After agent_workflow, if the lifecycle is still
-                    // "running" it means tool calls were executed and the
-                    // agent needs another API round. Only stop when the
-                    // lifecycle has transitioned away from running (e.g.
-                    // Idle via self.stop(), Error, or Waiting).
-                    if !self.lifecycle.is_running() {
-                        // Don't emit `Done` when waiting for background
-                        // tasks — the turn isn't complete, just paused.
-                        // The watcher will inject a message to resume.
-                        if *self.lifecycle.status() != agentik_types::AgentLifecycleStatus::Waiting
-                        {
-                            self.finish_turn(TurnExecutionStatus::Completed);
-                            self.shared.send_event(AgentEvent::Done);
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                }
-                Err(e) => {
-                    if self.cancel_token.is_cancelled() {
-                        was_cancelled = true;
-                        break;
-                    }
-                    tracing::error!(
-                        error = %e,
-                        error_chain = ?e,
-                        "workflow failed"
-                    );
-                    self.shared.send_event(AgentEvent::Error(format!("{e}")));
-                    self.persist_snapshot().await;
-                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
-                    self.finish_turn(TurnExecutionStatus::Failed);
-                    true
-                }
-            };
-
-            if session_done {
-                break;
-            }
-
-            // Drain control/notification events that arrived during this iteration.
-            let mut terminal = false;
-            let mut session_mgmt_pending = false;
-            while let Ok(event) = rx.try_recv() {
-                if matches!(
-                    event,
-                    InternalEvent::CreateSession { .. }
-                        | InternalEvent::SwitchSession { .. }
-                        | InternalEvent::CloseSession { .. }
-                        | InternalEvent::ListSessions
-                        | InternalEvent::RenameSession { .. }
-                        | InternalEvent::Shutdown
-                ) {
-                    // Re-queue for the outer Agent::run() loop.
-                    let _ = internal_event_tx.send(event);
-                    session_mgmt_pending = true;
+                TurnOutcome::Finished => break,
+                TurnOutcome::Paused => {
+                    // Resting on a background task. This *is* the end of
+                    // the turn: the agent is no longer moving, and the
+                    // watcher will inject a message that opens a new turn.
+                    self.finish_turn(TurnExecutionStatus::Completed);
                     break;
                 }
-                if !self.apply_internal_event(event).await {
-                    terminal = true;
-                    break;
-                }
-            }
-            if session_mgmt_pending {
-                self.pause_telemetry();
-                self.stop();
-                break;
-            }
-            if terminal {
-                break;
             }
         }
 
@@ -214,6 +161,145 @@ impl Session {
         }
     }
 
+    /// Drive one iteration of the agent loop — drain queued events, run a
+    /// single [`Session::agent_workflow`] step, then drain control events —
+    /// and report what the session loop should do next.
+    ///
+    /// A **turn** is the whole span from a resting lifecycle state
+    /// (`Idle` / `Error` / `Cancelled` / `Waiting`) back to a resting one,
+    /// however many iterations that takes: tool call → results → follow-up
+    /// request are all *within* one turn. The turn lifecycle
+    /// ([`Session::begin_turn`] / [`Session::finish_turn`]) therefore
+    /// brackets the whole loop in [`Session::run_session`], not each
+    /// iteration. Closing a turn per iteration would make every tool round
+    /// look like a completed turn to observers such as the headless
+    /// runner, which terminates the whole run on the first
+    /// `TurnCompleted(Completed)`.
+    async fn run_turn(
+        &mut self,
+        internal_event_tx: &UnboundedSender<InternalEvent>,
+        rx: &mut UnboundedReceiver<InternalEvent>,
+    ) -> TurnOutcome {
+        // Set when a pre-work drain hit a terminal control event. The
+        // original loop still ran one `agent_workflow` iteration after it,
+        // so this flag only gates the trailing control drain.
+        let mut terminal_during_drain = false;
+
+        // Cancellation observed before any work.
+        if self.cancel_token.is_cancelled() {
+            return TurnOutcome::Cancelled;
+        }
+
+        // Drain queued events (retry feedback, bg-task notices, etc.)
+        let mut retry_feedback: Option<String> = None;
+        while let Ok(event) = rx.try_recv() {
+            if !self.apply_internal_event(event).await {
+                // Terminal control event. Note the original loop only broke
+                // out of *this* drain — `agent_workflow` still ran once
+                // below. Preserve that: the event handlers that return
+                // false (Done/Shutdown) have already set the lifecycle and
+                // closed the turn themselves.
+                terminal_during_drain = true;
+                break;
+            }
+        }
+
+        // Run one iteration of the agent workflow.
+        let session_done = match self
+            .agent_workflow(internal_event_tx, retry_feedback.take())
+            .await
+        {
+            Ok(()) => {
+                // After agent_workflow, if the lifecycle is still
+                // "running" it means tool calls were executed and the
+                // agent needs another API round. Only stop when the
+                // lifecycle has transitioned away from running (e.g.
+                // Idle via self.stop(), Error, or Waiting).
+                if !self.lifecycle.is_running() {
+                    // Don't emit `Done` when waiting for background
+                    // tasks — the turn isn't complete, just paused.
+                    // The watcher will inject a message to resume.
+                    if *self.lifecycle.status() != agentik_types::AgentLifecycleStatus::Waiting {
+                        self.finish_turn(TurnExecutionStatus::Completed);
+                        self.shared.send_event(AgentEvent::Done);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Err(e) => {
+                if self.cancel_token.is_cancelled() {
+                    return TurnOutcome::Cancelled;
+                }
+                tracing::error!(
+                    error = %e,
+                    error_chain = ?e,
+                    "workflow failed"
+                );
+                self.shared.send_event(AgentEvent::Error(format!("{e}")));
+                self.persist_snapshot().await;
+                self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
+                self.finish_turn(TurnExecutionStatus::Failed);
+                true
+            }
+        };
+
+        if session_done {
+            // Parking on a background task reaches a resting lifecycle
+            // (`Waiting`), so by the turn definition this turn *is* over —
+            // the caller closes it and the watcher's message opens a new one.
+            return if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Waiting {
+                TurnOutcome::Paused
+            } else {
+                TurnOutcome::Finished
+            };
+        }
+
+        if terminal_during_drain {
+            self.finish_turn(TurnExecutionStatus::Completed);
+            return TurnOutcome::Finished;
+        }
+
+        // Drain control/notification events that arrived during this turn.
+        let mut terminal = false;
+        let mut session_mgmt_pending = false;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(
+                event,
+                InternalEvent::CreateSession { .. }
+                    | InternalEvent::SwitchSession { .. }
+                    | InternalEvent::CloseSession { .. }
+                    | InternalEvent::ListSessions
+                    | InternalEvent::RenameSession { .. }
+                    | InternalEvent::Shutdown
+            ) {
+                // Re-queue for the outer Agent::run() loop.
+                let _ = internal_event_tx.send(event);
+                session_mgmt_pending = true;
+                break;
+            }
+            if !self.apply_internal_event(event).await {
+                terminal = true;
+                break;
+            }
+        }
+        if session_mgmt_pending {
+            self.pause_telemetry();
+            self.stop();
+            self.finish_turn(TurnExecutionStatus::Completed);
+            return TurnOutcome::Finished;
+        }
+        if terminal {
+            self.finish_turn(TurnExecutionStatus::Completed);
+            return TurnOutcome::Finished;
+        }
+
+        // The agent is still moving (tool calls ran; it needs another API
+        // round). The turn stays open — the loop continues inside it.
+        TurnOutcome::Continue
+    }
+
     // ── Apply internal events ─────────────────────────────
 
     /// Apply a single [`InternalEvent`] against session state.
@@ -227,8 +313,8 @@ impl Session {
                 from_user,
                 delegation_id,
             } => {
-                if delegation_id.is_some() {
-                    self.active_delegation_id = delegation_id;
+                if let (Some(id), Some(turn)) = (delegation_id, self.turn.as_mut()) {
+                    turn.delegation_id = Some(id);
                 }
                 let _ = self.inject_message(content, from_user);
                 true
@@ -1534,5 +1620,184 @@ mod tests {
             .collect();
         actual.sort();
         assert_eq!(actual, expected);
+    }
+
+    // ── agent -> session -> turn hierarchy ───────────────────────
+
+    /// Shared fixture: an `AgentShared` whose event channel drains into
+    /// `tx`, so turn lifecycle events are observable.
+    fn turn_test_shared_with(
+        model: agentik_sdk::model::Model,
+        tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+        tool_registry: crate::tools::ToolRegistry,
+        tasks: Option<Arc<tokio::sync::RwLock<crate::tools::TaskStore>>>,
+    ) -> Arc<super::super::AgentShared> {
+        Arc::new(super::super::AgentShared {
+            id: Uuid::new_v4(),
+            path: agentik_types::AgentPath::root(),
+            config_json: serde_json::json!({}),
+            model: Arc::new(arc_swap::ArcSwapOption::from_pointee(Some(model))),
+            config: AgentConfig::default(),
+            storage: None,
+            context_provider: None,
+            system_prompt_section: None,
+            system_prompt_identity: None,
+            memory: None,
+            tool_registry: Arc::new(tool_registry),
+            tasks: tasks.unwrap_or_else(|| {
+                Arc::new(tokio::sync::RwLock::new(crate::tools::TaskStore::new()))
+            }),
+            event_tx: arc_swap::ArcSwapOption::from_pointee(Some(tx)),
+            persist_tx: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// A model that returns the given responses in order, one per call.
+    fn scripted_model(name: &'static str, responses: Vec<Message>) -> agentik_sdk::model::Model {
+        use crate::testing::dummy_model_info;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+
+        let mut mock = MockApiClient::new();
+        for resp in responses {
+            mock.expect_request_stream_with_system()
+                .times(1)
+                .returning(move |_, _, _, _| {
+                    Ok(MessageStream::from_events(Vec::new(), resp.clone()))
+                });
+        }
+        agentik_sdk::model::Model::with_client(dummy_model_info(name), mock)
+    }
+
+    /// Collect the turn lifecycle events in order.
+    fn turn_events(rx: &mut UnboundedReceiver<AgentEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AgentEvent::TurnStarted { .. } => out.push("started".into()),
+                AgentEvent::TurnCompleted { status, .. } => {
+                    out.push(format!("completed:{status:?}"))
+                }
+                AgentEvent::Done => out.push("done".into()),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A turn spans resting-state to resting-state, however many
+    /// `agent_workflow` iterations that takes. A tool call forces a second
+    /// iteration (tool call → results → follow-up request), but both
+    /// iterations belong to **one** turn: exactly one `TurnStarted` /
+    /// `TurnCompleted` pair, and `turn_count == 1`.
+    ///
+    /// Regression: closing a turn per iteration made the headless runner
+    /// see `TurnCompleted(Completed)` after the first tool round and
+    /// terminate the whole run — the agent looked like it went Idle after
+    /// a single response.
+    #[tokio::test]
+    async fn one_turn_spans_multiple_workflow_iterations() {
+        // A real registered tool, so the call actually executes and the
+        // loop must keep going for the follow-up request.
+        let model = scripted_model(
+            "turn-bracket",
+            vec![
+                Message::assistant_tool_use(
+                    "call_1",
+                    "view_task_status",
+                    serde_json::json!({"task": 1}),
+                ),
+                Message::assistant_text("done"),
+            ],
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = Arc::new(tokio::sync::RwLock::new(crate::tools::TaskStore::new()));
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry
+            .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
+            .unwrap();
+        let shared = turn_test_shared_with(model, tx, registry, Some(tasks));
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        session.remember(Message::user("go")).unwrap();
+
+        let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        session
+            .run_session(&internal_tx, &mut internal_rx, None)
+            .await;
+
+        let calls = turn_events(&mut rx);
+        assert_eq!(
+            calls,
+            vec![
+                "started",
+                "completed:Completed", // one pair for both iterations
+                "done",
+            ],
+            "two workflow iterations must still be ONE turn"
+        );
+        assert_eq!(
+            session.telemetry.turn_count, 1,
+            "turn_count must count turns, not iterations"
+        );
+    }
+
+    /// Parking on a background task reaches a resting lifecycle (`Waiting`),
+    /// which ends the turn. `run_turn` reports `Paused` and the session
+    /// loop closes the turn; the watcher's injected message then opens a
+    /// new one.
+    #[tokio::test]
+    async fn run_turn_pauses_on_background_wait() {
+        use crate::tools::task_runtime::TaskEntry;
+
+        // One model call: the wait_task tool call. `Paused` returns before
+        // any follow-up request, so no second script entry is expected.
+        let model = scripted_model(
+            "turn-paused",
+            vec![Message::assistant_tool_use(
+                "call_wait",
+                "wait_task",
+                serde_json::json!({"task": 1, "timeout_seconds": 300}),
+            )],
+        );
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let tasks = Arc::new(tokio::sync::RwLock::new(crate::tools::TaskStore::new()));
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry
+            .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
+            .unwrap();
+        let shared = turn_test_shared_with(model, tx, registry, Some(Arc::clone(&tasks)));
+        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+
+        // A genuinely-running task #1, so wait_task returns the "waiting"
+        // sentinel rather than an immediate result.
+        let cancel = tokio_util::sync::CancellationToken::new();
+        tasks.write().await.push(TaskEntry::new(
+            1,
+            "bg-task".into(),
+            "test_tool".into(),
+            tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(agentik_sdk::types::ToolResult::success("done"))
+            }),
+            cancel.clone(),
+        ));
+
+        // Drive a full session so the turn lifecycle is exercised end to end.
+        let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        session
+            .run_session(&internal_tx, &mut internal_rx, None)
+            .await;
+
+        // Waiting is a resting state, so the turn is closed exactly once —
+        // and no `Done` is emitted (the turn is paused, not complete).
+        let calls = turn_events(&mut rx);
+        assert_eq!(
+            calls,
+            vec!["started", "completed:Completed"],
+            "a paused turn closes on reaching the resting state: {calls:?}"
+        );
+
+        // Cleanup: the watcher we spawned is cancelled with the session.
+        cancel.cancel();
     }
 }

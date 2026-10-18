@@ -38,10 +38,26 @@ use super::{Session, SessionState};
 
 /// Maximum characters per tool output when serializing for summarization.
 const TOOL_OUTPUT_MAX_CHARS: usize = 2_000;
-/// Default tokens to preserve in the "recent" tail during compaction.
+/// Floor for the "recent" tail budget, and the fallback when the model's
+/// context window is unknown.
+///
+/// Also the pre-existing fixed value: small models keep exactly the
+/// behaviour they had before the budget became proportional.
 pub const DEFAULT_KEEP_TOKENS: u64 = 8_000;
-/// Maximum tokens of recent user messages to carry forward into compacted
-/// history (ported from Codex `COMPACT_USER_MESSAGE_MAX_TOKENS`).
+/// Share of the model's context window to preserve as the verbatim tail.
+///
+/// The budget used to be a flat 8k regardless of window size, which on a
+/// 200k model discarded ~95% of the usable context on every compaction.
+const KEEP_TOKENS_PERCENT: u64 = 5;
+/// Share of the context window the preserved user messages may occupy.
+///
+/// These are carried forward *in addition to* the tail, so they must stay
+/// proportional too — a flat 20k would dominate (and on a small window
+/// could re-cross the trigger threshold immediately, compacting again and
+/// again).
+const COMPACT_USER_MESSAGE_PERCENT: u64 = 5;
+/// Ceiling for preserved user messages, matching Codex's
+/// `COMPACT_USER_MESSAGE_MAX_TOKENS`.
 const COMPACT_USER_MESSAGE_MAX_TOKENS: u64 = 20_000;
 /// Minimum tokens of recent tool output to protect from pruning.
 ///
@@ -65,7 +81,8 @@ impl Session {
     ///
     /// Ported from Codex's compaction pipeline:
     ///
-    /// 1. Selects a head/tail split point based on `keep_tokens` budget
+    /// 1. Selects a head/tail split point based on a `keep_tokens` budget
+    ///    scaled to the model's context window
     /// 2. Summarizes the head via a streaming LLM call (deltas forwarded)
     /// 3. Collects recent user messages from the head (up to a token budget)
     /// 4. Rebuilds `messages` = [preserved user messages] + [tail]
@@ -88,7 +105,13 @@ impl Session {
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Compacting);
 
         // ── Selecting (local, ms) — outcome folded into the Start plan ──
-        let selection = match select_for_compaction(&self.messages, DEFAULT_KEEP_TOKENS) {
+        //
+        // Both budgets scale with the model's window so a large-context
+        // model doesn't have 95% of its usable context thrown away on
+        // every pass.
+        let context_length = model.model_info.context_length;
+        let keep_tokens = keep_tokens_for_window(context_length);
+        let selection = match select_for_compaction(&self.messages, keep_tokens) {
             Some(sel) => sel,
             None => {
                 // Too short to compact. Still close the Start/Finish pair so
@@ -176,13 +199,15 @@ impl Session {
 
         // ── Preserve recent user messages from the compacted head ──
         //
-        // Ported from Codex: carry forward user messages (up to
-        // COMPACT_USER_MESSAGE_MAX_TOKENS tokens) from the compacted head so
+        // Ported from Codex: carry forward user messages (up to a budget
+        // proportional to the context window) from the compacted head so
         // the model retains direct access to original user intent without
         // relying solely on the summary.
         let head_messages = &self.messages[..selection.tail_message_start];
-        let preserved_user_msgs =
-            collect_recent_user_messages(head_messages, COMPACT_USER_MESSAGE_MAX_TOKENS);
+        let preserved_user_msgs = collect_recent_user_messages(
+            head_messages,
+            user_message_budget_for_window(context_length),
+        );
         let preserved_tokens: u64 = preserved_user_msgs
             .iter()
             .map(estimate_message_tokens)
@@ -373,7 +398,7 @@ impl Session {
                 return;
             }
         };
-        let timing_was_active = self.turn_timing.is_active();
+        let timing_was_active = self.turn.as_ref().is_some_and(|t| t.timing.is_active());
         let standalone_started = Instant::now();
 
         match self
@@ -569,6 +594,36 @@ fn truncate_for_compact(text: &str) -> String {
         end -= 1;
     }
     format!("{}\n[truncated {} chars]", &text[..end], text.len() - end)
+}
+
+/// Tokens of verbatim tail to preserve, scaled to the model's context
+/// window.
+///
+/// [`KEEP_TOKENS_PERCENT`] of the window, floored at
+/// [`DEFAULT_KEEP_TOKENS`] so small models keep the historical behaviour
+/// and the budget never collapses to a handful of tokens. An unknown
+/// window (`0`) falls back to the floor.
+///
+/// The floor is deliberately a *minimum*, not a cap: a 1M-token model gets
+/// 50k, a 200k model 10k, a 32k model the 8k floor.
+fn keep_tokens_for_window(context_length: u64) -> u64 {
+    if context_length == 0 {
+        return DEFAULT_KEEP_TOKENS;
+    }
+    (context_length.saturating_mul(KEEP_TOKENS_PERCENT) / 100).max(DEFAULT_KEEP_TOKENS)
+}
+
+/// Budget for user messages carried forward out of the compacted head.
+///
+/// [`COMPACT_USER_MESSAGE_PERCENT`] of the window, capped at
+/// [`COMPACT_USER_MESSAGE_MAX_TOKENS`] so a large model doesn't preserve
+/// an unbounded amount of verbatim history.
+fn user_message_budget_for_window(context_length: u64) -> u64 {
+    if context_length == 0 {
+        return COMPACT_USER_MESSAGE_MAX_TOKENS;
+    }
+    (context_length.saturating_mul(COMPACT_USER_MESSAGE_PERCENT) / 100)
+        .min(COMPACT_USER_MESSAGE_MAX_TOKENS)
 }
 
 /// Select a split point in the conversation for compaction.
@@ -836,7 +891,9 @@ mod tests {
     }
 
     /// Alternate ~1.1k-char user/assistant messages so the conversation
-    /// crosses the compaction threshold (DEFAULT_KEEP_TOKENS = 8k).
+    /// crosses the compaction threshold. `dummy_model_info`'s 4096-token
+    /// window falls under the keep budget's floor, so these exercise the
+    /// historical 8k behaviour rather than the proportional path.
     fn long_conversation(n: usize) -> Vec<Message> {
         (0..n)
             .map(|i| {
@@ -1082,5 +1139,89 @@ mod tests {
         let cjk = "摘要".repeat(80); // 3-byte codepoints, > threshold in bytes
         t.push(&cjk, |s| out.push(s));
         assert_eq!(out, vec![cjk]);
+    }
+
+    // ── Proportional compaction budgets ───────────────────────────
+
+    /// The keep budget tracks the context window, floored at the historical
+    /// 8k so small models are unaffected.
+    #[test]
+    fn keep_tokens_scale_with_window_but_keep_an_8k_floor() {
+        // Unknown window → the floor.
+        assert_eq!(keep_tokens_for_window(0), DEFAULT_KEEP_TOKENS);
+
+        // Below the floor → the floor (32k window would be 1.6k at 5%).
+        assert_eq!(keep_tokens_for_window(32_000), DEFAULT_KEEP_TOKENS);
+        assert_eq!(keep_tokens_for_window(160_000), DEFAULT_KEEP_TOKENS);
+
+        // Above the floor → 5% of the window.
+        assert_eq!(keep_tokens_for_window(200_000), 10_000);
+        assert_eq!(keep_tokens_for_window(1_000_000), 50_000);
+    }
+
+    /// Preserved user messages scale too, capped at Codex's 20k. They are
+    /// carried forward *in addition to* the tail, so on a small window a
+    /// flat 20k would re-cross the trigger threshold right after a pass and
+    /// compact again in a loop.
+    #[test]
+    fn user_message_budget_scales_and_is_capped() {
+        assert_eq!(
+            user_message_budget_for_window(0),
+            COMPACT_USER_MESSAGE_MAX_TOKENS,
+            "unknown window keeps the legacy cap"
+        );
+        assert_eq!(
+            user_message_budget_for_window(32_000),
+            1_600,
+            "a small window must not carry 20k of verbatim history"
+        );
+        assert_eq!(user_message_budget_for_window(200_000), 10_000);
+        assert_eq!(
+            user_message_budget_for_window(1_000_000),
+            COMPACT_USER_MESSAGE_MAX_TOKENS,
+            "the 20k cap still applies to very large windows"
+        );
+    }
+
+    /// End-to-end: a large-window model retains proportionally more
+    /// verbatim tail than a small-window one, for the same conversation.
+    #[tokio::test]
+    async fn compact_retains_more_tail_on_a_large_window_model() {
+        // ~34k tokens of history: enough that the tail split differs by
+        // well over a factor of two between a 32k and a 200k window.
+        let messages: Vec<Message> = (0..120)
+            .map(|i| {
+                let text = format!("message {i:03} {}", "x".repeat(1080));
+                if i % 2 == 0 {
+                    Message::user(text)
+                } else {
+                    Message::assistant_text(text)
+                }
+            })
+            .collect();
+
+        let tail_kept = |context_length: u64| {
+            let keep = keep_tokens_for_window(context_length);
+            select_for_compaction(&messages, keep)
+                .map(|sel| messages.len() - sel.tail_message_start)
+        };
+
+        let small = tail_kept(32_000).expect("small window should split");
+        let large = tail_kept(200_000).expect("large window should split");
+
+        // ~1080-char messages ≈ 275 tokens each, so the 8k floor retains
+        // roughly 30 messages and the 10k budget roughly 37. Both compact
+        // a substantial amount of the 120-message history.
+        assert_eq!(small, 30, "the 8k floor keeps ~30 of these messages");
+        assert!(
+            large > small,
+            "a 200k window must keep more verbatim tail than a 32k one \
+             (small={small}, large={large})"
+        );
+        // ~10k tokens at ~275 tokens per message spans ~37 messages.
+        assert!(
+            (34..=40).contains(&large),
+            "the 10k budget should retain ~37 of these messages, got {large}"
+        );
     }
 }

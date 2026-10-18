@@ -83,6 +83,54 @@ pub struct SessionState {
     pub telemetry: SessionTelemetry,
 }
 
+/// One conversation turn — the span from a resting lifecycle state
+/// (`Idle` / `Error` / `Cancelled` / `Waiting`) back to a resting one,
+/// however many LLM round-trips that takes. A tool call, its results, and
+/// the follow-up request are all *within* one turn.
+///
+/// Owned by [`Session`] as `Option<Turn>`: `None` means no turn is open.
+/// A turn stays open across a `Waiting` pause (background `wait_task`), so
+/// a watcher resuming the session reuses it rather than starting a new one.
+///
+/// Deliberately does **not** own the lifecycle: that describes the agent's
+/// state, is consumed far outside this crate (TUI, gateway), and outlives
+/// any single turn.
+struct Turn {
+    /// Stable identity, correlated by callers with their delegation request.
+    id: Uuid,
+    /// Parent agent, when this turn was opened by a delegation.
+    delegation_id: Option<Uuid>,
+    /// Session telemetry as of turn start; the turn's reported usage is the
+    /// delta against this.
+    baseline: SessionTelemetry,
+    timing: TurnTiming,
+}
+
+impl Turn {
+    fn new(delegation_id: Option<Uuid>, baseline: SessionTelemetry) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            delegation_id,
+            baseline,
+            timing: TurnTiming::default(),
+        }
+    }
+
+    /// Settle the turn's wall-clock accounting and compute its telemetry
+    /// delta against `current`.
+    ///
+    /// Consumes the baseline, so a turn must be settled **once**. Note a
+    /// second settle would not return zero — it would re-report the full
+    /// totals against the now-empty baseline. Callers therefore take the
+    /// turn out of the session before settling it (see
+    /// [`Session::finish_turn`]), which also makes a double close a no-op.
+    fn settle(&mut self, current: &SessionTelemetry) -> (TurnTelemetry, u64) {
+        let elapsed_ms = self.timing.pause();
+        let baseline = std::mem::take(&mut self.baseline);
+        (TurnTelemetry::from_session_delta(current, &baseline, elapsed_ms), elapsed_ms)
+    }
+}
+
 #[derive(Default)]
 struct TurnTiming {
     active_since: Option<Instant>,
@@ -151,13 +199,8 @@ pub struct Session {
     /// The `ArcSwap` identity is stable for the session's lifetime; use
     /// [`set_plan`](Self::set_plan) to replace contents in place.
     pub(crate) plan: Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
-    /// Identity of the currently open conversation turn. A turn remains open
-    /// across a `Waiting` pause (for example `wait_task`) and closes only on
-    /// completion, interruption, or failure.
-    pub(crate) active_turn_id: Option<Uuid>,
-    pub(crate) active_delegation_id: Option<Uuid>,
-    turn_baseline: Option<SessionTelemetry>,
-    turn_timing: TurnTiming,
+    /// The currently open conversation turn, if any. See [`Turn`].
+    turn: Option<Turn>,
 
     /// Back-reference to shared agent resources.
     pub(crate) shared: Arc<AgentShared>,
@@ -207,10 +250,7 @@ impl Session {
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
             plan,
-            active_turn_id: None,
-            active_delegation_id: None,
-            turn_baseline: None,
-            turn_timing: TurnTiming::default(),
+            turn: None,
             shared,
         }
     }
@@ -252,10 +292,7 @@ impl Session {
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
             plan,
-            active_turn_id: None,
-            active_delegation_id: None,
-            turn_baseline: None,
-            turn_timing: TurnTiming::default(),
+            turn: None,
             shared,
         }
     }
@@ -335,10 +372,7 @@ impl Session {
             active_wait_watchers: HashMap::new(),
             pending_system_prompt: None,
             plan,
-            active_turn_id: None,
-            active_delegation_id: None,
-            turn_baseline: None,
-            turn_timing: TurnTiming::default(),
+            turn: None,
             shared,
         }
     }
@@ -392,16 +426,19 @@ impl Session {
     }
 
     fn pause_telemetry(&mut self) {
-        self.turn_timing.pause();
+        if let Some(turn) = self.turn.as_mut() {
+            turn.timing.pause();
+        }
     }
 
-    fn finish_telemetry(&mut self) -> TurnTelemetry {
-        let elapsed_ms = self.turn_timing.pause();
-        let baseline = self.turn_baseline.take().unwrap_or_default();
+    /// Settle `turn`'s telemetry into the session totals and return the
+    /// turn's delta.
+    fn finish_telemetry_for(&mut self, turn: &mut Turn) -> TurnTelemetry {
+        let (telemetry, elapsed_ms) = turn.settle(&self.telemetry);
         self.telemetry.record_elapsed(elapsed_ms);
         self.last_active = chrono::Utc::now().timestamp_millis();
         self.persist_telemetry();
-        TurnTelemetry::from_session_delta(&self.telemetry, &baseline, elapsed_ms)
+        telemetry
     }
 
     // ── Snapshot / persistence ────────────────────────────
@@ -610,6 +647,90 @@ mod tests {
         assert!(
             b.plan_snapshot().is_empty(),
             "session B must not see session A's plan"
+        );
+    }
+
+    // ── Turn ────────────────────────────────────────────
+
+    /// A turn's reported usage is the delta against the baseline captured
+    /// when it opened — not the session's lifetime totals.
+    #[test]
+    fn turn_settles_usage_as_a_delta_from_its_baseline() {
+        let mut baseline = SessionTelemetry::default();
+        baseline.record_usage(&agentik_types::Usage {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            ..Default::default()
+        });
+
+        let mut current = baseline;
+        current.record_usage(&agentik_types::Usage {
+            input_tokens: 400,
+            output_tokens: 50,
+            ..Default::default()
+        });
+
+        let mut turn = Turn::new(None, baseline);
+        let (telemetry, _) = turn.settle(&current);
+
+        assert_eq!(telemetry.input_tokens, 400, "only this turn's usage");
+        assert_eq!(telemetry.output_tokens, 50);
+    }
+
+    /// `finish_turn` takes the turn out of the session *before* settling
+    /// it, so a second close finds `session.turn == None` and does
+    /// nothing. This pins that guard: settling the same `Turn` twice would
+    /// report the full totals again (the baseline was consumed), so the
+    /// take-before-settle ordering is what prevents double counting.
+    #[test]
+    fn a_taken_turn_cannot_be_settled_twice() {
+        let shared = AgentShared::new_for_tests();
+        let mut session = Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+
+        session.begin_turn(None);
+        let taken = session.turn.take().expect("begin_turn opens one");
+        assert!(
+            session.turn.is_none(),
+            "a taken turn is gone, so the second close is a no-op"
+        );
+
+        let mut current = SessionTelemetry::default();
+        current.record_usage(&agentik_types::Usage {
+            input_tokens: 900,
+            output_tokens: 90,
+            ..Default::default()
+        });
+        let mut taken = taken;
+        let (first, _) = taken.settle(&current);
+        assert_eq!(first.input_tokens, 900);
+
+        // Settling again re-reports everything — the baseline is gone.
+        let (second, _) = taken.settle(&current);
+        assert_eq!(
+            second.input_tokens, 900,
+            "why finish_turn must take the turn before settling"
+        );
+    }
+
+    /// Timing accumulates across pause/resume: a turn that pauses on a
+    /// background `wait_task` and later resumes keeps counting total
+    /// elapsed wall-clock, not just the final active stretch.
+    #[test]
+    fn turn_timing_accumulates_across_pause_and_resume() {
+        let mut timing = TurnTiming::default();
+        timing.start();
+        assert!(timing.is_active());
+
+        let first = timing.pause();
+        assert!(!timing.is_active(), "pause clears the running clock");
+
+        timing.start();
+        let second = timing.pause();
+
+        assert_eq!(
+            timing.pause(),
+            first.saturating_add(second),
+            "total elapsed spans both active stretches"
         );
     }
 }
