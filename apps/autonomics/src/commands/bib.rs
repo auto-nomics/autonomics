@@ -3,7 +3,10 @@
 use crate::cli::{
     BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, ReextractArgs, RequestsArgs, UploadArgs,
 };
+use crate::widgets::bibliography::{BibliographyState, BibliographyWidget};
 use bib_base::{stored_fulltext, vfs_virtual_path};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ratatui::prelude::StatefulWidget as _;
 use vfs::OpendalFileStorage;
 
 pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
@@ -23,6 +26,7 @@ pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
         BibAction::Info(args) => run_bib_info(&db, args).await,
         BibAction::List(args) => run_bib_list(&db, args).await,
         BibAction::Export(args) => run_bib_export(&db, args).await,
+        BibAction::Tui => run_bib_tui(&db).await,
     }
 }
 
@@ -382,4 +386,119 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
     }
 
     Ok(())
+}
+
+async fn run_bib_tui(db: &bib_base::BibBase) -> color_eyre::Result<()> {
+    use std::io::{self, Stdout, Write, stdout};
+
+    use crossterm::{
+        execute,
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    };
+    use ratatui::{Terminal, backend::CrosstermBackend};
+
+    let mut state = BibliographyState::default();
+    if let Err(error) = reload_bibliography(db, &mut state).await {
+        state.error = Some(error.to_string());
+    }
+    load_selected_details(db, &mut state).await;
+
+    enable_raw_mode()?;
+    execute!(stdout(), EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let result = run_bibliography_loop(db, &mut terminal, &mut state).await;
+    execute!(stdout(), LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+    stdout().flush()?;
+    result
+}
+
+async fn run_bibliography_loop(
+    db: &bib_base::BibBase,
+    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
+    state: &mut BibliographyState,
+) -> color_eyre::Result<()> {
+    loop {
+        terminal.draw(|frame| {
+            BibliographyWidget::default().render(frame.area(), frame.buffer_mut(), state)
+        })?;
+        if !crossterm::event::poll(std::time::Duration::from_millis(250))? {
+            continue;
+        }
+        let Event::Key(key) = crossterm::event::read()? else {
+            continue;
+        };
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            continue;
+        }
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            break Ok(());
+        }
+        if key.code == KeyCode::Char('r')
+            && state.focus != crate::widgets::bibliography::BibliographyFocus::Search
+        {
+            if let Err(error) = reload_bibliography(db, state).await {
+                state.error = Some(error.to_string());
+            }
+            load_selected_details(db, state).await;
+            continue;
+        }
+        if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+            && state.focus != crate::widgets::bibliography::BibliographyFocus::Search
+        {
+            break Ok(());
+        }
+
+        let before = state.selected_article.clone();
+        state.handle_key(key);
+        if state.pending_search_reload {
+            state.pending_search_reload = false;
+            if let Err(error) = reload_bibliography(db, state).await {
+                state.error = Some(error.to_string());
+            }
+        }
+        if before != state.selected_article {
+            load_selected_details(db, state).await;
+        }
+    }
+}
+
+async fn reload_bibliography(
+    db: &bib_base::BibBase,
+    state: &mut BibliographyState,
+) -> bib_base::Result<()> {
+    let query = state.query.trim().to_string();
+    let collections = db.list_collections(None).await?;
+    let hits = db.search_articles(&query, 500).await?;
+    let mut articles = Vec::with_capacity(hits.len());
+    for hit in hits {
+        if let Some(article) = db.get_article(&hit.article_id).await? {
+            articles.push(article);
+        }
+    }
+    state.set_snapshot(collections, articles);
+    state.status = format!("{} articles loaded", state.articles.len());
+    state.error = None;
+    Ok(())
+}
+
+async fn load_selected_details(db: &bib_base::BibBase, state: &mut BibliographyState) {
+    let Some(article_id) = state.selected_article.clone() else {
+        return;
+    };
+    let fulltext = match db.get_fulltext(&article_id).await {
+        Ok(fulltext) => fulltext,
+        Err(error) => {
+            state.error = Some(format!("full text load failed: {error}"));
+            None
+        }
+    };
+    let annotations = match db.list_annotations(&article_id).await {
+        Ok(annotations) => annotations,
+        Err(error) => {
+            state.error = Some(format!("notes load failed: {error}"));
+            Vec::new()
+        }
+    };
+    state.set_details(article_id, fulltext, annotations);
 }
