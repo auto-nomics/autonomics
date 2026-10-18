@@ -357,7 +357,11 @@ pub fn collect_message_items(
                     ContentBlock::ToolUse { name, .. } => Some(format!("Tool call: {name}")),
                     ContentBlock::ToolResult { is_error, .. } => Some(format!(
                         "Tool result ({})",
-                        if is_error.unwrap_or(false) { "error" } else { "ok" }
+                        if is_error.unwrap_or(false) {
+                            "error"
+                        } else {
+                            "ok"
+                        }
                     )),
                     ContentBlock::Thinking { thinking, .. } => {
                         Some(format!("Thinking: {}", one_line_preview(thinking)))
