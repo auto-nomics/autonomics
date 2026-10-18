@@ -957,12 +957,11 @@ mod remote_embedding_tests {
         cfg.embedding.enabled = false;
         let mut host = RuntimeHost::open(&cfg).await.unwrap();
         assert!(host.infra.embedding.load().is_none());
-        assert_eq!(
+        assert!(
             host.infra
                 .observations
                 .embedding_signature()
-                .starts_with("bm25-"),
-            true
+                .starts_with("bm25-")
         );
         host.shutdown_all_agents_and_wait().await;
     }

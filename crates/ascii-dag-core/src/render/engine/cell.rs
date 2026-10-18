@@ -202,28 +202,6 @@ impl Cell {
         self.0 & MARKER_DASHED_BIT != 0
     }
 
-    /// A stroke with vertical arms only (edge labels may replace these).
-    /// Test-only since RW6: the planner replicates this rule
-    /// geometrically (plan.rs `span_blocked`); the tests below keep the
-    /// cell-level statement of R1.8 pinned.
-    #[cfg(test)]
-    pub(crate) fn is_pure_vertical(self) -> bool {
-        if !self.is_stroke() {
-            return false;
-        }
-        let (up, down, left, right) = self.arms();
-        left == Weight::None
-            && right == Weight::None
-            && (up != Weight::None || down != Weight::None)
-    }
-
-    /// Whether an edge label may occupy this cell — empty, or the edge's
-    /// own vertical line (the legacy `can_place_label` rule, R1.8).
-    #[cfg(test)]
-    pub(crate) fn accepts_label(self) -> bool {
-        self.is_empty() || self.is_pure_vertical()
-    }
-
     // ── Paint operations (ALL precedence rules live here) ────────────────
 
     /// Paint a stroke onto this cell.

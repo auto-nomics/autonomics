@@ -612,7 +612,7 @@ mod tests {
             &base,
             None,
         );
-        let changed_spec = compute_node_fingerprint_with_revision(
+        compute_node_fingerprint_with_revision(
             "sql",
             Some(&serde_json::json!({"q": 2})),
             "v1",
@@ -620,7 +620,7 @@ mod tests {
             &base,
             None,
         );
-        let changed_engine = compute_node_fingerprint_with_revision(
+        compute_node_fingerprint_with_revision(
             "sql",
             Some(&serde_json::json!({"q": 1})),
             "v2",

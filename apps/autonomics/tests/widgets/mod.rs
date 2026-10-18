@@ -11,4 +11,5 @@ pub mod popup;
 #[path = "../../src/widgets/skill_browser_widget.rs"]
 pub mod skill_browser_widget;
 #[path = "../../src/widgets/skill_evolution_widget.rs"]
+#[allow(dead_code)]
 pub mod skill_evolution_widget;

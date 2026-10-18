@@ -115,8 +115,12 @@ async fn paired_complete_case_matches_r_audit_example() {
     assert_close(opt_f64(&row, "stderr"), 3.5, "stderr");
     assert_close(opt_f64(&row, "statistic"), 1.2857142857142858, "statistic");
     assert_close(opt_f64(&row, "dof"), 1.0, "dof");
-    assert_close(opt_f64(&row, "p_value"), 0.42083315167886859, "p_value");
-    assert_close(opt_f64(&row, "conf_low"), -39.971716576611428, "conf_low");
+    assert_close(opt_f64(&row, "p_value"), 0.420_833_151_678_868_6, "p_value");
+    assert_close(
+        opt_f64(&row, "conf_low"),
+        -39.971_716_576_611_43,
+        "conf_low",
+    );
     assert_close(opt_f64(&row, "conf_high"), 48.971716576611435, "conf_high");
     assert_eq!(opt_i32(&row, "n"), Some(2));
 }
@@ -134,7 +138,7 @@ async fn paired_complete_case_across_batches() {
     .await;
     assert_close(opt_f64(&row, "estimate"), 4.5, "estimate");
     assert_close(opt_f64(&row, "stderr"), 3.5, "stderr");
-    assert_close(opt_f64(&row, "p_value"), 0.42083315167886859, "p_value");
+    assert_close(opt_f64(&row, "p_value"), 0.420_833_151_678_868_6, "p_value");
     assert_eq!(opt_i32(&row, "n"), Some(2));
 }
 
@@ -150,7 +154,7 @@ async fn paired_greater_one_sided_matches_r() {
         vec![audit_batch()],
     )
     .await;
-    assert_close(opt_f64(&row, "p_value"), 0.21041657583943429, "p_value");
+    assert_close(opt_f64(&row, "p_value"), 0.210_416_575_839_434_3, "p_value");
     assert_close(opt_f64(&row, "conf_low"), -17.59813030136263, "conf_low");
     assert_eq!(opt_f64(&row, "conf_high"), None, "+Inf bound → null cell");
 }

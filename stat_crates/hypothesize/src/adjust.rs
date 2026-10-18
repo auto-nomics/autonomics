@@ -424,7 +424,7 @@ mod tests {
         let bh = p_adjust_raw(&p, AdjustMethod::Bh, Some(10)).unwrap();
         assert!(close(&bh, &[0.1, 0.1], 1e-14));
         let by = p_adjust_raw(&p, AdjustMethod::By, Some(10)).unwrap();
-        assert!(close(&by, &[0.292_896_825_396_825_38; 2], 1e-14));
+        assert!(close(&by, &[0.292_896_825_396_825_4; 2], 1e-14));
     }
 
     #[test]
@@ -434,12 +434,12 @@ mod tests {
         // R: p.adjust(c(0.001, 0.02, 0.5), "BH", n = 4) = c(0.004, 0.04, 0.66666666666666663)
         let p = vec![0.001_f64, 0.02, 0.5];
         let bh = p_adjust_raw(&p, AdjustMethod::Bh, Some(4)).unwrap();
-        assert!(close(&bh, &[0.004, 0.04, 0.666_666_666_666_666_63], 1e-14));
+        assert!(close(&bh, &[0.004, 0.04, 0.666_666_666_666_666_6], 1e-14));
         // R: p.adjust(c(0.001, 0.02, 0.5), "BY", n = 4) = c(0.008333333333333335, 0.083333333333333343, 1)
         let by = p_adjust_raw(&p, AdjustMethod::By, Some(4)).unwrap();
         assert!(close(
             &by,
-            &[0.008_333_333_333_333_335, 0.083_333_333_333_333_343, 1.0],
+            &[0.008_333_333_333_333_335, 0.083_333_333_333_333_34, 1.0],
             1e-14
         ));
     }

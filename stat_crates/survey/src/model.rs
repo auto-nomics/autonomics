@@ -1051,7 +1051,7 @@ mod tests {
             .weights(vec![1.0; n])
             .build()
             .unwrap();
-        let fit = svyglm_linear(&y, &vec![x.clone()], &design, true, None).unwrap();
+        let fit = svyglm_linear(&y, std::slice::from_ref(&x), &design, true, None).unwrap();
         let wald = reg_term_test_with(&fit, &[1], RegTermTestMethod::Wald).unwrap();
         let working = reg_term_test_with(&fit, &[1], RegTermTestMethod::WorkingWald).unwrap();
         assert_eq!(wald.ndf, working.ndf);
@@ -1094,7 +1094,7 @@ mod tests {
             .lonely_psu(LonelyPsu::Remove)
             .build()
             .unwrap();
-        let fit = svyglm_linear(&y, &vec![x], &design, true, None).unwrap();
+        let fit = svyglm_linear(&y, &[x], &design, true, None).unwrap();
         let wald = reg_term_test_with(&fit, &[1], RegTermTestMethod::Wald).unwrap();
         let working = reg_term_test_with(&fit, &[1], RegTermTestMethod::WorkingWald).unwrap();
         assert!(

@@ -306,11 +306,4 @@ mod tests {
         assert_eq!(genes.value(1), "FTO; IRX3");
         assert!(genes.is_null(0));
     }
-
-    fn test_ctx() -> NodeCtx {
-        NodeCtx::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        )
-    }
 }
