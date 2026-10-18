@@ -389,6 +389,18 @@ pub trait AgentStorage: Send + Sync {
     async fn update_session_title(&self, session_id: Uuid, title: &str)
     -> Result<(), StorageError>;
 
+    /// Record where a forked session came from.
+    ///
+    /// `parent_session_id` identifies the source conversation. When present,
+    /// `fork_point_message_id` identifies the final parent message included
+    /// in the child context.
+    async fn update_session_lineage(
+        &self,
+        session_id: Uuid,
+        parent_session_id: Option<Uuid>,
+        fork_point_message_id: Option<&str>,
+    ) -> Result<(), StorageError>;
+
     /// List all session records for an agent (for restoring session list on
     /// restart). Returns sessions ordered by creation time ascending.
     async fn list_session_records(
@@ -503,6 +515,8 @@ pub struct SessionRecord {
     /// Last time telemetry observed activity in this session.
     pub last_active: i64,
     pub telemetry: SessionTelemetry,
+    pub parent_session_id: Option<Uuid>,
+    pub fork_point_message_id: Option<String>,
 }
 
 /// One explicitly tracked conversation turn.

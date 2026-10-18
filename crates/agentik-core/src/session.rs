@@ -124,6 +124,8 @@ pub struct Session {
     /// Summaries from compaction ancestors, oldest first.
     pub ancestor_summaries: Vec<String>,
     pub telemetry: SessionTelemetry,
+    pub parent_session_id: Option<Uuid>,
+    pub fork_point_message_id: Option<String>,
 
     // ── Runtime state ──
     pub persist_tx: Option<UnboundedSender<PersistOp>>,
@@ -195,6 +197,8 @@ impl Session {
             summary: None,
             ancestor_summaries: Vec::new(),
             telemetry: SessionTelemetry::default(),
+            parent_session_id: None,
+            fork_point_message_id: None,
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -238,6 +242,8 @@ impl Session {
             summary: state.summary,
             ancestor_summaries: state.ancestor_summaries,
             telemetry: state.telemetry,
+            parent_session_id: None,
+            fork_point_message_id: None,
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -254,8 +260,30 @@ impl Session {
         }
     }
 
-    /// Fork a new session from an existing one, deep-cloning its state.
-    pub(crate) fn fork_from(parent: &Session, new_id: Uuid, shared: Arc<AgentShared>) -> Self {
+    /// Fork a new session from an existing one.
+    ///
+    /// When `through_message_id` is supplied, the fork contains the parent's
+    /// summaries and transcript only through (and including) that message;
+    /// later messages remain exclusively in the parent. `None` preserves the
+    /// older whole-session fork behavior.
+    pub(crate) fn fork_from(
+        parent: &Session,
+        new_id: Uuid,
+        through_message_id: Option<&str>,
+        shared: Arc<AgentShared>,
+    ) -> Self {
+        Self::fork_from_source(parent, new_id, through_message_id, &parent.messages, shared)
+    }
+
+    /// Fork using an alternate immutable transcript prefix (used for points
+    /// archived out of the parent's active model context).
+    pub(crate) fn fork_from_source(
+        parent: &Session,
+        new_id: Uuid,
+        through_message_id: Option<&str>,
+        source_messages: &[Message],
+        shared: Arc<AgentShared>,
+    ) -> Self {
         // The fork inherits a snapshot of the parent's plan (revision
         // included); the two diverge independently from here on.
         let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
@@ -277,10 +305,28 @@ impl Session {
             )),
             created_at: now,
             last_active: now,
-            messages: parent.messages.clone(),
-            summary: parent.summary.clone(),
-            ancestor_summaries: parent.ancestor_summaries.clone(),
+            messages: match through_message_id {
+                Some(message_id) => source_messages
+                    .iter()
+                    .position(|message| message.id == message_id)
+                    .map(|end| source_messages[..=end].to_vec())
+                    .unwrap_or_else(|| source_messages.to_vec()),
+                None => source_messages.to_vec(),
+            },
+            summary: if std::ptr::eq(source_messages.as_ptr(), parent.messages.as_ptr()) {
+                parent.summary.clone()
+            } else {
+                None
+            },
+            ancestor_summaries: if std::ptr::eq(source_messages.as_ptr(), parent.messages.as_ptr())
+            {
+                parent.ancestor_summaries.clone()
+            } else {
+                Vec::new()
+            },
             telemetry: SessionTelemetry::default(),
+            parent_session_id: Some(parent.id),
+            fork_point_message_id: through_message_id.map(str::to_string),
             persist_tx,
             lifecycle: AgentLifecycle::new(),
             toolset,
@@ -425,6 +471,8 @@ impl From<&Session> for SessionInfo {
             created_at: s.created_at,
             last_active: s.last_active,
             telemetry: s.telemetry,
+            parent_session_id: s.parent_session_id,
+            fork_point_message_id: s.fork_point_message_id.clone(),
         }
     }
 }
@@ -442,6 +490,7 @@ pub(crate) fn make_test_session() -> Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message_ext::AgentMessageExt;
 
     /// A fork inherits a snapshot of the parent's plan (revision included)
     /// and diverges independently afterwards.
@@ -464,7 +513,7 @@ mod tests {
         parent.set_plan(plan.clone());
         assert_eq!(parent.plan_snapshot(), plan);
 
-        let mut child = Session::fork_from(&parent, Uuid::new_v4(), Arc::clone(&shared));
+        let mut child = Session::fork_from(&parent, Uuid::new_v4(), None, Arc::clone(&shared));
         assert_eq!(
             child.plan_snapshot(),
             parent.plan_snapshot(),
@@ -475,6 +524,75 @@ mod tests {
         child.set_plan(agentik_types::AgentPlan::new());
         assert_eq!(parent.plan_snapshot().revision, 3);
         assert!(child.plan_snapshot().is_empty());
+    }
+
+    #[test]
+    fn fork_through_message_stops_at_exact_transcript_point() {
+        let shared = AgentShared::new_for_tests();
+        let mut parent =
+            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        parent.remember(Message::user("first")).unwrap();
+        parent.remember(Message::assistant_text("second")).unwrap();
+        parent.remember(Message::user("later")).unwrap();
+
+        let fork_id = parent.messages[1].id.clone();
+        let child =
+            Session::fork_from(&parent, Uuid::new_v4(), Some(&fork_id), Arc::clone(&shared));
+
+        assert_eq!(
+            child
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            parent.messages[..2]
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            "fork must include the selected message and exclude everything after it"
+        );
+        assert_eq!(child.parent_session_id, Some(parent.id));
+        assert_eq!(
+            child.fork_point_message_id.as_deref(),
+            Some(fork_id.as_str())
+        );
+        assert_eq!(
+            parent.messages.len(),
+            3,
+            "forking must not mutate the parent"
+        );
+    }
+
+    #[test]
+    fn fork_from_archived_transcript_reuses_exact_prefix_without_summary_duplication() {
+        let shared = AgentShared::new_for_tests();
+        let mut parent =
+            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        parent.remember(Message::user("archived first")).unwrap();
+        parent
+            .remember(Message::assistant_text("archived second"))
+            .unwrap();
+        parent.ancestor_summaries = vec!["summarized prefix".into()];
+
+        // Simulate compaction: the immutable transcript still contains the
+        // selected point even after it has left the active model context.
+        let transcript = parent.messages.clone();
+        parent.messages.clear();
+        let fork_id = transcript[1].id.clone();
+        let child = Session::fork_from_source(
+            &parent,
+            Uuid::new_v4(),
+            Some(&fork_id),
+            &transcript,
+            Arc::clone(&shared),
+        );
+
+        assert_eq!(child.messages, transcript[..2].to_vec());
+        assert!(child.ancestor_summaries.is_empty());
+        assert_eq!(
+            child.fork_point_message_id.as_deref(),
+            Some(fork_id.as_str())
+        );
     }
 
     /// Two sessions over one shared must never observe each other's plans.

@@ -84,6 +84,8 @@ pub(crate) async fn list_stored_sessions(
                 last_active: record.last_active,
                 active: record.ended_at.is_none(),
                 telemetry: record.telemetry,
+                parent_session_id: record.parent_session_id,
+                fork_point_message_id: record.fork_point_message_id,
             })
             .collect(),
     ))

@@ -734,12 +734,16 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                         old.last_active = info.last_active;
                         old.created_at = info.created_at;
                         old.telemetry = info.telemetry;
+                        old.parent_session_id = info.parent_session_id;
+                        old.fork_point_message_id = info.fork_point_message_id.clone();
                         old
                     } else {
                         let mut sub = SubSession::new(info.id, info.title);
                         sub.last_active = info.last_active;
                         sub.created_at = info.created_at;
                         sub.telemetry = info.telemetry;
+                        sub.parent_session_id = info.parent_session_id;
+                        sub.fork_point_message_id = info.fork_point_message_id.clone();
                         sub
                     }
                 })
@@ -853,6 +857,10 @@ pub struct SubSession {
     /// sidebar session list (newest first).
     pub created_at: i64,
     pub telemetry: agentik_types::SessionTelemetry,
+    /// Source conversation for a forked session.
+    pub parent_session_id: Option<uuid::Uuid>,
+    /// Final parent message included when this session was forked.
+    pub fork_point_message_id: Option<String>,
     /// Conversation-level state — chat history, token counts, scroll, etc.
     /// Owned per-session so each session has its own memory of what
     /// happened in it.
@@ -871,6 +879,8 @@ impl SubSession {
             last_active: 0,
             created_at: chrono::Utc::now().timestamp_millis(),
             telemetry: Default::default(),
+            parent_session_id: None,
+            fork_point_message_id: None,
             tab_state: AgentTabState::default(),
             plan_requested: false,
         }

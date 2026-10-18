@@ -38,6 +38,12 @@ pub(crate) enum AppEvent {
         session_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
     },
+    /// Raw transcript fetched so the user can choose an exact fork point.
+    ForkHistoryLoaded {
+        agent_id: uuid::Uuid,
+        session_id: uuid::Uuid,
+        messages: Vec<agentik_sdk::types::messages::Message>,
+    },
     /// A fresh model catalogue snapshot arrived from the daemon (hydration,
     /// `ReloadCatalog`, or after a provider/catalog change). The handler
     /// rebuilds the config widget's catalog state.

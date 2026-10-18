@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AgentError, Result};
+use crate::session::SessionState;
 use crate::session::{AgentShared, Session};
 use crate::storage::{AgentRecord, AgentStorage, PersistOp};
 use crate::tools::ToolRegistration;
@@ -77,6 +78,7 @@ pub enum InternalEvent {
     CreateSession {
         id: Uuid,
         fork_from: Option<Uuid>,
+        fork_message_id: Option<String>,
         title: Option<String>,
     },
     /// Switch the active session to `id`.
@@ -329,6 +331,8 @@ impl Agent {
                         s.created_at = rec.started_at;
                         s.last_active = rec.last_active;
                         s.telemetry = rec.telemetry;
+                        s.parent_session_id = rec.parent_session_id;
+                        s.fork_point_message_id = rec.fork_point_message_id;
 
                         match crate::storage::restore_session_state(
                             storage.as_ref(),
@@ -447,10 +451,16 @@ impl Agent {
                 InternalEvent::CreateSession {
                     id,
                     fork_from,
+                    fork_message_id,
                     title,
                 } => {
-                    self.handle_create_session(*id, *fork_from, title.clone())
-                        .await;
+                    self.handle_create_session(
+                        *id,
+                        *fork_from,
+                        fork_message_id.as_deref(),
+                        title.clone(),
+                    )
+                    .await;
                     false
                 }
                 InternalEvent::SwitchSession { id } => {
@@ -526,12 +536,55 @@ impl Agent {
         &mut self,
         id: Uuid,
         fork_from: Option<Uuid>,
+        fork_message_id: Option<&str>,
         title: Option<String>,
     ) {
         let mut session = match fork_from {
             Some(parent_id) => {
                 if let Some(parent) = self.sessions.get(&parent_id) {
-                    let mut s = Session::fork_from(parent, id, self.shared.clone());
+                    // A selected message may pre-date compaction and no longer
+                    // live in the active model context. Fall back to the
+                    // immutable user-facing transcript so every visible point
+                    // remains forkable.
+                    let transcript = match fork_message_id {
+                        Some(message_id)
+                            if !parent
+                                .messages
+                                .iter()
+                                .any(|message| message.id == message_id) =>
+                        {
+                            self.shared
+                                .storage
+                                .as_ref()
+                                .map(|storage| storage.get_transcript_messages(parent_id))
+                        }
+                        _ => None,
+                    };
+                    let transcript = match transcript {
+                        Some(future) => future.await.unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    let source_messages = transcript
+                        .iter()
+                        .any(|message| Some(message.id.as_str()) == fork_message_id)
+                        .then_some(transcript.as_slice());
+
+                    let fork_point = fork_message_id.filter(|message_id| {
+                        source_messages
+                            .is_some_and(|messages| messages.iter().any(|m| m.id == *message_id))
+                            || parent.messages.iter().any(|m| m.id == *message_id)
+                    });
+
+                    let mut s = match source_messages {
+                        Some(source) => Session::fork_from_source(
+                            parent,
+                            id,
+                            fork_point,
+                            source,
+                            self.shared.clone(),
+                        ),
+                        None => Session::fork_from(parent, id, fork_point, self.shared.clone()),
+                    };
                     s.title = title.clone();
                     s
                 } else {
@@ -560,11 +613,34 @@ impl Agent {
             if let Some(ref t) = title {
                 let _ = storage.update_session_title(id, t).await;
             }
+            if let Some(session) = self.sessions.get(&id) {
+                if session.parent_session_id.is_some() {
+                    let _ = storage
+                        .update_session_lineage(
+                            id,
+                            session.parent_session_id,
+                            session.fork_point_message_id.as_deref(),
+                        )
+                        .await;
+                    let state = SessionState {
+                        messages: session.messages.clone(),
+                        summary: session.summary.clone(),
+                        ancestor_summaries: session.ancestor_summaries.clone(),
+                        telemetry: session.telemetry.clone(),
+                    };
+                    let _ = storage
+                        .replace_session_state(self.shared.id, id, &state)
+                        .await;
+                }
+            }
         }
 
         let title = self.sessions.get(&id).and_then(|s| s.title.clone());
         self.shared
             .send_event(AgentEvent::SessionActivated { id, title });
+        let infos = self.session_infos();
+        self.shared
+            .send_event(AgentEvent::SessionList { sessions: infos });
     }
 
     async fn handle_switch_session(&mut self, id: Uuid) {

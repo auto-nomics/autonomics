@@ -26,6 +26,7 @@ pub(super) enum AgentCommand {
     CreateSession {
         title: Option<String>,
         fork_from: Option<uuid::Uuid>,
+        fork_message_id: Option<String>,
     },
     SwitchSession(uuid::Uuid),
     CloseSession(uuid::Uuid),
@@ -329,8 +330,8 @@ async fn relay_loop(
                 Some(AgentCommand::ListSessions) => {
                     handle.list_sessions();
                 }
-                Some(AgentCommand::CreateSession { title, fork_from }) => {
-                    let _ = handle.create_session(title, fork_from);
+                Some(AgentCommand::CreateSession { title, fork_from, fork_message_id }) => {
+                    let _ = handle.create_session(title, fork_from, fork_message_id);
                 }
                 Some(AgentCommand::SwitchSession(id)) => {
                     handle.switch_session(id);

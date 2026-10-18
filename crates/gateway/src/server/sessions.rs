@@ -30,7 +30,7 @@ pub(crate) async fn create_session(
 ) -> StatusCode {
     state
         .control
-        .create_session(&name, req.title, req.fork_from);
+        .create_session(&name, req.title, req.fork_from, req.fork_message_id);
     StatusCode::ACCEPTED
 }
 

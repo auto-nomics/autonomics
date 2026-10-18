@@ -267,12 +267,20 @@ pub struct StoredSession {
     pub active: bool,
     #[serde(default)]
     pub telemetry: agentik_types::SessionTelemetry,
+    #[serde(default)]
+    pub parent_session_id: Option<Uuid>,
+    #[serde(default)]
+    pub fork_point_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CreateSessionRequest {
     pub title: Option<String>,
     pub fork_from: Option<Uuid>,
+    /// Final parent message to include in the new session. Requires
+    /// `fork_from`; ignored for new root sessions.
+    #[serde(default)]
+    pub fork_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

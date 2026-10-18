@@ -166,6 +166,9 @@ impl App {
             CommandAction::CopyMessage => {
                 self.open_message_picker();
             }
+            CommandAction::ForkMessage => {
+                self.open_fork_message_picker();
+            }
             CommandAction::Compact => {
                 let agent_name = self
                     .state
