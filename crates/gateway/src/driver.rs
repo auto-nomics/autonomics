@@ -148,6 +148,8 @@ mod tests {
             created_at: 0,
             last_active: 0,
             telemetry: Default::default(),
+            parent_session_id: None,
+            fork_point_message_id: None,
         }
     }
 
