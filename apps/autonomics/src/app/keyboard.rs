@@ -257,61 +257,12 @@ impl App {
             return;
         }
 
-        // Ctrl+C: cancel running agent first, then quit on second press.
-        // If the agent is blocked and doesn't transition to Idle after the
-        // first cancel, a second Ctrl+C within FORCE_QUIT_WINDOW force-quits.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            if self.should_quit {
-                // Already quitting — no-op.
-                return;
-            }
-            let active_status = self.state.active_status();
-            if !active_status.is_active() && active_status != AgentStatus::Waiting {
-                // Idle, Error, Cancelled, or Aborted — quit immediately.
-                self.should_quit = true;
-                return;
-            }
-            // Agent is running — check for force-quit (double Ctrl+C).
-            // Only treat as a double-press if the active tab is already
-            // showing "cancel pending" (i.e., the first Ctrl+C targeted
-            // *this* agent, not a different tab).
-            if self.state.active_tab_state().cancel_pending {
-                if let Some(ts) = self.cancel_requested_at {
-                    if ts.elapsed() < FORCE_QUIT_WINDOW {
-                        tracing::info!("force-quit: second Ctrl+C within {:?}", FORCE_QUIT_WINDOW);
-                        let agent_name = self
-                            .state
-                            .sessions
-                            .get(self.state.active_agent_idx)
-                            .map(|s| s.name.clone());
-                        if let Some(an) = agent_name {
-                            self.shutdown_agent_remotely(&an);
-                        }
-                        self.should_quit = true;
-                        return;
-                    }
-                }
-            }
-            // First Ctrl+C: cooperative cancel.
-            let agent_name = self
-                .state
-                .sessions
-                .get(self.state.active_agent_idx)
-                .map(|s| s.name.clone());
-            if let Some(an) = agent_name {
-                let client = self.client.clone();
-                self.spawn_client_task("cancel_agent", move || async move {
-                    if let Err(e) = client.cancel_agent(&an).await {
-                        tracing::warn!(agent = %an, error = %e, "cancel request failed");
-                    }
-                });
-            }
-            self.cancel_requested_at = Some(Instant::now());
-            // Mark the active agent's tab as "cancel pending" so the UI
-            // can show a "cancelling…" indicator.
-            self.state.active_tab_state_mut().cancel_pending = true;
-            return;
-        }
+        // Ctrl+C is deliberately NOT bound: accidental presses repeatedly
+        // interrupted running agents mid-task. Cancelling and quitting are
+        // reachable only through the command palette (Ctrl+P → "Cancel
+        // agent" / "Quit"), which requires an explicit selection. When no
+        // popup captures the key, Ctrl+C falls through to the workspace
+        // handler, which ignores chords with CONTROL held.
 
         // Ctrl+G: toggle the auto-scroll-to-bottom lock on the Agent tab.
         // When locked (following the tail), the first press releases the lock

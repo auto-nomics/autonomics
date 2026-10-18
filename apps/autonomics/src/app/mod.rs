@@ -25,10 +25,6 @@ use crate::widgets::agent_workspace::AgentWorkspace;
 /// Lines scrolled by a half-page motion (PageDown / PageUp in browse mode).
 const HALF_PAGE: usize = 12;
 
-/// If the user presses Ctrl+C again within this window after a cooperative
-/// cancel, the app force-quits regardless of agent status.
-const FORCE_QUIT_WINDOW: Duration = Duration::from_secs(3);
-
 mod agent_config;
 mod agents;
 mod chat;
