@@ -1,5 +1,6 @@
 .claude
 .serena/
+.zcodeignore
 .env
 target
 *.db

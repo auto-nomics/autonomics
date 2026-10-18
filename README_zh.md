@@ -121,7 +121,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 两套机制让系统在生物医学工作中可信：
 
 - **基于 DAG 的调度。** 科研请求由 Researcher 解析，规划为类型化、经 JSON Schema 校验的节点 DAG，经同一注册表装配。同一个 DAG 可以混合快速的进程内 DataFusion / Arrow 变换与重型外部容器；调度器经可插拔执行器契约（`local`、`process`，以及带 artifact store 的协调端 `remote` 执行器，为将来接入批调度器留好位置）异步分发任务，并保留输出以供快照、diff 与分支操作。
-- **容器化节点。** 每个外部工具运行在自己的临时 Podman 容器中。镜像以 sha256 digest 钉死，参考面板从 `manifest.json` 校验和验证后只读挂载，rootfs 为 `--read-only` 并施加 `no-new-privileges` 与显式的 CPU / PID / shm / UID 上限，声明的输出以 `FileRef = size + SHA-256` 经 pending-object + 原子改名写入 VFS，消费者永远不会看到半成品 artifact。容器工作目录内容寻址：完全相同的重跑会复用先前的工作区（Nextflow 式 resume），输入默认以只读 bind mount 暂入，后台清扫器负责回收过期工作区。
+- **容器化节点。** 每个外部工具运行在自己的临时 Podman 容器中。镜像以 sha256 digest 钉死，参考面板从 `manifest.json` 校验和验证后只读挂载，rootfs 为 `--read-only` 并施加 `no-new-privileges` 与显式的 CPU / PID / shm / UID 上限，声明的输出默认保留在任务 workdir 缓存中；设置 `artifact_prefix` 时，会以 `FileRef = size + SHA-256` 经 pending-object + 原子改名把副本发布到 VFS，消费者永远不会看到半成品 artifact。容器工作目录内容寻址：完全相同的重跑会复用先前的工作区（Nextflow 式 resume），输入默认以只读 bind mount 暂入，workdir 采用显式 opt-in 的保留清扫。
 
 ## 能力地图
 
@@ -417,6 +417,7 @@ bun run build
 - [Gateway 架构设计](docs/design/gateway-architecture.md)：常驻守护进程、线协议与多前端设计。
 - [Headless 运行模式设计](docs/headless-run-design.md)：`autonomics run`、`RunEvent` 契约与退出码。
 - [VFS 设计](docs/vfs.md)：挂载、并发写、目录叠加与参考数据。
+- [DAG 存储布局](docs/dag-storage-layout.md)：task workdir、published artifacts、receipts/evidence 的职责和保留策略。
 - [数据目录](docs/data-catalog.md)：数据包布局、发布与面板引用。
 - [运行时 bundle](docs/data-bundles.md)：内置 bundle 标识符与运行时叠加。
 - [证据通道](docs/evidence-channel.md)：引文作为 DAG 文件边上的类型化数据。

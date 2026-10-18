@@ -1,6 +1,6 @@
 //! Command palette dispatch and shortcut actions.
 
-use super::history::{compute_search_matches, load_selected_history_match};
+use super::history::compute_search_matches;
 use super::*;
 
 impl App {
@@ -85,9 +85,8 @@ impl App {
                     ts.in_history_search = true;
                     ts.history_search_query.clear();
                     ts.history_search_draft = Some(ts.input.value());
-                    ts.history_search_matches = compute_search_matches(&ts.input_history, "");
+                    ts.history_search_matches.clear();
                     ts.history_search_selected = 0;
-                    load_selected_history_match(ts);
                 }
             }
             CommandAction::ReloadConfig => {

@@ -16,7 +16,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-/// Environment override for the dag-tasks root.
+/// Preferred environment override for the task-receipt root.
+const DAG_RECEIPTS_ROOT_ENV: &str = "AUTONOMICS_DAG_RECEIPTS_ROOT";
+/// Legacy environment override for the task-receipt root.
 const DAG_TASKS_ROOT_ENV: &str = "AUTONOMICS_DAG_TASKS_ROOT";
 /// Minimum age before a dead-owner receipt directory is removed (seconds).
 const DAG_TASKS_GC_AGE_ENV: &str = "AUTONOMICS_DAG_TASKS_GC_AGE_SECS";
@@ -47,6 +49,9 @@ const GC_PENDING_PREFIX: &str = ".gc-";
 /// dag-tasks`, else a temp-dir fallback for headless environments without
 /// a home directory.
 pub fn dag_tasks_root() -> PathBuf {
+    if let Some(root) = std::env::var_os(DAG_RECEIPTS_ROOT_ENV).filter(|value| !value.is_empty()) {
+        return PathBuf::from(root);
+    }
     if let Some(root) = std::env::var_os(DAG_TASKS_ROOT_ENV) {
         return PathBuf::from(root);
     }
@@ -464,14 +469,16 @@ mod tests {
     }
 
     #[test]
-    fn dag_tasks_root_prefers_env_then_home() {
-        // Env override wins over the home default.
-        let guard = EnvGuard::set(DAG_TASKS_ROOT_ENV, "/tmp/dag-tasks-env-override");
-        assert_eq!(
-            dag_tasks_root(),
-            PathBuf::from("/tmp/dag-tasks-env-override")
-        );
-        drop(guard);
+    fn dag_tasks_root_prefers_role_env_then_legacy_env_then_home() {
+        let preferred = PathBuf::from("/tmp/dag-receipts-role-override");
+        let legacy = PathBuf::from("/tmp/dag-tasks-env-override");
+        let role_guard = EnvGuard::set(DAG_RECEIPTS_ROOT_ENV, &preferred.to_string_lossy());
+        let legacy_guard = EnvGuard::set(DAG_TASKS_ROOT_ENV, &legacy.to_string_lossy());
+        assert_eq!(dag_tasks_root(), preferred);
+        drop(role_guard);
+        assert_eq!(dag_tasks_root(), legacy);
+        drop(legacy_guard);
+
         // Default derives from HOME when present (it is, in test envs).
         if let Some(home) = std::env::var_os("HOME") {
             assert_eq!(

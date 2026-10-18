@@ -416,6 +416,7 @@ impl SharedInfra {
         }
 
         let engine_manager = Arc::new(DataEngineManager::new(engine));
+        engine_manager.spawn_maintenance();
         rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
             manager: Arc::clone(&engine_manager),
             execution: Arc::clone(&container_execution),

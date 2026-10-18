@@ -2,13 +2,18 @@
 //! `gateway::run_daemon` / `gateway::manager`.
 //!
 //! The daemon always runs detached: the CLI re-executes itself as a
-//! child (own process group, closed stdio), waits until the child's
-//! gateway is bound, prints its status, and exits — the daemon outlives
-//! the terminal that spawned it. Its file log lives under the absolute
-//! state dir; the gateway server additionally detaches stdio as soon as
-//! it is ready.
+//! child (own process group, stdin/stdout closed), waits until the
+//! child's gateway is bound, prints its status, and exits — the daemon
+//! outlives the terminal that spawned it. Until the gateway is bound
+//! the child's stderr is a pipe back to the launcher and its log is
+//! mirrored there, so a startup death reports the daemon's own
+//! diagnostics instead of a bare exit code. The daemon's file log lives
+//! under the absolute state dir; the gateway server points stdio at
+//! /dev/null as soon as it is ready.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use time::macros::format_description;
@@ -147,9 +152,13 @@ fn format_uptime(total_secs: u64) -> String {
 
 /// Re-execute this binary as a detached daemon child and wait until its
 /// gateway is ready, then return so the CLI exits and the terminal is
-/// freed. The child runs in its own process group with closed stdio —
-/// it survives the launcher, the terminal, and Ctrl+C; only
-/// `autonomics serve stop` (POST /gateway-shutdown) stops it.
+/// freed. The child runs in its own process group with stdin/stdout
+/// closed and stderr piped back to the launcher — the daemon mirrors its
+/// startup log to stderr and only points fd 2 at /dev/null once bound
+/// (`detach_stdio_on_ready`), so a child that dies mid-startup can
+/// explain itself below. The daemon still survives the launcher, the
+/// terminal, and Ctrl+C; only `autonomics serve stop`
+/// (POST /gateway-shutdown) stops it.
 fn spawn_detached_and_wait() -> color_eyre::Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -162,11 +171,12 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
         .env(DAEMON_CHILD_ENV, "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
         .map_err(|e| color_eyre::eyre::eyre!("cannot spawn daemon child: {e}"))?;
     let child_pid = child.id();
+    let stderr_tap = child.stderr.take().map(StderrTap::spawn);
 
     // The appender rotates daily (`autonomics-gateway.YYYY-MM-DD`), so
     // point at the directory rather than a dated filename.
@@ -181,8 +191,9 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
             // check it first so a startup failure is never masked by a
             // stale daemon's status response.
             if let Some(status) = child.try_wait().ok().flatten() {
+                let tail = startup_output_tail(stderr_tap.as_ref()).await;
                 return Err(color_eyre::eyre::eyre!(
-                    "daemon exited during startup (code {})\n  see logs: {}",
+                    "daemon exited during startup (code {})\n{tail}  see logs: {}",
                     status
                         .code()
                         .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
@@ -201,8 +212,9 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
             }
             if tokio::time::Instant::now() >= deadline {
                 let _ = child.kill();
+                let tail = startup_output_tail(stderr_tap.as_ref()).await;
                 return Err(color_eyre::eyre::eyre!(
-                    "daemon did not become ready within {}s\n  see logs: {}",
+                    "daemon did not become ready within {}s\n{tail}  see logs: {}",
                     DAEMON_READY_TIMEOUT.as_secs(),
                     log_hint().display()
                 ));
@@ -210,6 +222,104 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     })
+}
+
+async fn startup_output_tail(tap: Option<&StderrTap>) -> String {
+    match tap {
+        Some(tap) => tap.tail().await,
+        None => String::new(),
+    }
+}
+
+/// Live view of the daemon child's stderr, drained on a parked thread
+/// while the launcher waits for readiness.
+struct StderrTap {
+    buffer: Arc<Mutex<Vec<u8>>>,
+    done: Arc<AtomicBool>,
+}
+
+/// Lines kept for the CLI's failure message — enough to hold a startup
+/// readiness report plus the fatal error below it.
+const STDERR_TAIL_LINES: usize = 64;
+
+impl StderrTap {
+    fn spawn(pipe: std::process::ChildStderr) -> Self {
+        let tap = Self {
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            done: Arc::new(AtomicBool::new(false)),
+        };
+        let buffer = tap.buffer.clone();
+        let done = tap.done.clone();
+        // A plain OS thread rather than `spawn_blocking`: on the success
+        // path the launcher tears its runtime down without joining, and
+        // a pre-detach grandchild (podman, git) could hold the pipe's
+        // write end open past that point. Draining continuously also
+        // keeps the pipe from filling and stalling the child mid-log.
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut pipe = pipe;
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut buffer = buffer.lock().expect("stderr tap lock");
+                        buffer.extend_from_slice(&chunk[..n]);
+                        // Only the tail is ever shown; don't let a chatty
+                        // startup grow the capture without bound across
+                        // the ready-timeout window.
+                        let excess = buffer.len().saturating_sub(512 * 1024);
+                        if excess > 0 {
+                            buffer.drain(..excess);
+                        }
+                    }
+                }
+            }
+            done.store(true, Ordering::Release);
+        });
+        tap
+    }
+
+    /// The last [`STDERR_TAIL_LINES`] lines the child wrote, waiting
+    /// briefly for the reader to drain the pipe — the write end EOFs as
+    /// soon as the (dead or killed) child and its pre-detach
+    /// subprocesses are gone.
+    async fn tail(&self) -> String {
+        for _ in 0..20 {
+            if self.done.load(Ordering::Acquire) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let text =
+            String::from_utf8_lossy(&self.buffer.lock().expect("stderr tap lock")).into_owned();
+        format_startup_tail(&text)
+    }
+}
+
+/// Render the captured startup output for the launcher's failure
+/// message: the last [`STDERR_TAIL_LINES`] lines, indented under a
+/// marker header; empty capture renders as nothing at all so the
+/// failure message stays clean when the child died before logging.
+fn format_startup_tail(text: &str) -> String {
+    if text.trim().is_empty() {
+        return String::new();
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    let skipped = lines.len().saturating_sub(STDERR_TAIL_LINES);
+    let mut out = String::from("\ndaemon startup output");
+    if skipped > 0 {
+        out.push_str(&format!(" (first {skipped} lines cut)"));
+    }
+    out.push_str(":\n");
+    for line in &lines[skipped..] {
+        out.push_str("  ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push('\n');
+    out
 }
 
 async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<()> {
@@ -222,8 +332,9 @@ async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<
     // Provisioning is `prepare`'s job; the daemon-internal plugin sync
     // (`SharedInfra::open` → materialize_registry) stays as an
     // idempotent, network-free no-op backstop once the gate passed.
-    // The child's stdio is closed, so the report goes to the file log;
-    // the launcher surfaces the log path if startup fails.
+    // The report is mirrored to stderr (piped back to the launcher), so
+    // a fatal gate abort shows it in the CLI error; the file log keeps
+    // the full record.
     let report = crate::diagnostics::check_readiness(&config).await;
     tracing::info!("startup readiness report:\n{}", report.render());
     if report.has_fatal_gaps() {
@@ -243,8 +354,8 @@ async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<
         detach_stdio_on_ready: true,
     };
 
-    // The child's stdio is closed, so startup failures are logged to
-    // the file (the launcher's timeout message points there); the CLI
+    // Startup failures are mirrored to stderr — which the launcher
+    // captures and prints back — and recorded in the file log; the CLI
     // process exits nonzero either way.
     match run_daemon(opts, shutdown).await {
         Ok(()) => Ok(()),
@@ -348,6 +459,14 @@ fn init_gateway_logging(state_dir: &std::path::Path) -> color_eyre::Result<()> {
         RollingFileAppender::new(Rotation::DAILY, &log_dir, "autonomics-gateway.log");
     let file_writer = file_appender.with_max_level(Level::DEBUG);
 
+    // Mirror INFO+ to stderr during startup: the launcher pipes the
+    // child's stderr back to the user's terminal, so a daemon that dies
+    // before binding reports its own diagnostics — the readiness
+    // report, instance-lock/protocol errors, panics. Once the gateway
+    // binds, `detach_stdio` points fd 2 at /dev/null and this writer
+    // becomes a silent sink for the rest of the daemon's life.
+    let stderr_writer = std::io::stderr.with_max_level(Level::INFO);
+
     let timer = OffsetTime::new(
         time::UtcOffset::current_local_offset().expect("timezone"),
         format_description!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3]"),
@@ -372,11 +491,45 @@ fn init_gateway_logging(state_dir: &std::path::Path) -> color_eyre::Result<()> {
         .with_span_events(FmtSpan::NONE)
         .with_timer(timer);
 
-    subscriber.with_writer(file_writer).init();
+    subscriber
+        .with_writer(file_writer.and(stderr_writer))
+        .init();
 
     tracing::info!(
         "gateway logging initialized — logs directory: {}",
         log_dir.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_tail_tests {
+    use super::*;
+
+    #[test]
+    fn empty_capture_renders_nothing() {
+        assert_eq!(format_startup_tail(""), String::new());
+        assert_eq!(format_startup_tail("\n"), String::new());
+    }
+
+    #[test]
+    fn short_capture_is_indented_under_header() {
+        let rendered = format_startup_tail("plugins  ok\ndaemon error: boom");
+        assert!(rendered.starts_with("\ndaemon startup output:\n"));
+        assert!(rendered.contains("  plugins  ok\n"));
+        assert!(rendered.contains("  daemon error: boom\n"));
+        assert!(rendered.ends_with('\n'));
+        assert!(!rendered.contains("cut"));
+    }
+
+    #[test]
+    fn long_capture_keeps_only_the_tail_and_counts_the_cut() {
+        let text: String = (0..STDERR_TAIL_LINES + 10)
+            .map(|i| format!("line {i}\n"))
+            .collect();
+        let rendered = format_startup_tail(&text);
+        assert!(rendered.contains("(first 10 lines cut)"));
+        assert!(!rendered.contains("line 9\n"));
+        assert!(rendered.contains(&format!("  line {}\n", STDERR_TAIL_LINES + 9)));
+    }
 }

@@ -7,7 +7,10 @@
 //!   gracefully stop a running daemon.
 //!
 //! Logs always live under the state dir (`logs/autonomics-gateway.log`);
-//! there is no foreground mode.
+//! there is no foreground mode. While starting up, the daemon mirrors
+//! its INFO-level log to stderr, which the launcher captures and prints
+//! back when startup fails — so a dead daemon explains itself instead
+//! of just reporting an exit code.
 
 use clap::Subcommand;
 

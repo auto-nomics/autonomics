@@ -53,8 +53,8 @@ impl PodmanConfig {
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
             workspace_root: crate::config::canonicalize_workspace_root(env_path(
-                "AUTONOMICS_PODMAN_WORKSPACE_ROOT",
-                root.join("work"),
+                "AUTONOMICS_DAG_WORK_ROOT",
+                env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("work")),
             )),
             panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
         }
@@ -556,6 +556,38 @@ mod tests {
             blocking_podman_command("podman").get_current_dir(),
             Some(std::path::Path::new("/"))
         );
+    }
+
+    #[test]
+    fn dag_work_root_env_is_preferred_over_legacy_podman_name() {
+        let preferred = tempfile::tempdir().unwrap();
+        let legacy = tempfile::tempdir().unwrap();
+        let preferred_guard = EnvGuard::set("AUTONOMICS_DAG_WORK_ROOT", preferred.path());
+        let _legacy_guard = EnvGuard::set("AUTONOMICS_PODMAN_WORKSPACE_ROOT", legacy.path());
+        assert_eq!(
+            PodmanConfig::from_env().workspace_root,
+            crate::config::canonicalize_workspace_root(preferred.path().to_path_buf())
+        );
+        drop(preferred_guard);
+        assert_eq!(
+            PodmanConfig::from_env().workspace_root,
+            crate::config::canonicalize_workspace_root(legacy.path().to_path_buf())
+        );
+    }
+
+    struct EnvGuard(&'static str);
+    impl EnvGuard {
+        fn set(name: &'static str, value: &std::path::Path) -> Self {
+            // SAFETY: process-global env mutation, restored on drop.
+            unsafe { std::env::set_var(name, value) };
+            Self(name)
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: process-global state restored at test end.
+            unsafe { std::env::remove_var(self.0) };
+        }
     }
 
     #[test]

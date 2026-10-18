@@ -1710,6 +1710,55 @@ impl DataEngine {
         self.dag.output(node_id.into().as_ref())
     }
 
+    /// Release retained in-memory node outputs without changing graph topology.
+    ///
+    /// Returns whether anything was released — `false` means the cache was
+    /// already empty, so idle maintenance must not count this as a success.
+    pub fn release_output_cache(&mut self) -> bool {
+        self.dag.release_output_cache()
+    }
+
+    /// Seed reusable file outputs from the manager's cross-session cache.
+    ///
+    /// Returns the number of nodes whose id and fingerprint both matched.
+    ///
+    /// Every candidate file is freshness-checked before it is trusted: a
+    /// missing local file, or one whose size/mtime/content no longer match the
+    /// recorded fingerprint, is skipped so the node re-executes instead of
+    /// consuming stale bytes. `vfs://` outputs are validated through the
+    /// mounted object storage by the same check.
+    pub async fn restore_cached_file_outputs(
+        &mut self,
+        entries: &[crate::runtime::CachedFileOutput],
+    ) -> usize {
+        let storage = self.engine_ctx.opendal.as_deref();
+        let mut restored = 0;
+        for entry in entries {
+            let fresh = match entry.file.fingerprint.as_ref() {
+                // No recorded fingerprint — existence is all we can verify.
+                None => {
+                    entry.file.path.starts_with("vfs://")
+                        || std::path::Path::new(&entry.file.path).exists()
+                }
+                // Immutable remote content never goes stale.
+                Some(fp) if fp.immutable_remote && fp.content_hash.is_some() => true,
+                Some(_) => !dag_core::fingerprint::cached_file_changed(&entry.file, storage).await,
+            };
+            if !fresh {
+                continue;
+            }
+            let outputs = vec![(entry.port, entry.file.clone())];
+            if self
+                .dag
+                .restore_cached_file_outputs(&entry.node_id, &entry.fingerprint, outputs)
+                .is_ok()
+            {
+                restored += 1;
+            }
+        }
+        restored
+    }
+
     /// Maximum payload served through [`Self::read_file`]. Payload rendering
     /// (evidence citations, …) is bounded; anything larger is caller-scope
     /// data movement, not tool rendering.

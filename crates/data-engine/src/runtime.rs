@@ -19,6 +19,7 @@
 //! (`NodeRegistry`, `DagHistory`, `RuntimeEnv`) is shared via `Arc`.
 
 use std::panic::AssertUnwindSafe;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
@@ -34,7 +35,13 @@ use crate::runtime::error::{ClientError, Result};
 use crate::runtime::types::{DataEngineCmd, EngineMsg, RunDagOptions};
 
 pub mod error;
+pub mod storage;
 pub mod types;
+
+pub use storage::{
+    ArtifactEntry, CachedFileOutput, MaintenancePolicy, ReferenceEntry, ResultCache,
+    RunAwareCleanReport, SessionTracker, StorageCoordinator, StorageStatus,
+};
 
 // ═══════════════════════════════════════════════════════════════════════
 // Per-session actor (Layer 2 + 3)
@@ -50,6 +57,13 @@ struct SessionServer {
     session_id: String,
     engine: Arc<tokio::sync::Mutex<DataEngine>>,
     running: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
+    /// Set by the manager when this session generation is being evicted.
+    /// Queued runs are rejected instead of executing on a session the manager
+    /// has already removed from its map.
+    closing: Arc<AtomicBool>,
+    result_cache: Arc<ResultCache>,
+    storage: Arc<StorageCoordinator>,
     rx: mpsc::UnboundedReceiver<EngineMsg>,
 }
 
@@ -63,6 +77,9 @@ impl SessionServer {
                     "session actor handler panicked: {:?}",
                     panic
                 );
+            }
+            if self.shutdown.load(Ordering::SeqCst) {
+                break;
             }
         }
         tracing::debug!(session_id = %self.session_id, "session actor exited");
@@ -102,6 +119,12 @@ impl SessionServer {
                 reply,
                 cancel_token,
             } => {
+                if self.closing.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "session is shutting down; reconnect to start a new run".to_string(),
+                    )));
+                    return;
+                }
                 if self.running.swap(true, Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
                         "DAG is already running for this session; wait for the current run to complete"
@@ -109,8 +132,28 @@ impl SessionServer {
                     )));
                     return;
                 }
+                // Seed matching file outputs from the manager-wide fingerprint
+                // cache before the run task takes the engine lock. DataFrame
+                // results intentionally remain session-local.
+                {
+                    let entries = self.result_cache.snapshot();
+                    if !entries.is_empty() {
+                        let mut engine = self.engine.lock().await;
+                        let restored = engine.restore_cached_file_outputs(&entries).await;
+                        if restored > 0 {
+                            tracing::debug!(
+                                session_id = %self.session_id,
+                                restored,
+                                "restored cross-session file outputs"
+                            );
+                        }
+                    }
+                }
                 let engine = Arc::clone(&self.engine);
                 let running = Arc::clone(&self.running);
+                let session_id = self.session_id.clone();
+                let result_cache = Arc::clone(&self.result_cache);
+                let storage = Arc::clone(&self.storage);
                 tokio::spawn(async move {
                     // Race the DAG run against cancellation. When the caller
                     // drops the reply receiver (e.g. the agent task is
@@ -164,6 +207,19 @@ impl SessionServer {
 
                     match result {
                         Ok(res) => {
+                            if let Ok(report) = &res {
+                                if report.ok {
+                                    let (cached, displaced) =
+                                        result_cache.record_report_collected(&session_id, report);
+                                    if !cached.is_empty() {
+                                        storage.retain_cache_owner(&cached);
+                                    }
+                                    if !displaced.is_empty() {
+                                        storage.release_cache_owner(&displaced);
+                                    }
+                                }
+                                storage.retain_report(&session_id, report);
+                            }
                             let _ = reply.send(res);
                         }
                         Err(panic) => {
@@ -335,6 +391,39 @@ impl SessionServer {
                     .expect("uncontended: running flag is false");
                 let result = engine.clear_dag().await;
                 let _ = reply.send(result);
+            }
+
+            DataEngineCmd::ReleaseOutputs { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "DAG is currently running; cannot release outputs".to_string(),
+                    )));
+                    return;
+                }
+                let mut engine = self
+                    .engine
+                    .try_lock()
+                    .expect("uncontended: running flag is false");
+                let released = engine.release_output_cache();
+                let _ = reply.send(Ok(released));
+            }
+            DataEngineCmd::Shutdown { reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Ok(false));
+                    return;
+                }
+                {
+                    let mut engine = self
+                        .engine
+                        .try_lock()
+                        .expect("uncontended: running flag is false");
+                    engine.release_output_cache();
+                }
+                // Shared storage references are released by the manager after
+                // the shutdown ack, guarded against a newer session generation
+                // having recreated this session id in the meantime.
+                self.shutdown.store(true, Ordering::SeqCst);
+                let _ = reply.send(Ok(true));
             }
 
             // ── Read-only engine inspection ──────────────────────────────
@@ -695,6 +784,7 @@ pub struct DataEngineClient {
     /// subsequent metadata queries are zero-cost reads with no channel hop.
     node_registry: Arc<NodeRegistry>,
     session_id: String,
+    activity: Arc<SessionTracker>,
 }
 
 impl DataEngineClient {
@@ -757,6 +847,7 @@ impl DataEngineClient {
                 >,
             >,
     {
+        self.activity.touch(&self.session_id);
         self.tx
             .send(EngineMsg {
                 session_id: self.session_id.clone(),
@@ -1248,10 +1339,18 @@ pub struct DataEngineManager {
     template: DataEngine,
     node_registry: Arc<NodeRegistry>,
     sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
+    activity: Arc<SessionTracker>,
+    result_cache: Arc<ResultCache>,
+    storage: Arc<StorageCoordinator>,
+    policy: MaintenancePolicy,
 }
 
 struct SessionHandle {
     tx: mpsc::UnboundedSender<EngineMsg>,
+    running: Arc<AtomicBool>,
+    /// Mirrors the actor's `closing` flag: once set, `client_for_session`
+    /// stops handing out this generation and creates a fresh session instead.
+    closing: Arc<AtomicBool>,
     _task: JoinHandle<()>,
 }
 
@@ -1260,11 +1359,35 @@ impl DataEngineManager {
     /// `NodeRegistry`, `RuntimeEnv`, `DagHistory`, etc. are shared across all
     /// lazily-created sessions via `Arc` / `Clone`.
     pub fn new(engine: DataEngine) -> Self {
+        Self::with_policy(engine, MaintenancePolicy::from_env())
+    }
+
+    pub fn with_policy(engine: DataEngine, policy: MaintenancePolicy) -> Self {
+        let work_root = container_runtime::PodmanConfig::from_env().workspace_root;
+        let receipt_root = dag_core::dag_tasks_root();
+        Self::with_policy_and_roots(engine, policy, work_root, receipt_root)
+    }
+
+    /// [`Self::with_policy`] with explicit managed roots — used by tests and
+    /// embedders that do not derive storage roots from the environment.
+    pub fn with_policy_and_roots(
+        engine: DataEngine,
+        policy: MaintenancePolicy,
+        work_root: impl Into<PathBuf>,
+        receipt_root: impl Into<PathBuf>,
+    ) -> Self {
         let node_registry = Arc::clone(engine.node_registry());
         Self {
             template: engine,
             node_registry,
             sessions: std::sync::Mutex::new(HashMap::new()),
+            activity: Arc::new(SessionTracker::default()),
+            result_cache: Arc::new(ResultCache::new(
+                policy.result_cache_max_entries,
+                Some(policy.result_cache_ttl),
+            )),
+            storage: Arc::new(StorageCoordinator::new(work_root, receipt_root)),
+            policy,
         }
     }
 
@@ -1312,12 +1435,18 @@ impl DataEngineManager {
     ) -> DataEngineClient {
         let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
 
-        // Fast path: session already exists.
-        if let Some(handle) = sessions.get(session_id) {
+        // Fast path: session already exists and is not being evicted. A
+        // closing generation is treated as absent so callers transparently
+        // get a fresh session (new generation) with the same id.
+        if let Some(handle) = sessions.get(session_id)
+            && !handle.closing.load(Ordering::SeqCst)
+        {
+            self.activity.touch(session_id);
             return DataEngineClient {
                 tx: handle.tx.clone(),
                 node_registry: Arc::clone(&self.node_registry),
                 session_id: session_id.to_string(),
+                activity: Arc::clone(&self.activity),
             };
         }
 
@@ -1326,10 +1455,17 @@ impl DataEngineManager {
         // snapshot lineage instead of all committing to "main".
         let new_engine = self.template.new_session().with_history_ref(history_ref);
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
+        let running = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let closing = Arc::new(AtomicBool::new(false));
         let server = SessionServer {
             session_id: session_id.to_string(),
             engine: Arc::new(tokio::sync::Mutex::new(new_engine)),
-            running: Arc::new(AtomicBool::new(false)),
+            running: Arc::clone(&running),
+            shutdown: Arc::clone(&shutdown),
+            closing: Arc::clone(&closing),
+            result_cache: Arc::clone(&self.result_cache),
+            storage: Arc::clone(&self.storage),
             rx,
         };
         let task = tokio::task::spawn(server.run());
@@ -1339,6 +1475,8 @@ impl DataEngineManager {
             session_id.to_string(),
             SessionHandle {
                 tx: tx.clone(),
+                running,
+                closing,
                 _task: task,
             },
         );
@@ -1348,7 +1486,196 @@ impl DataEngineManager {
             tx,
             node_registry: Arc::clone(&self.node_registry),
             session_id: session_id.to_string(),
+            activity: Arc::clone(&self.activity),
         }
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.sessions.lock().expect("sessions mutex poisoned").len()
+    }
+
+    /// Release retained outputs for idle sessions without stopping them.
+    pub async fn release_idle_outputs(&self) -> usize {
+        let targets = {
+            let sessions = self.sessions.lock().expect("sessions mutex poisoned");
+            sessions
+                .iter()
+                .filter(|(id, handle)| {
+                    !handle.running.load(Ordering::SeqCst)
+                        && self.activity.is_idle(id, self.policy.output_cache_idle)
+                })
+                .map(|(id, handle)| (id.clone(), handle.tx.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut released = 0;
+        for (session_id, tx) in targets {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            if tx
+                .send(EngineMsg {
+                    session_id: session_id.clone(),
+                    cmd: DataEngineCmd::ReleaseOutputs { reply: reply_tx },
+                })
+                .is_err()
+            {
+                continue;
+            }
+            if matches!(reply_rx.await, Ok(Ok(true))) {
+                tracing::info!(session_id, "released idle DAG output cache");
+                released += 1;
+            }
+        }
+        released
+    }
+
+    /// Stop idle session actors. Active runs are never evicted.
+    ///
+    /// Only the current generation is evicted: targets are marked `closing`
+    /// under the sessions lock, so any client asking for the same session id
+    /// afterwards receives a freshly created session whose storage references
+    /// are never released by the old actor's shutdown.
+    pub async fn evict_idle_sessions(&self) -> usize {
+        let targets = {
+            let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
+            let mut targets = Vec::new();
+            for (id, handle) in sessions.iter_mut() {
+                if !handle.running.load(Ordering::SeqCst)
+                    && self.activity.is_idle(id, self.policy.session_idle)
+                {
+                    // Mark closing inside the lock: a client racing this
+                    // eviction will create a new generation instead of
+                    // queueing work on the doomed actor.
+                    handle.closing.store(true, Ordering::SeqCst);
+                    targets.push((id.clone(), handle.tx.clone()));
+                }
+            }
+            for (id, _) in &targets {
+                sessions.remove(id);
+            }
+            targets
+        };
+        let mut evicted = 0;
+        for (session_id, tx) in targets {
+            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+            if tx
+                .send(EngineMsg {
+                    session_id: session_id.clone(),
+                    cmd: DataEngineCmd::Shutdown { reply: reply_tx },
+                })
+                .is_err()
+            {
+                continue;
+            }
+            if matches!(reply_rx.await, Ok(Ok(true))) {
+                evicted += 1;
+                tracing::info!(session_id, "evicted idle DAG session");
+            }
+            // A client may have recreated the session while the old actor was
+            // acknowledging shutdown. Only clear shared refs if it did not.
+            let recreated = self
+                .sessions
+                .lock()
+                .expect("sessions mutex poisoned")
+                .contains_key(&session_id);
+            if !recreated {
+                self.activity.forget(&session_id);
+                self.storage.release_session(&session_id);
+            }
+        }
+        evicted
+    }
+
+    /// Run one lifecycle pass and enforce the central local-storage budget.
+    ///
+    /// Order is fixed: release idle output caches → evict idle sessions →
+    /// prune the result cache (dropping its storage references) → enforce the
+    /// local budget with run-aware cleanup. VFS artifacts are only ever
+    /// reported by that cleanup, never deleted.
+    pub async fn maintain_once(
+        &self,
+    ) -> std::result::Result<(usize, usize, Option<RunAwareCleanReport>), String> {
+        let released = self.release_idle_outputs().await;
+        let evicted = self.evict_idle_sessions().await;
+        let retired = self.result_cache.prune_retired();
+        if !retired.is_empty() {
+            self.storage.release_cache_owner(&retired);
+        }
+        let clean = if self.policy.storage_max_bytes > 0
+            && let Some(history) = self.template.history()
+        {
+            let history = history.clone();
+            Some(
+                self.storage
+                    .run_aware_clean_once(
+                        self.policy.clean_keep_runs,
+                        self.policy.storage_max_bytes,
+                        false,
+                        &history,
+                    )
+                    .await?,
+            )
+        } else {
+            None
+        };
+        Ok((released, evicted, clean))
+    }
+
+    /// Point-in-time storage view: sessions, result cache, local managed
+    /// bytes, tracked VFS artifacts and the reference index snapshot.
+    pub fn storage_status(&self) -> StorageStatus {
+        StorageStatus {
+            session_count: self.session_count(),
+            result_cache_entries: self.result_cache.len(),
+            local_bytes: self.storage.managed_bytes(),
+            artifact_count: self.storage.artifact_count(),
+            artifact_bytes: self.storage.artifact_bytes(),
+            references: self.storage.reference_snapshot(),
+            artifacts: self.storage.artifact_snapshot(),
+        }
+    }
+
+    /// Explicit run-aware clean. `keep_runs` protects the newest runs; a live
+    /// `dry_run` reports candidates and protected directories without
+    /// touching the disk. VFS artifacts are never deleted.
+    pub async fn clean_storage(
+        &self,
+        keep_runs: usize,
+        dry_run: bool,
+    ) -> std::result::Result<RunAwareCleanReport, String> {
+        let history = self
+            .template
+            .history()
+            .cloned()
+            .ok_or_else(|| "no history store attached to the engine".to_string())?;
+        self.storage
+            .clean_history(&history, keep_runs, dry_run)
+            .await
+    }
+
+    /// Start the daemon maintenance loop. Interval `None` performs no work.
+    pub fn spawn_maintenance(self: &Arc<Self>) -> JoinHandle<()> {
+        let manager = Arc::clone(self);
+        let interval = manager.policy.maintenance_interval;
+        tokio::spawn(async move {
+            let Some(interval) = interval else {
+                return;
+            };
+            loop {
+                match manager.maintain_once().await {
+                    Ok((released, evicted, clean)) => {
+                        tracing::info!(
+                            output_caches_released = released,
+                            sessions_evicted = evicted,
+                            storage_clean = ?clean,
+                            "DAG lifecycle maintenance"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "DAG lifecycle maintenance failed");
+                    }
+                }
+                tokio::time::sleep(interval).await;
+            }
+        })
     }
 }
 
@@ -1591,6 +1918,321 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("memory guard"))
+        );
+    }
+    fn zero_idle_policy() -> MaintenancePolicy {
+        MaintenancePolicy {
+            session_idle: std::time::Duration::ZERO,
+            output_cache_idle: std::time::Duration::ZERO,
+            result_cache_ttl: std::time::Duration::from_secs(60),
+            result_cache_max_entries: 16,
+            maintenance_interval: None,
+            clean_keep_runs: 2,
+            storage_max_bytes: 0,
+        }
+    }
+
+    fn iris_csv_path() -> String {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        std::path::Path::new(&manifest_dir)
+            .join("test_datasets/Iris.csv")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Install a `file_to_dataframe → dataframe_to_file` pipeline in `client`
+    /// writing to `out`. Both node kinds come from the shared registry, so
+    /// every session sees the same fingerprints for identical specs.
+    async fn install_file_pipeline(client: &DataEngineClient, out: &std::path::Path) {
+        client
+            .add_node(
+                "src".to_string(),
+                "file_to_dataframe".to_string(),
+                serde_json::json!({ "path": iris_csv_path() }),
+            )
+            .await
+            .unwrap();
+        client
+            .add_node(
+                "sink".to_string(),
+                "dataframe_to_file".to_string(),
+                serde_json::json!({ "path": out.display().to_string(), "format": "csv" }),
+            )
+            .await
+            .unwrap();
+        client
+            .add_edge("src".to_string(), "sink".to_string())
+            .await
+            .unwrap();
+    }
+
+    fn node_report<'a>(
+        report: &'a crate::dag::RunReport,
+        id: &str,
+    ) -> &'a crate::dag::runtime::NodeReport {
+        report
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .unwrap_or_else(|| panic!("run report must contain `{id}`: {report:?}"))
+    }
+
+    #[tokio::test]
+    async fn idle_output_cache_releases_and_session_evicts() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("result.txt");
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_session("idle");
+        install_file_pipeline(&client, &output).await;
+        let report = client.run_dag(None).await.unwrap();
+        assert!(report.ok, "{report:?}");
+        assert!(
+            client
+                .get_output("src".to_string())
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let (released, evicted, clean) = manager.maintain_once().await.unwrap();
+        assert_eq!(released, 1, "idle output cache must be released once");
+        assert_eq!(evicted, 1);
+        assert!(clean.is_none(), "budget disabled by default");
+        assert_eq!(manager.session_count(), 0);
+        assert!(client.get_output("src".to_string()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cross_session_file_results_reuse_by_fingerprint() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("shared.csv");
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            MaintenancePolicy {
+                output_cache_idle: std::time::Duration::from_secs(3600),
+                ..zero_idle_policy()
+            },
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+
+        let first = manager.client_for_session("first");
+        install_file_pipeline(&first, &output).await;
+        let first_report = first.run_dag(None).await.unwrap();
+        assert!(first_report.ok, "{first_report:?}");
+        assert!(!node_report(&first_report, "sink").reused);
+
+        let second = manager.client_for_session("second");
+        install_file_pipeline(&second, &output).await;
+        let second_report = second
+            .run_dag_with_options(
+                None,
+                RunDagOptions {
+                    resume: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(second_report.ok, "{second_report:?}");
+        assert!(
+            node_report(&second_report, "sink").reused,
+            "second session should consume the central file-result cache"
+        );
+    }
+
+    /// A session recreated while its previous generation is shutting down must
+    /// not have the new generation's storage references released by the old
+    /// actor.
+    #[tokio::test]
+    async fn eviction_recreate_same_session_keeps_new_generation_refs() {
+        let directory = tempfile::tempdir().unwrap();
+        let work = directory.path().join("work");
+        let output = work.join("aa").join("b".repeat(62)).join("out.csv");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            zero_idle_policy(),
+            &work,
+            directory.path().join("receipts"),
+        );
+
+        let first = manager.client_for_session("dup");
+        install_file_pipeline(&first, &output).await;
+        assert!(first.run_dag(None).await.unwrap().ok);
+
+        let (_, evicted, _) = manager.maintain_once().await.unwrap();
+        assert_eq!(evicted, 1);
+        assert_eq!(manager.session_count(), 0);
+
+        // Recreate under the same id: a brand-new generation whose storage
+        // references must survive the old actor's shutdown bookkeeping.
+        let second = manager.client_for_session("dup");
+        assert_eq!(manager.session_count(), 1);
+        install_file_pipeline(&second, &output).await;
+        assert!(second.run_dag(None).await.unwrap().ok);
+
+        let status = manager.storage_status();
+        assert!(
+            status
+                .references
+                .iter()
+                .any(|entry| entry.sessions == 1 && entry.path == output.parent().unwrap()),
+            "the recreated generation must own its storage references: {:?}",
+            status.references
+        );
+    }
+
+    /// Once a generation is marked closing, queued runs are rejected instead
+    /// of executing on a session the manager has already removed.
+    #[tokio::test]
+    async fn closing_generation_rejects_queued_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            MaintenancePolicy {
+                session_idle: std::time::Duration::from_secs(3600),
+                output_cache_idle: std::time::Duration::from_secs(3600),
+                ..zero_idle_policy()
+            },
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_session("closing");
+        install_file_pipeline(&client, &directory.path().join("out.csv")).await;
+
+        // Simulate the eviction pass marking this generation closing.
+        {
+            let sessions = manager.sessions.lock().expect("sessions mutex poisoned");
+            sessions
+                .get("closing")
+                .expect("session must exist")
+                .closing
+                .store(true, Ordering::SeqCst);
+        }
+
+        let error = client.run_dag(None).await.unwrap_err();
+        assert!(
+            error.to_string().contains("session is shutting down"),
+            "unexpected error: {error}"
+        );
+
+        // The next client for the same id transparently gets a new generation.
+        let fresh = manager.client_for_session("closing");
+        assert!(fresh.run_dag(None).await.unwrap().ok);
+    }
+
+    /// Result-cache TTL expiry must also drop the cache-owner storage
+    /// references so run-aware cleanup can reclaim the local files later.
+    #[tokio::test]
+    async fn expired_result_cache_frees_local_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            MaintenancePolicy {
+                session_idle: std::time::Duration::from_secs(3600),
+                output_cache_idle: std::time::Duration::from_secs(3600),
+                result_cache_ttl: std::time::Duration::ZERO,
+                ..zero_idle_policy()
+            },
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_session("ttl");
+        install_file_pipeline(&client, &directory.path().join("out.csv")).await;
+        assert!(client.run_dag(None).await.unwrap().ok);
+        // TTL=0 expires entries the moment they are recorded, and the same
+        // pass must release the cache-owner storage reference that the entry
+        // would otherwise hold.
+        assert_eq!(
+            manager.result_cache.len(),
+            0,
+            "TTL=0 expires entries immediately"
+        );
+        let status = manager.storage_status();
+        assert!(
+            status
+                .references
+                .iter()
+                .all(|entry| entry.cache_owners == 0),
+            "expired cache entries must release their storage references: {:?}",
+            status.references
+        );
+    }
+
+    /// Cross-session restore must skip entries whose local files disappeared
+    /// or changed on disk — the node re-executes instead of reusing stale
+    /// bytes.
+    #[tokio::test]
+    async fn result_cache_restore_skips_missing_or_changed_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("reuse.csv");
+        let engine = DataEngine::builder().build();
+        let manager = DataEngineManager::with_policy_and_roots(
+            engine,
+            MaintenancePolicy {
+                session_idle: std::time::Duration::from_secs(3600),
+                output_cache_idle: std::time::Duration::from_secs(3600),
+                ..zero_idle_policy()
+            },
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+
+        let first = manager.client_for_session("origin");
+        install_file_pipeline(&first, &output).await;
+        assert!(first.run_dag(None).await.unwrap().ok);
+        assert_eq!(manager.result_cache.len(), 1);
+
+        // Missing file: restore must skip, the node re-executes (and
+        // recreates the file).
+        std::fs::remove_file(&output).unwrap();
+        let second = manager.client_for_session("missing");
+        install_file_pipeline(&second, &output).await;
+        let report = second
+            .run_dag_with_options(
+                None,
+                RunDagOptions {
+                    resume: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(report.ok, "{report:?}");
+        assert!(
+            !node_report(&report, "sink").reused,
+            "a deleted output file must not be reused across sessions"
+        );
+
+        // Changed file: a different on-disk fingerprint is also skipped.
+        std::fs::write(&output, "tampered with much longer content").unwrap();
+        let third = manager.client_for_session("changed");
+        install_file_pipeline(&third, &output).await;
+        let report = third
+            .run_dag_with_options(
+                None,
+                RunDagOptions {
+                    resume: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(report.ok, "{report:?}");
+        assert!(
+            !node_report(&report, "sink").reused,
+            "a fingerprint-mismatched output file must not be reused across sessions"
         );
     }
 }

@@ -403,6 +403,26 @@ impl DAG {
     /// report; those nodes remain dirty and execute on the next incremental
     /// run. File/FileSet outputs, which dominate container and assay jobs,
     /// can be restored without rerunning their producers.
+    /// Release every in-memory output value while preserving the DAG graph.
+    ///
+    /// This is the cache-lifecycle boundary used by the runtime manager when a
+    /// session becomes idle. Fingerprints are released too: a node without a
+    /// retained output is intentionally dirty on the next incremental run.
+    /// File definitions remain in history and can be restored by a new session.
+    ///
+    /// Returns whether anything was actually released, so idle maintenance can
+    /// distinguish a real release from a repeated no-op.
+    pub fn release_output_cache(&mut self) -> bool {
+        let had_outputs = !self.outputs.is_empty();
+        self.outputs.clear();
+        self.fingerprints.clear();
+        for id in self.nodes.keys() {
+            self.statuses.insert(id.clone(), RuntimeStatus::Pending);
+        }
+        self.errors.clear();
+        had_outputs
+    }
+
     pub fn restore_cached_file_outputs(
         &mut self,
         id: &str,

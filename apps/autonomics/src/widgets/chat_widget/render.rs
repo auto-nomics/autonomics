@@ -5,7 +5,90 @@ use ratatui::{
 };
 
 use crate::state::{ChatLine, CompactResult, DisplaySettings, TurnUsage};
+use crate::widgets::chat_widget::text_layout::wrap_spans;
 use crate::widgets::status_bar::format_tokens;
+
+/// Prefix used for the first visual row of a user-authored message.
+const USER_PREFIX: &str = "› ";
+/// Prefix used for wrapped and explicit continuation rows.
+const USER_CONTINUATION_PREFIX: &str = "  ";
+/// Columns reserved for the user-message prefix and a one-column right margin.
+const USER_HORIZONTAL_RESERVE: u16 = USER_PREFIX.len() as u16 + 1;
+
+/// Remove terminal escape/control characters while preserving tabs and newlines.
+///
+/// User input is untrusted enough to contain pasted CSI/OSC-style sequences. Rendering those
+/// verbatim can corrupt or reconfigure the terminal, matching Codex's user-message sanitizer is
+/// safer than treating the message as ordinary display text.
+fn sanitize_user_text(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek().is_some_and(|next| *next == '[') {
+            chars.next();
+            // Skip through the final byte of a CSI sequence. Invalid incomplete
+            // sequences simply drop the remainder instead of emitting an ESC.
+            let _ = chars.find(|next| ('@'..='~').contains(next));
+        } else if matches!(ch, '\n' | '\t') || !ch.is_control() {
+            sanitized.push(ch);
+        }
+    }
+    sanitized
+}
+
+fn render_user_message(text: &str, width: u16) -> Vec<Line<'static>> {
+    let message = sanitize_user_text(text);
+    if message.trim().is_empty() {
+        return Vec::new();
+    }
+    let content_width = width.saturating_sub(USER_HORIZONTAL_RESERVE).max(1);
+    let style = Style::default().fg(Color::Cyan);
+
+    let mut content_lines = Vec::new();
+    for logical_line in message.trim_end_matches(['\r', '\n']).split('\n') {
+        let wrapped = wrap_spans(
+            &[Span::styled(logical_line.to_string(), style)],
+            content_width,
+        );
+        for row in wrapped {
+            let prefix = if content_lines.is_empty() {
+                USER_PREFIX
+            } else {
+                USER_CONTINUATION_PREFIX
+            };
+            let mut spans = Vec::with_capacity(row.spans.len() + 1);
+            spans.push(Span::styled(
+                prefix,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::DIM | Modifier::BOLD),
+            ));
+            spans.extend(
+                row.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content, span.style)),
+            );
+            content_lines.push(Line::from(spans));
+        }
+    }
+
+    // Codex leaves quiet vertical space around each user turn. Trim only
+    // trailing blank content rows; intentional blank lines inside the message
+    // remain visible.
+    while content_lines.last().is_some_and(|line| {
+        line.spans.is_empty() || line.spans.iter().all(|span| span.content.trim().is_empty())
+    }) {
+        content_lines.pop();
+    }
+    if content_lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines = vec![Line::from("")];
+    lines.extend(content_lines);
+    lines.push(Line::from(""));
+    lines
+}
 
 /// Try to parse `text` as JSON and return a pretty-printed version.
 /// Falls back to the original text if parsing fails.
@@ -39,22 +122,7 @@ fn format_turn_usage(u: TurnUsage) -> String {
 /// Render a single `ChatLine` into one or more owned `Line<'static>`.
 pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>> {
     match msg {
-        ChatLine::User(text) => {
-            let mut lines = vec![Line::from(Span::styled(
-                "You",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-            ))];
-            for line in text.lines() {
-                lines.push(Line::from(Span::styled(
-                    line.to_string(),
-                    Style::default().fg(Color::Cyan).bg(Color::DarkGray),
-                )));
-            }
-            lines
-        }
+        ChatLine::User(text) => render_user_message(text, area.width),
         ChatLine::Assistant { text, usage } => {
             let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
                 "Assistant",
@@ -248,5 +316,42 @@ pub(crate) fn render_line_with_settings(
             ))]
         }
         _ => render_line_owned(msg, area),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn user_message_wraps_and_prefixes_each_visual_row() {
+        let lines = render_user_message("alpha beta gamma", 12);
+        assert_eq!(lines.first().map(line_text).as_deref(), Some(""));
+        assert_eq!(line_text(&lines[1]), "› alpha");
+        assert_eq!(line_text(&lines[2]), "  beta");
+        assert_eq!(line_text(&lines[3]), "  gamma");
+        assert_eq!(lines.last().map(line_text).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn user_message_preserves_explicit_blank_lines_but_trims_trailing_newlines() {
+        let lines = render_user_message("first\n\nsecond\n\n", 40);
+        let rendered: Vec<_> = lines.iter().map(line_text).collect();
+        assert_eq!(rendered, vec!["", "› first", "  ", "  second", ""]);
+    }
+
+    #[test]
+    fn user_message_removes_terminal_control_sequences() {
+        let lines = render_user_message("safe\u{1b}[2Jtext\u{7}", 40);
+        assert_eq!(line_text(&lines[1]), "› safetext");
+    }
+
+    #[test]
+    fn blank_user_message_renders_nothing() {
+        assert!(render_user_message(" \n ", 40).is_empty());
     }
 }

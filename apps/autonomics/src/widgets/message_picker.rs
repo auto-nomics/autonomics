@@ -1094,12 +1094,20 @@ mod tests {
         use agentik_sdk::types::messages::{ContentBlock, Role};
 
         let messages = vec![
-            sdk_message("m1", Role::User, vec![ContentBlock::Text { text: "hello".into() }]),
+            sdk_message(
+                "m1",
+                Role::User,
+                vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+            ),
             sdk_message("empty", Role::User, Vec::new()),
             sdk_message(
                 "m2",
                 Role::Assistant,
-                vec![ContentBlock::Text { text: "answer".into() }],
+                vec![ContentBlock::Text {
+                    text: "answer".into(),
+                }],
             ),
         ];
         let items = collect_message_items(&messages);

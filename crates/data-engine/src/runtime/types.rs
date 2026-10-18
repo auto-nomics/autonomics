@@ -199,4 +199,15 @@ pub enum DataEngineCmd {
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
     },
+    /// Release retained in-memory outputs while preserving the graph.
+    ///
+    /// Replies `true` when a non-empty cache was actually released and `false`
+    /// when it was already empty, so idle maintenance never double-counts.
+    ReleaseOutputs {
+        reply: oneshot::Sender<EngineResult<bool>>,
+    },
+    /// Stop this session actor. Replies `false` when a DAG run is active.
+    Shutdown {
+        reply: oneshot::Sender<EngineResult<bool>>,
+    },
 }

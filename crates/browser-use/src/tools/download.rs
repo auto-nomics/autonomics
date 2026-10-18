@@ -60,7 +60,7 @@ impl ToolFunction for DownloadTool {
     /// (120s default) bounds the wait first; this is only the backstop that
     /// stops a wedged Chromium from pinning the task forever.
     fn timeout_seconds(&self) -> u64 {
-        900
+        60 * 60 * 24
     }
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {

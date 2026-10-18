@@ -5,6 +5,7 @@ use super::history::{
     recompute_history_search,
 };
 use super::*;
+use crate::widgets::input_area::history_clear_recall;
 
 impl App {
     pub(super) fn handle_browse_key(&mut self, key: &KeyEvent) {
@@ -74,7 +75,7 @@ impl App {
     /// internal queue. The Session commits it at the next safe iteration
     /// boundary, and the TUI keeps an unacknowledged preview until then.
     pub(super) fn handle_input_key(&mut self, key: &KeyEvent) {
-        use crate::widgets::input_area::{history_clear_recall, history_down, history_up};
+        use crate::widgets::input_area::{history_down, history_should_recall, history_up};
 
         // While an incremental Ctrl+R search is active, every keystroke
         // drives the search instead of editing the buffer.
@@ -86,18 +87,19 @@ impl App {
         let active_idx = self.state.active_agent_idx;
         let ts = self.state.active_tab_state_mut();
 
-        // Ctrl+R: enter incremental history search (codex-style).
-        // Available in both idle and running states.
+        // Ctrl+R opens the footer query first; only a non-empty query
+        // produces a preview. Clearing normal recall here prevents an old
+        // traversal cursor from leaking into the accepted search result.
         if !ts.input_history.is_empty()
             && key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('r')
         {
+            history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
             ts.in_history_search = true;
             ts.history_search_query.clear();
             ts.history_search_draft = Some(ts.input.value());
-            ts.history_search_matches = compute_search_matches(&ts.input_history, "");
+            ts.history_search_matches.clear();
             ts.history_search_selected = 0;
-            load_selected_history_match(ts);
             return;
         }
 
@@ -154,7 +156,7 @@ impl App {
                 ts.input_mode = InputMode::Browse;
             }
             // Up/Down: recall history (Up) / advance towards draft (Down)
-            KeyCode::Up => {
+            KeyCode::Up if history_should_recall(&ts.input, &ts.input_history) => {
                 let _ = history_up(
                     &mut ts.input,
                     &ts.input_history,
@@ -162,7 +164,7 @@ impl App {
                     &mut ts.input_recall,
                 );
             }
-            KeyCode::Down => {
+            KeyCode::Down if history_should_recall(&ts.input, &ts.input_history) => {
                 let _ = history_down(
                     &mut ts.input,
                     &ts.input_history,
@@ -205,12 +207,19 @@ impl App {
                 let draft = ts.history_search_draft.take().unwrap_or_default();
                 ts.input.clear();
                 ts.input.insert_str(&draft);
+                history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                 end_history_search(ts);
             }
             // Enter: accept the currently-previewed match into the buffer
             // and resume normal input editing.
             KeyCode::Enter => {
+                let accepted = ts.input_recall.is_none();
+                history_clear_recall(&mut ts.input_draft, &mut ts.input_recall);
                 end_history_search(ts);
+                if !accepted {
+                    return;
+                }
+                ts.input.move_cursor_to_end();
             }
             // Up: move to the next-older match.
             KeyCode::Up => {

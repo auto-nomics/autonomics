@@ -122,7 +122,7 @@ Every plugin runs against an **environment**: a host-approved, digest-pinned bas
 Two mechanisms make the system trustworthy for biomedical work:
 
 - **DAG-based dispatch.** A research request is parsed by the Researcher, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the scheduler dispatches asynchronously through a pluggable executor contract (`local`, `process`, and a coordinator-side `remote` executor with an artifact store, so batch schedulers can slot in later) and retains outputs for snapshot, diff, and branch operations.
-- **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs are streamed to VFS as `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. Container work directories are content-addressed: an identical re-run reuses the previous workspace (Nextflow-style resume), inputs stage in as read-only bind mounts by default, and a background sweeper garbage-collects stale workspaces.
+- **Containerized nodes.** Every external tool runs in its own ephemeral Podman container. Images are pinned by sha256 digest, reference panels are checksum-verified from `manifest.json` and mounted read-only, the rootfs is `--read-only` with `no-new-privileges` and explicit CPU / PID / shm / UID caps, and declared outputs stay cache-local unless `artifact_prefix` publishes a copy to VFS as an immutable `FileRef = size + SHA-256` using a pending-object + atomic rename so consumers never observe partial artifacts. Container work directories are content-addressed: an identical re-run reuses the previous workspace (Nextflow-style resume), inputs stage in as read-only bind mounts by default, and workdirs have an explicit opt-in retention sweep.
 
 ## Capability Map
 
@@ -441,6 +441,7 @@ Many topic guides have Chinese editions (`*_zh.md`) alongside the English origin
 - [Gateway architecture](docs/design/gateway-architecture.md): the resident daemon, wire protocol, and multi-frontend design (Chinese).
 - [Headless run design](docs/headless-run-design.md): `autonomics run`, the `RunEvent` contract, and exit codes (Chinese).
 - [VFS design](docs/vfs.md): mounts, concurrent writes, catalog overlays, and reference data.
+- [DAG storage layout](docs/dag-storage-layout.md): responsibilities and retention for task workdirs, published artifacts, and receipts/evidence.
 - [Data catalog](docs/data-catalog.md): package layout, publication, and panel references.
 - [Runtime bundles](docs/data-bundles.md): built-in bundle identifiers and runtime overlays.
 - [Evidence channel](docs/evidence-channel.md): citations as typed data on DAG file edges.

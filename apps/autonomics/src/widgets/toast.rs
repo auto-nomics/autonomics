@@ -30,7 +30,7 @@ use ratatui::{
     prelude::Buffer,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -204,8 +204,8 @@ impl ToastManager {
         }
 
         // Layout: stack toasts top-down in the top-right corner.
-        // Each toast is 3 rows (title only) or 4 rows (title + description),
-        // including the rounded border.
+        // Each toast is sized to fit its wrapped content, including the
+        // rounded border.
         let max_width: u16 = 48;
         let gap: u16 = 1;
 
@@ -213,18 +213,22 @@ impl ToastManager {
         let mut y = frame_area.y + 1; // +1 margin from top
 
         for toast in self.toasts.iter() {
-            let h: u16 = if let Some(description) = toast.description.as_deref() {
-                let content_width = usize::from(max_width.saturating_sub(2)).max(1);
-                let description_lines = description.chars().count().div_ceil(content_width).max(1);
-                u16::try_from(description_lines + 2).unwrap_or(u16::MAX)
+            let width = max_width.min(frame_area.width);
+            let content_width = width.saturating_sub(2);
+            let lines = Self::toast_lines(toast);
+            let content_rows = if content_width == 0 {
+                0
             } else {
-                3
+                Paragraph::new(lines)
+                    .wrap(Wrap { trim: false })
+                    .line_count(content_width)
             };
-            let x = frame_area.right().saturating_sub(max_width + 1); // +1 right margin
+            let h = u16::try_from(content_rows + 2).unwrap_or(u16::MAX);
+            let x = frame_area.right().saturating_sub(width + 1); // +1 right margin
             let area = Rect {
                 x,
                 y,
-                width: max_width.min(frame_area.width),
+                width,
                 height: h,
             };
 
@@ -249,36 +253,31 @@ impl ToastManager {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let icon_style = Style::default().fg(accent).add_modifier(Modifier::BOLD);
+        let paragraph = Paragraph::new(Self::toast_lines(toast))
+            .alignment(Alignment::Left)
+            .wrap(Wrap { trim: false });
+        Widget::render(paragraph, inner, buf);
+    }
+
+    fn toast_lines(toast: &Toast) -> Vec<Line<'_>> {
+        let icon_style = Style::default()
+            .fg(toast.variant.color())
+            .add_modifier(Modifier::BOLD);
         let title_style = Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD);
         let desc_style = Style::default().fg(Color::Gray);
 
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Title line: icon + title.
-        lines.push(Line::from(vec![
+        let mut lines = vec![Line::from(vec![
             Span::styled(format!("{} ", toast.variant.icon()), icon_style),
             Span::styled(&toast.title, title_style),
-        ]));
+        ])];
 
-        // Optional description line.
-        if let Some(desc) = &toast.description {
-            // Truncate to fit inner width.
-            let max_w = inner.width as usize;
-            let desc_text = if desc.chars().count() > max_w {
-                let mut s: String = desc.chars().take(max_w.saturating_sub(1)).collect();
-                s.push('…');
-                s
-            } else {
-                desc.clone()
-            };
-            lines.push(Line::from(Span::styled(desc_text, desc_style)));
+        if let Some(description) = &toast.description {
+            lines.push(Line::from(Span::styled(description, desc_style)));
         }
 
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Left);
-        Widget::render(paragraph, inner, buf);
+        lines
     }
 }
 
