@@ -36,6 +36,7 @@ pub(super) fn load_selected_history_match(ts: &mut crate::state::AgentTabState) 
     } else {
         ts.input.clear();
     }
+    ts.input.move_cursor_to_end();
 }
 
 /// Recompute the match list for the current query, reset selection to the

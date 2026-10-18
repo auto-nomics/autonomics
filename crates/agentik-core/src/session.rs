@@ -127,7 +127,10 @@ impl Turn {
     fn settle(&mut self, current: &SessionTelemetry) -> (TurnTelemetry, u64) {
         let elapsed_ms = self.timing.pause();
         let baseline = std::mem::take(&mut self.baseline);
-        (TurnTelemetry::from_session_delta(current, &baseline, elapsed_ms), elapsed_ms)
+        (
+            TurnTelemetry::from_session_delta(current, &baseline, elapsed_ms),
+            elapsed_ms,
+        )
     }
 }
 
@@ -685,7 +688,8 @@ mod tests {
     #[test]
     fn a_taken_turn_cannot_be_settled_twice() {
         let shared = AgentShared::new_for_tests();
-        let mut session = Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        let mut session =
+            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
 
         session.begin_turn(None);
         let taken = session.turn.take().expect("begin_turn opens one");

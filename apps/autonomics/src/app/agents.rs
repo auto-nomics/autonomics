@@ -144,6 +144,7 @@ impl App {
             .iter()
             .map(|s| crate::widgets::agent_picker::RunningAgent {
                 name: s.name.clone(),
+                agent_id: s.agent_id,
                 status: s
                     .sub_sessions
                     .get(s.active_sub_session_idx)
@@ -168,6 +169,19 @@ impl App {
             KeyCode::Down => self.state.agent_picker.move_down(),
             KeyCode::Backspace => self.state.agent_picker.pop_char(),
             KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
+            // Close the selected leaf without deleting its persisted history.
+            // This mirrors Ctrl+W outside the picker, but targets the picker's
+            // selection so filtered/non-active agents can be closed directly.
+            KeyCode::Char('w') if ctrl => {
+                let agent_id = self.state.agent_picker.selected_agent_id();
+                if let Some(agent_id) = agent_id {
+                    self.close_agent_leaf_by_id(agent_id);
+                    self.refresh_agent_picker();
+                    if self.state.sessions.is_empty() {
+                        self.state.agent_picker.close();
+                    }
+                }
+            }
             KeyCode::Enter => {
                 let name = self
                     .state

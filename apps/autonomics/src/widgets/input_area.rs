@@ -93,6 +93,16 @@ impl InputArea {
         self.textarea.set_text("");
     }
 
+    /// Current byte offset of the editing cursor.
+    pub fn cursor(&self) -> usize {
+        self.textarea.cursor()
+    }
+
+    /// Move the cursor to the end of the buffer.
+    pub fn move_cursor_to_end(&mut self) {
+        self.textarea.set_cursor(self.value().len());
+    }
+
     /// Set or replace the maximum-length cap (grapheme clusters,
     /// not bytes). `None` disables the cap.
     // Live code goes through `new()`'s `DEFAULT_MAX_LENGTH`; only the
@@ -325,6 +335,21 @@ fn truncate_to_width(s: &str, max_width: usize) -> String {
 
 // ── Input-history helpers (chat input Up/Down recall) ───────────
 
+/// Return whether an Up/Down key should currently traverse history.
+///
+/// Empty input always traverses when history exists. Once an entry has been
+/// recalled, traversal continues while the cursor is at a buffer boundary. This preserves ordinary multiline cursor
+/// movement after the user moves into or edits the recalled text.
+pub(crate) fn history_should_recall(
+    input: &InputArea,
+    history: &std::collections::VecDeque<String>,
+) -> bool {
+    if history.is_empty() {
+        return false;
+    }
+    input.is_empty() || input.cursor() == 0 || input.cursor() == input.value().len()
+}
+
 /// Append a freshly-submitted prompt to `history`, evicting the
 /// oldest entry when capacity is reached. Whitespace-only entries
 /// are skipped.
@@ -379,6 +404,7 @@ pub(crate) fn history_up(
     input.clear();
     let last = history.len() - 1;
     input.insert_str(&history[last]);
+    input.move_cursor_to_end();
     *recall = Some(last);
     true
 }
@@ -407,12 +433,14 @@ pub(crate) fn history_down(
         let restored = draft.take().unwrap_or_default();
         input.clear();
         input.insert_str(&restored);
+        input.move_cursor_to_end();
         *recall = None;
         return true;
     }
     let new_idx = idx - 1;
     input.clear();
     input.insert_str(&history[new_idx]);
+    input.move_cursor_to_end();
     *recall = Some(new_idx);
     true
 }
@@ -508,6 +536,34 @@ mod tests {
             &mut recall3
         ));
         assert_eq!(recall3, None);
+    }
+
+    /// Recall leaves the cursor at the end so repeated Up/Down remain in
+    /// history mode, while interior cursor positions allow normal multiline
+    /// navigation instead of hijacking Up/Down.
+    #[test]
+    fn history_navigation_cursor_and_boundary_gating() {
+        let mut h: VecDeque<String> = VecDeque::new();
+        history_push(&mut h, "alpha".into(), 10);
+
+        let mut input = InputArea::new();
+        let mut draft = None;
+        let mut recall = None;
+
+        assert!(history_should_recall(&input, &h));
+        assert!(history_up(&mut input, &h, &mut draft, &mut recall));
+        assert_eq!(input.value(), "alpha");
+        assert_eq!(input.cursor(), "alpha".len());
+
+        input.textarea.set_cursor(1);
+        assert!(!history_should_recall(&input, &h));
+        input.move_cursor_to_end();
+        assert!(history_should_recall(&input, &h));
+
+        assert!(history_down(&mut input, &h, &mut draft, &mut recall));
+        assert_eq!(input.value(), "");
+        assert_eq!(input.cursor(), 0);
+        assert!(history_should_recall(&input, &h));
     }
 
     /// `history_down` with no recall in progress is a no-op (we're

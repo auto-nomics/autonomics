@@ -14,7 +14,7 @@
 //! │  ◐ literature                         │
 //! │  ⚙ gwas-analysis                      │
 //! ├──────────────────────────────────────┤
-//! │  Enter switch  ↑↓ navigate  Esc close │
+//! │ Enter switch ↑↓ nav Ctrl+W close Esc  │
 //! └──────────────────────────────────────┘
 //! ```
 //!
@@ -41,6 +41,7 @@ use crate::widgets::tree_picker::{render_chrome, render_footer, render_search, r
 #[derive(Clone, Debug)]
 pub struct RunningAgent {
     pub name: String,
+    pub agent_id: uuid::Uuid,
     pub status: AgentStatus,
     /// `true` for the currently active leaf.
     pub is_active: bool,
@@ -51,6 +52,7 @@ pub struct RunningAgent {
 struct Row {
     agent_idx: usize,
     name: String,
+    agent_id: uuid::Uuid,
     status: AgentStatus,
     is_active: bool,
 }
@@ -134,6 +136,11 @@ impl AgentPickerState {
         self.agents.get(row.agent_idx)
     }
 
+    /// Returns the selected agent's stable ID, if any.
+    pub fn selected_agent_id(&self) -> Option<uuid::Uuid> {
+        self.rows.get(self.selected).map(|row| row.agent_id)
+    }
+
     // ── Internal ──
 
     fn refilter(&mut self) {
@@ -146,6 +153,7 @@ impl AgentPickerState {
             .map(|(i, a)| Row {
                 agent_idx: i,
                 name: a.name.clone(),
+                agent_id: a.agent_id,
                 status: a.status,
                 is_active: a.is_active,
             })
@@ -252,7 +260,11 @@ impl StatefulWidget for AgentPicker {
             StatefulWidget::render(list, inner, buf, &mut state.list_state);
         }
 
-        render_footer(layout.footer, buf, " Enter switch  ↑↓ navigate  Esc close");
+        render_footer(
+            layout.footer,
+            buf,
+            " Enter switch  ↑↓ navigate  Ctrl+W close  Esc close ",
+        );
     }
 }
 
@@ -312,6 +324,7 @@ mod tests {
     fn agent(name: &str, active: bool) -> RunningAgent {
         RunningAgent {
             name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4(),
             status: AgentStatus::Idle,
             is_active: active,
         }
