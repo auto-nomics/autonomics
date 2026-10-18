@@ -563,11 +563,11 @@ impl ToolResult {
             ToolResultContent::Json(v) => v.to_string(),
             ToolResultContent::Blocks(blocks) => blocks
                 .iter()
-                .filter_map(|b| match b {
-                    ToolResultBlock::Text { text } => Some(text.as_str()),
-                    ToolResultBlock::Image { .. } => Some("[image omitted]"),
+                .map(|b| match b {
+                    ToolResultBlock::Text { text } => text.as_str(),
+                    ToolResultBlock::Image { .. } => "[image omitted]",
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<&str>>()
                 .join(""),
         }
     }
