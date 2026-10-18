@@ -132,6 +132,7 @@ mod tests {
         };
         assert_eq!(report["ok"], false);
         assert_eq!(report["applied"], false);
+        assert_eq!(report["committed"], false);
         assert_eq!(report["error"]["code"], "unknown_node_kind");
         assert_eq!(report["error"]["operation_index"], 1);
         assert_eq!(report["graph"]["node_count"], 0);

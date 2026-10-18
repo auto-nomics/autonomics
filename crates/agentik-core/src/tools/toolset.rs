@@ -126,6 +126,121 @@ impl ToolRegistry {
 
 // ─────────────────────────── Toolset ───────────────────────────
 
+/// Coerce schema-declared string scalars to their native JSON types.
+///
+/// This is deliberately narrow: only strings that parse exactly as booleans or
+/// numbers are changed, and only when the relevant JSON Schema property says
+/// the destination is that scalar type. This keeps arbitrary string payloads
+/// intact while tolerating a caller that serialized `12`/`true` as `"12"`/
+/// `"true"`.
+fn coerce_string_scalars(
+    input: &serde_json::Value,
+    schema: &agentik_types::ToolInputSchema,
+    tool_name: &str,
+) -> serde_json::Value {
+    let mut normalized = input.clone();
+    let mut changed = Vec::new();
+    normalize_schema_value(&mut normalized, &schema_value(schema), "", &mut changed);
+    if !changed.is_empty() {
+        tracing::warn!(
+            target: "tool_input",
+            tool = tool_name,
+            fields = ?changed,
+            "coerced string-encoded JSON scalars to native types"
+        );
+    }
+    normalized
+}
+
+fn schema_value(schema: &agentik_types::ToolInputSchema) -> serde_json::Value {
+    let mut root = serde_json::Map::new();
+    root.insert(
+        "properties".to_string(),
+        serde_json::Value::Object(schema.properties.clone()),
+    );
+    serde_json::Value::Object(root)
+}
+
+fn normalize_schema_value(
+    value: &mut serde_json::Value,
+    schema: &serde_json::Value,
+    path: &str,
+    changed: &mut Vec<String>,
+) {
+    if let serde_json::Value::String(text) = value
+        && let Some(replacement) = parse_string_scalar_for_schema(text, schema)
+    {
+        *value = replacement;
+        changed.push(path.to_string());
+        return;
+    }
+
+    if let serde_json::Value::Array(values) = value
+        && let Some(item_schema) = schema.get("items")
+    {
+        for (index, item) in values.iter_mut().enumerate() {
+            let item_path = format!("{path}[{index}]");
+            normalize_schema_value(item, item_schema, &item_path, changed);
+        }
+        return;
+    }
+
+    if let serde_json::Value::Object(fields) = value
+        && let Some(properties) = schema
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+    {
+        for (name, field) in fields.iter_mut() {
+            if let Some(field_schema) = properties.get(name) {
+                let field_path = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}.{name}")
+                };
+                normalize_schema_value(field, field_schema, &field_path, changed);
+            }
+        }
+    }
+}
+
+fn parse_string_scalar_for_schema(
+    text: &str,
+    schema: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    if schema_declares_type(schema, "boolean") {
+        parse_string_scalar(text, "boolean")
+    } else if schema_declares_type(schema, "integer") {
+        parse_string_scalar(text, "integer")
+    } else if schema_declares_type(schema, "number") {
+        parse_string_scalar(text, "number")
+    } else {
+        None
+    }
+}
+
+fn schema_declares_type(schema: &serde_json::Value, expected: &str) -> bool {
+    match schema.get("type") {
+        Some(serde_json::Value::String(actual)) => actual == expected,
+        Some(serde_json::Value::Array(types)) => {
+            types.iter().any(|actual| actual.as_str() == Some(expected))
+        }
+        _ => false,
+    }
+}
+
+fn parse_string_scalar(text: &str, type_name: &str) -> Option<serde_json::Value> {
+    match type_name {
+        "boolean" if text == "true" => Some(serde_json::Value::Bool(true)),
+        "boolean" if text == "false" => Some(serde_json::Value::Bool(false)),
+        "integer" => text.parse::<i64>().ok().map(serde_json::Value::from),
+        "number" => text
+            .parse::<f64>()
+            .ok()
+            .and_then(|number| serde_json::Number::from_f64(number).map(serde_json::Value::Number)),
+        _ => None,
+    }
+}
+
 /// Session-level tool runtime: shares an immutable [`ToolRegistry`] (tool
 /// definitions + implementations) across sessions while maintaining
 /// independent per-session state (background task list, event channel).
@@ -270,7 +385,17 @@ impl Toolset {
                 continue;
             };
 
-            if let Err(e) = registration.implementation.validate_input(&tc.input) {
+            // Compatibility guard for upstream callers that flatten JSON tool
+            // arguments to strings (for example `{"limit":"8"}`). Tool input is
+            // supposed to preserve native JSON types end-to-end, but rejecting
+            // these calls leaves an agent with no way to invoke required
+            // numeric or boolean parameters. Coerce only schema-declared
+            // scalar fields, retain all other values, and let serde report
+            // malformed strings normally.
+            let input =
+                coerce_string_scalars(&tc.input, &registration.definition.input_schema, &tc.name);
+
+            if let Err(e) = registration.implementation.validate_input(&input) {
                 immediate_results.push(ToolResult::error_with_id(tc.id.clone(), e.to_string()));
                 continue;
             }
@@ -279,7 +404,6 @@ impl Toolset {
             let timeout_secs = registration.implementation.timeout_seconds();
 
             let implementation = registration.implementation.clone();
-            let input = tc.input.clone();
             let task_id = tc.id.clone();
             let tool_name = tc.name.clone();
 
@@ -480,6 +604,8 @@ mod tests {
     #[tool(name = "test_tool", description = "A test tool")]
     struct MockInput {
         reason: String,
+        count: Option<usize>,
+        enabled: Option<bool>,
     }
 
     struct MockTool {
@@ -577,6 +703,32 @@ mod tests {
         let mut registry = ToolRegistry::new();
         registry.register_all(tools).unwrap();
         Arc::new(registry)
+    }
+
+    #[tokio::test]
+    async fn string_encoded_scalars_are_coerced_before_typed_deserialization() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![MockTool::new("ok").into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+
+        let toolcalls = vec![ToolUse {
+            id: "call_strings".to_string(),
+            name: "test_tool".to_string(),
+            input: json!({
+                "reason": "native JSON types",
+                "count": "8",
+                "enabled": "true"
+            }),
+        }];
+        let result = toolset
+            .execute(&toolcalls, None)
+            .await
+            .expect("string-encoded scalar arguments must be accepted")
+            .pop()
+            .expect("one tool result");
+
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(result.text_content(), "ok");
     }
 
     #[test]

@@ -426,11 +426,11 @@ impl Session {
                     .iter()
                     .find(|tc| tc.id == tr.tool_use_id)
                     .expect("matched above");
-                let task_seq = tc.input.get("task").and_then(|v| v.as_u64()).unwrap_or(0);
+                let task_seq = tc.input.get("task").and_then(flexible_u64).unwrap_or(0);
                 let timeout_secs = tc
                     .input
                     .get("timeout_seconds")
-                    .and_then(|v| v.as_u64())
+                    .and_then(flexible_u64)
                     .unwrap_or(600)
                     .max(300); // floor: 别让模型传小值反复空醒烧 turn
 
@@ -1056,6 +1056,12 @@ fn notice_text(prefix: &str, current: Option<&str>) -> String {
         Some(body) => format!("{prefix}{body}"),
         None => format!("{prefix}{NOTICE_CLEARED_BODY}"),
     }
+}
+
+/// Read a task ID or timeout that arrived as either a number or its canonical
+/// string representation.
+fn flexible_u64(value: &serde_json::Value) -> Option<u64> {
+    value.as_u64().or_else(|| value.as_str()?.parse().ok())
 }
 
 #[cfg(test)]

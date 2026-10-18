@@ -21,7 +21,7 @@ pub const MAX_API_OPERATIONS: usize = 1_000;
 pub const MAX_RHAI_OPERATIONS: u64 = 100_000;
 pub const MAX_CALL_LEVELS: usize = 64;
 pub const MAX_ARRAY_SIZE: usize = 10_000;
-pub const MAX_MAP_SIZE: usize = 1_000;
+pub const MAX_MAP_SIZE: usize = 10_000;
 pub const MAX_STRING_SIZE: usize = 64 * 1024;
 pub const MAX_EXPRESSION_DEPTH: usize = 64;
 pub const DEFAULT_TIMEOUT_MS: u64 = 1_000;
@@ -109,6 +109,10 @@ pub struct DagShellOutcome {
     pub ok: bool,
     pub applied: bool,
     pub dry_run: bool,
+    /// Whether the transaction successfully committed graph changes.
+    ///
+    /// A dry run or a rolled-back transaction is not committed even if the
+    /// script called `commit()` before validation/installation failed.
     pub committed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
@@ -367,7 +371,16 @@ fn register_graph_functions(
     );
     let s = Arc::clone(&state);
     engine.register_fn("add_logical_graph", move |graph: Dynamic| {
-        let graph = serde_json::from_value::<LogicalGraph>(require_json(graph)?)
+        let graph_json = require_json(graph)?;
+        let requested_map_properties = json_map_property_count(&graph_json);
+        if requested_map_properties > MAX_MAP_SIZE {
+            return Err(eval_error(format!(
+                "{LIMIT_TOKEN}: logical graph object-map budget exceeded: \
+                 limit={MAX_MAP_SIZE}, requested={requested_map_properties} \
+                 (unit: recursively nested map properties)"
+            )));
+        }
+        let graph = serde_json::from_value::<LogicalGraph>(graph_json)
             .map_err(|error| eval_error(format!("invalid logical graph: {error}")))?;
         stage(&s, GraphEditOp::AddLogicalGraph { graph })
     });
@@ -597,7 +610,12 @@ impl DagShellError {
 
 fn rhai_error(error: Box<rhai::EvalAltResult>, operation_index: Option<usize>) -> DagShellError {
     let position = error.position();
-    let message = error.to_string();
+    let mut message = error.to_string();
+    if message.contains("Size of object map too large") {
+        message = format!(
+            "{message}; limit={MAX_MAP_SIZE}, unit=recursively nested map properties; split large add_logical_graph calls"
+        );
+    }
     if let rhai::EvalAltResult::ErrorTerminated(token, _) = &*error
         && token.clone().try_cast::<String>().as_deref() == Some(TIMEOUT_TOKEN)
     {
@@ -627,6 +645,18 @@ fn rhai_error(error: Box<rhai::EvalAltResult>, operation_index: Option<usize>) -
         return error_at("parse_error", message, Some(position), operation_index);
     }
     error_at("runtime_error", message, Some(position), operation_index)
+}
+
+/// Count JSON object properties recursively in the same units Rhai uses for
+/// its nested object-map limit.
+fn json_map_property_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Object(fields) => {
+            fields.len() + fields.values().map(json_map_property_count).sum::<usize>()
+        }
+        serde_json::Value::Array(items) => items.iter().map(json_map_property_count).sum(),
+        _ => 0,
+    }
 }
 
 pub fn operation_traces(operations: &[GraphEditOp]) -> Vec<OperationTrace> {
@@ -702,6 +732,35 @@ mod tests {
         let error =
             execute_script(&script, Duration::from_millis(10), &snapshot, &registry).unwrap_err();
         assert_eq!(error.code, "script_too_large");
+    }
+
+    #[test]
+    fn large_logical_graph_can_be_staged_from_rhai() {
+        let (registry, snapshot) = sandbox();
+        // Reproduce the field's 127-node / 246-edge graph shape. The original
+        // 1,000-property Rhai limit counted nested maps recursively, so these
+        // edges matter: the graph needs roughly 1,620 nested map properties.
+        let script = r#"
+            let nodes = [];
+            let edges = [];
+            for i in 0..127 {
+                let suffix = i.to_string();
+                let id = "n" + suffix;
+                nodes.push(#{
+                    id: id,
+                    definition: #{Registry: #{kind: "core/echo", spec: #{}}},
+                    strategy: "Once"
+                });
+                edges.push(#{from: id, from_port: 0, to: id, to_port: 0});
+                edges.push(#{from: id, from_port: 0, to: id, to_port: 1});
+            }
+            add_logical_graph(#{nodes: nodes, edges: edges});
+            commit();
+        "#;
+        let execution = execute_script(script, Duration::from_millis(1000), &snapshot, &registry)
+            .expect("a 127-node, 246-edge logical graph must be stageable");
+        assert_eq!(execution.operations.len(), 1);
+        assert!(execution.committed);
     }
 
     fn sandbox() -> (Arc<NodeRegistry>, DagShellSnapshot) {
@@ -804,7 +863,7 @@ mod tests {
             }
             values
             "#,
-            Duration::from_millis(1000),
+            Duration::from_millis(5000),
             &snapshot,
             &registry,
         )
@@ -818,7 +877,7 @@ mod tests {
         let error = execute_script(
             r#"
             let values = #{};
-            for value in 0..1001 {
+            for value in 0..10002 {
                 values[value.to_string()] = value;
             }
             values
@@ -837,13 +896,13 @@ mod tests {
         let error = execute_script(
             r#"
             let values = #{};
-            for value in 0..1001 {
+            for value in 0..10002 {
                 values[value.to_string()] = value;
             }
             node("oversized", "echo", values);
             commit();
             "#,
-            Duration::from_millis(1000),
+            Duration::from_millis(5000),
             &snapshot,
             &registry,
         )
