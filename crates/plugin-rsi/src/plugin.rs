@@ -15,6 +15,8 @@ use container_plugin::manifest::{
     PluginManifest, PluginStatus,
 };
 use container_runtime::ImageReference;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::{
     Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
@@ -57,6 +59,41 @@ impl PluginSourceFetcher for GitPluginSourceFetcher {
             )),
         }
     }
+}
+
+/// The immutable runtime source currently inspected by a tool.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginCacheActiveSource {
+    pub kind: String,
+    pub commit: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+/// Materialized script content from the active and development manifests.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginScriptCache {
+    pub node_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_file: Option<String>,
+    pub source: &'static str,
+    pub active_sha256: String,
+    pub development_sha256: String,
+    pub active_content: String,
+    pub development_content: String,
+    pub identical: bool,
+    pub diff: String,
+}
+
+/// File-level evidence separating development edits from runtime activation.
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginCacheReport {
+    pub plugin_name: String,
+    pub active: PluginCacheActiveSource,
+    pub active_manifest: String,
+    pub development_manifest: String,
+    pub scripts: Vec<PluginScriptCache>,
+    pub stale_scripts: usize,
 }
 
 /// A host-owned handle to one long-lived plugin workspace.
@@ -312,6 +349,113 @@ impl PluginStore {
             path: destination,
             commit,
             digest,
+        })
+    }
+
+    /// Inspect the active materialization and compare it with development.
+    ///
+    /// This reads the manifest and script files from disk after registry
+    /// resolution. It therefore reports what a fresh plugin-loader scan sees,
+    /// not merely what a development tool last claimed to write.
+    pub fn inspect_plugin_cache(&self, plugin_name: &str) -> Result<PluginCacheReport> {
+        crate::validate_plugin_name(plugin_name)?;
+        let source = self.installed_source(plugin_name)?;
+        let active_path = match &source {
+            InstalledPluginSource::Git(_) => self.runtime_root.join(plugin_name),
+            InstalledPluginSource::Local(source) => source.path.clone(),
+        };
+        let development_path = self.layout.workspace_path(plugin_name)?;
+        let active_workspace = PluginWorkspace::new(&active_path);
+        let development_workspace = PluginWorkspace::new(&development_path);
+        let active_manifest = load_manifest(&active_workspace)?;
+        let development_manifest = load_manifest(&development_workspace)?;
+
+        let mut scripts = Vec::new();
+        for development_node in &development_manifest.nodes {
+            let active_node = active_manifest
+                .nodes
+                .iter()
+                .find(|node| node.kind == development_node.kind)
+                .ok_or_else(|| {
+                    Error::Validation(format!(
+                        "active plugin has no node `{}`; reinstall before runtime use",
+                        development_node.kind
+                    ))
+                })?;
+
+            let (script_file, active_content, development_content) = match (
+                &active_node.command.script_file,
+                &development_node.command.script_file,
+            ) {
+                (Some(active_file), Some(development_file)) => {
+                    if active_file != development_file {
+                        return Err(Error::Validation(format!(
+                            "node `{}` changed script_file from `{active_file}` to `{development_file}`; reinstall it",
+                            development_node.kind
+                        )));
+                    }
+                    (
+                        Some(development_file.clone()),
+                        active_workspace.read_text(development_file)?,
+                        development_workspace.read_text(development_file)?,
+                    )
+                }
+                (None, None) => {
+                    let active = active_node.command.script.clone().unwrap_or_default();
+                    let development = development_node.command.script.clone().unwrap_or_default();
+                    (None, active, development)
+                }
+                _ => {
+                    return Err(Error::Validation(format!(
+                        "node `{}` changed between script and script_file; reinstall it",
+                        development_node.kind
+                    )));
+                }
+            };
+            let identical = active_content == development_content;
+            scripts.push(PluginScriptCache {
+                node_kind: development_node.kind.clone(),
+                script_file,
+                source: if active_node.command.script_file.is_some() {
+                    "script_file"
+                } else {
+                    "inline_script"
+                },
+                active_sha256: content_digest(active_content.as_bytes()),
+                development_sha256: content_digest(development_content.as_bytes()),
+                diff: if identical {
+                    String::new()
+                } else {
+                    apply_patch::make_unified_diff(&active_content, &development_content)
+                },
+                identical,
+                active_content,
+                development_content,
+            });
+        }
+        let stale_scripts = scripts.iter().filter(|script| !script.identical).count();
+        let (kind, commit, digest) = match &source {
+            InstalledPluginSource::Git(source) => {
+                ("github".to_string(), source.commit.clone(), None)
+            }
+            InstalledPluginSource::Local(source) => (
+                "local_snapshot".to_string(),
+                source.commit.clone(),
+                Some(source.digest.clone()),
+            ),
+        };
+
+        Ok(PluginCacheReport {
+            plugin_name: plugin_name.to_string(),
+            active: PluginCacheActiveSource {
+                kind,
+                commit,
+                digest,
+            },
+            active_manifest: active_workspace.read_text("manifest.toml")?,
+            development_manifest: development_workspace.read_text("manifest.toml")?,
+            scripts,
+            stale_scripts,
         })
     }
 
@@ -940,4 +1084,15 @@ pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<
             to: format!("{to:?}").to_lowercase(),
         })
     }
+}
+
+fn content_digest(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }

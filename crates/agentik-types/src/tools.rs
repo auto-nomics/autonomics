@@ -563,7 +563,7 @@ impl ToolResult {
             ToolResultContent::Json(v) => v.to_string(),
             ToolResultContent::Blocks(blocks) => blocks
                 .iter()
-                .map(|b| match b {
+                .map(|block| match block {
                     ToolResultBlock::Text { text } => text.as_str(),
                     ToolResultBlock::Image { .. } => "[image omitted]",
                 })

@@ -10,6 +10,7 @@ mod environment_bind;
 mod environments_list;
 mod fork;
 mod helpers;
+mod inspect_cache;
 mod install;
 mod manifest;
 mod node_create;
@@ -284,6 +285,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
             state: state.clone(),
         }),
         ToolRegistration::from(install::PluginInstallTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(inspect_cache::EngineInspectCacheTool {
             state: state.clone(),
         }),
         ToolRegistration::from(uninstall::PluginUninstallTool {
