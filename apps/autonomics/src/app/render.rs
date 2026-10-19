@@ -299,6 +299,10 @@ impl App {
             self.render_dag_view(frame.area(), frame.buffer_mut());
         }
 
+        if self.state.bibliography_visible {
+            self.render_bibliography(frame.area(), frame.buffer_mut());
+        }
+
         if self.state.agent_config.visible {
             crate::widgets::agent_config_widget::render_agent_config(
                 frame.area(),

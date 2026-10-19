@@ -4821,6 +4821,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "bib-base",
+ "bib-types",
  "chrono",
  "container-plugin",
  "dag-core",

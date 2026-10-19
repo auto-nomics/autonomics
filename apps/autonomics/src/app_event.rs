@@ -71,6 +71,18 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
+    /// A bibliography popup snapshot arrived. The token discards replies from
+    /// a superseded refresh/search.
+    BibliographySnapshotLoaded {
+        token: u64,
+        result: std::result::Result<gateway::proto::BibliographySnapshot, String>,
+    },
+    /// One selected article's full-text/annotation details arrived.
+    BibliographyDetailsLoaded {
+        token: u64,
+        article_id: String,
+        result: std::result::Result<gateway::proto::BibliographyArticleDetail, String>,
+    },
     /// Skill-evolution dashboard data arrived: service status, unified
     /// skill library, and recorded observations.
     SkillEvolutionLoaded {

@@ -358,6 +358,16 @@ impl App {
                     self.state.dag_view_error = Some(error);
                 }
             },
+            crate::app_event::AppEvent::BibliographySnapshotLoaded { token, result } => {
+                self.apply_bibliography_snapshot(token, result);
+            }
+            crate::app_event::AppEvent::BibliographyDetailsLoaded {
+                token,
+                article_id,
+                result,
+            } => {
+                self.apply_bibliography_details(token, article_id, result);
+            }
             crate::app_event::AppEvent::ModelInfoLoaded { agent, info } => {
                 self.model_info_pending.remove(&agent);
                 if let Some(info) = info {

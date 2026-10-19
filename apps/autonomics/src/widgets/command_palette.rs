@@ -40,6 +40,8 @@ pub enum CommandAction {
     AgentConfig,
     /// Open the active agent's data-engine DAG view.
     ViewDag,
+    /// Open the bibliography library browser in a popup.
+    BibliographyPanel,
     /// Open the agent resume picker.
     ResumeAgent,
     /// Close the active agent leaf and terminate its background process.
@@ -371,6 +373,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "dag graph pipeline topology data engine node edges ctrl o".into(),
             category: "data".into(),
             action: CommandAction::ViewDag,
+        },
+        Command {
+            title: "Bibliography library".into(),
+            keywords: "bib bibliography literature papers articles fulltext collections".into(),
+            category: "research".into(),
+            action: CommandAction::BibliographyPanel,
         },
         Command {
             title: "New session".into(),

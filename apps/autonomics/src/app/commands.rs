@@ -120,6 +120,9 @@ impl App {
             CommandAction::ViewDag => {
                 self.open_dag_view();
             }
+            CommandAction::BibliographyPanel => {
+                self.open_bibliography();
+            }
             CommandAction::SkillEvolutionPanel => {
                 self.open_skill_evolution();
             }

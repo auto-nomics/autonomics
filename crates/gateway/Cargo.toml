@@ -17,6 +17,7 @@ evolution-core = { path = "../evolution-core" }
 skills = { path = "../skills" }
 api-server = { path = "../api-server" }
 bib-base = { path = "../bib-base" }
+bib-types = { path = "../bib-types" }
 dag-core = { path = "../dag-core" }
 container-plugin = { path = "../container-plugin" }
 axum = { version = "0.8", features = ["macros"] }

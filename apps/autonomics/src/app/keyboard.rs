@@ -21,6 +21,10 @@ impl App {
                     return 0;
                 }
 
+                if self.state.bibliography_visible {
+                    return 0;
+                }
+
                 if self.state.name_input.visible {
                     self.state.name_input.paste(s);
                     return 0;
@@ -77,6 +81,7 @@ impl App {
             || state.session_picker.visible
             || state.message_picker.is_visible()
             || state.dag_view_visible
+            || state.bibliography_visible
             || state.model_config_visible
             || state.embedding_config_visible
             || state.agent_config.visible
@@ -232,6 +237,11 @@ impl App {
         // navigation keys as text.
         if self.state.dag_view_visible {
             self.handle_dag_view_key(key);
+            return;
+        }
+
+        if self.state.bibliography_visible {
+            self.handle_bibliography_key(key);
             return;
         }
 
