@@ -5,10 +5,8 @@ use std::sync::Arc;
 
 use agentik_core::memory::{SemanticGrounding, SemanticGroundingOutcome, SemanticObservation};
 use async_trait::async_trait;
-use kms::storage::repo;
 use kms::{
-    Diagnostic, Entity, Index, KmsService, Knowledge, KnowledgeType, Language, Nomenclature,
-    Severity, TargetType,
+    Diagnostic, Entity, Index, KmsService, Knowledge, Language, Nomenclature, Severity, TargetType,
 };
 use uuid::Uuid;
 
@@ -120,7 +118,6 @@ async fn apply_observation(
             let knowledge = service
                 .create_knowledge(
                     &title,
-                    KnowledgeType::Relation,
                     vec![subject_entity.id, object_entity.id],
                     Some(knowledge_content(observation, &subject, &object)),
                 )
@@ -254,21 +251,17 @@ fn new_error_diagnostics(before: &[Diagnostic], after: &[Diagnostic]) -> Vec<Str
 }
 
 async fn cleanup(service: &KmsService, draft: &mut GroundingDraft) {
-    let conn = &*service.lock_conn().await;
     for index in draft.indexes.iter().rev() {
-        if let Err(error) = repo::index_delete(conn, index.id).await {
+        if let Err(error) = service.delete_index_by_id(index.id).await {
             tracing::warn!(
                 index_id = %index.id,
                 error = %error,
                 "failed to roll back KMS index"
             );
         }
-        if let Some(parent) = index.parent_id {
-            let _ = repo::index_reindex_positions(conn, Some(parent)).await;
-        }
     }
     for knowledge in draft.knowledge.iter().rev() {
-        if let Err(error) = repo::knowledge_delete(conn, knowledge.id).await {
+        if let Err(error) = service.delete_knowledge_by_id(knowledge.id).await {
             tracing::warn!(
                 knowledge_id = %knowledge.id,
                 error = %error,
@@ -277,7 +270,7 @@ async fn cleanup(service: &KmsService, draft: &mut GroundingDraft) {
         }
     }
     for entity in draft.entities.iter().rev() {
-        if let Err(error) = repo::entity_delete(conn, entity.id).await {
+        if let Err(error) = service.delete_entity(entity.id).await {
             tracing::warn!(
                 entity_id = %entity.id,
                 error = %error,

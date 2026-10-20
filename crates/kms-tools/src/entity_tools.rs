@@ -11,8 +11,10 @@ use kms::{EntityFilter, KmsService, Language, Nomenclature};
 use serde_json::json;
 use uuid::Uuid;
 
-fn svc_err(e: String) -> ToolError {
-    ToolError::ExecutionFailed { source: e.into() }
+fn svc_err(e: impl std::fmt::Display) -> ToolError {
+    ToolError::ExecutionFailed {
+        source: e.to_string().into(),
+    }
 }
 
 fn lang_from_str(s: &str) -> Language {

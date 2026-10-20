@@ -7,17 +7,12 @@ use agentik_core::tools::{ToolError, ToolFunction};
 use agentik_proc::tool;
 use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
-use kms::{KmsService, KnowledgeType};
+use kms::KmsService;
 use serde_json::json;
 
-fn svc_err(e: String) -> ToolError {
-    ToolError::ExecutionFailed { source: e.into() }
-}
-
-fn knowledge_type_from_str(s: &str) -> KnowledgeType {
-    match s {
-        "relation" => KnowledgeType::Relation,
-        _ => KnowledgeType::Aspect,
+fn svc_err(e: impl std::fmt::Display) -> ToolError {
+    ToolError::ExecutionFailed {
+        source: e.to_string().into(),
     }
 }
 
@@ -54,15 +49,12 @@ fn validate_knowledge_title(title: &str) -> Result<(), ToolError> {
 
 #[tool(
     name = "kms_create_knowledge",
-    description = "Create a knowledge entry about an entity or entities. Knowledge can be 'aspect' \
-                   (about one entity) or 'relation' (between multiple entities). Content uses \
+    description = "Create a knowledge entry about an entity or entities. Content uses \
                    [[entity name]] wiki-style links."
 )]
 pub struct CreateKnowledgeInput {
     #[desc = "Title of the knowledge entry (format: 'Entity · Aspect')"]
     pub title: String,
-    #[desc = "'aspect' or 'relation'"]
-    pub knowledge_type: String,
     #[desc = "Array of all entity names mentioned in the content"]
     pub entities: Vec<String>,
     #[desc = "The knowledge content — use [[entity name]] to mark entity mentions"]
@@ -79,8 +71,6 @@ impl ToolFunction for KmsCreateKnowledgeTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         validate_knowledge_title(&input.title)?;
-        let ktype = knowledge_type_from_str(&input.knowledge_type);
-
         // Resolve entity refs.
         let mut entities = Vec::with_capacity(input.entities.len());
         for r in &input.entities {
@@ -94,7 +84,7 @@ impl ToolFunction for KmsCreateKnowledgeTool {
 
         let knowledge = self
             .svc
-            .create_knowledge(&input.title, ktype, entities, input.content)
+            .create_knowledge(&input.title, entities, input.content)
             .await
             .map_err(svc_err)?;
 
@@ -142,7 +132,6 @@ impl ToolFunction for KmsUpdateKnowledgeTool {
 
         Ok(ToolResult::success_json(json!({
             "title": knowledge.title,
-            "knowledge_type": knowledge.knowledge_type.as_str(),
             "entities": knowledge.entities,
             "content": knowledge.content,
         })))
@@ -214,7 +203,6 @@ impl ToolFunction for KmsGetKnowledgeTool {
 
         Ok(ToolResult::success_json(json!({
             "title": knowledge.title,
-            "knowledge_type": knowledge.knowledge_type.as_str(),
             "entities": entity_names,
             "content": knowledge.content,
         })))
@@ -260,7 +248,6 @@ impl ToolFunction for KmsGetKnowledgeBatchTool {
                         "status": "ok",
                         "knowledge": {
                             "title": kv.title,
-                            "knowledge_type": kv.knowledge_type,
                             "entities": entity_names,
                             "content": kv.content,
                         }
@@ -317,7 +304,6 @@ impl ToolFunction for KmsGetEntityKnowledgeTool {
             .map(|k| {
                 json!({
                     "title": k.title,
-                    "knowledge_type": k.knowledge_type.as_str(),
                     "content": k.content,
                 })
             })

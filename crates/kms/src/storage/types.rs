@@ -17,26 +17,9 @@ pub struct Nomenclature {
     pub abbr: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum KnowledgeType {
-    Aspect,
-    Relation,
-}
-
-impl KnowledgeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            KnowledgeType::Aspect => "aspect",
-            KnowledgeType::Relation => "relation",
-        }
-    }
-
-    pub fn convert_from_str(s: &str) -> Self {
-        match s {
-            "relation" => KnowledgeType::Relation,
-            _ => KnowledgeType::Aspect,
-        }
-    }
+pub enum DataType {
+    Entity(Entity),
+    Knowledge(Knowledge),
 }
 
 /// Knowledge data model.
@@ -47,7 +30,6 @@ pub struct Knowledge {
     /// UNIQUE constraint — no two Knowledge entries share the same title,
     /// so the agent can reference a title one-to-one.
     pub title: String,
-    pub knowledge_type: KnowledgeType,
     pub entities: Vec<Uuid>,
     pub content: Option<String>,
 

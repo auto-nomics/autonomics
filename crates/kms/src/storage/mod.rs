@@ -90,6 +90,23 @@ impl Storage {
 
     async fn init_schema(&self) -> Result<(), turso::Error> {
         let conn = self.conn.lock().await;
+
+        // V2: `knowledge_type` was an unenforced presentation detail. Aspect
+        // versus relation is already carried by the knowledge title/entities;
+        // remove it from legacy databases as well as freshly created schemas.
+        let mut columns = conn
+            .query(
+                "SELECT name FROM pragma_table_info('knowledges') WHERE name = 'knowledge_type'",
+                (),
+            )
+            .await?;
+        let has_legacy_knowledge_type = columns.next().await?.is_some();
+        drop(columns);
+        if has_legacy_knowledge_type {
+            conn.execute_batch("ALTER TABLE knowledges DROP COLUMN knowledge_type;")
+                .await?;
+        }
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS entities (
                     id TEXT PRIMARY KEY NOT NULL,
@@ -108,7 +125,6 @@ impl Storage {
                 CREATE TABLE IF NOT EXISTS knowledges (
                     id TEXT PRIMARY KEY NOT NULL,
                     title TEXT NOT NULL,
-                    knowledge_type TEXT NOT NULL,
                     entities TEXT NOT NULL,
                     content TEXT,
                     source_document_id TEXT,
@@ -215,6 +231,63 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn legacy_knowledge_type_column_is_dropped_with_data_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("knowledge.db");
+        let db_path_string = db_path.to_string_lossy().to_string();
+
+        {
+            let db = turso::Builder::new_local(&db_path_string)
+                .build()
+                .await
+                .unwrap();
+            let conn = db.connect().unwrap();
+            conn.execute_batch(
+                "CREATE TABLE knowledges (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    title TEXT NOT NULL,
+                    knowledge_type TEXT NOT NULL,
+                    entities TEXT NOT NULL,
+                    content TEXT,
+                    source_document_id TEXT,
+                    source_chunk_idx INTEGER,
+                    UNIQUE(title)
+                );
+                INSERT INTO knowledges (id, title, knowledge_type, entities, content)
+                VALUES (
+                    '00000000-0000-0000-0000-000000000001',
+                    'Legacy · knowledge',
+                    'relation',
+                    '',
+                    'legacy content'
+                );",
+            )
+            .await
+            .unwrap();
+        }
+
+        let storage = Storage::new(&db_path_string).await.unwrap();
+        let conn = storage.conn().await;
+        let mut columns = conn
+            .query("SELECT name FROM pragma_table_info('knowledges')", ())
+            .await
+            .unwrap();
+        let mut names = Vec::new();
+        while let Some(row) = columns.next().await.unwrap() {
+            names.push(row.get::<String>(0).unwrap());
+        }
+        assert!(!names.contains(&"knowledge_type".to_string()));
+
+        let mut rows = conn
+            .query("SELECT title, content FROM knowledges", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<String>(0).unwrap(), "Legacy · knowledge");
+        assert_eq!(row.get::<String>(1).unwrap(), "legacy content");
     }
 
     #[test]

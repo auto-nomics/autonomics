@@ -11,8 +11,10 @@ use async_trait::async_trait;
 use kms::{KmsService, TargetType};
 use serde_json::json;
 
-fn svc_err(e: String) -> ToolError {
-    ToolError::ExecutionFailed { source: e.into() }
+fn svc_err(e: impl std::fmt::Display) -> ToolError {
+    ToolError::ExecutionFailed {
+        source: e.to_string().into(),
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -281,7 +283,6 @@ impl ToolFunction for KmsSubtreeKnowledgeTool {
             .map(|k| {
                 json!({
                     "title": k.title,
-                    "knowledge_type": k.knowledge_type.as_str(),
                     "content": k.content,
                 })
             })
@@ -337,7 +338,6 @@ impl ToolFunction for KmsSearchSubtreeTool {
             .map(|k| {
                 json!({
                     "title": k.title,
-                    "knowledge_type": k.knowledge_type.as_str(),
                     "content": k.content,
                 })
             })

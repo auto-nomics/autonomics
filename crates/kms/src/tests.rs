@@ -10,7 +10,7 @@
 use uuid::Uuid;
 
 use crate::language::Language;
-use crate::storage::types::{KnowledgeType, Nomenclature, TargetType};
+use crate::storage::types::{Nomenclature, TargetType};
 use crate::*;
 
 fn make_name(full: &str) -> Nomenclature {
@@ -117,7 +117,6 @@ async fn test_create_and_get_knowledge() {
     let knowledge = svc
         .create_knowledge(
             "Docker · 安装指南",
-            KnowledgeType::Aspect,
             vec![entity.id],
             Some("安装步骤...".into()),
         )
@@ -126,21 +125,15 @@ async fn test_create_and_get_knowledge() {
 
     let got = svc.get_knowledge(knowledge.id).await.unwrap();
     assert_eq!(got.title, "Docker · 安装指南");
-    assert_eq!(got.knowledge_type, KnowledgeType::Aspect);
     assert_eq!(got.entities, vec![entity.id]);
 }
 
 #[tokio::test]
 async fn test_delete_knowledge() {
     let svc = setup().await;
-    svc.create_knowledge(
-        "Test · 删除",
-        KnowledgeType::Aspect,
-        vec![],
-        Some("content".into()),
-    )
-    .await
-    .unwrap();
+    svc.create_knowledge("Test · 删除", vec![], Some("content".into()))
+        .await
+        .unwrap();
 
     svc.delete_knowledge("Test · 删除").await.unwrap();
     assert!(svc.resolve_knowledge("Test · 删除").await.is_err());
@@ -168,8 +161,9 @@ async fn test_create_index_and_navigate() {
         .await
         .unwrap();
 
-    let result = svc.navigate("/编程语言/Python").await.unwrap();
-    assert!(result.contains("Python"));
+    let node_id = svc.resolve_path("/编程语言/Python").await.unwrap();
+    let node = svc.get_index(node_id).await.unwrap();
+    assert_eq!(node.title.as_deref(), Some("Python"));
 }
 
 #[tokio::test]
@@ -185,7 +179,11 @@ async fn test_duplicate_child_title_rejected() {
         .create_index(root.id, Some("Same Title".into()), None, None)
         .await;
     assert!(err.is_err());
-    assert!(err.unwrap_err().contains("duplicate child title"));
+    assert!(
+        err.unwrap_err()
+            .to_string()
+            .contains("duplicate child title")
+    );
 }
 
 #[tokio::test]
@@ -316,7 +314,6 @@ async fn test_subtree_knowledge() {
     let knowledge = svc
         .create_knowledge(
             "React · 核心概念",
-            KnowledgeType::Aspect,
             vec![entity.id],
             Some("Virtual DOM...".into()),
         )
@@ -375,7 +372,6 @@ async fn test_detach_and_link_orphan() {
     let knowledge = svc
         .create_knowledge(
             "Vue · 响应式原理",
-            KnowledgeType::Aspect,
             vec![entity.id],
             Some("Reactive...".into()),
         )

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::language::Language;
 use crate::storage::error::StorageError;
-use crate::storage::types::{Entity, Index, Knowledge, KnowledgeType, Nomenclature, TargetType};
+use crate::storage::types::{Entity, Index, Knowledge, Nomenclature, TargetType};
 
 // ─────────────────────────── row helpers ───────────────────────────
 
@@ -468,20 +468,18 @@ pub async fn entity_delete_nomenclature(
 fn row_to_knowledge(row: &turso::Row) -> Result<Knowledge, StorageError> {
     let id = parse_uuid(&text_col(row, 0)?)?;
     let title = text_col(row, 1)?;
-    let knowledge_type = KnowledgeType::convert_from_str(&text_col(row, 2)?);
-    let entities_str = text_col(row, 3)?;
+    let entities_str = text_col(row, 2)?;
     let entities: Vec<Uuid> = entities_str
         .split(',')
         .filter(|s| !s.is_empty())
         .filter_map(|s| Uuid::parse_str(s).ok())
         .collect();
-    let content = opt_text_col(row, 4)?;
-    let source_document_id = opt_uuid_col(row, 5)?;
-    let source_chunk_idx = opt_int_col(row, 6)?;
+    let content = opt_text_col(row, 3)?;
+    let source_document_id = opt_uuid_col(row, 4)?;
+    let source_chunk_idx = opt_int_col(row, 5)?;
     Ok(Knowledge {
         id,
         title,
-        knowledge_type,
         entities,
         content,
         source_document_id,
@@ -489,8 +487,7 @@ fn row_to_knowledge(row: &turso::Row) -> Result<Knowledge, StorageError> {
     })
 }
 
-const KNOWLEDGE_COLS: &str =
-    "id, title, knowledge_type, entities, content, source_document_id, source_chunk_idx";
+const KNOWLEDGE_COLS: &str = "id, title, entities, content, source_document_id, source_chunk_idx";
 
 pub async fn knowledge_create(
     conn: &turso::Connection,
@@ -504,11 +501,10 @@ pub async fn knowledge_create(
         .join(",");
 
     conn.execute(
-        &format!("INSERT INTO knowledges ({KNOWLEDGE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"),
+        &format!("INSERT INTO knowledges ({KNOWLEDGE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"),
         params_from_iter([
             v(knowledge.id),
             Value::Text(knowledge.title.clone()),
-            Value::Text(knowledge.knowledge_type.as_str().to_string()),
             Value::Text(entities_str),
             knowledge
                 .content
@@ -593,11 +589,10 @@ pub async fn knowledge_update(
 
     let affected = conn
         .execute(
-            "UPDATE knowledges SET title = ?1, knowledge_type = ?2, entities = ?3, \
-             content = ?4, source_document_id = ?5, source_chunk_idx = ?6 WHERE id = ?7",
+            "UPDATE knowledges SET title = ?1, entities = ?2, \
+             content = ?3, source_document_id = ?4, source_chunk_idx = ?5 WHERE id = ?6",
             params_from_iter([
                 Value::Text(knowledge.title.clone()),
-                Value::Text(knowledge.knowledge_type.as_str().to_string()),
                 Value::Text(entities_str),
                 knowledge
                     .content

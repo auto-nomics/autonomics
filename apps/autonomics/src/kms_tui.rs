@@ -116,7 +116,11 @@ pub struct KmsTui {
 impl KmsTui {
     pub async fn new(kms_db: &std::path::Path) -> Result<Self, String> {
         let kms_storage = kms::Storage::new(&kms_db.to_string_lossy()).await?;
-        let service = Arc::new(KmsService::from_storage(kms_storage).await?);
+        let service = Arc::new(
+            KmsService::from_storage(kms_storage)
+                .await
+                .map_err(kms_err)?,
+        );
         let mut app = Self {
             service,
             root: None,
@@ -136,7 +140,7 @@ impl KmsTui {
             theme: Theme::new(),
         };
         app.reload().await?;
-        let root_id = app.service.find_root().await?.id;
+        let root_id = app.service.find_root().await.map_err(kms_err)?.id;
         app.expanded.insert(root_id);
         let root = app.root.clone().expect("KMS root loaded");
         app.rebuild_visible(&root);
@@ -144,25 +148,33 @@ impl KmsTui {
     }
 
     async fn reload(&mut self) -> Result<(), String> {
-        let root_value = self.service.find_root().await?;
+        let root_value = self.service.find_root().await.map_err(kms_err)?;
         let root_id = root_value.id;
         let root = self.load_tree(root_value).await?;
         self.by_id.clear();
         index_tree(&root, &mut self.by_id);
 
-        let all_knowledge = self.service.get_subtree_knowledge(root_id).await?;
+        let all_knowledge = self
+            .service
+            .get_subtree_knowledge(root_id)
+            .await
+            .map_err(kms_err)?;
         self.knowledge_by_id = all_knowledge
             .into_iter()
             .map(|knowledge| (knowledge.id, knowledge))
             .collect();
 
-        let all_entities = self.service.list_entities(kms::EntityFilter::All).await?;
+        let all_entities = self
+            .service
+            .list_entities(kms::EntityFilter::All)
+            .await
+            .map_err(kms_err)?;
         self.entity_by_id = all_entities
             .into_iter()
             .map(|entity| (entity.id, entity))
             .collect();
 
-        self.diagnostics = self.service.diagnose().await?;
+        self.diagnostics = self.service.diagnose().await.map_err(kms_err)?;
         self.rebuild_visible(&root);
         self.root = Some(root);
         self.status = format!(
@@ -176,7 +188,11 @@ impl KmsTui {
     }
 
     async fn load_tree(&self, value: Index) -> Result<TreeNode, String> {
-        let children = self.service.get_children(Some(value.id)).await?;
+        let children = self
+            .service
+            .get_children(Some(value.id))
+            .await
+            .map_err(kms_err)?;
         let mut loaded = Vec::with_capacity(children.len());
         for child in children {
             loaded.push(Box::pin(self.load_tree(child)).await?);
@@ -404,10 +420,6 @@ impl KmsTui {
                             .fg(self.theme.knowledge)
                             .add_modifier(Modifier::BOLD),
                     )));
-                    lines.push(Line::from(format!(
-                        "type: {}",
-                        knowledge.knowledge_type.as_str()
-                    )));
                     lines.push(Line::from(""));
                     for line in knowledge.content.clone().unwrap_or_default().lines() {
                         lines.push(Line::from(line.to_string()));
@@ -631,6 +643,11 @@ impl KmsTui {
 enum Handled {
     Continue,
     Quit,
+}
+
+/// Bridge the typed KMS error into the TUI's string-typed status channel.
+fn kms_err(e: kms::Error) -> String {
+    e.to_string()
 }
 
 fn index_tree(node: &TreeNode, map: &mut HashMap<Uuid, Index>) {
