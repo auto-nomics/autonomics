@@ -115,7 +115,9 @@ pub struct KmsTui {
 
 impl KmsTui {
     pub async fn new(kms_db: &std::path::Path) -> Result<Self, String> {
-        let kms_storage = kms::Storage::new(&kms_db.to_string_lossy()).await?;
+        let kms_storage = kms::Storage::new(&kms_db.to_string_lossy())
+            .await
+            .map_err(kms_err)?;
         let service = Arc::new(
             KmsService::from_storage(kms_storage)
                 .await
