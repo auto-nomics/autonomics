@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Sequence type accepted by Ensembl sequence endpoints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum SequenceType {
     #[default]
     /// Genomic sequence.

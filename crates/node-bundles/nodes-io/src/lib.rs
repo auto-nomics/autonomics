@@ -18,6 +18,7 @@ pub mod parquet_sql;
 pub mod radiomics;
 pub mod script_nodes;
 pub mod source_chembl;
+pub mod source_ensembl;
 pub mod source_kegg;
 pub mod source_openalex;
 pub mod source_opentargets;
@@ -151,6 +152,13 @@ pub use scp::nodes::{
     ScpStudyNodeFactory, ScpStudySpec,
 };
 pub use script_nodes::builtin_script_images;
+pub use source_ensembl::{
+    EnsemblAssemblyNode, EnsemblAssemblyNodeFactory, EnsemblLookupNode, EnsemblLookupNodeFactory,
+    EnsemblOverlapNode, EnsemblOverlapNodeFactory, EnsemblSequenceNode, EnsemblSequenceNodeFactory,
+    EnsemblSpeciesNode, EnsemblSpeciesNodeFactory, EnsemblVariationNode,
+    EnsemblVariationNodeFactory, EnsemblVepNode, EnsemblVepNodeFactory, EnsemblXrefsNode,
+    EnsemblXrefsNodeFactory,
+};
 pub use string_sdk::nodes::{Plugin as StringPlugin, StringIdMapNode, StringIdMapNodeFactory};
 pub use string_sdk::nodes::{
     StringEnrichmentNode, StringEnrichmentNodeFactory, StringNetworkNode, StringNetworkNodeFactory,
@@ -250,6 +258,16 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(source_kegg::KeggRelationsNodeFactory));
         registry.register(Box::new(source_kegg::KeggGenePathwaysNodeFactory));
         registry.register(Box::new(source_kegg::KeggDdiNodeFactory));
+        // Ensembl REST source nodes wrap the typed SDK directly; schemas are
+        // runtime-discovered because the API can add endpoint-specific fields.
+        registry.register(Box::new(source_ensembl::EnsemblSpeciesNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblAssemblyNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblLookupNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblXrefsNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblOverlapNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblSequenceNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblVepNodeFactory));
+        registry.register(Box::new(source_ensembl::EnsemblVariationNodeFactory));
         registry.register(Box::new(source_openalex::OpenAlexGroupByNodeFactory {}));
         registry.register(Box::new(
             source_semantic_scholar::S2PaperSearchNodeFactory {},
@@ -372,6 +390,33 @@ impl NodePlugin for Plugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_registers_ensembl_source_nodes() {
+        let ctx = dag_core::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx);
+        registry.register_plugin(&Plugin::new());
+        let expected = [
+            "source_ensembl_species",
+            "source_ensembl_assembly",
+            "source_ensembl_lookup",
+            "source_ensembl_xrefs",
+            "source_ensembl_overlap",
+            "source_ensembl_sequence",
+            "source_ensembl_vep",
+            "source_ensembl_variation",
+        ];
+        for kind in expected {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
 
     #[test]
     fn plugin_registers_protocolio_source_nodes() {

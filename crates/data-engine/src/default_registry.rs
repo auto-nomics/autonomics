@@ -285,6 +285,34 @@ mod tests {
     /// B5 (M3-② spike): the scalar and matrix OpenGWAS operations fold into
     /// the DataFrame channel — scalar as a single-row DataFrame, matrix as
     /// a long-format table. No new `PortType`s.
+    /// Ensembl SDK operations now have in-process DataFrame counterparts in
+    /// the io bundle, matching the other scientific data clients.
+    #[test]
+    fn ensembl_source_factories_are_registered() {
+        let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
+        let registry = build_default_registry(runtime_env, None, Arc::new(BundleRegistry::new()));
+
+        for kind in [
+            "source_ensembl_species",
+            "source_ensembl_assembly",
+            "source_ensembl_lookup",
+            "source_ensembl_xrefs",
+            "source_ensembl_overlap",
+            "source_ensembl_sequence",
+            "source_ensembl_vep",
+            "source_ensembl_variation",
+        ] {
+            let ports = registry
+                .get_node_ports(kind)
+                .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
+            assert_eq!(ports.input_ports().len(), 0);
+            assert_eq!(ports.output_ports().len(), 1);
+        }
+    }
+
+    /// B5 (M3-② spike): the scalar and matrix OpenGWAS operations fold into
+    /// the DataFrame channel — scalar as a single-row DataFrame, matrix as a
+    /// long-format table. No new `PortType`s.
     #[test]
     fn b5_scalar_matrix_factories_are_registered() {
         let runtime_env = datafusion::prelude::SessionContext::new().runtime_env();
