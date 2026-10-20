@@ -213,3 +213,83 @@ impl KmsService {
         Ok(entity)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::{make_name, setup};
+
+    #[tokio::test]
+    async fn test_create_and_get_entity() {
+        let svc = setup().await;
+        let (entity, existed) = svc
+            .create_entity(vec![make_name("Python")], "A programming language")
+            .await
+            .unwrap();
+        assert!(!existed);
+        assert_eq!(entity.definition, "A programming language");
+        assert_eq!(entity.name.len(), 1);
+
+        let got = svc.get_entity(entity.id).await.unwrap();
+        assert_eq!(got.id, entity.id);
+        assert_eq!(got.definition, "A programming language");
+    }
+
+    #[tokio::test]
+    async fn test_entity_dedup_on_exact_name() {
+        let svc = setup().await;
+        let (e1, existed1) = svc
+            .create_entity(vec![make_name("Rust")], "Systems language")
+            .await
+            .unwrap();
+        assert!(!existed1);
+
+        let (e2, existed2) = svc
+            .create_entity(vec![make_name("Rust")], "Different definition")
+            .await
+            .unwrap();
+        assert!(existed2);
+        assert_eq!(e1.id, e2.id);
+    }
+
+    #[tokio::test]
+    async fn test_update_entity() {
+        let svc = setup().await;
+        let (entity, _) = svc
+            .create_entity(vec![make_name("Go")], "original")
+            .await
+            .unwrap();
+
+        let updated = svc
+            .update_entity_by_id(entity.id, Some("updated definition"), None)
+            .await
+            .unwrap();
+        assert_eq!(updated.definition, "updated definition");
+    }
+
+    #[tokio::test]
+    async fn test_delete_entity() {
+        let svc = setup().await;
+        let (entity, _) = svc
+            .create_entity(vec![make_name("Java")], "JVM language")
+            .await
+            .unwrap();
+
+        svc.delete_entity(entity.id).await.unwrap();
+        assert!(svc.get_entity(entity.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_search_entity() {
+        let svc = setup().await;
+        svc.create_entity(vec![make_name("TypeScript")], "Typed JS")
+            .await
+            .unwrap();
+        svc.create_entity(vec![make_name("JavaScript")], "Dynamic JS")
+            .await
+            .unwrap();
+
+        let results = svc.search_entity("Type").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name[0].full, "TypeScript");
+    }
+}

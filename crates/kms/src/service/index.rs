@@ -275,3 +275,107 @@ impl KmsService {
         Ok(children.len())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::{make_name, setup};
+    use crate::storage::types::TargetType;
+
+    #[tokio::test]
+    async fn test_duplicate_child_title_rejected() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        svc.create_index(root.id, Some("Same Title".into()), None, None)
+            .await
+            .unwrap();
+
+        let err = svc
+            .create_index(root.id, Some("Same Title".into()), None, None)
+            .await;
+        assert!(err.is_err());
+        assert!(
+            err.unwrap_err()
+                .to_string()
+                .contains("duplicate child title")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_index_cascades_children() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        let parent = svc
+            .create_index(root.id, Some("Parent".into()), None, None)
+            .await
+            .unwrap();
+        let _child = svc
+            .create_index(
+                parent.id,
+                Some("Child".into()),
+                None,
+                Some(TargetType::Group),
+            )
+            .await
+            .unwrap();
+
+        // Non-empty: should refuse.
+        let err = svc.delete_index("Parent").await;
+        assert!(err.is_err());
+
+        // Delete child first, then parent.
+        svc.delete_index("Child").await.unwrap();
+        svc.delete_index("Parent").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_detach_and_link_orphan() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+        let (entity, _) = svc
+            .create_entity(vec![make_name("Vue")], "Progressive framework")
+            .await
+            .unwrap();
+
+        let knowledge = svc
+            .create_knowledge(
+                "Vue · 响应式原理",
+                vec![entity.id],
+                Some("Reactive...".into()),
+            )
+            .await
+            .unwrap();
+
+        let group = svc
+            .create_index(root.id, Some("Frameworks".into()), None, None)
+            .await
+            .unwrap();
+        svc.create_index(
+            group.id,
+            Some("Vue · 响应式原理".into()),
+            Some(knowledge.id),
+            Some(TargetType::Knowledge),
+        )
+        .await
+        .unwrap();
+
+        // Detach.
+        let orphaned_id = svc
+            .detach_knowledge_index("Vue · 响应式原理")
+            .await
+            .unwrap();
+        assert_eq!(orphaned_id, knowledge.id);
+
+        // The knowledge should now be orphaned.
+        let diags = svc.diagnose().await.unwrap();
+        assert!(diags.iter().any(|d| d.code == "knowledge.orphan"));
+
+        // Re-link.
+        svc.link_orphans("Frameworks", &["Vue · 响应式原理"])
+            .await
+            .unwrap();
+        let diags2 = svc.diagnose().await.unwrap();
+        assert!(!diags2.iter().any(|d| d.code == "knowledge.orphan"));
+    }
+}

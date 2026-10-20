@@ -173,3 +173,34 @@ pub(super) fn addressing_hint(param_name: &str, value: &str, err: &Error) -> Str
         format!("{err} (parameter `{param_name}` was {value:?})")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::setup;
+    use crate::storage::types::TargetType;
+
+    #[tokio::test]
+    async fn test_create_index_and_navigate() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        let lang_group = svc
+            .create_index(root.id, Some("编程语言".into()), None, None)
+            .await
+            .unwrap();
+
+        let _python_group = svc
+            .create_index(
+                lang_group.id,
+                Some("Python".into()),
+                None,
+                Some(TargetType::Group),
+            )
+            .await
+            .unwrap();
+
+        let node_id = svc.resolve_path("/编程语言/Python").await.unwrap();
+        let node = svc.get_index(node_id).await.unwrap();
+        assert_eq!(node.title.as_deref(), Some("Python"));
+    }
+}

@@ -160,3 +160,43 @@ impl KmsService {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::setup;
+    use crate::storage::types::TargetType;
+
+    #[tokio::test]
+    async fn test_move_index() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        let group_a = svc
+            .create_index(root.id, Some("GroupA".into()), None, None)
+            .await
+            .unwrap();
+        let group_b = svc
+            .create_index(root.id, Some("GroupB".into()), None, None)
+            .await
+            .unwrap();
+        let item = svc
+            .create_index(
+                group_a.id,
+                Some("Item".into()),
+                None,
+                Some(TargetType::Group),
+            )
+            .await
+            .unwrap();
+
+        // Move Item from GroupA to GroupB.
+        svc.move_index("/GroupA/Item", "/GroupB").await.unwrap();
+
+        let b_children = svc.get_children(Some(group_b.id)).await.unwrap();
+        assert_eq!(b_children.len(), 1);
+        assert_eq!(b_children[0].id, item.id);
+
+        let a_children = svc.get_children(Some(group_a.id)).await.unwrap();
+        assert!(a_children.is_empty());
+    }
+}

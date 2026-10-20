@@ -163,3 +163,67 @@ fn extract_content_snippet(content: &str, lower: &str, kw: &str, window: usize) 
     let suffix = if end < content.len() { "…" } else { "" };
     format!("{prefix}{}{suffix}", &content[start..end])
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::{make_name, setup};
+    use crate::storage::types::TargetType;
+
+    #[tokio::test]
+    async fn test_local_view_root() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        let view = svc.get_local_view(root.id).await.unwrap();
+        assert_eq!(view.node.id, root.id);
+        assert!(view.path.len() == 1); // just the root itself
+    }
+
+    #[tokio::test]
+    async fn test_local_view_by_path() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+        svc.create_index(root.id, Some("TopicA".into()), None, None)
+            .await
+            .unwrap();
+
+        let view = svc.get_local_view_by_path("/TopicA").await.unwrap();
+        assert_eq!(view.node.title.as_deref(), Some("TopicA"));
+    }
+
+    #[tokio::test]
+    async fn test_subtree_knowledge() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+        let (entity, _) = svc
+            .create_entity(vec![make_name("React")], "UI library")
+            .await
+            .unwrap();
+
+        let knowledge = svc
+            .create_knowledge(
+                "React · 核心概念",
+                vec![entity.id],
+                Some("Virtual DOM...".into()),
+            )
+            .await
+            .unwrap();
+
+        let frontend_group = svc
+            .create_index(root.id, Some("Frontend".into()), None, None)
+            .await
+            .unwrap();
+        svc.create_index(
+            frontend_group.id,
+            Some("React · 核心概念".into()),
+            Some(knowledge.id),
+            Some(TargetType::Knowledge),
+        )
+        .await
+        .unwrap();
+
+        let subtree = svc.get_subtree_knowledge(frontend_group.id).await.unwrap();
+        assert_eq!(subtree.len(), 1);
+        assert_eq!(subtree[0].title, "React · 核心概念");
+    }
+}

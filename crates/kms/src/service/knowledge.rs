@@ -232,3 +232,41 @@ impl KmsService {
         Ok(repo::knowledge_find_by_entity(&*self.storage.conn().await, entity_id).await?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::{make_name, setup};
+
+    #[tokio::test]
+    async fn test_create_and_get_knowledge() {
+        let svc = setup().await;
+        let (entity, _) = svc
+            .create_entity(vec![make_name("Docker")], "Container platform")
+            .await
+            .unwrap();
+
+        let knowledge = svc
+            .create_knowledge(
+                "Docker · 安装指南",
+                vec![entity.id],
+                Some("安装步骤...".into()),
+            )
+            .await
+            .unwrap();
+
+        let got = svc.get_knowledge(knowledge.id).await.unwrap();
+        assert_eq!(got.title, "Docker · 安装指南");
+        assert_eq!(got.entities, vec![entity.id]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_knowledge() {
+        let svc = setup().await;
+        svc.create_knowledge("Test · 删除", vec![], Some("content".into()))
+            .await
+            .unwrap();
+
+        svc.delete_knowledge("Test · 删除").await.unwrap();
+        assert!(svc.resolve_knowledge("Test · 删除").await.is_err());
+    }
+}

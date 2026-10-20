@@ -124,3 +124,26 @@ impl KmsService {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::setup;
+
+    #[tokio::test]
+    async fn test_render_full_tree() {
+        let svc = setup().await;
+        let root = svc.find_root().await.unwrap();
+
+        svc.create_index(root.id, Some("Languages".into()), None, None)
+            .await
+            .unwrap();
+        svc.create_index(root.id, Some("Tools".into()), None, None)
+            .await
+            .unwrap();
+
+        let tree = svc.render_full_tree().await.unwrap();
+        assert!(tree.contains("Root"));
+        assert!(tree.contains("Languages"));
+        assert!(tree.contains("Tools"));
+    }
+}

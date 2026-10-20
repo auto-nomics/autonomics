@@ -23,7 +23,8 @@ mod local_view;
 mod move_ops;
 mod path;
 mod render;
-
+#[cfg(test)]
+mod test_support;
 pub use entity::EntityFilter;
 pub use knowledge::{BatchKnowledgeResult, BatchStatus, KnowledgeContentHit, KnowledgeView};
 pub use move_ops::MoveChildrenResult;
@@ -84,7 +85,7 @@ impl KmsService {
     // ── Diagnostics ──
 
     pub async fn diagnose(&self) -> Result<Vec<Diagnostic>> {
-        Ok(diagnostics::run_diagnostics(&self.storage).await?)
+        diagnostics::run_diagnostics(&self.storage).await
     }
 }
 
@@ -119,5 +120,38 @@ async fn ensure_root_index(storage: &Storage) -> Result<Uuid> {
             repo::index_create(conn, &entry).await?;
             Ok(id)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::service::test_support::{make_name, setup};
+
+    #[tokio::test]
+    async fn test_diagnostics_empty_definition() {
+        let svc = setup().await;
+        svc.create_entity(vec![make_name("EmptyEntity")], "")
+            .await
+            .unwrap();
+
+        let diags = svc.diagnose().await.unwrap();
+        let has_empty_def = diags.iter().any(|d| d.code == "entity.empty_definition");
+        assert!(has_empty_def);
+    }
+
+    #[tokio::test]
+    async fn test_diagnostics_clean() {
+        let svc = setup().await;
+        svc.create_entity(vec![make_name("Clean")], "A well-defined entity")
+            .await
+            .unwrap();
+
+        let diags = svc.diagnose().await.unwrap();
+        // Should have no entity-related issues.
+        let entity_issues: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code.starts_with("entity."))
+            .collect();
+        assert!(entity_issues.is_empty());
     }
 }
