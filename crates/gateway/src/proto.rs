@@ -94,6 +94,25 @@ pub struct ChatgptLoginInfo {
     pub plan_type: Option<String>,
 }
 
+// ── Bibliography ────────────────────────────────────────────────────────
+
+/// Bounded library snapshot for the TUI bibliography popup: collections plus
+/// the articles matching the current search query. The endpoint remains the
+/// source of truth for ranking/FTS; the TUI only refines locally while typing.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BibliographySnapshot {
+    pub collections: Vec<bib_types::Collection>,
+    pub articles: Vec<bib_types::Article>,
+}
+
+/// Article details shown in the popup's right pane.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BibliographyArticleDetail {
+    pub article: bib_types::Article,
+    pub fulltext: Option<bib_types::FullText>,
+    pub annotations: Vec<bib_types::Annotation>,
+}
+
 // ── Hydration ─────────────────────────────────────────────────────────
 
 /// One frame of a `Lagged` notification: the subscriber fell behind the

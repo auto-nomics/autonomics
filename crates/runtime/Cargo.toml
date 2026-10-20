@@ -27,6 +27,7 @@ data-catalog = { path = "../data-catalog" }
 container-plugin = { path = "../container-plugin" }
 plugin-rsi = { path = "../plugin-rsi" }
 browser-use = { path = "../browser-use" }
+resource-downloader = { path = "../resource-downloader" }
 dag-core = { path = "../dag-core" }
 container-runtime = { path = "../container-runtime" }
 anyhow = "1"

@@ -49,6 +49,7 @@ members = [
   "crates/clinicaltrials",
   "crates/container-runtime",
   "crates/headless",
+  "crates/resource-downloader",
   "crates/gateway",
   "crates/data-catalog",
   "crates/data-engine-tools",

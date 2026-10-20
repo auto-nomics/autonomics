@@ -27,6 +27,7 @@ const HALF_PAGE: usize = 12;
 
 mod agent_config;
 mod agents;
+mod bibliography;
 mod chat;
 mod commands;
 mod dag_view;

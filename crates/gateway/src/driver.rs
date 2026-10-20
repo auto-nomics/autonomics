@@ -150,8 +150,6 @@ mod tests {
             parent_session_id: None,
             fork_point_message_id: None,
             telemetry: Default::default(),
-            parent_session_id: None,
-            fork_point_message_id: None,
         }
     }
 

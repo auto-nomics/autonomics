@@ -14,6 +14,7 @@ use agentik_types::{AgentEvent, AgentPlan};
 use eventsource_stream::Eventsource;
 use futures::{Stream, StreamExt};
 use runtime::control::AgentInfo;
+use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::proto::*;
@@ -144,6 +145,34 @@ impl GatewayClient {
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.request(reqwest::Method::GET, path, None::<&serde_json::Value>)
             .await
+    }
+
+    /// GET with URL query parameters. Kept beside [`Self::get`] so endpoint
+    /// wrappers retain the same error handling and bearer-token behavior.
+    async fn get_with_query<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T> {
+        let response = self.http.get(self.url(path)).query(query).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let message = response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|error| error.as_str())
+                        .map(String::from)
+                })
+                .unwrap_or_else(|| status.to_string());
+            return Err(ClientError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+        Ok(response.json::<T>().await?)
     }
 
     async fn send<T: serde::de::DeserializeOwned>(
@@ -593,6 +622,34 @@ impl GatewayClient {
             });
         }
         Ok(response)
+    }
+
+    // ── bibliography ─────────────────────────────────────────────
+
+    /// Fetch a bounded bibliography snapshot for the TUI popup. Collections
+    /// and article search run daemon-side against the shared library.
+    pub async fn bib_snapshot(&self, query: &str) -> Result<BibliographySnapshot> {
+        #[derive(Deserialize)]
+        struct Response {
+            #[serde(default)]
+            collections: Vec<bib_types::Collection>,
+            articles: Vec<bib_types::Article>,
+        }
+
+        let response: Response = self
+            .get_with_query("/bib/articles", &[("query", query), ("limit", "500")])
+            .await?;
+        Ok(BibliographySnapshot {
+            collections: response.collections,
+            articles: response.articles,
+        })
+    }
+
+    /// Fetch one article's full-text row and annotations. Article IDs may
+    /// contain `/` (DOI-style IDs), so they are encoded as a single segment.
+    pub async fn bib_article_detail(&self, article_id: &str) -> Result<BibliographyArticleDetail> {
+        self.get(&format!("/bib/articles/{}", encode_segment(article_id)))
+            .await
     }
 
     // ── skill evolution ──────────────────────────────────────────

@@ -966,6 +966,12 @@ pub struct AppState {
     /// Agent kind selected from the picker, waiting for the user to enter a
     /// name. When `Some`, the name input popup is shown.
     pub pending_profile: Option<agentik_core::AgentKind>,
+    /// Bibliography popup visibility plus its display snapshot.
+    pub bibliography_visible: bool,
+    pub bibliography_state: crate::widgets::bibliography::BibliographyState,
+    /// Monotonic tokens used to discard stale async snapshot/detail replies.
+    pub bibliography_snapshot_token: u64,
+    pub bibliography_detail_token: u64,
     /// Model config popup visibility.
     pub model_config_visible: bool,
     pub embedding_config_visible: bool,
