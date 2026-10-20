@@ -162,6 +162,11 @@ impl AgentKind {
     pub const fn enable_browser(self) -> bool {
         self.is_browser()
     }
+
+    /// Enable the central `resource_download` tool group.
+    pub const fn enable_resource_downloads(self) -> bool {
+        self.is_researcher()
+    }
 }
 
 impl fmt::Display for AgentKind {

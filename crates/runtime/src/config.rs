@@ -622,6 +622,10 @@ pub struct RuntimeConfig {
     /// Plugin-based recursive self-improvement services.
     #[serde(default)]
     pub plugin_rsi: PluginRsiConfig,
+    /// Central resource downloader policy, transport limits, and object-store
+    /// profiles. Defaults to deny-all network sources.
+    #[serde(default)]
+    pub downloader: resource_downloader::DownloaderConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -794,6 +798,7 @@ impl RuntimeConfig {
                 .unwrap_or(DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS),
             bib_http: resolve_bib_http(base),
             plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
+            downloader: base.and_then(|b| b.downloader.clone()).unwrap_or_default(),
         }
     }
 }
@@ -914,6 +919,18 @@ const PROMPT_BIOMEDICAL_RESOURCES: &str = "\n\
   chemical identifiers and properties.\n\
 - Use `clinicaltrials_study_lookup` for a study's status, sponsor, design, conditions, \
   interventions, and primary outcomes.";
+
+const PROMPT_RESOURCE_DOWNLOADS: &str = "\n\
+### Central Resource Downloads\n\
+- Use `resource_download` for allowlisted HTTP(S) files and host-managed S3/OSS \
+objects. It streams in the background and installs the final file atomically \
+under `/downloads`; poll `view_task_status` and collect the receipt with \
+`wait_task` or `view_task_results`.\n\
+- For HTTP(S), provide `uri` plus `destination`. For S3/OSS, provide the \
+host-configured `profile`, `bucket`, and `key`; never request or expose \
+object-store credentials.\n\
+- Set `expected_sha256` when a checksum is available, and choose explicit \
+filenames under `/downloads`.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -1203,6 +1220,9 @@ pub trait PromptCapabilities {
     fn enable_browser(&self) -> bool {
         false
     }
+    fn enable_resource_downloads(&self) -> bool {
+        false
+    }
 }
 
 /// Build the default system prompt dynamically, including only the sections for
@@ -1245,6 +1265,10 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
         || caps.enable_kegg()
     {
         s.push_str(PROMPT_BIOMEDICAL_RESOURCES);
+    }
+
+    if caps.enable_resource_downloads() {
+        s.push_str(PROMPT_RESOURCE_DOWNLOADS);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -1447,6 +1471,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
     pub(crate) plugin_rsi: Option<PluginRsiConfig>,
+    pub(crate) downloader: Option<resource_downloader::DownloaderConfig>,
 }
 
 impl RuntimeConfigBuilder {
@@ -1658,6 +1683,12 @@ impl RuntimeConfigBuilder {
     /// Configure the RSI plugin subsystem.
     pub fn plugin_rsi(mut self, config: PluginRsiConfig) -> Self {
         self.plugin_rsi = Some(config);
+        self
+    }
+
+    /// Configure the central resource downloader.
+    pub fn downloader(mut self, config: resource_downloader::DownloaderConfig) -> Self {
+        self.downloader = Some(config);
         self
     }
 
@@ -1926,6 +1957,16 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_advertises_central_downloads_for_researcher_only() {
+        use agentik_core::AgentKind;
+
+        assert!(build_system_prompt(&AgentKind::Researcher).contains("Central Resource Downloads"));
+        for kind in [AgentKind::Developer, AgentKind::Browser] {
+            assert!(!build_system_prompt(&kind).contains("Central Resource Downloads"));
+        }
+    }
+
+    #[test]
     fn system_prompt_advertises_browser_for_browser_kind_only() {
         use agentik_core::AgentKind;
 
@@ -2090,6 +2131,18 @@ mod tests {
         assert!(cfg.bib_http.request_timeout.is_none());
         assert!(cfg.bib_http.proxy_url.is_none());
         assert!(cfg.bib_http.accept_invalid_certs.is_none());
+    }
+
+    #[test]
+    fn downloader_builder_overrides_deny_by_default() {
+        let mut downloader = resource_downloader::DownloaderConfig::default();
+        downloader.policy =
+            resource_downloader::DownloadPolicy::allow_https("example.com", "/data/");
+        let cfg = RuntimeConfig::builder()
+            .downloader(downloader.clone())
+            .build();
+        assert_eq!(cfg.downloader, downloader);
+        assert!(RuntimeConfig::default().downloader.policy.allow.is_empty());
     }
 
     #[test]

@@ -17,6 +17,7 @@ use data_engine::dag::DagHistory;
 use data_engine::data_engine::DataEngine;
 use data_engine::runtime::DataEngineManager;
 use rcsb::RcsbClient;
+use resource_downloader::DownloadManager;
 use vfs::OpendalFileStorage;
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
@@ -98,6 +99,9 @@ impl PromptCapabilities for agentik_core::AgentKind {
     fn enable_browser(&self) -> bool {
         (*self).enable_browser()
     }
+    fn enable_resource_downloads(&self) -> bool {
+        (*self).enable_resource_downloads()
+    }
 }
 
 /// Process-level shared infrastructure created once and reused by all agents.
@@ -126,6 +130,8 @@ pub struct SharedInfra {
     pub storage: Arc<dyn AgentStorage>,
     /// Process-wide RCSB PDB HTTP client shared by every enabled agent.
     pub rcsb: Arc<RcsbClient>,
+    /// Central, policy-gated downloader shared by every enabled agent.
+    pub resource_downloader: Arc<DownloadManager>,
     /// Bibliography storage + literature gateway, opened **once** per
     /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
@@ -535,6 +541,13 @@ impl SharedInfra {
         browser_options.no_sandbox = config.browser_no_sandbox;
         browser_options.download_dir = Some(browser_download_root(config));
         browser_options.download_vfs_path = Some(BROWSER_DOWNLOAD_VFS_PATH.to_string());
+        let downloader_config = resource_downloader::runtime::load(&config.state_dir)
+            .map_err(|error| Error::Other(format!("load resource downloader config: {error}")))?
+            .unwrap_or_else(|| config.downloader.clone());
+        let resource_downloader = Arc::new(
+            DownloadManager::new(downloader_config, file_storage.clone())
+                .map_err(|error| Error::Other(format!("open resource downloader: {error}")))?,
+        );
 
         Ok(Self {
             engine_manager,
@@ -546,6 +559,7 @@ impl SharedInfra {
             catalog: catalog_service,
             storage,
             rcsb,
+            resource_downloader,
             bib,
             writing,
             memory,
@@ -712,6 +726,11 @@ impl SharedInfra {
         // Browser-kind agents get a private BrowserSession allocated on
         // their first tool assembly; the session Arc is cloned into every
         // browser_* tool's struct, so the pool only needs to keep a Weak.
+        if kind.enable_resource_downloads() {
+            tools.extend(resource_downloader::tools::registrations(Arc::clone(
+                &self.resource_downloader,
+            )));
+        }
         if kind.enable_browser() {
             let session = self
                 .browser_session_for(agent_path.as_str(), self.browser_options_template.clone())
@@ -999,6 +1018,12 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "vfs")
         );
         assert!(
+            researcher_tools
+                .iter()
+                .any(|tool| tool.definition.name == "resource_download"),
+            "central resource_download tool must be registered"
+        );
+        assert!(
             !researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_node_create")
@@ -1037,6 +1062,12 @@ mod plugin_profile_tools_tests {
             developer_tools
                 .iter()
                 .any(|tool| tool.definition.name == "plugin_node_create")
+        );
+        assert!(
+            !developer_tools
+                .iter()
+                .any(|tool| tool.definition.name == "resource_download"),
+            "resource_download must be scoped away from Developer"
         );
         assert!(
             developer_tools

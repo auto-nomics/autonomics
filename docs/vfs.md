@@ -283,3 +283,7 @@ The `gene2go_human.parquet` table contains 446,675 human NCBI GeneID-to-GO rows.
 The MAGMA-ready files remove `NOT` qualifiers, propagate annotations through GO
 `is_a` and `part_of` edges, intersect with each MAGMA gene universe, and retain
 sets containing 10-1000 genes.
+
+## Central resource downloader
+
+Resource downloads are configured separately in `state_dir/resource-downloader.toml`. Missing manifests resolve to a deny-by-default policy. HTTP(S) allow rules can be added under `[[policy.allow]]`; S3/OSS profiles can be declared under `[[object_store_profiles]]`. Downloaded files are installed atomically in the agent VFS, by default under `/downloads`.

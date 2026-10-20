@@ -462,3 +462,7 @@ bun run build
 ## 许可证
 
 工作空间元数据为继承它的 Autonomics 包声明 MIT 许可；当前未检入独立的顶层许可证文件。Vendored 与容器化的第三方软件保留其上游许可。GPL 许可的工具（如 grf R 包）只在 digest 钉死的容器插件内运行，像所有其他工具家族一样在镜像边界隔离；没有任何 GPL 代码被编译进或链接进工作空间二进制。数据集与模型 checkpoint 携带各自条款。
+
+## 中央资源下载
+
+Agent 可以通过 `resource_download` 工具下载 allowlist 内的 HTTP(S) 文件。共享下载器由 `state_dir/resource-downloader.toml` 配置；文件缺失时默认拒绝所有来源。策略支持 host/子域和路径前缀、目标路径限制、大小上限、跳转重校验、SHA-256 校验以及后台进度。也可以在同一配置中声明由宿主管的 S3/OSS profile，Agent 只引用 profile，不接触凭据。

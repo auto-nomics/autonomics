@@ -486,3 +486,7 @@ Many topic guides have Chinese editions (`*_zh.md`) alongside the English origin
 ## License
 
 The workspace metadata declares the MIT license for Autonomics packages that inherit it; no standalone top-level license file is currently checked in. Vendored and containerized third-party software retains its upstream license. GPL-licensed tooling (e.g. the grf R package) runs only inside digest-pinned container plugins, isolated at the image boundary like every other tool family; nothing GPL is compiled into or linked with the workspace binaries. Dataset and model checkpoints carry their own terms.
+
+## Central resource downloads
+
+Agents can download allowlisted HTTP(S) files with the `resource_download` tool. The shared downloader is configured by `state_dir/resource-downloader.toml`; when that file is absent it is deny-by-default. The policy supports host/subdomain and path-prefix rules, destination confinement, byte limits, redirect revalidation, SHA-256 verification, and background progress. Host-managed S3/OSS profiles can also be declared in the same manifest and referenced without exposing credentials to agents.

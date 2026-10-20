@@ -149,6 +149,30 @@ impl OpendalFileStorage {
         lock_object(&self.path_locks, path)
     }
 
+    /// Open a bounded-memory atomic staging writer for a virtual path.
+    ///
+    /// The writer targets a unique sibling key on the destination backend, so
+    /// commit is a rename within that backend. The destination object lock is
+    /// acquired once here and held until [`AtomicWriter::commit`] or
+    /// [`AtomicWriter::abort`] completes; readers therefore never observe a
+    /// partially written staging object at the final path.
+    pub async fn atomic_writer(&self, virtual_path: &str) -> Result<AtomicWriter, opendal::Error> {
+        self.check_writable(virtual_path)?;
+        let key = self.resolve_path(virtual_path);
+        let operator = self.resolve(virtual_path);
+        let staging_path = staging_key(&key);
+        let destination_lock = self.object_lock(&key).write_owned().await;
+        let writer = operator.writer(&staging_path).await?;
+        Ok(AtomicWriter {
+            operator,
+            staging_path,
+            destination_path: key,
+            destination_lock,
+            writer,
+            bytes_written: 0,
+        })
+    }
+
     /// Resolve a virtual path to the concrete backend operator that
     /// owns it. Internal helper; public callers should use the `&str`
     /// wrapper [`Self::resolve`].
@@ -1410,6 +1434,57 @@ impl MultipartUpload for OpendalMultipartUpload {
     }
 }
 
+/// Sequential atomic VFS writer returned by
+/// [`OpendalFileStorage::atomic_writer`].
+#[allow(dead_code)]
+pub struct AtomicWriter {
+    operator: Operator,
+    staging_path: String,
+    destination_path: String,
+    destination_lock: tokio::sync::OwnedRwLockWriteGuard<()>,
+    writer: opendal::Writer,
+    bytes_written: u64,
+}
+
+impl AtomicWriter {
+    /// Write the next sequential chunk. Peak memory is bounded by the caller's
+    /// chunk size, not by the complete file size.
+    pub async fn write<T: Into<opendal::Buffer>>(
+        &mut self,
+        chunk: T,
+    ) -> Result<(), opendal::Error> {
+        let chunk = chunk.into();
+        self.bytes_written += chunk.len() as u64;
+        self.writer.write(chunk).await
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    /// Close the staging object, atomically rename it to the final VFS key,
+    /// and release the destination write lock.
+    pub async fn commit(mut self) -> Result<u64, opendal::Error> {
+        self.writer.close().await?;
+        if let Err(error) = self
+            .operator
+            .rename(&self.staging_path, &self.destination_path)
+            .await
+        {
+            let _ = self.operator.delete(&self.staging_path).await;
+            return Err(error);
+        }
+        Ok(self.bytes_written)
+    }
+
+    /// Abort the transfer and delete its staging object.
+    pub async fn abort(mut self) -> Result<(), opendal::Error> {
+        let _ = self.writer.abort().await;
+        let _ = self.operator.delete(&self.staging_path).await;
+        Ok(())
+    }
+}
+
 /// Build a unique sibling key. Renames must occur within one backend, so the
 /// staging object must share the destination's backend-local parent directory.
 fn staging_key(path: &str) -> String {
@@ -2318,6 +2393,32 @@ mod tests {
                 .kind(),
             opendal::ErrorKind::PermissionDenied
         ));
+    }
+
+    #[tokio::test]
+    async fn atomic_writer_streams_and_commits_without_partial_objects() {
+        let storage = OpendalFileStorage::new_temp();
+        let mut writer = storage.atomic_writer("/downloads/large.bin").await.unwrap();
+        assert_eq!(writer.bytes_written(), 0);
+        writer.write(&b"hello "[..]).await.unwrap();
+        assert_eq!(writer.bytes_written(), 6);
+        writer.write(&b"world"[..]).await.unwrap();
+        assert_eq!(writer.bytes_written(), 11);
+        assert!(
+            storage
+                .content_length("/downloads/large.bin")
+                .await
+                .is_err()
+        );
+        assert_eq!(writer.commit().await.unwrap(), 11);
+        assert_eq!(
+            storage
+                .read_range("/downloads/large.bin", 0..11)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"hello world"
+        );
     }
 
     #[tokio::test]
