@@ -123,7 +123,7 @@ pub struct SharedInfra {
     /// all DAG sessions.
     pub container_execution: Arc<ContainerExecutionInfra>,
     /// Unified plugin request, development, publication, and registration.
-    pub rsi: Arc<plugin_rsi::RsiInfra>,
+    pub rsi: Arc<plugin_rsi::PluginInfra>,
     /// Environment (image) development subsystem; `None` when disabled in
     /// configuration, in which case agents receive no environment tools.
     pub environment_dev: Option<Arc<plugin_rsi::EnvironmentDevInfra>>,
@@ -275,7 +275,7 @@ impl SharedInfra {
         )
         .map_err(|error| crate::error::Error::Other(error.to_string()))?;
         let rsi = Arc::new(
-            plugin_rsi::RsiInfra::open_with_environments(
+            plugin_rsi::PluginInfra::open_with_environments(
                 &config.state_dir,
                 "main",
                 "Autonomics RSI",

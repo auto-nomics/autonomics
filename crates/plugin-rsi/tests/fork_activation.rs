@@ -7,8 +7,8 @@ mod common;
 use plugin_rsi::GitRepo;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GhPublisher,
-    GhPublisherConfig, InstalledPluginSource, PluginLifecycle, PluginStatus, PluginStore,
-    RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore, RsiInfra,
+    GhPublisherConfig, InstalledPluginSource, PluginInfra, PluginLifecycle, PluginStatus,
+    PluginStore, RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore,
     ValidationOutcome,
 };
 use serde_json::{Value, json};
@@ -155,13 +155,13 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         enabled: false,
         ..Default::default()
     }));
-    let infra = RsiInfra::open(
+    let infra = PluginInfra::open_with_environments(
         state.path(),
         "main",
         "Autonomics RSI",
         "rsi@example.com",
         observations,
-        catalog(),
+        EnvironmentRegistry::ephemeral(catalog()),
         publisher.clone(),
         publisher,
     )

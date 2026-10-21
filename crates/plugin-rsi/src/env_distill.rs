@@ -152,7 +152,7 @@ impl EnvironmentDistiller {
                 }
                 EnvironmentStatus::PendingReview => {
                     self.infra
-                        .review_environment(environment_id, true)
+                        .review_environment(environment_id)
                         .map_err(stage("review"))?;
                 }
                 EnvironmentStatus::Approved => {

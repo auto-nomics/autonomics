@@ -53,20 +53,13 @@ pub(crate) async fn list_plugins(State(state): State<GatewayState>) -> Json<Plug
                         .collect(),
                     source: declared.get(&manifest.plugin_name).map(plugin_source_view),
                     registered: is_registered,
-                    error: None,
                 }
             })
             .collect(),
-        Err(error) => vec![PluginView {
-            name: "<plugin-store>".into(),
-            status: "error".into(),
-            image: None,
-            kinds: Vec::new(),
-            panels: Vec::new(),
-            source: None,
-            registered: false,
-            error: Some(error.to_string()),
-        }],
+        Err(error) => {
+            tracing::warn!(error = %error, "cannot list plugin store for /plugins");
+            Vec::new()
+        }
     };
 
     Json(PluginListView {

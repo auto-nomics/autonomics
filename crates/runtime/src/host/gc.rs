@@ -131,7 +131,7 @@ pub(super) fn spawn_dag_task_gc() {
 /// The first interval is skipped intentionally: startup should not turn an
 /// already usable local snapshot into a GitHub operation before the host has
 /// finished opening its registries.
-pub(super) fn spawn_plugin_distiller(rsi: &Arc<plugin_rsi::RsiInfra>, config: &PluginRsiConfig) {
+pub(super) fn spawn_plugin_distiller(rsi: &Arc<plugin_rsi::PluginInfra>, config: &PluginRsiConfig) {
     if !config.distillation_enabled {
         tracing::info!("plugin distillation disabled");
         return;

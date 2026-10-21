@@ -236,52 +236,6 @@ impl EnvironmentStore {
         })
     }
 
-    /// Start an in-place update of a catalog-active environment.
-    ///
-    /// The workspace must already exist: unlike plugin sources, an image
-    /// cannot be materialized back into a repository, so updates always
-    /// continue from the retained development workspace.
-    pub fn create_update(
-        &self,
-        environment_id: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &crate::RequestStore,
-        registry: &EnvironmentRegistry,
-    ) -> Result<EnvironmentOperator<'_>> {
-        crate::validate_plugin_name(environment_id)?;
-        validate_requests(request_ids, requests, rationale)?;
-        let mut operator = self.develop(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!(
-                "environment `{environment_id}` has no development workspace; \
-                     create one with environment_create or environment_fork"
-            ))
-        })?;
-        let active = registry.get(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!(
-                "environment `{environment_id}` is not active in the catalog"
-            ))
-        })?;
-
-        operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.request_ids = request_ids.to_vec();
-            manifest.lifecycle.rationale = Some(rationale.trim().to_string());
-            manifest.lifecycle.publication_pending = false;
-        })?;
-        if operator.status() == EnvironmentStatus::Updating {
-            operator.snapshot("environment: attach update feedback")?;
-            return Ok(operator);
-        }
-        operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.base_reference = Some(active.reference.clone());
-        })?;
-        operator.transition_snapshot(
-            EnvironmentStatus::Updating,
-            "environment: start in-place update",
-        )?;
-        Ok(operator)
-    }
-
     /// List environments represented by a readable, correctly named manifest.
     ///
     /// Malformed or orphaned workspaces are skipped so background scans keep

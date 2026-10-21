@@ -75,7 +75,6 @@ pub enum PluginStatus {
     InstallPending,
     Installed,
     PublishFailed,
-    Rejected,
 }
 
 /// Installation channel for a plugin whose development workspace and runtime
@@ -86,7 +85,6 @@ pub enum PluginInstallationStatus {
     NotInstalled,
     LocalActive,
     GithubActive,
-    Retired,
 }
 
 /// Daemon-owned installation facts. Unlike `status`, these fields describe

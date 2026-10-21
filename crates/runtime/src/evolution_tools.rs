@@ -4,7 +4,7 @@ use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration, ToolResult}
 use agentik_proc::tool;
 use async_trait::async_trait;
 use evolution_core::{ObservationInput, ObservationKind, ObservationSource};
-use plugin_rsi::RsiInfra;
+use plugin_rsi::PluginInfra;
 use serde_json::json;
 
 /// Record one durable evolution observation and let the host route it.
@@ -30,7 +30,7 @@ pub struct EvoObserveInput {
 }
 
 pub struct EvoObserveTool {
-    infra: RsiInfra,
+    infra: PluginInfra,
     /// The skill-evolution control handle, when the service runs.
     /// Recording a skill-eligible observation nudges the worker so
     /// the evidence distills within the quiet window instead of
@@ -120,7 +120,7 @@ impl ToolFunction for EvoObserveTool {
 
 /// Build the host-owned unified observation tool.
 pub fn evo_observe_registration(
-    infra: RsiInfra,
+    infra: PluginInfra,
     control: Option<skills::evolution::SkillControlHandle>,
 ) -> ToolRegistration {
     ToolRegistration::from(EvoObserveTool { infra, control })
@@ -151,7 +151,7 @@ mod tests {
         environments
     }
 
-    fn infra_with_skills(state: &std::path::Path) -> (RsiInfra, Arc<skills::SkillManager>) {
+    fn infra_with_skills(state: &std::path::Path) -> (PluginInfra, Arc<skills::SkillManager>) {
         let skills = skills::SkillManager::init(skills::SkillManager::new(state));
         let observations = skills.observation_hub();
         let environments = catalog();
@@ -159,13 +159,13 @@ mod tests {
             enabled: false,
             ..Default::default()
         }));
-        let infra = RsiInfra::open(
+        let infra = PluginInfra::open_with_environments(
             state,
             "main",
             "Test",
             "test@example.com",
             observations,
-            environments,
+            plugin_rsi::EnvironmentRegistry::ephemeral(environments),
             publisher.clone(),
             publisher,
         )
@@ -173,7 +173,7 @@ mod tests {
         (infra, skills)
     }
 
-    fn infra(state: &std::path::Path) -> RsiInfra {
+    fn infra(state: &std::path::Path) -> PluginInfra {
         infra_with_skills(state).0
     }
 
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unowned_recipes_route_to_skills_and_unowned_failures_wait_for_triage() {
+    async fn unowned_observations_all_route_to_skills() {
         let state = tempfile::tempdir().unwrap();
         let tool = EvoObserveTool {
             infra: infra(state.path()),
@@ -255,14 +255,16 @@ mod tests {
         let failure = tool
             .run(EvoObserveInput {
                 summary: "Unknown node failed".into(),
-                body: "This failure needs triage.".into(),
+                body: "This failure has no plugin owner.".into(),
                 kind: Some("failure".into()),
                 node_kind: Some("unknown_node".into()),
                 error: Some("node not found".into()),
             })
             .await
             .unwrap();
-        assert!(failure.text_content().contains("unassigned"));
+        // Ownerless evidence flows to skill distillation; there is no
+        // unassigned dead-end route anymore.
+        assert!(failure.text_content().contains("skill"));
     }
 
     #[tokio::test]

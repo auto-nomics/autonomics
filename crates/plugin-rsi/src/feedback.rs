@@ -19,7 +19,6 @@ fn request_source(source: ObservationSource) -> RequestSource {
     match source {
         ObservationSource::Agent => RequestSource::Agent,
         ObservationSource::Eval => RequestSource::Eval,
-        ObservationSource::WorkflowRun => RequestSource::WorkflowRun,
         ObservationSource::Cli => RequestSource::User,
     }
 }

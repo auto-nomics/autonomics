@@ -65,7 +65,7 @@ pub use image_registry::{
     SharedImagePublisher,
 };
 pub use infra::{
-    PluginRegistryControl, RsiInfra, SharedPluginPublisher, SharedPullRequestPublisher,
+    PluginInfra, PluginRegistryControl, SharedPluginPublisher, SharedPullRequestPublisher,
 };
 pub use install::{
     GitInstalledPluginSource, InstalledPluginSource, LocalInstalledPluginSource,

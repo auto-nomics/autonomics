@@ -1062,7 +1062,6 @@ pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<
         | (PluginStatus::Updating, PluginStatus::PendingReview)
         | (PluginStatus::PendingReview, PluginStatus::Updating)
         | (PluginStatus::PendingReview, PluginStatus::Approved)
-        | (PluginStatus::PendingReview, PluginStatus::Rejected)
         | (PluginStatus::Approved, PluginStatus::Publishing)
         | (PluginStatus::Publishing, PluginStatus::Published)
         | (PluginStatus::Publishing, PluginStatus::PullRequestOpen)

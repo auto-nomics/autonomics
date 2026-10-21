@@ -892,7 +892,7 @@ async fn lifecycle_mutations_are_guarded_by_transitions() {
         .unwrap();
 
     // A draft environment cannot be reviewed directly.
-    let error = infra.review_environment("guarded-env", true).unwrap_err();
+    let error = infra.review_environment("guarded-env").unwrap_err();
     assert!(
         error
             .to_string()

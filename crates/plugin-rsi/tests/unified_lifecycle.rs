@@ -218,7 +218,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         .unwrap(),
         plugin_rsi::InstalledPluginSource::Local(_)
     ));
-    lifecycle.review(true).unwrap();
+    lifecycle.review().unwrap();
     let publisher = FakePublisher::default();
     lifecycle.publish_reviewed(&publisher).unwrap();
     lifecycle.install(&publisher).unwrap();
@@ -262,7 +262,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("update validation failed: {report:?}"),
     }
-    update_lifecycle.review(true).unwrap();
+    update_lifecycle.review().unwrap();
     let pull_request_publisher = FakePullRequestPublisher::default();
     update_lifecycle
         .open_update_pull_request(&pull_request_publisher)

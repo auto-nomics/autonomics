@@ -41,7 +41,7 @@ pub trait PluginRegistryControl: Send + Sync {
 
 /// One trusted plugin subsystem.
 #[derive(Clone)]
-pub struct RsiInfra {
+pub struct PluginInfra {
     store: Arc<PluginStore>,
     requests: RequestStore,
     /// Shared observation evidence, resolved through the process-wide
@@ -55,30 +55,7 @@ pub struct RsiInfra {
     registry: Arc<RwLock<Option<Arc<dyn PluginRegistryControl>>>>,
 }
 
-impl RsiInfra {
-    /// Open durable stores beneath one state directory.
-    pub fn open(
-        state_dir: &std::path::Path,
-        default_branch: &str,
-        author_name: &str,
-        author_email: &str,
-        observations: Arc<evolution_core::ObservationHub>,
-        environments: EnvironmentCatalog,
-        publisher: SharedPluginPublisher,
-        pull_request_publisher: SharedPullRequestPublisher,
-    ) -> Result<Self> {
-        Self::open_with_environments(
-            state_dir,
-            default_branch,
-            author_name,
-            author_email,
-            observations,
-            EnvironmentRegistry::ephemeral(environments),
-            publisher,
-            pull_request_publisher,
-        )
-    }
-
+impl PluginInfra {
     /// Open RSI with a persistent, daemon-owned environment registry.
     #[allow(clippy::too_many_arguments)]
     pub fn open_with_environments(
@@ -111,7 +88,8 @@ impl RsiInfra {
     }
 
     /// Return every durable routing decision for shared observations.
-    pub fn observation_routes(&self) -> Vec<ObservationRoute> {
+    #[cfg(test)]
+    fn observation_routes(&self) -> Vec<ObservationRoute> {
         self.routes.list()
     }
 
@@ -151,38 +129,6 @@ impl RsiInfra {
             .record(input)
             .await
             .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
-    }
-
-    /// Promote an existing shared observation into plugin demand.
-    ///
-    /// The observation id becomes the request's first evidence id, so later
-    /// skill distillation and plugin review reference the same evidence.
-    pub async fn create_plugin_request_from_observation(
-        &self,
-        observation_id: &str,
-        intent: RequestIntent,
-        plugin_name: Option<&str>,
-    ) -> Result<ObservationRequest> {
-        observation_request(
-            &self.requests,
-            self.observations.storage().as_ref(),
-            observation_id,
-            intent,
-            plugin_name,
-        )
-        .await
-    }
-
-    /// Record one observation and immediately promote it to plugin demand.
-    pub async fn record_plugin_observation(
-        &self,
-        input: ObservationInput,
-        intent: RequestIntent,
-        plugin_name: &str,
-    ) -> Result<ObservationRequest> {
-        let observation = self.record_observation(input).await?;
-        self.create_plugin_request_from_observation(&observation.id, intent, Some(plugin_name))
-            .await
     }
 
     /// Record shared evidence, classify it, and create plugin demand when owned.
@@ -264,54 +210,6 @@ impl RsiInfra {
             .expect("registry control lock poisoned") = Some(control);
     }
 
-    /// Record demand and materialize a new plugin workspace.
-    pub fn create_plugin(
-        &self,
-        request: RequestRecord,
-        environment_id: &str,
-    ) -> Result<crate::PluginOperator<'_>> {
-        let request = self.requests.record(request)?;
-        self.ensure_request_plugin(&request, request.plugin_name.as_deref())?;
-        let operator = self.store.create(
-            request.plugin_name.as_deref().ok_or_else(|| {
-                Error::InvalidRequest("new plugin requests must name their plugin".into())
-            })?,
-            environment_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-            &self.catalog(),
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        Ok(operator)
-    }
-
-    /// Start an in-place update from the plugin's installed source.
-    pub fn start_update(
-        &self,
-        plugin_name: &str,
-        request: RequestRecord,
-    ) -> Result<crate::PluginOperator<'_>> {
-        let request = self.requests.record(request)?;
-        self.ensure_request_plugin(&request, Some(plugin_name))?;
-        let source = self.store.installed_source(plugin_name)?;
-        self.store.create_update(
-            plugin_name,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-            &source,
-            &self.catalog(),
-            &crate::GitPluginSourceFetcher,
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.store
-            .develop(plugin_name)?
-            .ok_or_else(|| Error::Validation("plugin disappeared during update startup".into()))
-    }
-
     /// Fork an installed reference plugin and claim the request for development.
     ///
     /// This is the fast path for agents: the fork is already runnable in the
@@ -377,7 +275,7 @@ impl RsiInfra {
         lifecycle.validate_local()
     }
 
-    pub fn review(&self, plugin_name: &str, approved: bool) -> Result<PluginStatus> {
+    pub fn review(&self, plugin_name: &str) -> Result<PluginStatus> {
         let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
@@ -387,15 +285,10 @@ impl RsiInfra {
         let catalog = self.catalog();
         let status = {
             let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
-            lifecycle.review(approved)?
-        };
-        let request_status = if approved {
-            RequestStatus::Consumed
-        } else {
-            RequestStatus::Rejected
+            lifecycle.review()?
         };
         for id in request_ids {
-            self.requests.set_status(&id, request_status)?;
+            self.requests.set_status(&id, RequestStatus::Consumed)?;
         }
         Ok(status)
     }
@@ -590,13 +483,13 @@ pub struct ObservationRouting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Environment, RequestIntent, RequestSource};
+    use crate::Environment;
     use evolution_core::observation::{
         ObservationKind, ObservationSource as SkillObservationSource,
     };
 
-    #[test]
-    fn creating_plugin_claims_request_through_the_unified_facade() {
+    #[tokio::test]
+    async fn observations_feed_both_skill_and_plugin_feedback_systems() {
         let state = tempfile::tempdir().unwrap();
         let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
         let mut catalog = EnvironmentCatalog::default();
@@ -611,90 +504,18 @@ mod tests {
             enabled: false,
             ..Default::default()
         }));
-        let infra = RsiInfra::open(
-            state.path(),
-            "main",
-            "Test",
-            "test@example.com",
-            observations,
-            catalog,
-            publisher.clone(),
-            publisher,
-        )
-        .unwrap();
-        let request = infra
-            .requests()
-            .record(RequestRecord {
-                id: String::new(),
-                created_at: 0,
-                source: RequestSource::User,
-                intent: RequestIntent::NewNode,
-                summary: "Create a demo adapter".into(),
-                body: "Copy one input file.".into(),
-                plugin_name: Some("demo-plugin".into()),
-                evidence_ids: Vec::new(),
-                status: RequestStatus::Open,
-            })
-            .unwrap();
-        let operator = infra.create_plugin(request.clone(), "alpine").unwrap();
-        assert_eq!(operator.status(), PluginStatus::Draft);
-        assert_eq!(
-            infra.requests().find(&request.id).unwrap().unwrap().status,
-            RequestStatus::Working
-        );
-    }
-
-    #[tokio::test]
-    async fn observations_feed_both_skill_and_plugin_feedback_systems() {
-        let state = tempfile::tempdir().unwrap();
-        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
-        let catalog = EnvironmentCatalog::default();
-        let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
-            enabled: false,
-            ..Default::default()
-        }));
-        let infra = RsiInfra::open(
+        let infra = PluginInfra::open_with_environments(
             state.path(),
             "main",
             "Test",
             "test@example.com",
             observations.clone(),
-            catalog,
+            crate::EnvironmentRegistry::ephemeral(catalog),
             publisher.clone(),
             publisher,
         )
         .unwrap();
 
-        let feedback = infra
-            .record_plugin_observation(
-                ObservationInput {
-                    kind: ObservationKind::Failure,
-                    source: SkillObservationSource::Eval,
-                    summary: "adapter rejects empty input".into(),
-                    body: "The current script silently copies empty inputs.".into(),
-                    node_kind: Some("demo_adapter".into()),
-                    error: Some("empty input accepted".into()),
-                },
-                RequestIntent::FixNode,
-                "demo-plugin",
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            feedback.request.evidence_ids,
-            vec![feedback.observation.id.clone()]
-        );
-        assert_eq!(feedback.request.source, RequestSource::Eval);
-        assert_eq!(feedback.request.plugin_name.as_deref(), Some("demo-plugin"));
-        assert!(
-            observations
-                .storage()
-                .list()
-                .await
-                .iter()
-                .any(|observation| observation.id == feedback.observation.id)
-        );
         let routing = infra
             .record_and_route_observation(
                 ObservationInput {
@@ -711,6 +532,10 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(
+            routing.request.as_ref().unwrap().request.evidence_ids,
+            vec![routing.observation.id.clone()]
+        );
         assert_eq!(routing.route.audience, ObservationAudience::Plugin);
         assert_eq!(
             routing.route.request_id,

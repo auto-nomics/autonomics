@@ -1,20 +1,20 @@
 //! Profile for agents that develop RSI plugins.
+//!
+//! The production prompt lives in the runtime host
+//! (`runtime/src/config.rs`); this profile only binds a stable agent
+//! identity to the specialized plugin development toolset.
 
-use agentik_core::agent_builder::AgentBuilder;
 use agentik_core::tools::ToolRegistration;
 
 use crate::{Error, Result, plugin_development_tool_registrations};
 
 /// Configuration for one plugin development agent.
 ///
-/// The profile connects one stable agent identity to the specialized plugin
-/// development toolset. The identity determines the VFS principal; plugins are
-/// selected per tool call by their `/plugins/dev/<name>` path.
+/// The identity determines the VFS principal; plugins are selected per
+/// tool call by their `/plugins/dev/<name>` path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfile {
     agent_id: String,
-    agent_identity: String,
-    system_prompt: String,
 }
 
 impl AgentProfile {
@@ -25,11 +25,7 @@ impl AgentProfile {
     pub fn new(agent_id: impl Into<String>) -> Result<Self> {
         let agent_id = agent_id.into();
         validate_agent_id(&agent_id)?;
-        Ok(Self {
-            agent_id,
-            agent_identity: "You are a plugin development agent.".into(),
-            system_prompt: default_system_prompt(),
-        })
+        Ok(Self { agent_id })
     }
 
     /// Return the identity used to derive this profile's VFS principal.
@@ -37,52 +33,9 @@ impl AgentProfile {
         &self.agent_id
     }
 
-    /// Return the identity shown in the agent system prompt.
-    pub fn agent_identity(&self) -> &str {
-        &self.agent_identity
-    }
-
-    /// Replace the identity shown in the agent system prompt.
-    pub fn set_agent_identity(&mut self, identity: impl Into<String>) -> Result<()> {
-        let identity = identity.into();
-        if identity.trim().is_empty() {
-            return Err(Error::Validation("agent identity cannot be empty".into()));
-        }
-        self.agent_identity = identity;
-        Ok(())
-    }
-
-    /// Return the specialized system prompt section for plugin development.
-    pub fn system_prompt(&self) -> &str {
-        &self.system_prompt
-    }
-
-    /// Replace the specialized system prompt section for plugin development.
-    pub fn set_system_prompt(&mut self, prompt: impl Into<String>) -> Result<()> {
-        let prompt = prompt.into();
-        if prompt.trim().is_empty() {
-            return Err(Error::Validation(
-                "agent system prompt cannot be empty".into(),
-            ));
-        }
-        self.system_prompt = prompt;
-        Ok(())
-    }
-
     /// Build the specialized tools bound to this profile's agent identity.
     pub fn tool_registrations(&self) -> Vec<ToolRegistration> {
         plugin_development_tool_registrations(self.agent_id.clone())
-    }
-
-    /// Attach the profile's prompts and specialized tools to an agent builder.
-    ///
-    /// The caller remains responsible for supplying the model, storage,
-    /// memory, path, and other lifecycle configuration.
-    pub fn apply_to_agent_builder(&self, builder: AgentBuilder) -> AgentBuilder {
-        builder
-            .with_tools(self.tool_registrations())
-            .with_system_prompt_identity(self.agent_identity.clone())
-            .with_system_prompt_section(self.system_prompt.clone())
     }
 }
 
@@ -98,29 +51,12 @@ fn validate_agent_id(agent_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn default_system_prompt() -> String {
-    "You are a plugin/node development agent. You may create, modify, document, \
-    install, uninstall, and debug plugins and nodes through their \
-    /plugins/dev/<plugin-name> VFS paths. This is your exclusive scope.\n\n\
-    Inspect files through vfs and modify nodes only through plugin tools. \
-    plugin_container_run is strictly for node/plugin debugging and validation; \
-    it must never be used for research, real data analysis, data processing, \
-    summarization, interpretation, or to bypass the DAG engine.\n\n\
-    If a request asks for research, analysis, execution on real datasets, \
-    scientific results, or data-derived conclusions, explicitly decline that \
-    task and explain that you only develop and validate plugins/nodes. Ask for \
-    an interface contract, node spec, and synthetic or redacted fixtures if the \
-    requester wants a new capability. Do not claim completion without checking \
-    the workspace in its selected environment."
-        .into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn profile_connects_agent_identity_to_plugin_toolset() {
+    fn profile_binds_identity_to_plugin_toolset() {
         let profile = AgentProfile::new("plugin-agent").unwrap();
         let tools = profile.tool_registrations();
         let names = tools
@@ -144,18 +80,10 @@ mod tests {
                 "plugin_container_run",
             ]
         );
-        assert!(
-            profile
-                .system_prompt()
-                .contains("/plugins/dev/<plugin-name>")
-        );
     }
 
     #[test]
-    fn profile_validates_identity_fields() {
-        let mut profile = AgentProfile::new("plugin-agent").unwrap();
-        assert!(profile.set_agent_identity("  ").is_err());
-        assert!(profile.set_system_prompt(String::new()).is_err());
+    fn profile_rejects_invalid_identities() {
         assert!(AgentProfile::new("invalid\tid").is_err());
     }
 }

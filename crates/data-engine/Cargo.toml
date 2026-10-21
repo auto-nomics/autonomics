@@ -48,7 +48,25 @@ nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
 container-plugin = { path = "../container-plugin" }
 
 [features]
-default = ["bundle-hypothesize", "bundle-power", "bundle-ml", "bundle-sql", "bundle-regression", "bundle-survival", "bundle-epi", "bundle-io", "bundle-opengwas", "bundle-causal", "bundle-lcmm", "bundle-survey", "bundle-genetics", "bundle-mice", "bundle-writing", "bundle-rd", "bundle-dl"]
+default = [
+  "bundle-hypothesize",
+  "bundle-power",
+  "bundle-ml",
+  "bundle-sql",
+  "bundle-regression",
+  "bundle-survival",
+  "bundle-epi",
+  "bundle-io",
+  "bundle-opengwas",
+  "bundle-causal",
+  "bundle-lcmm",
+  "bundle-survey",
+  "bundle-genetics",
+  "bundle-mice",
+  "bundle-writing",
+  "bundle-rd",
+  "bundle-dl",
+]
 bundle-hypothesize = ["dep:nodes-hypothesize"]
 bundle-power = ["dep:nodes-power"]
 bundle-ml = ["dep:nodes-ml"]

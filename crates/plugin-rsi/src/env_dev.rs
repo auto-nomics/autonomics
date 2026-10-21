@@ -171,26 +171,6 @@ impl EnvironmentDevInfra {
         self.develop(&target_id)
     }
 
-    /// Start an in-place update of a catalog-active environment.
-    pub fn start_environment_update(
-        &self,
-        environment_id: &str,
-        request: RequestRecord,
-    ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        self.ensure_request_environment(&request, environment_id)?;
-        self.store.create_update(
-            environment_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-            &self.environments,
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.develop(environment_id)
-    }
-
     /// Run the four deterministic static gates, leaving the workspace editable.
     pub async fn validate_environment_local(
         &self,
@@ -241,29 +221,15 @@ impl EnvironmentDevInfra {
         }
     }
 
-    /// Apply a review decision and propagate request state.
-    pub fn review_environment(
-        &self,
-        environment_id: &str,
-        approved: bool,
-    ) -> Result<EnvironmentStatus> {
+    /// Approve the environment and propagate request state.
+    pub fn review_environment(&self, environment_id: &str) -> Result<EnvironmentStatus> {
         let mut operator = self.develop(environment_id)?;
         let request_ids = operator.manifest().lifecycle.request_ids.clone();
-        let to = if approved {
-            EnvironmentStatus::Approved
-        } else {
-            EnvironmentStatus::Rejected
-        };
-        operator.transition_snapshot(to, "environment: review decision")?;
-        let request_status = if approved {
-            RequestStatus::Consumed
-        } else {
-            RequestStatus::Rejected
-        };
+        operator.transition_snapshot(EnvironmentStatus::Approved, "environment: review decision")?;
         for id in request_ids {
-            self.requests.set_status(&id, request_status)?;
+            self.requests.set_status(&id, RequestStatus::Consumed)?;
         }
-        Ok(to)
+        Ok(EnvironmentStatus::Approved)
     }
 
     /// Push a reviewed environment and re-pin the catalog to the remote digest.

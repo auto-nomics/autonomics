@@ -6,9 +6,9 @@ use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GitRepo, MergeOutcome,
-    PluginDevelopmentToolsetRegistry, PluginDistiller, PluginPublisher, PluginPullRequestPublisher,
-    PluginStatus, PublishOutcome, PullRequestOutcome, RequestIntent, RequestRecord, RequestSource,
-    RequestStatus, RsiInfra,
+    PluginDevelopmentToolsetRegistry, PluginDistiller, PluginInfra, PluginPublisher,
+    PluginPullRequestPublisher, PluginStatus, PublishOutcome, PullRequestOutcome, RequestIntent,
+    RequestRecord, RequestSource, RequestStatus,
 };
 use serde_json::{Value, json};
 
@@ -135,13 +135,13 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
         .unwrap();
     let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(FakePublisher);
-    let infra = RsiInfra::open(
+    let infra = PluginInfra::open_with_environments(
         state.path(),
         "main",
         "Autonomics RSI",
         "rsi@example.com",
         observations,
-        catalog(),
+        EnvironmentRegistry::ephemeral(catalog()),
         publisher.clone(),
         Arc::new(FakePullRequestPublisher),
     )
@@ -162,7 +162,17 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
             status: RequestStatus::Open,
         })
         .unwrap();
-    let operator = infra.create_plugin(request.clone(), "alpine").unwrap();
+    let store = infra.store();
+    let operator = store
+        .create(
+            request.plugin_name.as_deref().unwrap(),
+            "alpine",
+            &[request.id.clone()],
+            &request.body,
+            infra.requests(),
+            &catalog(),
+        )
+        .unwrap();
     let profile = AgentProfile::new("distillation-agent").unwrap();
     let tools = profile.tool_registrations();
     let environments = execute(&tools, "plugin_environments_list", json!({}))

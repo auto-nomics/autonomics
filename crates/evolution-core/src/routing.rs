@@ -20,7 +20,6 @@ pub enum ObservationAudience {
     Skill,
     Plugin,
     Both,
-    Unassigned,
 }
 
 /// Lifecycle state of one routing decision.
@@ -29,7 +28,6 @@ pub enum ObservationAudience {
 pub enum ObservationRouteStatus {
     Pending,
     Consumed,
-    Rejected,
 }
 
 /// A durable decision that sends shared evidence to an evolution consumer.
@@ -71,13 +69,9 @@ pub fn classify_observation(
             audience: ObservationAudience::Both,
             reason: format!("reusable guidance for plugin `{owner}`"),
         },
-        (None, ObservationKind::Recipe | ObservationKind::Caveat) => RouteDecision {
-            audience: ObservationAudience::Skill,
-            reason: "unowned reusable guidance belongs to skill distillation".into(),
-        },
         (None, _) => RouteDecision {
-            audience: ObservationAudience::Unassigned,
-            reason: "failure has no known plugin owner; needs triage".into(),
+            audience: ObservationAudience::Skill,
+            reason: "unowned evidence belongs to skill distillation".into(),
         },
     }
 }
@@ -191,16 +185,6 @@ impl ObservationRouteStore {
         }
         routes.sort_by(|a, b| a.id.cmp(&b.id));
         routes
-    }
-
-    pub fn set_status(&self, id: &str, status: ObservationRouteStatus) -> Result<ObservationRoute> {
-        let mut route = self
-            .find(id)?
-            .ok_or_else(|| Error::InvalidRequest(format!("unknown observation route {id:?}")))?;
-        route.status = status;
-        let path = self.root.join(format!("{id}.toml"));
-        atomic_toml(&path, &route)?;
-        Ok(route)
     }
 
     /// Mark a route consumed by a derived request, preserving its derived id.

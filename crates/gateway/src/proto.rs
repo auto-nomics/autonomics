@@ -661,8 +661,6 @@ pub struct PluginView {
     /// (the daemon registered the family at startup). False after
     /// on-disk drift until the next restart.
     pub registered: bool,
-    /// Manifest parse failure detail, when the family is broken.
-    pub error: Option<String>,
 }
 
 /// One catalog panel binding: mount contract plus the dataset repo that

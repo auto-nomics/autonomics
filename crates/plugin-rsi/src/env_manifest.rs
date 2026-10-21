@@ -32,8 +32,6 @@ pub enum EnvironmentStatus {
     PublishFailed,
     /// Successfully pushed to the registry.
     Published,
-    /// Rejected by review; retained as negative feedback.
-    Rejected,
     /// Publication finished; the catalog re-pin is being finalized.
     InstallPending,
     /// The registry reference is active in the environment catalog.
@@ -155,7 +153,6 @@ pub(crate) fn ensure_environment_transition(
         | (EnvironmentStatus::Validating, EnvironmentStatus::PendingReview)
         | (EnvironmentStatus::PendingReview, EnvironmentStatus::Updating)
         | (EnvironmentStatus::PendingReview, EnvironmentStatus::Approved)
-        | (EnvironmentStatus::PendingReview, EnvironmentStatus::Rejected)
         | (EnvironmentStatus::Approved, EnvironmentStatus::Publishing)
         | (EnvironmentStatus::Publishing, EnvironmentStatus::Published)
         | (EnvironmentStatus::Publishing, EnvironmentStatus::PublishFailed)
@@ -244,10 +241,6 @@ mod tests {
         );
         assert!(
             ensure_environment_transition(EnvironmentStatus::Published, EnvironmentStatus::Draft)
-                .is_err()
-        );
-        assert!(
-            ensure_environment_transition(EnvironmentStatus::Rejected, EnvironmentStatus::Approved)
                 .is_err()
         );
     }

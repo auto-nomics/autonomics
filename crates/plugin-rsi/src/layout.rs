@@ -10,9 +10,9 @@ use crate::{Error, Result, names::validate_plugin_name, request::atomic_toml};
 
 const V2_MARKER: &str = "plugins/.autonomics-layout.toml";
 const LEGACY_WORKSPACE_DIR: &str = "plugins";
+const LEGACY_REQUEST_DIR: &str = "plugin-rsi/requests";
 const LEGACY_RUNTIME_DIR: &str = "plugin-runtime";
 const LEGACY_SNAPSHOT_DIR: &str = "plugin-installs";
-const LEGACY_REQUEST_DIR: &str = "plugin-rsi/requests";
 
 /// Which on-disk generation a state directory uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,17 +112,6 @@ impl PluginStateLayout {
     pub fn registry_path(&self) -> PathBuf {
         self.state_dir
             .join(container_plugin::sync::PLUGIN_CONFIG_FILE)
-    }
-
-    pub fn requests_root(&self) -> PathBuf {
-        match self.version {
-            PluginLayoutVersion::Legacy => self.state_dir.join(LEGACY_REQUEST_DIR),
-            PluginLayoutVersion::V2 => self
-                .state_dir
-                .join("evolution")
-                .join("plugin")
-                .join("requests"),
-        }
     }
 
     pub fn workspace_path(&self, plugin_name: &str) -> Result<PathBuf> {

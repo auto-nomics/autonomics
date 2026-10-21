@@ -117,9 +117,7 @@ mod workflow_tests {
         // A burst of manual triggers coalesces into exactly one more
         // report (which is a no-op — the cluster is consumed).
         for i in 0..5 {
-            handle.trigger(EvolutionTrigger::Manual {
-                by: format!("t{i}"),
-            });
+            handle.trigger(EvolutionTrigger::Observation);
         }
         let coalesced = tokio::time::timeout(Duration::from_secs(2), reports.recv())
             .await
@@ -129,7 +127,7 @@ mod workflow_tests {
             coalesced
                 .triggers
                 .iter()
-                .filter(|t| **t == "manual")
+                .filter(|t| **t == "observation")
                 .count()
                 >= 1,
             "{:?}",
@@ -324,7 +322,7 @@ mod channel_funnel {
         let tmp = tempfile::tempdir().unwrap();
         let (_manager, handle) = start_service(&tmp.path().join("state"));
         let baseline = handle.dropped_commands();
-        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
+        handle.trigger(EvolutionTrigger::Observation);
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(handle.dropped_commands(), baseline);
     }
@@ -369,13 +367,13 @@ mod channel_funnel {
         // Drive a manual cycle through the worker and capture the
         // status just before the worker is parked (and after — we
         // read by polling, so the final state is what matters).
-        handle.trigger(EvolutionTrigger::Manual { by: "t1".into() });
+        handle.trigger(EvolutionTrigger::Observation);
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let final_status = loop {
             let s = handle.cycle_status();
             if !matches!(s.phase, CyclePhase::Idle) || std::time::Instant::now() >= deadline {
                 // Cycle should have advanced the counter past startup.
-                if s.cycles_completed >= 2 && s.last_triggers.iter().any(|t| t == "manual") {
+                if s.cycles_completed >= 2 && s.last_triggers.iter().any(|t| t == "observation") {
                     break s;
                 }
             }
@@ -383,7 +381,7 @@ mod channel_funnel {
         };
         assert_eq!(final_status.phase, CyclePhase::Idle);
         assert!(
-            final_status.last_triggers.iter().any(|t| t == "manual"),
+            final_status.last_triggers.iter().any(|t| t == "observation"),
             "last_triggers missing: {:?}",
             final_status.last_triggers
         );
@@ -393,7 +391,7 @@ mod channel_funnel {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn empty_observation_pool_short_circuits_before_merge() {
         // The startup sweep also gets short-circuited when no
-        // observations exist; subsequent Manual triggers must not
+        // observations exist; subsequent observation triggers must not
         // flip the phase into Distilling nor bump cycles_completed.
         let tmp = tempfile::tempdir().unwrap();
         let manager = Arc::new(SkillManager::new(tmp.path().join("state")));
@@ -415,7 +413,7 @@ mod channel_funnel {
 
         // A manual trigger against an empty pool must also be a
         // skip, not a Distilling run.
-        handle.trigger(EvolutionTrigger::Manual { by: "t0".into() });
+        handle.trigger(EvolutionTrigger::Observation);
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let status = handle.cycle_status();
@@ -431,7 +429,7 @@ mod channel_funnel {
             "skip reason surfaces the empty-pool signal"
         );
         assert!(
-            status.last_triggers.iter().any(|t| t == "manual"),
+            status.last_triggers.iter().any(|t| t == "observation"),
             "last_triggers records what got skipped: {:?}",
             status.last_triggers
         );

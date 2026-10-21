@@ -17,8 +17,6 @@ pub enum RequestSource {
     User,
     /// Request inferred or submitted by an Agent during its work.
     Agent,
-    /// Request generated from a failed workflow run.
-    WorkflowRun,
     /// Request generated from a failed skill or plugin evaluation.
     Eval,
     /// Request distilled from a durable observation.
@@ -53,8 +51,6 @@ pub enum RequestStatus {
     ReviewPending,
     /// A reviewed plugin has resolved the request.
     Consumed,
-    /// Rejected by triage or review; retained as negative feedback.
-    Rejected,
 }
 
 /// A durable request for a plugin change.
