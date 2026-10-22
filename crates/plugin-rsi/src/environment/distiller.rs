@@ -10,7 +10,7 @@
 
 use crate::{
     EnvironmentDevInfra, EnvironmentStatus, EnvironmentValidationOutcome, Result,
-    env_manifest::EnvironmentManifest,
+    environment::manifest::EnvironmentManifest,
 };
 
 /// One locally active environment waiting to become a published reference.
@@ -19,7 +19,6 @@ pub struct EnvironmentDistillationCandidate {
     pub environment_id: String,
     pub status: EnvironmentStatus,
     pub source_environment: Option<String>,
-    pub request_ids: Vec<String>,
 }
 
 /// Summary of one non-blocking background publication pass.
@@ -65,7 +64,6 @@ impl EnvironmentDistiller {
                 environment_id: manifest.environment_id,
                 status: manifest.status,
                 source_environment: manifest.lifecycle.source_environment,
-                request_ids: manifest.lifecycle.request_ids,
             });
         }
         Ok(candidates)
@@ -152,7 +150,7 @@ impl EnvironmentDistiller {
                 }
                 EnvironmentStatus::PendingReview => {
                     self.infra
-                        .review_environment(environment_id, true)
+                        .review_environment(environment_id)
                         .map_err(stage("review"))?;
                 }
                 EnvironmentStatus::Approved => {

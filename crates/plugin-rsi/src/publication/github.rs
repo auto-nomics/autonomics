@@ -5,7 +5,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, gitrepo::GitRepo};
+use crate::vcs::gitrepo::GitRepo;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

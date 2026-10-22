@@ -13,11 +13,10 @@ use std::{
 use container_runtime::{ImageBuildConnection, PodmanConnection};
 
 use crate::{
-    EnvironmentRegistry, EnvironmentValidationReport, Error, RequestRecord, RequestStatus,
-    RequestStore, Result,
-    env_manifest::EnvironmentStatus,
-    env_store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
-    image_registry::SharedImagePublisher,
+    EnvironmentRegistry, EnvironmentValidationReport, Error, Result,
+    environment::image_registry::SharedImagePublisher,
+    environment::manifest::EnvironmentStatus,
+    environment::store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
 };
 
 /// Result of one environment validation cycle.
@@ -49,7 +48,6 @@ struct EnvironmentConnections {
 pub struct EnvironmentDevInfra {
     store: Arc<EnvironmentStore>,
     environments: EnvironmentRegistry,
-    requests: RequestStore,
     publisher: SharedImagePublisher,
     connections: Arc<RwLock<EnvironmentConnections>>,
 }
@@ -75,7 +73,6 @@ impl EnvironmentDevInfra {
                 local_namespace,
             )),
             environments,
-            requests: RequestStore::open(state_dir),
             publisher,
             connections: Arc::new(RwLock::new(Default::default())),
         })
@@ -88,10 +85,6 @@ impl EnvironmentDevInfra {
     /// Return the host-owned mutable environment allow list.
     pub fn environment_registry(&self) -> EnvironmentRegistry {
         self.environments.clone()
-    }
-
-    pub fn requests(&self) -> &RequestStore {
-        &self.requests
     }
 
     /// Configure the trusted image builder used by validation and push.
@@ -124,70 +117,31 @@ impl EnvironmentDevInfra {
         operate(&mut connections)
     }
 
-    /// Record demand and materialize a new environment workspace.
+    /// Materialize a new environment workspace from an approved base.
     pub fn create_environment(
         &self,
-        request: RequestRecord,
+        environment_id: &str,
         base_environment_id: &str,
+        purpose: &str,
     ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        let environment_id = request.plugin_name.clone().ok_or_else(|| {
-            Error::InvalidRequest("environment requests must name their environment".into())
-        })?;
-        self.ensure_request_environment(&request, &environment_id)?;
         self.store.create(
-            &environment_id,
+            environment_id,
             base_environment_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
+            purpose,
             &self.catalog(),
         )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.develop(&environment_id)
+        self.develop(environment_id)
     }
 
-    /// Fork an existing environment workspace and claim the request.
+    /// Fork an existing environment workspace under a new id.
     pub fn fork_environment(
         &self,
         source_environment_id: &str,
-        request: RequestRecord,
-    ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        let target_id = request.plugin_name.clone().ok_or_else(|| {
-            Error::InvalidRequest("environment fork requests must name their environment".into())
-        })?;
-        self.ensure_request_environment(&request, &target_id)?;
-        self.store.fork(
-            source_environment_id,
-            &target_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.develop(&target_id)
-    }
-
-    /// Start an in-place update of a catalog-active environment.
-    pub fn start_environment_update(
-        &self,
         environment_id: &str,
-        request: RequestRecord,
+        purpose: &str,
     ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        self.ensure_request_environment(&request, environment_id)?;
-        self.store.create_update(
-            environment_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-            &self.environments,
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
+        self.store
+            .fork(source_environment_id, environment_id, purpose)?;
         self.develop(environment_id)
     }
 
@@ -221,19 +175,9 @@ impl EnvironmentDevInfra {
                 Ok(EnvironmentLocalActivationOutcome::NeedsFix(report))
             }
             EnvironmentValidationOutcome::Passed(report) => {
-                let request_ids = self
-                    .develop(environment_id)?
-                    .manifest()
-                    .lifecycle
-                    .request_ids
-                    .clone();
                 let installed = self
                     .store
                     .install_local(environment_id, &self.environments)?;
-                for id in request_ids {
-                    self.requests
-                        .set_status(&id, RequestStatus::ReviewPending)?;
-                }
                 Ok(EnvironmentLocalActivationOutcome::Activated(
                     report, installed,
                 ))
@@ -241,29 +185,12 @@ impl EnvironmentDevInfra {
         }
     }
 
-    /// Apply a review decision and propagate request state.
-    pub fn review_environment(
-        &self,
-        environment_id: &str,
-        approved: bool,
-    ) -> Result<EnvironmentStatus> {
+    /// Approve the environment workspace.
+    pub fn review_environment(&self, environment_id: &str) -> Result<EnvironmentStatus> {
         let mut operator = self.develop(environment_id)?;
-        let request_ids = operator.manifest().lifecycle.request_ids.clone();
-        let to = if approved {
-            EnvironmentStatus::Approved
-        } else {
-            EnvironmentStatus::Rejected
-        };
-        operator.transition_snapshot(to, "environment: review decision")?;
-        let request_status = if approved {
-            RequestStatus::Consumed
-        } else {
-            RequestStatus::Rejected
-        };
-        for id in request_ids {
-            self.requests.set_status(&id, request_status)?;
-        }
-        Ok(to)
+        operator
+            .transition_snapshot(EnvironmentStatus::Approved, "environment: review decision")?;
+        Ok(EnvironmentStatus::Approved)
     }
 
     /// Push a reviewed environment and re-pin the catalog to the remote digest.
@@ -382,9 +309,9 @@ impl EnvironmentDevInfra {
             &operator.workspace(),
             store.local_namespace(),
             if full {
-                crate::env_validate::ValidationDepth::Full
+                crate::environment::validation::ValidationDepth::Full
             } else {
-                crate::env_validate::ValidationDepth::Static
+                crate::environment::validation::ValidationDepth::Static
             },
             builder,
             runner,
@@ -431,20 +358,5 @@ impl EnvironmentDevInfra {
 
     fn catalog(&self) -> crate::EnvironmentCatalog {
         self.environments.snapshot()
-    }
-
-    fn ensure_request_environment(
-        &self,
-        request: &RequestRecord,
-        environment_id: &str,
-    ) -> Result<()> {
-        if request.plugin_name.as_deref() == Some(environment_id) {
-            Ok(())
-        } else {
-            Err(Error::InvalidRequest(format!(
-                "request `{}` targets a different environment",
-                request.id
-            )))
-        }
     }
 }

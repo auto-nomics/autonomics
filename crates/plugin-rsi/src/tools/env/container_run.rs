@@ -9,7 +9,7 @@ use container_runtime::{
 };
 use serde_json::json;
 
-use crate::env_store::load_manifest;
+use crate::environment::store::load_manifest;
 
 use super::EnvToolState;
 use super::{resolve_target, tool_error};

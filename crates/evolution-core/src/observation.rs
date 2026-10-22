@@ -8,9 +8,8 @@
 //!   procedural knowledge in the moment (replaces EvoScientist's
 //!   background memory-worker distillation with first-person capture;
 //!   no auxiliary model, no transcript re-reading)
-//! - **automatic**: the runtime records eval failures and workflow
-//!   run failures as `failure` observations anchored on the failing
-//!   node kind and error text
+//! - **automatic**: the runtime records eval failures as `failure`
+//!   observations anchored on the failing node kind and error text
 //!
 //! Schema only lives here. The Turso database backend and the shared
 //! handle are [`crate::storage::TursoObservationStorage`] and
@@ -65,7 +64,6 @@ pub enum ObservationKind {
 pub enum ObservationSource {
     Agent,
     Eval,
-    WorkflowRun,
     Cli,
 }
 

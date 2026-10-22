@@ -1,10 +1,7 @@
 use agentik_core::tools::{ToolError, ToolRegistration};
 mod common;
 
-use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, PluginStatus, PluginStore, RequestIntent,
-    RequestRecord, RequestSource, RequestStatus, RequestStore,
-};
+use plugin_rsi::{AgentProfile, Environment, EnvironmentCatalog, PluginStatus, PluginStore};
 use serde_json::{Value, json};
 
 const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
@@ -19,20 +16,6 @@ fn catalog() -> EnvironmentCatalog {
         },
     );
     catalog
-}
-
-fn request() -> RequestRecord {
-    RequestRecord {
-        id: String::new(),
-        created_at: 0,
-        source: RequestSource::User,
-        intent: RequestIntent::NewNode,
-        summary: "Create a direct-development adapter".into(),
-        body: "Copy the input file to the declared output.".into(),
-        plugin_name: Some("direct-plugin".into()),
-        evidence_ids: Vec::new(),
-        status: RequestStatus::Open,
-    }
 }
 
 fn adapter_node_toml(kind: &str, script_file: &str) -> String {
@@ -71,8 +54,6 @@ async fn execute(
 #[tokio::test]
 async fn plugin_store_develops_one_repository_in_place() {
     let state = tempfile::tempdir().unwrap();
-    let requests = RequestStore::open(state.path());
-    let request = requests.record(request()).unwrap();
     let layout = plugin_rsi::PluginStateLayout::v2(state.path());
     let workspace_root = layout.workspace_root();
     let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
@@ -81,9 +62,7 @@ async fn plugin_store_develops_one_repository_in_place() {
         .create(
             "direct-plugin",
             "alpine",
-            &[request.id],
             "Create the first direct-workspace plugin.",
-            &requests,
             &catalog(),
         )
         .unwrap();

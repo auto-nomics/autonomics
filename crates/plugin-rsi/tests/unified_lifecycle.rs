@@ -8,8 +8,7 @@ use plugin_rsi::PluginStateLayout;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginLifecycle,
     PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore, PublishOutcome,
-    PullRequestOutcome, RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore,
-    ValidationOutcome,
+    PullRequestOutcome, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -93,20 +92,6 @@ fn catalog() -> EnvironmentCatalog {
     catalog
 }
 
-fn request(summary: &str, body: &str, intent: RequestIntent) -> RequestRecord {
-    RequestRecord {
-        id: String::new(),
-        created_at: 0,
-        source: RequestSource::User,
-        intent,
-        summary: summary.into(),
-        body: body.into(),
-        plugin_name: Some("unified-plugin".into()),
-        evidence_ids: Vec::new(),
-        status: RequestStatus::Open,
-    }
-}
-
 fn adapter_node_toml(kind: &str, script_file: &str) -> String {
     format!(
         "\
@@ -143,14 +128,6 @@ async fn execute(
 #[tokio::test]
 async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() {
     let state = tempfile::tempdir().unwrap();
-    let requests = RequestStore::open(state.path());
-    let first_request = requests
-        .record(request(
-            "Create a deterministic adapter",
-            "Copy the input file to the declared output.",
-            RequestIntent::NewNode,
-        ))
-        .unwrap();
     common::configure_plugin_vfs(state.path());
     let layout = PluginStateLayout::v2(state.path());
     let store =
@@ -159,9 +136,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         .create(
             "unified-plugin",
             "alpine",
-            std::slice::from_ref(&first_request.id),
             "Create the unified lifecycle plugin.",
-            &requests,
             &catalog(),
         )
         .unwrap();
@@ -201,10 +176,6 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         ValidationOutcome::NeedsFix(report) => panic!("validation failed: {report:?}"),
     }
     assert_eq!(lifecycle.plugin().status, PluginStatus::PendingReview);
-    assert_eq!(
-        lifecycle.plugin().lifecycle.request_ids,
-        vec![first_request.id.clone()]
-    );
     let local_install = store.install_local("unified-plugin").unwrap();
     assert!(local_install.path.join("manifest.toml").is_file());
     assert!(!local_install.path.join(".git").exists());
@@ -218,28 +189,19 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         .unwrap(),
         plugin_rsi::InstalledPluginSource::Local(_)
     ));
-    lifecycle.review(true).unwrap();
+    lifecycle.review().unwrap();
     let publisher = FakePublisher::default();
     lifecycle.publish_reviewed(&publisher).unwrap();
     lifecycle.install(&publisher).unwrap();
     assert_eq!(operator.status(), PluginStatus::Installed);
 
-    let second_request = requests
-        .record(request(
-            "Reject empty input",
-            "Fail when the input file is empty.",
-            RequestIntent::OptimizeNode,
-        ))
-        .unwrap();
     let installed =
         plugin_rsi::read_git_plugin_source(&state.path().join("plugins.toml"), "unified-plugin")
             .unwrap();
     let mut update = store
         .create_update(
             "unified-plugin",
-            &[second_request.id],
             "The adapter should reject empty input.",
-            &requests,
             &plugin_rsi::InstalledPluginSource::Git(installed.clone()),
             &catalog(),
             &plugin_rsi::GitPluginSourceFetcher,
@@ -262,7 +224,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         ValidationOutcome::Passed(_) => panic!("review submission unexpectedly stayed local"),
         ValidationOutcome::NeedsFix(report) => panic!("update validation failed: {report:?}"),
     }
-    update_lifecycle.review(true).unwrap();
+    update_lifecycle.review().unwrap();
     let pull_request_publisher = FakePullRequestPublisher::default();
     update_lifecycle
         .open_update_pull_request(&pull_request_publisher)

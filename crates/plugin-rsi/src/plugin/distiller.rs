@@ -6,7 +6,7 @@
 
 use container_plugin::manifest::{PluginInstallationStatus, PluginManifest};
 
-use crate::{PluginStatus, Result, RsiInfra, ValidationOutcome};
+use crate::{PluginInfra, PluginStatus, Result, ValidationOutcome};
 
 /// One locally active plugin waiting to become a durable remote source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +14,6 @@ pub struct DistillationCandidate {
     pub plugin_name: String,
     pub status: PluginStatus,
     pub source_plugin: Option<String>,
-    pub request_ids: Vec<String>,
 }
 
 /// Summary of one non-blocking background publication pass.
@@ -36,11 +35,11 @@ pub struct DistillFailure {
 /// Callable one-shot distiller; a runtime worker may schedule this periodically.
 #[derive(Clone)]
 pub struct PluginDistiller {
-    infra: RsiInfra,
+    infra: PluginInfra,
 }
 
 impl PluginDistiller {
-    pub fn new(infra: RsiInfra) -> Self {
+    pub fn new(infra: PluginInfra) -> Self {
         Self { infra }
     }
 
@@ -56,7 +55,6 @@ impl PluginDistiller {
                 plugin_name: manifest.plugin_name,
                 status: manifest.status,
                 source_plugin: manifest.lifecycle.source_plugin,
-                request_ids: manifest.lifecycle.request_ids,
             })
             .collect())
     }
@@ -142,9 +140,7 @@ impl PluginDistiller {
                         .map_err(stage("submit_review"))?;
                 }
                 PluginStatus::PendingReview => {
-                    self.infra
-                        .review(plugin_name, true)
-                        .map_err(stage("review"))?;
+                    self.infra.review(plugin_name).map_err(stage("review"))?;
                 }
                 PluginStatus::Approved => {
                     let is_update = operator.manifest().lifecycle.base_remote.is_some()

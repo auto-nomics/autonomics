@@ -1,6 +1,5 @@
 //! Tool: run one argv command in the plugin environment with the addressed
 //! VFS workspace mounted at /work.
-
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;

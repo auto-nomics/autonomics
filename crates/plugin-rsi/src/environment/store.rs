@@ -12,12 +12,12 @@ use container_runtime::ImageReference;
 
 use crate::{
     Environment, EnvironmentRegistry, Error, GitRepo, PluginWorkspace, Result,
-    env_manifest::{
+    environment::manifest::{
         EnvironmentBase, EnvironmentLifecycleMetadata, EnvironmentManifest, EnvironmentSmokeTest,
         EnvironmentStatus, ensure_environment_transition, environment_is_editable,
     },
-    lifecycle::next_validation_attempt,
-    plugin::{copy_plugin_tree, validate_requests},
+    plugin::lifecycle::next_validation_attempt,
+    plugin::store::copy_plugin_tree,
 };
 
 /// Stable virtual mount containing every long-lived environment workspace.
@@ -114,13 +114,11 @@ impl EnvironmentStore {
         &self,
         environment_id: &str,
         base_environment_id: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &crate::RequestStore,
+        purpose: &str,
         catalog: &crate::EnvironmentCatalog,
     ) -> Result<EnvironmentOperator<'_>> {
         crate::validate_plugin_name(environment_id)?;
-        validate_requests(request_ids, requests, rationale)?;
+        validate_purpose(purpose)?;
         let base = catalog.get(base_environment_id).ok_or_else(|| {
             Error::Validation(format!(
                 "environment {base_environment_id:?} is not approved for RSI"
@@ -157,8 +155,7 @@ impl EnvironmentStore {
                 expected_stdout_contains: None,
             }],
             lifecycle: EnvironmentLifecycleMetadata {
-                request_ids: request_ids.to_vec(),
-                rationale: Some(rationale.trim().to_string()),
+                rationale: Some(purpose.trim().to_string()),
                 ..Default::default()
             },
         };
@@ -183,9 +180,7 @@ impl EnvironmentStore {
         &self,
         source_environment_id: &str,
         environment_id: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &crate::RequestStore,
+        purpose: &str,
     ) -> Result<EnvironmentOperator<'_>> {
         crate::validate_plugin_name(source_environment_id)?;
         crate::validate_plugin_name(environment_id)?;
@@ -194,7 +189,7 @@ impl EnvironmentStore {
                 "an environment fork must use a new environment id".into(),
             ));
         }
-        validate_requests(request_ids, requests, rationale)?;
+        validate_purpose(purpose)?;
         let source = self
             .develop(source_environment_id)?
             .ok_or_else(|| {
@@ -219,8 +214,7 @@ impl EnvironmentStore {
         manifest.status = EnvironmentStatus::Draft;
         manifest.lifecycle = EnvironmentLifecycleMetadata {
             source_environment: Some(source_environment_id.to_string()),
-            request_ids: request_ids.to_vec(),
-            rationale: Some(rationale.trim().to_string()),
+            rationale: Some(purpose.trim().to_string()),
             ..Default::default()
         };
         save_manifest(&workspace, &manifest)?;
@@ -234,52 +228,6 @@ impl EnvironmentStore {
             environment_id: environment_id.to_string(),
             manifest,
         })
-    }
-
-    /// Start an in-place update of a catalog-active environment.
-    ///
-    /// The workspace must already exist: unlike plugin sources, an image
-    /// cannot be materialized back into a repository, so updates always
-    /// continue from the retained development workspace.
-    pub fn create_update(
-        &self,
-        environment_id: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &crate::RequestStore,
-        registry: &EnvironmentRegistry,
-    ) -> Result<EnvironmentOperator<'_>> {
-        crate::validate_plugin_name(environment_id)?;
-        validate_requests(request_ids, requests, rationale)?;
-        let mut operator = self.develop(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!(
-                "environment `{environment_id}` has no development workspace; \
-                     create one with environment_create or environment_fork"
-            ))
-        })?;
-        let active = registry.get(environment_id)?.ok_or_else(|| {
-            Error::Validation(format!(
-                "environment `{environment_id}` is not active in the catalog"
-            ))
-        })?;
-
-        operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.request_ids = request_ids.to_vec();
-            manifest.lifecycle.rationale = Some(rationale.trim().to_string());
-            manifest.lifecycle.publication_pending = false;
-        })?;
-        if operator.status() == EnvironmentStatus::Updating {
-            operator.snapshot("environment: attach update feedback")?;
-            return Ok(operator);
-        }
-        operator.mutate_manifest(|manifest| {
-            manifest.lifecycle.base_reference = Some(active.reference.clone());
-        })?;
-        operator.transition_snapshot(
-            EnvironmentStatus::Updating,
-            "environment: start in-place update",
-        )?;
-        Ok(operator)
     }
 
     /// List environments represented by a readable, correctly named manifest.
@@ -586,6 +534,15 @@ impl EnvironmentOperator<'_> {
         serde_json::from_str(&text)
             .map_err(|source| Error::Validation(format!("invalid report JSON: {source}")))
     }
+}
+
+fn validate_purpose(purpose: &str) -> Result<()> {
+    if purpose.trim().is_empty() {
+        return Err(Error::InvalidRequest(
+            "environment development purpose is required".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn load_manifest(workspace: &PluginWorkspace) -> Result<EnvironmentManifest> {

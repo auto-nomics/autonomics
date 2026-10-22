@@ -12,8 +12,8 @@ use serde_json::json;
 
 use crate::{
     EnvironmentManifest,
-    env_store::{load_manifest, save_manifest},
-    env_validate::{check_manifest, gate_base_policy, parse_manifest_text},
+    environment::store::{load_manifest, save_manifest},
+    environment::validation::{check_manifest, gate_base_policy, parse_manifest_text},
 };
 
 use super::EnvToolState;

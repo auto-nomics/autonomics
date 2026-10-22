@@ -96,7 +96,7 @@ pub(super) fn environment_manifest_lock(
 }
 
 pub(super) fn ensure_editable(manifest: &crate::EnvironmentManifest) -> RsiResult<()> {
-    if crate::env_manifest::environment_is_editable(manifest.status) {
+    if crate::environment::manifest::environment_is_editable(manifest.status) {
         Ok(())
     } else {
         Err(Error::Validation(format!(

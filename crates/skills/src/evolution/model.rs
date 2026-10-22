@@ -2,8 +2,6 @@
 /// re-derives everything it needs from the stores.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvolutionTrigger {
-    /// Explicit request (CLI, agent tool, future host control).
-    Manual { by: String },
     /// Service start: sweep once so overnight accumulation is dealt
     /// with before anyone asks.
     Startup,
@@ -21,7 +19,6 @@ pub enum EvolutionTrigger {
 impl EvolutionTrigger {
     pub fn label(&self) -> &'static str {
         match self {
-            EvolutionTrigger::Manual { .. } => "manual",
             EvolutionTrigger::Startup => "startup",
             EvolutionTrigger::Timer => "timer",
             EvolutionTrigger::Observation => "observation",

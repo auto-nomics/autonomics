@@ -1,12 +1,12 @@
 //! Long-lived, plugin-scoped development workspaces.
 //!
 //! A plugin directory is both the git repository and the lifecycle record.
-//! Requests point at it, agents edit it in place, and `manifest.toml.status`
-//! is the daemon-owned state marker. This avoids separate development repositories
+//! Agents create or fork workspaces, edit them in place, and `manifest.toml.status`
+//! is the daemon-owned state marker. This avoids separate development-repository
 //! copies in the direct-development path.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
-    PluginStateLayout, PluginWorkspace, RequestStore, Result, validate::EnvironmentCatalog,
+    PluginStateLayout, PluginWorkspace, Result, environment::catalog::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.
@@ -507,13 +507,11 @@ impl PluginStore {
         &self,
         plugin_name: &str,
         environment_id: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &RequestStore,
+        purpose: &str,
         catalog: &EnvironmentCatalog,
     ) -> Result<PluginOperator<'_>> {
         crate::validate_plugin_name(plugin_name)?;
-        validate_requests(request_ids, requests, rationale)?;
+        validate_purpose(purpose)?;
         let environment = catalog.get(environment_id).ok_or_else(|| {
             Error::Validation(format!(
                 "environment {environment_id:?} is not approved for RSI"
@@ -537,8 +535,7 @@ impl PluginStore {
             plugin_name: plugin_name.to_string(),
             status: PluginStatus::Draft,
             lifecycle: PluginLifecycleMetadata {
-                request_ids: request_ids.to_vec(),
-                rationale: Some(rationale.trim().to_string()),
+                rationale: Some(purpose.trim().to_string()),
                 ..Default::default()
             },
             image,
@@ -569,9 +566,7 @@ impl PluginStore {
         &self,
         reference_plugin_name: &str,
         plugin_name: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &RequestStore,
+        purpose: &str,
         catalog: &EnvironmentCatalog,
     ) -> Result<PluginOperator<'_>> {
         crate::validate_plugin_name(reference_plugin_name)?;
@@ -581,7 +576,7 @@ impl PluginStore {
                 "a plugin fork must use a new plugin name".into(),
             ));
         }
-        validate_requests(request_ids, requests, rationale)?;
+        validate_purpose(purpose)?;
         let source = self.installed_source(reference_plugin_name)?;
         let path = self.plugin_path(plugin_name);
         if path.exists() {
@@ -616,8 +611,7 @@ impl PluginStore {
         manifest.lifecycle = PluginLifecycleMetadata {
             source_plugin: Some(reference_plugin_name.to_string()),
             source_commit: Some(source_commit),
-            request_ids: request_ids.to_vec(),
-            rationale: Some(rationale.trim().to_string()),
+            rationale: Some(purpose.trim().to_string()),
             ..Default::default()
         };
         save_manifest(&workspace, &manifest)?;
@@ -641,15 +635,13 @@ impl PluginStore {
     pub fn create_update(
         &self,
         plugin_name: &str,
-        request_ids: &[String],
-        rationale: &str,
-        requests: &RequestStore,
+        purpose: &str,
         source: &InstalledPluginSource,
         catalog: &EnvironmentCatalog,
         fetcher: &dyn PluginSourceFetcher,
     ) -> Result<PluginOperator<'_>> {
         crate::validate_plugin_name(plugin_name)?;
-        validate_requests(request_ids, requests, rationale)?;
+        validate_purpose(purpose)?;
         let path = self.plugin_path(plugin_name);
         if path.exists() {
             let mut operator = self
@@ -674,8 +666,8 @@ impl PluginStore {
                 InstalledPluginSource::Local(_) => {}
             }
             operator.mutate_manifest(|manifest| {
-                manifest.lifecycle.request_ids = request_ids.to_vec();
-                manifest.lifecycle.rationale = Some(rationale.trim().to_string());
+                manifest.lifecycle.request_ids = Vec::new();
+                manifest.lifecycle.rationale = Some(purpose.trim().to_string());
                 manifest.lifecycle.publication_pending = false;
             })?;
             if operator.status() == PluginStatus::Updating {
@@ -709,8 +701,8 @@ impl PluginStore {
             ));
         }
         manifest.status = PluginStatus::Updating;
-        manifest.lifecycle.request_ids = request_ids.to_vec();
-        manifest.lifecycle.rationale = Some(rationale.trim().to_string());
+        manifest.lifecycle.request_ids = Vec::new();
+        manifest.lifecycle.rationale = Some(purpose.trim().to_string());
         manifest.lifecycle.base_commit = Some(source.commit().to_string());
         manifest.lifecycle.base_remote = match source {
             InstalledPluginSource::Git(source) => Some(source.remote.clone()),
@@ -1013,26 +1005,11 @@ pub(crate) fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<()> 
         .map_err(Error::Io)
 }
 
-pub(crate) fn validate_requests(
-    request_ids: &[String],
-    requests: &RequestStore,
-    rationale: &str,
-) -> Result<()> {
-    let requested = BTreeSet::from_iter(request_ids.iter().cloned());
-    if requested.is_empty() {
+fn validate_purpose(purpose: &str) -> Result<()> {
+    if purpose.trim().is_empty() {
         return Err(Error::InvalidRequest(
-            "at least one request id is required".into(),
+            "development purpose is required".into(),
         ));
-    }
-    let missing = requests.missing_ids(&requested);
-    if !missing.is_empty() {
-        return Err(Error::InvalidRequest(format!(
-            "unknown request ids: {}",
-            missing.join(", ")
-        )));
-    }
-    if rationale.trim().is_empty() {
-        return Err(Error::InvalidRequest("rationale is required".into()));
     }
     Ok(())
 }
@@ -1062,7 +1039,6 @@ pub(crate) fn ensure_transition(from: PluginStatus, to: PluginStatus) -> Result<
         | (PluginStatus::Updating, PluginStatus::PendingReview)
         | (PluginStatus::PendingReview, PluginStatus::Updating)
         | (PluginStatus::PendingReview, PluginStatus::Approved)
-        | (PluginStatus::PendingReview, PluginStatus::Rejected)
         | (PluginStatus::Approved, PluginStatus::Publishing)
         | (PluginStatus::Publishing, PluginStatus::Published)
         | (PluginStatus::Publishing, PluginStatus::PullRequestOpen)

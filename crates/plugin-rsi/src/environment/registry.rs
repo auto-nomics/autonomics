@@ -13,8 +13,8 @@ use std::{
 use container_runtime::ImageReference;
 
 use crate::{
-    Environment, EnvironmentCatalog, Error, Result, names::validate_plugin_name,
-    request::atomic_toml,
+    Environment, EnvironmentCatalog, Error, Result, foundation::names::validate_plugin_name,
+    foundation::toml::atomic_toml,
 };
 
 /// Persistent allow list shared by validation and agent tools.

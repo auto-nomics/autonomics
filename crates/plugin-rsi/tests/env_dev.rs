@@ -24,7 +24,7 @@ use container_runtime::{
 use plugin_rsi::{
     Environment, EnvironmentCatalog, EnvironmentDevInfra, EnvironmentDistiller,
     EnvironmentRegistry, EnvironmentStatus, GateStatus, PluginDevelopmentToolsetRegistry,
-    PublishedImageReference, RequestIntent, RequestRecord, RequestSource, RequestStatus,
+    PublishedImageReference,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
@@ -164,20 +164,6 @@ fn catalog() -> EnvironmentCatalog {
     catalog
 }
 
-fn environment_request(environment_id: &str, summary: &str) -> RequestRecord {
-    RequestRecord {
-        id: String::new(),
-        created_at: 0,
-        source: RequestSource::User,
-        intent: RequestIntent::NewEnvironment,
-        summary: summary.into(),
-        body: "Provide the environment with the requested capability.".into(),
-        plugin_name: Some(environment_id.into()),
-        evidence_ids: Vec::new(),
-        status: RequestStatus::Open,
-    }
-}
-
 fn harness(with_builder: bool) -> Harness {
     let state = tempfile::tempdir().unwrap();
     common::configure_environment_vfs(state.path());
@@ -249,8 +235,9 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
 
     let operator = infra
         .create_environment(
-            environment_request("bioconductor-extra", "Add extra Bioconductor packages"),
+            "bioconductor-extra",
             "alpine",
+            "Add extra Bioconductor packages",
         )
         .unwrap();
     assert_eq!(operator.status(), EnvironmentStatus::Draft);
@@ -260,11 +247,6 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
             .read_text("Containerfile")
             .unwrap()
             .starts_with("FROM ")
-    );
-    let request_id = operator.manifest().lifecycle.request_ids[0].clone();
-    assert_eq!(
-        infra.requests().find(&request_id).unwrap().unwrap().status,
-        RequestStatus::Working
     );
 
     // Extend the seeded Containerfile beyond the base image.
@@ -349,10 +331,6 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
             .reference,
         local_reference
     );
-    assert_eq!(
-        infra.requests().find(&request_id).unwrap().unwrap().status,
-        RequestStatus::ReviewPending
-    );
 
     let distiller = EnvironmentDistiller::new((*infra).clone());
     let report = distiller.run_once().await;
@@ -385,10 +363,6 @@ async fn environment_is_developed_activated_published_and_rolled_back() {
         Some(local_reference.as_str())
     );
     assert!(!manifest.lifecycle.publication_pending);
-    assert_eq!(
-        infra.requests().find(&request_id).unwrap().unwrap().status,
-        RequestStatus::Consumed
-    );
 
     let restored = infra.rollback_environment("bioconductor-extra").unwrap();
     assert_eq!(restored, local_reference);
@@ -426,10 +400,7 @@ async fn static_gates_reject_unsafe_containerfiles_and_secrets() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(
-            environment_request("demo-env", "Create demo environment"),
-            "alpine",
-        )
+        .create_environment("demo-env", "alpine", "Create demo environment")
         .unwrap();
 
     let store = infra.store();
@@ -549,10 +520,7 @@ async fn missing_builder_blocks_infrastructure_gates() {
     let harness = harness(false);
     let infra = harness.infra.clone();
     infra
-        .create_environment(
-            environment_request("blocked-env", "Create blocked environment"),
-            "alpine",
-        )
+        .create_environment("blocked-env", "alpine", "Create blocked environment")
         .unwrap();
 
     let outcome = infra.build_environment("blocked-env").await.unwrap();
@@ -587,10 +555,7 @@ async fn failing_smoke_tests_repair_the_workspace() {
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-smoke-agent");
     infra
-        .create_environment(
-            environment_request("smoke-env", "Create smoke environment"),
-            "alpine",
-        )
+        .create_environment("smoke-env", "alpine", "Create smoke environment")
         .unwrap();
     json_result(
         &tools,
@@ -638,10 +603,7 @@ async fn manifest_update_edits_are_validated_before_they_land() {
     let tools = plugin_rsi::environment_development_tool_registrations("env-manifest-agent");
     let environment_path = "/environments/dev/manifest-env";
     infra
-        .create_environment(
-            environment_request("manifest-env", "Create manifest environment"),
-            "alpine",
-        )
+        .create_environment("manifest-env", "alpine", "Create manifest environment")
         .unwrap();
     let store = infra.store();
     let operator = store.develop("manifest-env").unwrap().unwrap();
@@ -763,10 +725,7 @@ async fn manifest_update_requires_disambiguation_for_repeated_blocks() {
     let infra = harness.infra.clone();
     let tools = plugin_rsi::environment_development_tool_registrations("env-twin-agent");
     infra
-        .create_environment(
-            environment_request("twin-env", "Create twin environment"),
-            "alpine",
-        )
+        .create_environment("twin-env", "alpine", "Create twin environment")
         .unwrap();
     let store = infra.store();
     let operator = store.develop("twin-env").unwrap().unwrap();
@@ -844,10 +803,7 @@ async fn dirty_workspaces_refuse_local_activation() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(
-            environment_request("dirty-env", "Create dirty environment"),
-            "alpine",
-        )
+        .create_environment("dirty-env", "alpine", "Create dirty environment")
         .unwrap();
     let store = infra.store();
     let operator = store.develop("dirty-env").unwrap().unwrap();
@@ -885,14 +841,11 @@ async fn lifecycle_mutations_are_guarded_by_transitions() {
     let harness = harness(true);
     let infra = harness.infra.clone();
     infra
-        .create_environment(
-            environment_request("guarded-env", "Create guarded environment"),
-            "alpine",
-        )
+        .create_environment("guarded-env", "alpine", "Create guarded environment")
         .unwrap();
 
     // A draft environment cannot be reviewed directly.
-    let error = infra.review_environment("guarded-env", true).unwrap_err();
+    let error = infra.review_environment("guarded-env").unwrap_err();
     assert!(
         error
             .to_string()
@@ -904,7 +857,8 @@ async fn lifecycle_mutations_are_guarded_by_transitions() {
     let operator = infra
         .fork_environment(
             "guarded-env",
-            environment_request("guarded-fork", "Fork the guarded environment"),
+            "guarded-fork",
+            "Fork the guarded environment",
         )
         .unwrap();
     let manifest = operator.manifest();

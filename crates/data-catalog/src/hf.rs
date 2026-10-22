@@ -420,6 +420,11 @@ fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
 
 fn upsert_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<CatalogIndex> {
     index.upsert_current(entry.clone());
+    // The package-local index is not a registry. upsert_current records the
+    // repository for registry-style consumers (the local cache index), but
+    // validate_package_index rejects a non-empty repositories list when the
+    // package repo is read back — strip it before committing.
+    index.repositories.clear();
     index.validate()?;
     Ok(index)
 }

@@ -6,7 +6,8 @@
 use container_plugin::{manifest::PluginManifest, node_definition::NodeDefinition};
 use vfs::OpendalFileStorage;
 
-use crate::{Error, PluginWorkspace, Result as RsiResult, plugin::is_editable};
+use crate::plugin::store::is_editable;
+use crate::{Error, PluginWorkspace, Result as RsiResult};
 
 use super::PluginTarget;
 

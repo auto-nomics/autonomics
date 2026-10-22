@@ -5,6 +5,7 @@
 //! principal, while the path selects the workspace.
 
 mod container_run;
+mod crate_plugin_tool;
 mod env;
 mod environment_bind;
 mod environments_list;
@@ -29,7 +30,8 @@ use container_runtime::PodmanConnection;
 use vfs::{OpendalFileStorage, permission::VfsPrincipal};
 
 use crate::{
-    EnvironmentDevInfra, EnvironmentRegistry, Error, PluginWorkspace, Result as RsiResult, RsiInfra,
+    EnvironmentDevInfra, EnvironmentRegistry, Error, PluginInfra, PluginWorkspace,
+    Result as RsiResult,
 };
 
 pub(crate) const MAX_AGENT_ID_BYTES: usize = 256;
@@ -41,7 +43,7 @@ struct RegistryState {
     runtime: Option<Arc<dyn PodmanConnection>>,
     vfs: Option<OpendalFileStorage>,
     environments: Option<EnvironmentRegistry>,
-    infra: Option<Arc<RsiInfra>>,
+    infra: Option<Arc<PluginInfra>>,
     environment_dev: Option<Arc<EnvironmentDevInfra>>,
     development_root: Option<PathBuf>,
     manifest_locks: BTreeMap<String, Arc<tokio::sync::Mutex<()>>>,
@@ -90,7 +92,7 @@ impl PluginDevelopmentToolsetRegistry {
     }
 
     /// Configure trusted lifecycle orchestration exposed by plugin tools.
-    pub fn configure_infra(&self, infra: Arc<RsiInfra>) -> RsiResult<()> {
+    pub fn configure_infra(&self, infra: Arc<PluginInfra>) -> RsiResult<()> {
         self.lock(|state| {
             state.infra = Some(infra);
             Ok(())
@@ -181,7 +183,7 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
-    fn infra(&self) -> RsiResult<Arc<RsiInfra>> {
+    fn infra(&self) -> RsiResult<Arc<PluginInfra>> {
         self.lock(|state| {
             state.infra.clone().ok_or_else(|| {
                 Error::Validation("plugin lifecycle infrastructure is not configured".into())
@@ -279,6 +281,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
             state: state.clone(),
         }),
         ToolRegistration::from(environment_bind::PluginEnvironmentBindTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(crate_plugin_tool::PluginCreateTool {
             state: state.clone(),
         }),
         ToolRegistration::from(fork::PluginForkTool {

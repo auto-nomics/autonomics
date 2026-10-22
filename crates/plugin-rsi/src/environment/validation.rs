@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, GateResult, GateStatus, PluginWorkspace, Result,
-    env_manifest::{EnvironmentManifest, validate_interpreters},
-    request::unix_now,
+    environment::manifest::{EnvironmentManifest, validate_interpreters},
+    foundation::toml::unix_now,
 };
 
 /// Which gates a validation run includes.
@@ -300,7 +300,7 @@ pub(crate) fn check_manifest(
 }
 
 pub(crate) fn gate_base_policy(
-    manifest: &crate::env_manifest::EnvironmentManifest,
+    manifest: &crate::environment::manifest::EnvironmentManifest,
 ) -> std::result::Result<(), String> {
     container_runtime::ImageReference::parse(&manifest.base.reference)
         .map(|_| ())
@@ -397,7 +397,7 @@ fn gate_containerfile_static(text: &str, files: &[String]) -> std::result::Resul
 
 async fn gate_smoke(
     runner: &dyn PodmanConnection,
-    manifest: &crate::env_manifest::EnvironmentManifest,
+    manifest: &crate::environment::manifest::EnvironmentManifest,
     tag: &str,
 ) -> std::result::Result<(), String> {
     let scratch = runner.workspace_root().join("environment-smoke");

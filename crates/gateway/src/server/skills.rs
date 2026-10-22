@@ -32,7 +32,6 @@ pub(crate) async fn list_skill_observations(
                 source: match observation.source {
                     evolution_core::ObservationSource::Agent => "agent",
                     evolution_core::ObservationSource::Eval => "eval",
-                    evolution_core::ObservationSource::WorkflowRun => "workflow_run",
                     evolution_core::ObservationSource::Cli => "cli",
                 }
                 .to_string(),

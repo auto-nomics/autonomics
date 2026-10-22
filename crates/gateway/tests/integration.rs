@@ -477,7 +477,7 @@ async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
         .observation_hub()
         .record(evolution_core::ObservationInput {
             kind: evolution_core::ObservationKind::Caveat,
-            source: evolution_core::ObservationSource::WorkflowRun,
+            source: evolution_core::ObservationSource::Cli,
             summary: "Header must match".into(),
             body: "Validate all column names.\nKeep evidence intact.".into(),
             node_kind: Some("sql".into()),
@@ -502,7 +502,7 @@ async fn skill_observations_endpoint_returns_full_evidence_in_stable_order() {
     assert_eq!(rows.len(), 2);
     let row = rows.iter().find(|row| row.id == observation.id).unwrap();
     assert_eq!(row.kind, "caveat");
-    assert_eq!(row.source, "workflow_run");
+    assert_eq!(row.source, "cli");
     assert_eq!(row.body, observation.body);
     assert_eq!(row.node_kind.as_deref(), Some("sql"));
     assert_eq!(row.error.as_deref(), Some("missing column"));

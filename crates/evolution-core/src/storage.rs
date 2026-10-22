@@ -466,7 +466,6 @@ fn source_column(observation: &Observation) -> String {
     match observation.source {
         crate::observation::ObservationSource::Agent => "agent".into(),
         crate::observation::ObservationSource::Eval => "eval".into(),
-        crate::observation::ObservationSource::WorkflowRun => "workflow_run".into(),
         crate::observation::ObservationSource::Cli => "cli".into(),
     }
 }
@@ -484,7 +483,8 @@ fn parse_source(label: &str) -> std::result::Result<crate::observation::Observat
     match label {
         "agent" => Ok(crate::observation::ObservationSource::Agent),
         "eval" => Ok(crate::observation::ObservationSource::Eval),
-        "workflow_run" => Ok(crate::observation::ObservationSource::WorkflowRun),
+        // Retired producers map to agent so old rows stay readable.
+        "workflow_run" => Ok(crate::observation::ObservationSource::Agent),
         "cli" => Ok(crate::observation::ObservationSource::Cli),
         other => Err(format!("unknown source {other:?}")),
     }

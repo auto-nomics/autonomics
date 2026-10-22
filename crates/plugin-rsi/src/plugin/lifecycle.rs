@@ -105,17 +105,16 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
         Ok(ValidationOutcome::Passed(report))
     }
 
-    /// Apply human review and snapshot the decision.
-    pub fn review(&mut self, approved: bool) -> Result<PluginStatus> {
+    /// Approve the workspace and snapshot the decision.
+    ///
+    /// The pipeline has no human reject path: a failing workspace returns
+    /// through `NeedsFix` at validation, and publication only advances from
+    /// an approved state.
+    pub fn review(&mut self) -> Result<PluginStatus> {
         self.operator.refresh()?;
-        let to = if approved {
-            PluginStatus::Approved
-        } else {
-            PluginStatus::Rejected
-        };
         self.operator
-            .transition_snapshot(to, "lifecycle: review decision")?;
-        Ok(to)
+            .transition_snapshot(PluginStatus::Approved, "lifecycle: review decision")?;
+        Ok(PluginStatus::Approved)
     }
 
     /// Publish a newly approved plugin to its default remote branch.
