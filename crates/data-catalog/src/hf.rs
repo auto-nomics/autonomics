@@ -42,6 +42,12 @@ pub struct HfPublishTarget {
     pub token: Option<String>,
     /// Create the dataset repository first when it does not exist yet.
     pub create_repository: bool,
+    /// Open the central-index registration as a pull request
+    /// (`?create_pr=1`) instead of committing straight to the registry
+    /// branch. Writers without push rights on the registry repository —
+    /// every publisher that is not its owner — get `Forbidden` otherwise;
+    /// the Hub accepts the same commit as a PR in this mode.
+    pub create_pr: bool,
 }
 
 /// Derive a per-package HF repo name (`{prefix}-{sanitized-id}`) from a
@@ -350,7 +356,7 @@ pub async fn publish_package_to_hf(
         target.revision.as_deref(),
     )
     .await?;
-    let package_index = upsert_entry(package_index, &entry)?;
+    let package_index = upsert_package_entry(package_index, &entry)?;
     let package_index_bytes =
         serde_json::to_vec_pretty(&package_index).map_err(|error| error.to_string())?;
     package_repository
@@ -385,19 +391,37 @@ pub async fn publish_package_to_hf(
     registry.record_repository(&entry.repo);
     registry.generation = registry.generation.saturating_add(1);
     let registry_bytes = serde_json::to_vec_pretty(&registry).map_err(|error| error.to_string())?;
-    index_repository
+    let commit = index_repository
         .create_commit()
         .operations(vec![CommitOperation::add_bytes(INDEX_PATH, registry_bytes)])
         .commit_message(format!("Register {}", entry.repo))
         .revision(revision)
+        .create_pr(target.create_pr)
         .send()
         .await
         .map_err(|error| {
+            let hint = if target.create_pr {
+                String::new()
+            } else {
+                " (`Forbidden` on the registry branch means you are not a direct \
+                 writer — republish with --create-pr to open a pull request)"
+                    .to_string()
+            };
             format!(
-                "publish index to Hugging Face repository `{}`: {error}",
+                "publish index to Hugging Face repository `{}`: {error}{hint}",
                 target.index_repo_id
             )
         })?;
+    if target.create_pr {
+        if let Some(url) = commit.pr_url.as_deref() {
+            eprintln!("[catalog] central index change opened as pull request: {url}");
+        } else {
+            eprintln!(
+                "[catalog] central index change submitted with create_pr \
+                 (no PR URL returned; check the repository discussions)"
+            );
+        }
+    }
     Ok(entry)
 }
 
@@ -418,8 +442,20 @@ fn build_entry(manifest: &DatasetManifest) -> CatalogEntry {
     }
 }
 
-fn upsert_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<CatalogIndex> {
+/// Upsert for a PACKAGE repository's own index.
+///
+/// A package-local index must carry `repositories: []`: `install`'s
+/// direct-read path runs `validate_package_index`, which rejects any
+/// non-empty `repositories` as registry form. `upsert_current` is the
+/// registry-side primitive and records the repo into `repositories`
+/// (its intended effect for the central index, a defect for the package
+/// repo), so the recording is cleared before validating here. Publishing
+/// again also self-heals package repositories that an earlier build left
+/// in registry form.
+fn upsert_package_entry(mut index: CatalogIndex, entry: &CatalogEntry) -> Result<CatalogIndex> {
+    index.repositories.clear();
     index.upsert_current(entry.clone());
+    index.repositories.clear();
     index.validate()?;
     Ok(index)
 }
@@ -1056,6 +1092,48 @@ mod tests {
         }
     }
 
+    fn mrlap_entry() -> CatalogEntry {
+        CatalogEntry {
+            repo: HfRepoId::new("owner/catalog-panel-x").unwrap(),
+            version: "v1".to_string(),
+            kind: "ldscore_reference".to_string(),
+            digest: format!("sha256:{}", "c".repeat(64)),
+            current: true,
+            created_unix_seconds: 1_791_272_605,
+        }
+    }
+
+    #[test]
+    fn upsert_package_entry_keeps_the_index_in_package_form() {
+        // Fresh repository: empty index upserted must satisfy the exact
+        // predicate `install`'s direct read enforces (`validate_package_index`).
+        let entry = mrlap_entry();
+        let index = upsert_package_entry(CatalogIndex::default(), &entry).unwrap();
+        assert!(index.repositories.is_empty(), "package index declares no registry");
+        assert_eq!(index.entries.len(), 1);
+        crate::remote::validate_package_index(
+            &index,
+            entry.repo.as_str(),
+            "owner/catalog-panel-x/index.json",
+        )
+        .expect("install-side package validation accepts the published form");
+    }
+
+    #[test]
+    fn upsert_package_entry_self_heals_registry_form() {
+        // A package repo left in registry form by an earlier build (the
+        // pre-fix publish wrote `repositories:[self]`) must normalize to
+        // package form on the next publish.
+        let entry = mrlap_entry();
+        let mut dirty = CatalogIndex::default();
+        dirty.repositories = vec![entry.repo.clone()];
+        let healed = upsert_package_entry(dirty, &entry).unwrap();
+        assert!(healed.repositories.is_empty(), "registry form is healed");
+        assert_eq!(healed.entries.len(), 1);
+        crate::remote::validate_package_index(&healed, entry.repo.as_str(), "index.json")
+            .expect("healed index installs directly");
+    }
+
     #[test]
     fn split_repo_id_requires_owner_and_name() {
         assert_eq!(
@@ -1116,7 +1194,8 @@ mod tests {
         .unwrap();
         let manifest = validate_package(&package.path).unwrap();
         let entry = build_entry(&manifest);
-        let index = upsert_entry(CatalogIndex::default(), &entry).unwrap();
+        let index = upsert_package_entry(CatalogIndex::default(), &entry).unwrap();
+        assert!(index.repositories.is_empty(), "package commit path keeps package form");
         let _index_bytes = serde_json::to_vec_pretty(&index).unwrap();
 
         let operations = package_commit_operations(&package.path, &entry, &manifest);
