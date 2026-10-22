@@ -1,3 +1,7 @@
+use agentik_sdk::ToolResult;
+
+pub type ToolRunResult = std::result::Result<ToolResult, ToolError>;
+
 /// Tool execution errors.
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {

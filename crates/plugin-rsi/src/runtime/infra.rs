@@ -1,6 +1,6 @@
-//! High-level facade for plugin-based recursive self-improvement.
+//! High-level facade for daemon-owned plugin lifecycle management.
 //!
-//! `RsiInfra` is the system-facing authority. It owns the durable stores and
+//! `PluginInfra` is the system-facing authority. It owns the durable stores and
 //! routes trusted publishers and runtime registration behind host-only
 //! adapters, so callers never reassemble the lifecycle from its pieces.
 
@@ -9,17 +9,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use evolution_core::observation::ObservationInput;
-use evolution_core::routing::observation_route;
-
 use crate::{
-    EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, ObservationAudience,
-    ObservationRequest, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
-    PluginCacheReport, PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus,
-    PluginStore, RequestIntent, RequestRecord, RequestStatus, RequestStore, Result,
-    ValidationOutcome,
-    intake::feedback::{default_request_intent, observation_request},
-    plugin::distiller::DistillationCandidate,
+    EnvironmentCatalog, EnvironmentRegistry, Error, LocalActivationOutcome, PluginCacheReport,
+    PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore,
+    Result, ValidationOutcome, plugin::distiller::DistillationCandidate,
 };
 
 /// Trusted publisher used for plugin releases and installs.
@@ -43,12 +36,6 @@ pub trait PluginRegistryControl: Send + Sync {
 #[derive(Clone)]
 pub struct PluginInfra {
     store: Arc<PluginStore>,
-    requests: RequestStore,
-    /// Shared observation evidence, resolved through the process-wide
-    /// hub — upstream of both plugins and skills. Plugin RSI never
-    /// touches the skill manager for evidence.
-    observations: Arc<evolution_core::ObservationHub>,
-    routes: ObservationRouteStore,
     environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
     pull_request_publisher: SharedPullRequestPublisher,
@@ -63,7 +50,6 @@ impl PluginInfra {
         default_branch: &str,
         author_name: &str,
         author_email: &str,
-        observations: Arc<evolution_core::ObservationHub>,
         environments: EnvironmentRegistry,
         publisher: SharedPluginPublisher,
         pull_request_publisher: SharedPullRequestPublisher,
@@ -74,12 +60,8 @@ impl PluginInfra {
             author_name,
             author_email,
         ));
-        let routes = ObservationRouteStore::open(state_dir);
         Ok(Self {
             store: Arc::clone(&store),
-            requests: RequestStore::open(state_dir),
-            observations,
-            routes,
             environments,
             publisher,
             pull_request_publisher,
@@ -87,10 +69,11 @@ impl PluginInfra {
         })
     }
 
-    /// Return every durable routing decision for shared observations.
-    #[cfg(test)]
-    fn observation_routes(&self) -> Vec<ObservationRoute> {
-        self.routes.list()
+    pub fn configure_registry(&self, control: Arc<dyn PluginRegistryControl>) {
+        *self
+            .registry
+            .write()
+            .expect("registry control lock poisoned") = Some(control);
     }
 
     pub fn store(&self) -> Arc<PluginStore> {
@@ -111,106 +94,23 @@ impl PluginInfra {
         self.environments.clone()
     }
 
-    /// Return local-active plugins waiting for background distillation.
+    /// Return local-active plugins waiting for background publication.
     pub fn pending_distillation(&self) -> Result<Vec<DistillationCandidate>> {
         crate::plugin::distiller::PluginDistiller::new(self.clone()).pending()
     }
 
-    pub fn requests(&self) -> &RequestStore {
-        &self.requests
-    }
-
-    /// Record shared observation evidence without creating plugin demand.
-    pub async fn record_observation(
+    /// Create an empty Draft plugin workspace bound to an approved environment.
+    pub fn create_plugin(
         &self,
-        input: ObservationInput,
-    ) -> Result<evolution_core::Observation> {
-        self.observations
-            .record(input)
-            .await
-            .map_err(|error| Error::Validation(format!("cannot record observation: {error}")))
+        plugin_name: &str,
+        environment_id: &str,
+        purpose: &str,
+    ) -> Result<crate::PluginOperator<'_>> {
+        self.store
+            .create(plugin_name, environment_id, purpose, &self.catalog())
     }
 
-    /// Record shared evidence, classify it, and create plugin demand when owned.
-    pub async fn record_and_route_observation(
-        &self,
-        input: ObservationInput,
-        plugin_name: Option<&str>,
-        intent: Option<RequestIntent>,
-    ) -> Result<ObservationRouting> {
-        let observation = self.record_observation(input).await?;
-        self.route_existing_observation(&observation.id, plugin_name, intent)
-            .await
-    }
-
-    /// Route an observation that already exists in the shared store.
-    pub async fn route_existing_observation(
-        &self,
-        observation_id: &str,
-        plugin_name: Option<&str>,
-        intent: Option<RequestIntent>,
-    ) -> Result<ObservationRouting> {
-        let observation = self
-            .observations
-            .storage()
-            .list()
-            .await
-            .into_iter()
-            .find(|observation| observation.id == observation_id)
-            .ok_or_else(|| {
-                Error::InvalidRequest(format!("unknown observation {observation_id:?}"))
-            })?;
-        let plugin_owner = if plugin_name.is_some() {
-            None
-        } else {
-            observation
-                .node_kind
-                .as_deref()
-                .map(|kind| self.store.owner_of_node_kind(kind))
-                .transpose()?
-                .flatten()
-        };
-        let (_, route) = observation_route(&observation, plugin_name, plugin_owner.as_deref());
-        let route = self.routes.record(route)?;
-        let mut request = None;
-        let mut route = route;
-        if matches!(
-            route.audience,
-            ObservationAudience::Plugin | ObservationAudience::Both
-        ) {
-            let target = route.plugin_name.as_deref().ok_or_else(|| {
-                Error::Validation("plugin route is missing its target plugin".into())
-            })?;
-            let promoted = observation_request(
-                &self.requests,
-                self.observations.storage().as_ref(),
-                &route.observation_id,
-                intent.unwrap_or_else(|| default_request_intent(observation.kind)),
-                Some(target),
-            )
-            .await?;
-            self.routes.consume(&route.id, &promoted.request.id)?;
-            route.request_id = Some(promoted.request.id.clone());
-            route.status = ObservationRouteStatus::Consumed;
-            request = Some(promoted);
-        }
-
-        Ok(ObservationRouting {
-            observation,
-            decision_reason: route.reason.clone(),
-            route,
-            request,
-        })
-    }
-
-    pub fn configure_registry(&self, control: Arc<dyn PluginRegistryControl>) {
-        *self
-            .registry
-            .write()
-            .expect("registry control lock poisoned") = Some(control);
-    }
-
-    /// Fork an installed reference plugin and claim the request for development.
+    /// Fork an installed reference plugin into a new development workspace.
     ///
     /// This is the fast path for agents: the fork is already runnable in the
     /// reference environment and can be activated locally after validation.
@@ -218,48 +118,25 @@ impl PluginInfra {
     pub fn fork_plugin(
         &self,
         reference_plugin_name: &str,
-        request: RequestRecord,
+        plugin_name: &str,
+        purpose: &str,
     ) -> Result<crate::PluginOperator<'_>> {
-        let request = self.requests.record(request)?;
-        let target_name = request
-            .plugin_name
-            .clone()
-            .ok_or_else(|| Error::InvalidRequest("fork requests must name their plugin".into()))?;
-        self.ensure_request_plugin(&request, Some(&target_name))?;
-        self.store.fork(
-            reference_plugin_name,
-            &target_name,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-            &self.catalog(),
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
         self.store
-            .develop(&target_name)?
-            .ok_or_else(|| Error::Validation("plugin fork disappeared during startup".into()))
+            .fork(reference_plugin_name, plugin_name, purpose, &self.catalog())
     }
 
-    /// Validate, record evidence, submit, and propagate request state.
+    /// Validate a workspace, append evidence, and submit it for review.
     pub fn validate_and_submit(&self, plugin_name: &str) -> Result<ValidationOutcome> {
         let installed_kinds = self.installed_node_addresses()?;
         let mut operator = self
             .store
             .develop(plugin_name)?
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
-        let request_ids = operator.manifest().lifecycle.request_ids.clone();
         let catalog = self.catalog();
         let outcome = {
             let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
             lifecycle.validate_and_submit()?
         };
-        if matches!(outcome, ValidationOutcome::Submitted(_)) {
-            for id in request_ids {
-                self.requests
-                    .set_status(&id, RequestStatus::ReviewPending)?;
-            }
-        }
         Ok(outcome)
     }
 
@@ -281,15 +158,11 @@ impl PluginInfra {
             .store
             .develop(plugin_name)?
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
-        let request_ids = operator.manifest().lifecycle.request_ids.clone();
         let catalog = self.catalog();
         let status = {
             let mut lifecycle = PluginLifecycle::new(&mut operator, &catalog, &installed_kinds);
             lifecycle.review()?
         };
-        for id in request_ids {
-            self.requests.set_status(&id, RequestStatus::Consumed)?;
-        }
         Ok(status)
     }
 
@@ -361,20 +234,6 @@ impl PluginInfra {
         match self.validate_local(plugin_name)? {
             ValidationOutcome::Passed(report) => {
                 let source = self.install_local(plugin_name)?;
-                let request_ids = self
-                    .store
-                    .develop(plugin_name)?
-                    .ok_or_else(|| {
-                        Error::Validation("plugin disappeared during local activation".into())
-                    })?
-                    .manifest()
-                    .lifecycle
-                    .request_ids
-                    .clone();
-                for id in request_ids {
-                    self.requests
-                        .set_status(&id, RequestStatus::ReviewPending)?;
-                }
                 Ok(LocalActivationOutcome::Activated(report, source))
             }
             ValidationOutcome::NeedsFix(report) => Ok(LocalActivationOutcome::NeedsFix(report)),
@@ -449,116 +308,5 @@ impl PluginInfra {
 
     fn catalog(&self) -> Arc<EnvironmentCatalog> {
         Arc::new(self.environments.snapshot())
-    }
-
-    fn ensure_request_plugin(
-        &self,
-        request: &RequestRecord,
-        plugin_name: Option<&str>,
-    ) -> Result<()> {
-        if request.plugin_name.as_deref() == plugin_name {
-            Ok(())
-        } else {
-            Err(Error::InvalidRequest(format!(
-                "request `{}` targets a different plugin",
-                request.id
-            )))
-        }
-    }
-}
-
-/// The result of routing one shared observation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ObservationRouting {
-    /// The canonical observation retained in the shared hub.
-    pub observation: evolution_core::Observation,
-    /// Why the router selected the audience.
-    pub decision_reason: String,
-    /// The durable route record.
-    pub route: ObservationRoute,
-    /// Plugin demand, present only for plugin/both routes.
-    pub request: Option<ObservationRequest>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Environment;
-    use evolution_core::observation::{
-        ObservationKind, ObservationSource as SkillObservationSource,
-    };
-
-    #[tokio::test]
-    async fn observations_feed_both_skill_and_plugin_feedback_systems() {
-        let state = tempfile::tempdir().unwrap();
-        let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
-        let mut catalog = EnvironmentCatalog::default();
-        catalog.insert(
-            "alpine",
-            Environment {
-                reference: "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123".into(),
-                interpreters: vec!["sh".into()],
-            },
-        );
-        let publisher = Arc::new(crate::GhPublisher::new(crate::GhPublisherConfig {
-            enabled: false,
-            ..Default::default()
-        }));
-        let infra = PluginInfra::open_with_environments(
-            state.path(),
-            "main",
-            "Test",
-            "test@example.com",
-            observations.clone(),
-            crate::EnvironmentRegistry::ephemeral(catalog),
-            publisher.clone(),
-            publisher,
-        )
-        .unwrap();
-
-        let routing = infra
-            .record_and_route_observation(
-                ObservationInput {
-                    kind: ObservationKind::Failure,
-                    source: SkillObservationSource::Eval,
-                    summary: "adapter rejects malformed input".into(),
-                    body: "The adapter should fail with a useful validation error.".into(),
-                    node_kind: Some("demo_adapter".into()),
-                    error: Some("malformed input".into()),
-                },
-                Some("demo-plugin"),
-                Some(RequestIntent::FixNode),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            routing.request.as_ref().unwrap().request.evidence_ids,
-            vec![routing.observation.id.clone()]
-        );
-        assert_eq!(routing.route.audience, ObservationAudience::Plugin);
-        assert_eq!(
-            routing.route.request_id,
-            Some(routing.request.as_ref().unwrap().request.id.clone())
-        );
-        assert_eq!(
-            infra.observation_routes().len(),
-            1,
-            "routing must be idempotent across shared observations"
-        );
-        assert!(state.path().join("feedback/routes").is_dir());
-        let persisted = infra
-            .observation_routes()
-            .into_iter()
-            .find(|route| route.id == routing.route.id)
-            .unwrap();
-        assert_eq!(persisted.status, ObservationRouteStatus::Consumed);
-        assert_eq!(
-            persisted.request_id,
-            routing
-                .request
-                .as_ref()
-                .map(|feedback| feedback.request.id.clone())
-        );
     }
 }

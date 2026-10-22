@@ -14,7 +14,7 @@ use container_runtime::ImageReference;
 
 use crate::{
     Environment, EnvironmentCatalog, Error, Result, foundation::names::validate_plugin_name,
-    intake::request::atomic_toml,
+    foundation::toml::atomic_toml,
 };
 
 /// Persistent allow list shared by validation and agent tools.

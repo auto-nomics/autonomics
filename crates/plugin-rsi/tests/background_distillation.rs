@@ -7,8 +7,7 @@ use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GitRepo, MergeOutcome,
     PluginDevelopmentToolsetRegistry, PluginDistiller, PluginInfra, PluginPublisher,
-    PluginPullRequestPublisher, PluginStatus, PublishOutcome, PullRequestOutcome, RequestIntent,
-    RequestRecord, RequestSource, RequestStatus,
+    PluginPullRequestPublisher, PluginStatus, PublishOutcome, PullRequestOutcome,
 };
 use serde_json::{Value, json};
 
@@ -133,14 +132,12 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     PluginDevelopmentToolsetRegistry::global()
         .configure_environments(environment_registry.clone())
         .unwrap();
-    let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(FakePublisher);
     let infra = PluginInfra::open_with_environments(
         state.path(),
         "main",
         "Autonomics RSI",
         "rsi@example.com",
-        observations,
         EnvironmentRegistry::ephemeral(catalog()),
         publisher.clone(),
         Arc::new(FakePullRequestPublisher),
@@ -148,28 +145,12 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     .unwrap();
     infra.configure_registry(Arc::new(NoopRegistry));
 
-    let request = infra
-        .requests()
-        .record(RequestRecord {
-            id: String::new(),
-            created_at: 0,
-            source: RequestSource::User,
-            intent: RequestIntent::NewNode,
-            summary: "Create a locally active adapter".into(),
-            body: "Copy one input file.".into(),
-            plugin_name: Some("distilled-plugin".into()),
-            evidence_ids: Vec::new(),
-            status: RequestStatus::Open,
-        })
-        .unwrap();
     let store = infra.store();
     let operator = store
         .create(
-            request.plugin_name.as_deref().unwrap(),
+            "distilled-plugin",
             "alpine",
-            std::slice::from_ref(&request.id),
-            &request.body,
-            infra.requests(),
+            "Copy one input file.",
             &catalog(),
         )
         .unwrap();
@@ -256,8 +237,4 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
     let store = infra.store();
     let manifest = store.develop("distilled-plugin").unwrap().unwrap();
     assert_eq!(manifest.status(), PluginStatus::Installed);
-    assert_eq!(
-        infra.requests().find(&request.id).unwrap().unwrap().status,
-        RequestStatus::Consumed
-    );
 }

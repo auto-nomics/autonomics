@@ -1020,11 +1020,12 @@ into **refs** (branches) — each ref is an independent lineage.\n\
   an alternative direction from that point.";
 
 const PROMPT_PLUGIN_RSI: &str = "\n\
-### Plugin Self-Improvement\n\
+### Plugin Development\n\
 You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
 List approved environments with `plugin_environments_list`, inspect the addressed\n\
-workspace with `vfs`, fork installed references with `plugin_fork`, bind approved\n\
-environment images with `plugin_environment_bind`, add nodes with\n\
+workspace with `vfs`, create greenfield workspaces with `plugin_create`, fork\n\
+installed references with `plugin_fork`, bind approved environment images with\n\
+`plugin_environment_bind`, add nodes with\n\
 `plugin_node_create` (standalone NodeDefinition TOML), edit manifest.toml via\n\
 old_string/new_string replacement with `plugin_node_update` (read the file\n\
 through the VFS first; daemon-owned fields and the node set must not change,\n\
@@ -1938,11 +1939,11 @@ mod tests {
         assert!(researcher_prompt.contains("does not execute your research dataset"));
         assert!(researcher_prompt.contains("Do not hand over production or"));
         assert!(researcher_prompt.contains("do not attempt to patch the plugin"));
-        assert!(!researcher_prompt.contains("Plugin Self-Improvement"));
+        assert!(!researcher_prompt.contains("Plugin Development"));
         assert!(!researcher_prompt.contains("Developer Handoff"));
 
         let developer_prompt = build_system_prompt(&AgentKind::Developer);
-        assert!(developer_prompt.contains("Plugin Self-Improvement"));
+        assert!(developer_prompt.contains("Plugin Development"));
         assert!(developer_prompt.contains("Developer Handoff"));
         assert!(developer_prompt.contains("Maintain the execution boundary"));
         assert!(developer_prompt.contains("explicitly reject that task"));
@@ -1983,7 +1984,7 @@ mod tests {
         // those sections must be absent so the prompt doesn't waste
         // context advertising tools they don't have.
         assert!(!browser_prompt.contains("Literature & Evidence"));
-        assert!(!browser_prompt.contains("Plugin Self-Improvement"));
+        assert!(!browser_prompt.contains("Plugin Development"));
         assert!(!browser_prompt.contains("Researcher / Developer Collaboration"));
     }
 

@@ -7,11 +7,10 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::{Error, Result};
-use crate::{foundation::names::validate_plugin_name, intake::request::atomic_toml};
+use crate::{foundation::names::validate_plugin_name, foundation::toml::atomic_toml};
 
 const V2_MARKER: &str = "plugins/.autonomics-layout.toml";
 const LEGACY_WORKSPACE_DIR: &str = "plugins";
-const LEGACY_REQUEST_DIR: &str = "plugin-rsi/requests";
 const LEGACY_RUNTIME_DIR: &str = "plugin-runtime";
 const LEGACY_SNAPSHOT_DIR: &str = "plugin-installs";
 
@@ -70,7 +69,6 @@ impl PluginStateLayout {
                 LEGACY_WORKSPACE_DIR,
                 LEGACY_RUNTIME_DIR,
                 LEGACY_SNAPSHOT_DIR,
-                LEGACY_REQUEST_DIR,
             ]
             .iter()
             .any(|legacy_dir| state_dir.join(legacy_dir).exists())
@@ -171,7 +169,6 @@ mod tests {
         std::fs::create_dir_all(state.path().join("plugins")).unwrap();
         std::fs::create_dir_all(state.path().join("plugin-runtime")).unwrap();
         std::fs::create_dir_all(state.path().join("plugin-installs")).unwrap();
-        std::fs::create_dir_all(state.path().join("plugin-rsi/requests")).unwrap();
 
         let layout = PluginStateLayout::open(state.path());
         assert_eq!(layout.version(), PluginLayoutVersion::Legacy);

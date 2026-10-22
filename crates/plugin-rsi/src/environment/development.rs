@@ -13,8 +13,7 @@ use std::{
 use container_runtime::{ImageBuildConnection, PodmanConnection};
 
 use crate::{
-    EnvironmentRegistry, EnvironmentValidationReport, Error, RequestRecord, RequestStatus,
-    RequestStore, Result,
+    EnvironmentRegistry, EnvironmentValidationReport, Error, Result,
     environment::image_registry::SharedImagePublisher,
     environment::manifest::EnvironmentStatus,
     environment::store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
@@ -49,7 +48,6 @@ struct EnvironmentConnections {
 pub struct EnvironmentDevInfra {
     store: Arc<EnvironmentStore>,
     environments: EnvironmentRegistry,
-    requests: RequestStore,
     publisher: SharedImagePublisher,
     connections: Arc<RwLock<EnvironmentConnections>>,
 }
@@ -75,7 +73,6 @@ impl EnvironmentDevInfra {
                 local_namespace,
             )),
             environments,
-            requests: RequestStore::open(state_dir),
             publisher,
             connections: Arc::new(RwLock::new(Default::default())),
         })
@@ -88,10 +85,6 @@ impl EnvironmentDevInfra {
     /// Return the host-owned mutable environment allow list.
     pub fn environment_registry(&self) -> EnvironmentRegistry {
         self.environments.clone()
-    }
-
-    pub fn requests(&self) -> &RequestStore {
-        &self.requests
     }
 
     /// Configure the trusted image builder used by validation and push.
@@ -124,51 +117,32 @@ impl EnvironmentDevInfra {
         operate(&mut connections)
     }
 
-    /// Record demand and materialize a new environment workspace.
+    /// Materialize a new environment workspace from an approved base.
     pub fn create_environment(
         &self,
-        request: RequestRecord,
+        environment_id: &str,
         base_environment_id: &str,
+        purpose: &str,
     ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        let environment_id = request.plugin_name.clone().ok_or_else(|| {
-            Error::InvalidRequest("environment requests must name their environment".into())
-        })?;
-        self.ensure_request_environment(&request, &environment_id)?;
         self.store.create(
-            &environment_id,
+            environment_id,
             base_environment_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
+            purpose,
             &self.catalog(),
         )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.develop(&environment_id)
+        self.develop(environment_id)
     }
 
-    /// Fork an existing environment workspace and claim the request.
+    /// Fork an existing environment workspace under a new id.
     pub fn fork_environment(
         &self,
         source_environment_id: &str,
-        request: RequestRecord,
+        environment_id: &str,
+        purpose: &str,
     ) -> Result<EnvironmentOperator<'_>> {
-        let request = self.requests.record(request)?;
-        let target_id = request.plugin_name.clone().ok_or_else(|| {
-            Error::InvalidRequest("environment fork requests must name their environment".into())
-        })?;
-        self.ensure_request_environment(&request, &target_id)?;
-        self.store.fork(
-            source_environment_id,
-            &target_id,
-            std::slice::from_ref(&request.id),
-            &request.body,
-            &self.requests,
-        )?;
-        self.requests
-            .set_status(&request.id, RequestStatus::Working)?;
-        self.develop(&target_id)
+        self.store
+            .fork(source_environment_id, environment_id, purpose)?;
+        self.develop(environment_id)
     }
 
     /// Run the four deterministic static gates, leaving the workspace editable.
@@ -201,19 +175,9 @@ impl EnvironmentDevInfra {
                 Ok(EnvironmentLocalActivationOutcome::NeedsFix(report))
             }
             EnvironmentValidationOutcome::Passed(report) => {
-                let request_ids = self
-                    .develop(environment_id)?
-                    .manifest()
-                    .lifecycle
-                    .request_ids
-                    .clone();
                 let installed = self
                     .store
                     .install_local(environment_id, &self.environments)?;
-                for id in request_ids {
-                    self.requests
-                        .set_status(&id, RequestStatus::ReviewPending)?;
-                }
                 Ok(EnvironmentLocalActivationOutcome::Activated(
                     report, installed,
                 ))
@@ -221,15 +185,11 @@ impl EnvironmentDevInfra {
         }
     }
 
-    /// Approve the environment and propagate request state.
+    /// Approve the environment workspace.
     pub fn review_environment(&self, environment_id: &str) -> Result<EnvironmentStatus> {
         let mut operator = self.develop(environment_id)?;
-        let request_ids = operator.manifest().lifecycle.request_ids.clone();
         operator
             .transition_snapshot(EnvironmentStatus::Approved, "environment: review decision")?;
-        for id in request_ids {
-            self.requests.set_status(&id, RequestStatus::Consumed)?;
-        }
         Ok(EnvironmentStatus::Approved)
     }
 
@@ -398,20 +358,5 @@ impl EnvironmentDevInfra {
 
     fn catalog(&self) -> crate::EnvironmentCatalog {
         self.environments.snapshot()
-    }
-
-    fn ensure_request_environment(
-        &self,
-        request: &RequestRecord,
-        environment_id: &str,
-    ) -> Result<()> {
-        if request.plugin_name.as_deref() == Some(environment_id) {
-            Ok(())
-        } else {
-            Err(Error::InvalidRequest(format!(
-                "request `{}` targets a different environment",
-                request.id
-            )))
-        }
     }
 }

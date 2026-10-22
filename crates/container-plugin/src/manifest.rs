@@ -127,8 +127,10 @@ pub struct PluginLifecycleMetadata {
     /// Immutable commit captured from the fork's installed source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_commit: Option<String>,
-    /// Requests that motivated the current development or update.
-    #[serde(default)]
+    /// Deprecated request ids from the retired demand-intake path. The field
+    /// remains deserializable so existing immutable manifests continue to load;
+    /// new lifecycle mutations no longer depend on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_ids: Vec<String>,
     /// Host-provided reason retained with the lifecycle record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -254,6 +256,18 @@ bundle = "wjixiang/catalog-mtag-ld-ref-1000g-eur-w-ld"
         assert_eq!(panel.mount, "/panels/ld_ref");
         assert_eq!(panel.bundle.owner(), "wjixiang");
         assert_eq!(panel.bundle.name(), "catalog-mtag-ld-ref-1000g-eur-w-ld");
+    }
+
+    #[test]
+    fn retired_request_ids_remain_parseable_but_are_not_written() {
+        let legacy = format!("{MANIFEST_TOML}\n[lifecycle]\nrequest_ids = [\"R-legacy\"]\n");
+        let manifest: PluginManifest = toml::from_str(&legacy).unwrap();
+        assert_eq!(manifest.lifecycle.request_ids, ["R-legacy"]);
+
+        let mut modern = manifest;
+        modern.lifecycle.request_ids.clear();
+        let rewritten = toml::to_string(&modern).unwrap();
+        assert!(!rewritten.contains("request_ids"));
     }
 
     #[test]

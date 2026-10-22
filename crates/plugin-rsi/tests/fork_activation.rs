@@ -8,8 +8,7 @@ use plugin_rsi::GitRepo;
 use plugin_rsi::{
     AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GhPublisher,
     GhPublisherConfig, InstalledPluginSource, PluginInfra, PluginLifecycle, PluginStatus,
-    PluginStore, RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore,
-    ValidationOutcome,
+    PluginStore, ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -33,20 +32,6 @@ fn catalog() -> EnvironmentCatalog {
         },
     );
     catalog
-}
-
-fn request(plugin_name: &str) -> RequestRecord {
-    RequestRecord {
-        id: String::new(),
-        created_at: 0,
-        source: RequestSource::User,
-        intent: RequestIntent::NewNode,
-        summary: "Fork the reference adapter".into(),
-        body: "Fork the installed adapter and give it a new node kind.".into(),
-        plugin_name: Some(plugin_name.into()),
-        evidence_ids: Vec::new(),
-        status: RequestStatus::Open,
-    }
 }
 
 fn adapter_node_toml(kind: &str, script_file: &str) -> String {
@@ -101,17 +86,13 @@ async fn execute(
 #[tokio::test]
 async fn an_installed_reference_can_be_forked_and_locally_activated() {
     let state = tempfile::tempdir().unwrap();
-    let requests = RequestStore::open(state.path());
     let store = PluginStore::open(state.path(), "main", "Autonomics RSI", "rsi@example.com");
     common::configure_plugin_vfs(state.path());
-    let first_request = requests.record(request("reference-plugin")).unwrap();
     let mut reference = store
         .create(
             "reference-plugin",
             "alpine",
-            &[first_request.id],
             "Create the reference adapter.",
-            &requests,
             &catalog(),
         )
         .unwrap();
@@ -150,7 +131,6 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         ValidationOutcome::NeedsFix(report) => panic!("reference validation failed: {report:?}"),
     };
 
-    let observations = std::sync::Arc::new(evolution_core::ObservationHub::new(state.path()));
     let publisher = Arc::new(GhPublisher::new(GhPublisherConfig {
         enabled: false,
         ..Default::default()
@@ -160,7 +140,6 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         "main",
         "Autonomics RSI",
         "rsi@example.com",
-        observations,
         EnvironmentRegistry::ephemeral(catalog()),
         publisher.clone(),
         publisher,
@@ -181,9 +160,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         json!({
             "reference_plugin_path": "/plugins/dev/reference-plugin",
             "plugin_name": "forked-plugin",
-            "intent": "new_node",
-            "summary": "Fork the local active reference.",
-            "body": "Fork the installed adapter and give it a new node kind."
+            "purpose": "Fork the installed adapter and give it a new node kind."
         }),
     )
     .await
@@ -194,10 +171,6 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     assert_eq!(fork_output["reference_plugin"], "reference-plugin");
     assert_eq!(fork_output["target_plugin"], "forked-plugin");
     assert_eq!(fork_output["target_vfs_path"], "/plugins/dev/forked-plugin");
-    let request_id = fork_output["request_id"].as_str().unwrap();
-    let fork_request = infra.requests().find(request_id).unwrap().unwrap();
-    assert_eq!(fork_request.status, RequestStatus::Working);
-
     let environment_result = execute(
         &tools,
         "plugin_environment_bind",
@@ -408,14 +381,11 @@ script_file = \"scripts/forked.sh\"
     assert!(repository.is_clean().unwrap());
     assert_eq!(forked.status(), PluginStatus::Draft);
 
-    let update_request = requests.record(request("forked-plugin")).unwrap();
     let installed_source = store.installed_source("forked-plugin").unwrap();
     let mut update = store
         .create_update(
             "forked-plugin",
-            &[update_request.id],
             "Continue the fast local feedback loop.",
-            &requests,
             &installed_source,
             &validation_catalog,
             &plugin_rsi::GitPluginSourceFetcher,

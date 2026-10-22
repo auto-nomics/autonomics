@@ -14,7 +14,6 @@ pub struct DistillationCandidate {
     pub plugin_name: String,
     pub status: PluginStatus,
     pub source_plugin: Option<String>,
-    pub request_ids: Vec<String>,
 }
 
 /// Summary of one non-blocking background publication pass.
@@ -56,7 +55,6 @@ impl PluginDistiller {
                 plugin_name: manifest.plugin_name,
                 status: manifest.status,
                 source_plugin: manifest.lifecycle.source_plugin,
-                request_ids: manifest.lifecycle.request_ids,
             })
             .collect())
     }

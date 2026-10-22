@@ -352,15 +352,6 @@ script_file = "scripts/adapter.sh"
         workspace
     }
 
-    fn reason(report: &ValidationReport, gate: &str) -> String {
-        report
-            .gates
-            .iter()
-            .find(|result| result.name == gate)
-            .and_then(|result| result.reason.clone())
-            .unwrap_or_default()
-    }
-
     #[test]
     fn panel_free_fixture_passes_all_six_gates() {
         let report = validate_workspace("panel-plugin", &workspace(false), &catalog(), &[], &[], 1);
@@ -370,27 +361,10 @@ script_file = "scripts/adapter.sh"
     }
 
     #[test]
-    fn greenfield_panel_policy_is_isolated_and_blocks_later_gates() {
+    fn declared_panel_bindings_pass_the_plugin_gates() {
         let report = validate_workspace("panel-plugin", &workspace(true), &catalog(), &[], &[], 1);
 
-        assert_eq!(report.overall, GateStatus::Fail);
-        assert_eq!(
-            reason(&report, "policy"),
-            "panels are not allowed in the greenfield MVP"
-        );
-        assert_eq!(
-            report
-                .gates
-                .iter()
-                .map(|gate| gate.name.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "manifest",
-                "policy",
-                "script_static",
-                "registry_compile",
-                "secret_scan"
-            ]
-        );
+        assert_eq!(report.overall, GateStatus::Pass);
+        assert_eq!(report.gates.len(), 6);
     }
 }

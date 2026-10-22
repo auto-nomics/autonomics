@@ -5,6 +5,7 @@
 //! principal, while the path selects the workspace.
 
 mod container_run;
+mod crate_plugin_tool;
 mod env;
 mod environment_bind;
 mod environments_list;
@@ -280,6 +281,9 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
             state: state.clone(),
         }),
         ToolRegistration::from(environment_bind::PluginEnvironmentBindTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(crate_plugin_tool::PluginCreateTool {
             state: state.clone(),
         }),
         ToolRegistration::from(fork::PluginForkTool {

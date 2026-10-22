@@ -2,4 +2,5 @@
 pub mod error;
 pub mod names;
 pub mod report;
+pub mod toml;
 pub mod workspace;

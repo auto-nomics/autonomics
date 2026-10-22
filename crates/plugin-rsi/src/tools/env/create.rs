@@ -5,10 +5,8 @@ use agentik_proc::tool;
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::{RequestIntent, RequestRecord, RequestSource, RequestStatus};
-
 use super::EnvToolState;
-use super::{resolve_target, tool_error};
+use super::{environment_manifest_lock, resolve_target, tool_error};
 
 #[tool(
     name = "environment_create",
@@ -21,12 +19,8 @@ pub(super) struct EnvironmentCreateInput {
     environment_id: String,
     /// Approved base environment id from plugin_environments_list.
     base_environment_id: String,
-    /// Change intent; defaults to new_environment.
-    intent: Option<String>,
-    /// One-line summary of the requested environment.
-    summary: String,
-    /// Full demand, constraints, or requested capability.
-    body: String,
+    /// Why this environment is being developed.
+    purpose: String,
 }
 
 pub(super) struct EnvironmentCreateTool {
@@ -35,7 +29,6 @@ pub(super) struct EnvironmentCreateTool {
 
 #[derive(Debug)]
 struct CreateOutput {
-    request_id: String,
     environment_id: String,
     environment_vfs_path: String,
     base_environment_id: String,
@@ -48,20 +41,21 @@ impl ToolFunction for EnvironmentCreateTool {
     type Input = EnvironmentCreateInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let summary = input.summary.trim().to_string();
-        let body = input.body.trim().to_string();
-        if summary.is_empty() || body.is_empty() {
+        let environment_id = input.environment_id.trim().to_string();
+        let base_environment_id = input.base_environment_id.trim().to_string();
+        let purpose = input.purpose.trim().to_string();
+        if environment_id.is_empty() || base_environment_id.is_empty() || purpose.is_empty() {
             return Err(ToolError::ValidationFailed {
-                message: "summary and body must be non-empty".into(),
+                message: "environment_id, base_environment_id, and purpose must be non-empty"
+                    .into(),
             });
         }
-        let intent = parse_intent(input.intent.as_deref())?;
+
         let environments = self.state.registry.environments().map_err(tool_error)?;
-        if environments.get(&input.base_environment_id).is_none() {
+        if environments.get(&base_environment_id).is_none() {
             return Err(ToolError::ValidationFailed {
                 message: format!(
-                    "environment `{}` is not approved; use plugin_environments_list",
-                    input.base_environment_id
+                    "environment `{base_environment_id}` is not approved; use plugin_environments_list"
                 ),
             });
         }
@@ -70,49 +64,27 @@ impl ToolFunction for EnvironmentCreateTool {
             .registry
             .environment_infra()
             .map_err(tool_error)?;
-        let request = RequestRecord {
-            id: String::new(),
-            created_at: 0,
-            source: RequestSource::Agent,
-            intent,
-            summary,
-            body,
-            plugin_name: Some(input.environment_id),
-            evidence_ids: Vec::new(),
-            status: RequestStatus::Open,
-        };
-        let base_environment_id = input.base_environment_id;
-        let output =
-            tokio::task::spawn_blocking(move || -> std::result::Result<CreateOutput, ToolError> {
-                let operator = infra
-                    .create_environment(request, &base_environment_id)
-                    .map_err(tool_error)?;
-                let manifest = operator.manifest();
-                let request_id =
-                    manifest
-                        .lifecycle
-                        .request_ids
-                        .first()
-                        .cloned()
-                        .ok_or_else(|| ToolError::ExecutionFailed {
-                            source: "environment creation completed without its request id".into(),
-                        })?;
-                Ok(CreateOutput {
-                    request_id,
-                    environment_id: operator.environment_id().to_string(),
-                    environment_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
-                    base_environment_id,
-                    base_reference: manifest.base.reference.clone(),
-                    interpreters: manifest.interpreters.clone(),
-                })
+        let manifest_lock = environment_manifest_lock(&self.state.registry, &environment_id);
+        let _guard = manifest_lock.lock().await;
+        let output = tokio::task::spawn_blocking(move || -> Result<CreateOutput, ToolError> {
+            let operator = infra
+                .create_environment(&environment_id, &base_environment_id, &purpose)
+                .map_err(tool_error)?;
+            let manifest = operator.manifest();
+            Ok(CreateOutput {
+                environment_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
+                environment_id: operator.environment_id().to_string(),
+                base_environment_id,
+                base_reference: manifest.base.reference.clone(),
+                interpreters: manifest.interpreters.clone(),
             })
-            .await
-            .map_err(|join| ToolError::ExecutionFailed {
-                source: format!("environment create task failed: {join}").into(),
-            })??;
+        })
+        .await
+        .map_err(|join| ToolError::ExecutionFailed {
+            source: format!("environment create task failed: {join}").into(),
+        })??;
 
         Ok(ToolResult::success_json(json!({
-            "request_id": output.request_id,
             "environment_id": output.environment_id,
             "environment_vfs_path": output.environment_vfs_path,
             "base_environment_id": output.base_environment_id,
@@ -124,20 +96,15 @@ impl ToolFunction for EnvironmentCreateTool {
 
 #[tool(
     name = "environment_fork",
-    description = "Fork an existing environment development workspace under a new environment id. \
-                   Edit only the returned target path; never copy workspace files with vfs cp."
+    description = "Fork an existing environment workspace under a new id. Edit only the returned target path."
 )]
 pub(super) struct EnvironmentForkInput {
-    /// Source workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Existing environment workspace path, such as `/environments/dev/python`.
     source_environment_path: String,
     /// New environment id in lowercase kebab-case.
     environment_id: String,
-    /// Change intent; defaults to new_environment.
-    intent: Option<String>,
-    /// One-line summary of the requested improvement.
-    summary: String,
-    /// Full demand, constraints, or requested behavior.
-    body: String,
+    /// Why this environment fork is being developed.
+    purpose: String,
 }
 
 pub(super) struct EnvironmentForkTool {
@@ -146,10 +113,9 @@ pub(super) struct EnvironmentForkTool {
 
 #[derive(Debug)]
 struct ForkOutput {
-    request_id: String,
     source_environment: String,
-    target_environment: String,
-    target_vfs_path: String,
+    environment_id: String,
+    environment_vfs_path: String,
 }
 
 #[async_trait]
@@ -157,14 +123,13 @@ impl ToolFunction for EnvironmentForkTool {
     type Input = EnvironmentForkInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let summary = input.summary.trim().to_string();
-        let body = input.body.trim().to_string();
-        if summary.is_empty() || body.is_empty() {
+        let environment_id = input.environment_id.trim().to_string();
+        let purpose = input.purpose.trim().to_string();
+        if environment_id.is_empty() || purpose.is_empty() {
             return Err(ToolError::ValidationFailed {
-                message: "summary and body must be non-empty".into(),
+                message: "environment_id and purpose must be non-empty".into(),
             });
         }
-        let intent = parse_intent(input.intent.as_deref())?;
         let source = resolve_target(&self.state, &input.source_environment_path)
             .await
             .map_err(tool_error)?;
@@ -173,78 +138,28 @@ impl ToolFunction for EnvironmentForkTool {
             .registry
             .environment_infra()
             .map_err(tool_error)?;
-        let request = RequestRecord {
-            id: String::new(),
-            created_at: 0,
-            source: RequestSource::Agent,
-            intent,
-            summary,
-            body,
-            plugin_name: Some(input.environment_id),
-            evidence_ids: Vec::new(),
-            status: RequestStatus::Open,
-        };
-        let source_environment = source.environment_id;
-        let output =
-            tokio::task::spawn_blocking(move || -> std::result::Result<ForkOutput, ToolError> {
-                let operator = infra
-                    .fork_environment(&source_environment, request)
-                    .map_err(tool_error)?;
-                let manifest = operator.manifest();
-                let request_id =
-                    manifest
-                        .lifecycle
-                        .request_ids
-                        .first()
-                        .cloned()
-                        .ok_or_else(|| ToolError::ExecutionFailed {
-                            source: "environment fork completed without its request id".into(),
-                        })?;
-                Ok(ForkOutput {
-                    request_id,
-                    source_environment,
-                    target_environment: operator.environment_id().to_string(),
-                    target_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
-                })
+        let manifest_lock = environment_manifest_lock(&self.state.registry, &environment_id);
+        let _guard = manifest_lock.lock().await;
+        let source_environment = source.environment_id.clone();
+        let output = tokio::task::spawn_blocking(move || -> Result<ForkOutput, ToolError> {
+            let operator = infra
+                .fork_environment(&source_environment, &environment_id, &purpose)
+                .map_err(tool_error)?;
+            Ok(ForkOutput {
+                source_environment: source_environment.clone(),
+                environment_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
+                environment_id: operator.environment_id().to_string(),
             })
-            .await
-            .map_err(|join| ToolError::ExecutionFailed {
-                source: format!("environment fork task failed: {join}").into(),
-            })??;
+        })
+        .await
+        .map_err(|join| ToolError::ExecutionFailed {
+            source: format!("environment fork task failed: {join}").into(),
+        })??;
 
         Ok(ToolResult::success_json(json!({
-            "request_id": output.request_id,
             "source_environment": output.source_environment,
-            "target_environment": output.target_environment,
-            "target_vfs_path": output.target_vfs_path,
+            "environment_id": output.environment_id,
+            "environment_vfs_path": output.environment_vfs_path,
         })))
-    }
-}
-
-fn parse_intent(value: Option<&str>) -> Result<RequestIntent, ToolError> {
-    match value.map(str::trim) {
-        None | Some("") | Some("new_environment") => Ok(RequestIntent::NewEnvironment),
-        Some("optimize_node") => Ok(RequestIntent::OptimizeNode),
-        Some("fix_node") => Ok(RequestIntent::FixNode),
-        Some(other) => Err(ToolError::ValidationFailed {
-            message: format!(
-                "unknown intent {other:?}; use new_environment, optimize_node, or fix_node"
-            ),
-        }),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_environment_lifecycle_intents() {
-        assert_eq!(
-            parse_intent(Some("new_environment")).unwrap(),
-            RequestIntent::NewEnvironment
-        );
-        assert_eq!(parse_intent(None).unwrap(), RequestIntent::NewEnvironment);
-        assert!(parse_intent(Some("release")).is_err());
     }
 }

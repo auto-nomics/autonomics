@@ -12,10 +12,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
-use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, PluginStateLayout, PluginStore, RequestIntent,
-    RequestRecord, RequestSource, RequestStatus, RequestStore,
-};
+use plugin_rsi::{AgentProfile, Environment, EnvironmentCatalog, PluginStateLayout, PluginStore};
 use serde_json::{Value, json};
 
 const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
@@ -34,20 +31,6 @@ fn catalog() -> EnvironmentCatalog {
         },
     );
     catalog
-}
-
-fn request(plugin_name: &str, summary: &str) -> RequestRecord {
-    RequestRecord {
-        id: String::new(),
-        created_at: 0,
-        source: RequestSource::User,
-        intent: RequestIntent::NewNode,
-        summary: summary.into(),
-        body: "Provide the plugin with the requested node.".into(),
-        plugin_name: Some(plugin_name.into()),
-        evidence_ids: Vec::new(),
-        status: RequestStatus::Open,
-    }
 }
 
 async fn execute(
@@ -117,13 +100,6 @@ script_file = \"scripts/other.sh\"
 async fn manifest_edits_are_validated_before_they_land() {
     let _guard = SEQUENTIAL.lock().await;
     let state = tempfile::tempdir().unwrap();
-    let requests = RequestStore::open(state.path());
-    let recorded = requests
-        .record(request(
-            "manifest-plugin",
-            "Create a manifest editing playground",
-        ))
-        .unwrap();
     common::configure_plugin_vfs(state.path());
     let layout = PluginStateLayout::v2(state.path());
     let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
@@ -131,9 +107,7 @@ async fn manifest_edits_are_validated_before_they_land() {
         .create(
             "manifest-plugin",
             "alpine",
-            std::slice::from_ref(&recorded.id),
             "Create the manifest editing playground plugin.",
-            &requests,
             &catalog(),
         )
         .unwrap();

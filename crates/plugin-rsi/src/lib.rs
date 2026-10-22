@@ -1,11 +1,11 @@
-//! Plugin-based recursive self-improvement substrate.
+//! Daemon-owned plugin and runtime-environment lifecycle infrastructure.
 //!
 //! The crate is organized as a set of daemon-owned domains behind a stable
 //! root facade. Agent tools and runtime integrations consume the re-exported
 //! API rather than reaching into storage, git, registries, or validators.
 //!
-//! * [`foundation`] primitives: errors, names, reports, safe workspaces.
-//! * [`intake`] request/profiling inputs.
+//! * [`foundation`] primitives: errors, names, reports, safe workspaces, and atomic TOML.
+//! * [`intake`] agent profile inputs.
 //! * [`plugin`] plugin stores, lifecycle, validation, and source registry.
 //! * [`environment`] reusable runtime environments.
 //! * [`publication`] trusted external publication adapters.
@@ -46,19 +46,11 @@ pub use environment::store::{
     EnvironmentStore, InstalledEnvironment,
 };
 pub use environment::validation::{EnvironmentValidationReport, validate_environment};
-pub use evolution_core::{
-    ObservationAudience, ObservationRoute, ObservationRouteStatus, ObservationRouteStore,
-    RouteDecision,
-};
 pub use foundation::error::{Error, Result};
 pub use foundation::names::validate_plugin_name;
 pub use foundation::report::{GateResult, GateStatus, ValidationReport};
 pub use foundation::workspace::PluginWorkspace;
-pub use intake::feedback::ObservationRequest;
 pub use intake::profile::AgentProfile;
-pub use intake::request::{
-    RequestIntent, RequestRecord, RequestSource, RequestStatus, RequestStore,
-};
 pub use plugin::distiller::{
     DistillFailure, DistillationCandidate, PluginDistillReport, PluginDistiller,
 };

@@ -280,9 +280,6 @@ impl SharedInfra {
                 "main",
                 "Autonomics RSI",
                 "rsi@autonomics.example",
-                // The hub installed above — plugins and skills read the
-                // same evidence ledger, neither owns it.
-                Arc::clone(&observations),
                 environments.clone(),
                 plugin_publisher,
                 pull_request_publisher,
@@ -740,7 +737,7 @@ impl SharedInfra {
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
         tools.push(crate::evolution_tools::evo_observe_registration(
-            (*self.rsi).clone(),
+            Arc::clone(&self.observations),
             self.skill_evolution.clone(),
         ));
         tools.extend(skills::skill_registrations(
@@ -1050,7 +1047,7 @@ mod plugin_profile_tools_tests {
         );
         assert!(
             !crate::config::build_system_prompt(&AgentKind::Researcher)
-                .contains("Plugin Self-Improvement")
+                .contains("Plugin Development")
         );
 
         let developer_tools = host
@@ -1076,7 +1073,7 @@ mod plugin_profile_tools_tests {
         );
         assert!(
             crate::config::build_system_prompt(&AgentKind::Developer)
-                .contains("Plugin Self-Improvement")
+                .contains("Plugin Development")
         );
     }
 }

@@ -71,8 +71,10 @@ pub struct EnvironmentSmokeTest {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvironmentLifecycleMetadata {
-    /// Requests that motivated the current development or update.
-    #[serde(default)]
+    /// Deprecated request ids from the retired demand-intake path. The field
+    /// remains deserializable so existing immutable manifests continue to load;
+    /// new lifecycle mutations no longer depend on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub request_ids: Vec<String>,
     /// Host-provided reason retained with the lifecycle record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,6 +220,22 @@ pub(crate) fn validate_interpreters(interpreters: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_request_ids_remain_parseable_but_are_not_written() {
+        let legacy = toml::from_str::<EnvironmentLifecycleMetadata>(
+            r#"request_ids = ["R-legacy"]
+rationale = "Legacy environment demand"
+"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.request_ids, ["R-legacy"]);
+
+        let mut modern = legacy;
+        modern.request_ids.clear();
+        let rewritten = toml::to_string(&modern).unwrap();
+        assert!(!rewritten.contains("request_ids"));
+    }
 
     #[test]
     fn transitions_follow_the_explicit_lifecycle_whitelist() {

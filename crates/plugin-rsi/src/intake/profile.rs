@@ -71,6 +71,7 @@ mod tests {
             [
                 "plugin_environments_list",
                 "plugin_environment_bind",
+                "plugin_create",
                 "plugin_fork",
                 "plugin_install",
                 "engine_inspect_cache",

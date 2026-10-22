@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Error, GateResult, GateStatus, PluginWorkspace, Result,
     environment::manifest::{EnvironmentManifest, validate_interpreters},
-    intake::request::unix_now,
+    foundation::toml::unix_now,
 };
 
 /// Which gates a validation run includes.
