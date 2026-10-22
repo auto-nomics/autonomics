@@ -6,7 +6,8 @@
 
 use agentik_core::tools::ToolRegistration;
 
-use crate::{Error, Result, plugin_development_tool_registrations};
+use crate::tools::plugin_development_tool_registrations;
+use crate::{Error, Result};
 
 /// Configuration for one plugin development agent.
 ///

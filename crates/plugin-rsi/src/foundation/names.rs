@@ -1,4 +1,4 @@
-use crate::{Error, Result};
+use super::error::{Error, Result};
 
 /// Validate the public plugin/install identity: lowercase kebab-case.
 pub fn validate_plugin_name(name: &str) -> Result<&str> {

@@ -12,12 +12,12 @@ use container_runtime::ImageReference;
 
 use crate::{
     Environment, EnvironmentRegistry, Error, GitRepo, PluginWorkspace, Result,
-    env_manifest::{
+    environment::manifest::{
         EnvironmentBase, EnvironmentLifecycleMetadata, EnvironmentManifest, EnvironmentSmokeTest,
         EnvironmentStatus, ensure_environment_transition, environment_is_editable,
     },
-    lifecycle::next_validation_attempt,
-    plugin::{copy_plugin_tree, validate_requests},
+    plugin::lifecycle::next_validation_attempt,
+    plugin::store::{copy_plugin_tree, validate_requests},
 };
 
 /// Stable virtual mount containing every long-lived environment workspace.

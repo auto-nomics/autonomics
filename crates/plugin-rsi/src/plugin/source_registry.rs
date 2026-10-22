@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::{Error, Result, request::atomic_toml};
+use crate::intake::request::atomic_toml;
+use crate::{Error, Result};
 
 /// An immutable GitHub installation source.
 #[derive(Debug, Clone, PartialEq, Eq)]

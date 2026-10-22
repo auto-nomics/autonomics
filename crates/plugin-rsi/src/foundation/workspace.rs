@@ -3,7 +3,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use crate::{Error, Result, request::unix_now};
+use super::error::{Error, Result};
+use crate::intake::request::unix_now;
 
 pub const MAX_FILE_BYTES: usize = 1024 * 1024;
 pub const MAX_FILES: usize = 256;

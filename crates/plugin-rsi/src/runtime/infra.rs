@@ -18,8 +18,8 @@ use crate::{
     PluginCacheReport, PluginLifecycle, PluginPublisher, PluginPullRequestPublisher, PluginStatus,
     PluginStore, RequestIntent, RequestRecord, RequestStatus, RequestStore, Result,
     ValidationOutcome,
-    distill::DistillationCandidate,
-    feedback::{default_request_intent, observation_request},
+    intake::feedback::{default_request_intent, observation_request},
+    plugin::distiller::DistillationCandidate,
 };
 
 /// Trusted publisher used for plugin releases and installs.
@@ -113,7 +113,7 @@ impl PluginInfra {
 
     /// Return local-active plugins waiting for background distillation.
     pub fn pending_distillation(&self) -> Result<Vec<DistillationCandidate>> {
-        crate::distill::PluginDistiller::new(self.clone()).pending()
+        crate::plugin::distiller::PluginDistiller::new(self.clone()).pending()
     }
 
     pub fn requests(&self) -> &RequestStore {

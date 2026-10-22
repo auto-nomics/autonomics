@@ -15,9 +15,9 @@ use container_runtime::{ImageBuildConnection, PodmanConnection};
 use crate::{
     EnvironmentRegistry, EnvironmentValidationReport, Error, RequestRecord, RequestStatus,
     RequestStore, Result,
-    env_manifest::EnvironmentStatus,
-    env_store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
-    image_registry::SharedImagePublisher,
+    environment::image_registry::SharedImagePublisher,
+    environment::manifest::EnvironmentStatus,
+    environment::store::{EnvironmentOperator, EnvironmentStore, InstalledEnvironment},
 };
 
 /// Result of one environment validation cycle.
@@ -225,7 +225,8 @@ impl EnvironmentDevInfra {
     pub fn review_environment(&self, environment_id: &str) -> Result<EnvironmentStatus> {
         let mut operator = self.develop(environment_id)?;
         let request_ids = operator.manifest().lifecycle.request_ids.clone();
-        operator.transition_snapshot(EnvironmentStatus::Approved, "environment: review decision")?;
+        operator
+            .transition_snapshot(EnvironmentStatus::Approved, "environment: review decision")?;
         for id in request_ids {
             self.requests.set_status(&id, RequestStatus::Consumed)?;
         }
@@ -348,9 +349,9 @@ impl EnvironmentDevInfra {
             &operator.workspace(),
             store.local_namespace(),
             if full {
-                crate::env_validate::ValidationDepth::Full
+                crate::environment::validation::ValidationDepth::Full
             } else {
-                crate::env_validate::ValidationDepth::Static
+                crate::environment::validation::ValidationDepth::Static
             },
             builder,
             runner,

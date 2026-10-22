@@ -126,7 +126,7 @@ impl ToolFunction for PluginNodeCreateTool {
             });
         }
         manifest.nodes.push(node);
-        crate::validate::registry_compile(&manifest).map_err(|error| {
+        crate::plugin::validation::compiler::registry_compile(&manifest).map_err(|error| {
             ToolError::ValidationFailed {
                 message: format!("manifest does not compile with the new node: {error}"),
             }

@@ -20,7 +20,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     Error, GitInstalledPluginSource, GitRepo, InstalledPluginSource, LocalInstalledPluginSource,
-    PluginStateLayout, PluginWorkspace, RequestStore, Result, validate::EnvironmentCatalog,
+    PluginStateLayout, PluginWorkspace, RequestStore, Result,
+    environment::catalog::EnvironmentCatalog,
 };
 
 /// Creates and opens plugin repositories under one root.

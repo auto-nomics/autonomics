@@ -10,7 +10,7 @@
 
 use crate::{
     EnvironmentDevInfra, EnvironmentStatus, EnvironmentValidationOutcome, Result,
-    env_manifest::EnvironmentManifest,
+    environment::manifest::EnvironmentManifest,
 };
 
 /// One locally active environment waiting to become a published reference.

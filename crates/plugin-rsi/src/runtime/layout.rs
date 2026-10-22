@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::{Error, Result, names::validate_plugin_name, request::atomic_toml};
+use crate::{Error, Result};
+use crate::{foundation::names::validate_plugin_name, intake::request::atomic_toml};
 
 const V2_MARKER: &str = "plugins/.autonomics-layout.toml";
 const LEGACY_WORKSPACE_DIR: &str = "plugins";

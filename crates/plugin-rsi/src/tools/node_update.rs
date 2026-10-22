@@ -55,7 +55,7 @@ impl ToolFunction for PluginNodeUpdateTool {
 
         let current_text = read_manifest_text(&target).await.map_err(tool_error)?;
         let current = parse_manifest_text(&current_text).map_err(validation)?;
-        if !crate::plugin::is_editable(current.status) {
+        if !crate::plugin::store::is_editable(current.status) {
             return Err(validation(format!(
                 "plugin `{}` cannot be edited from manifest status {:?}",
                 target.plugin_name, current.status
@@ -88,7 +88,7 @@ impl ToolFunction for PluginNodeUpdateTool {
         guard_host_owned(&current, &candidate, &target.plugin_name)?;
         guard_node_set(&current, &candidate, &target)?;
         validate_nodes(&candidate).map_err(validation)?;
-        crate::validate::registry_compile(&candidate).map_err(validation)?;
+        crate::plugin::validation::compiler::registry_compile(&candidate).map_err(validation)?;
 
         save_manifest(&target.workspace, &mut candidate).map_err(tool_error)?;
         // Reload from disk: what landed must parse (the write is a fresh
