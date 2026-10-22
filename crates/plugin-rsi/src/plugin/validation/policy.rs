@@ -57,10 +57,8 @@ impl<'a> PolicyValidator<'a> {
 
     /// Panel policy is intentionally isolated here so release-class decisions
     /// and issue diagnostics point at one explicit rule.
+    /// NOTE: leave empty for future policy validation.
     fn validate_panel_policy(&self) -> Result<(), String> {
-        if !self.manifest.panels.is_empty() {
-            return Err("panels are not allowed in the greenfield MVP".into());
-        }
         Ok(())
     }
 

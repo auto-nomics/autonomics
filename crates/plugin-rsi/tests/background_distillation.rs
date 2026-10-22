@@ -167,7 +167,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
         .create(
             request.plugin_name.as_deref().unwrap(),
             "alpine",
-            &[request.id.clone()],
+            std::slice::from_ref(&request.id),
             &request.body,
             infra.requests(),
             &catalog(),
