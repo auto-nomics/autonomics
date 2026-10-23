@@ -24,6 +24,10 @@ fn real_col(row: &turso::Row, idx: usize) -> Result<f64, StorageError> {
     }
 }
 
+fn memory_db_error(error: turso::Error) -> agentik_memory::MemoryError {
+    agentik_memory::MemoryError::Storage(error.to_string())
+}
+
 fn row_to_entry(row: &turso::Row) -> Result<MemoryEntry, StorageError> {
     Ok(MemoryEntry {
         id: Uuid::parse_str(&text_col(row, 0)?).map_err(|e| StorageError::Other(e.into()))?,
@@ -74,8 +78,10 @@ impl MemoryStore for TursoAgentStorage {
         &self,
         scope_id: Uuid,
         session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>, StorageError> {
-        self.get_memory_stage1_output(scope_id, session_id).await
+    ) -> Result<Option<MemoryStage1Record>, agentik_memory::MemoryError> {
+        self.get_memory_stage1_output(scope_id, session_id)
+            .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn claim_stage1(
@@ -84,17 +90,20 @@ impl MemoryStore for TursoAgentStorage {
         session_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<bool, agentik_memory::MemoryError> {
         self.claim_memory_stage1(scope_id, session_id, source_hash, lease_until)
             .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn complete_stage1(
         &self,
         scope_id: Uuid,
         output: MemoryStage1Record,
-    ) -> Result<(), StorageError> {
-        self.complete_memory_stage1(scope_id, output).await
+    ) -> Result<(), agentik_memory::MemoryError> {
+        self.complete_memory_stage1(scope_id, output)
+            .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn fail_stage1(
@@ -103,17 +112,20 @@ impl MemoryStore for TursoAgentStorage {
         session_id: Uuid,
         source_hash: &str,
         error: &str,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), agentik_memory::MemoryError> {
         self.fail_memory_stage1(scope_id, session_id, source_hash, error)
             .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn list_stage1_outputs(
         &self,
         scope_id: Uuid,
         limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>, StorageError> {
-        self.list_memory_stage1_outputs(scope_id, limit).await
+    ) -> Result<Vec<MemoryStage1Record>, agentik_memory::MemoryError> {
+        self.list_memory_stage1_outputs(scope_id, limit)
+            .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn claim_phase2(
@@ -121,9 +133,10 @@ impl MemoryStore for TursoAgentStorage {
         scope_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<bool, agentik_memory::MemoryError> {
         self.claim_memory_phase2(scope_id, source_hash, lease_until)
             .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
     async fn complete_phase2(
@@ -134,10 +147,10 @@ impl MemoryStore for TursoAgentStorage {
         summary_md: &str,
         observations: Vec<SemanticObservation>,
         consumed_note_ids: Vec<Uuid>,
-    ) -> Result<(), StorageError> {
-        let now = crate::memory::now_ms();
-        self.conn.execute("BEGIN", ()).await?;
-        let result = async {
+    ) -> Result<(), agentik_memory::MemoryError> {
+        let result: Result<(), StorageError> = async {
+            let now = crate::memory::now_ms();
+            self.conn.execute("BEGIN", ()).await?;
             self.conn
                 .execute(
                     "UPDATE memory_entries SET status = 'superseded', updated_at = ?1
@@ -284,12 +297,15 @@ impl MemoryStore for TursoAgentStorage {
 
         match result {
             Ok(()) => {
-                self.conn.execute("COMMIT", ()).await?;
+                self.conn
+                    .execute("COMMIT", ())
+                    .await
+                    .map_err(memory_db_error)?;
                 Ok(())
             }
             Err(error) => {
                 let _ = self.conn.execute("ROLLBACK", ()).await;
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -299,11 +315,16 @@ impl MemoryStore for TursoAgentStorage {
         scope_id: Uuid,
         source_hash: &str,
         error: &str,
-    ) -> Result<(), StorageError> {
-        self.fail_memory_phase2(scope_id, source_hash, error).await
+    ) -> Result<(), agentik_memory::MemoryError> {
+        self.fail_memory_phase2(scope_id, source_hash, error)
+            .await
+            .map_err(agentik_memory::MemoryError::from)
     }
 
-    async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>, StorageError> {
+    async fn get_summary(
+        &self,
+        scope_id: Uuid,
+    ) -> Result<Option<MemorySummary>, agentik_memory::MemoryError> {
         let mut rows = self
             .conn
             .query(
@@ -311,15 +332,16 @@ impl MemoryStore for TursoAgentStorage {
                  FROM memory_summaries WHERE scope_id = ?1",
                 params_from_iter([uuid_value(scope_id)]),
             )
-            .await?;
-        match rows.next().await? {
+            .await
+            .map_err(memory_db_error)?;
+        match rows.next().await.map_err(memory_db_error)? {
             Some(row) => Ok(Some(MemorySummary {
-                scope_id: Uuid::parse_str(&text_col(&row, 0)?)
+                scope_id: Uuid::parse_str(&text_col(&row, 0).map_err(memory_db_error)?)
                     .map_err(|e| StorageError::Other(e.into()))?,
-                schema_version: text_col(&row, 1)?,
-                summary_md: text_col(&row, 2)?,
-                source_hash: text_col(&row, 3)?,
-                generated_at: int_col(&row, 4)?,
+                schema_version: text_col(&row, 1).map_err(memory_db_error)?,
+                summary_md: text_col(&row, 2).map_err(memory_db_error)?,
+                source_hash: text_col(&row, 3).map_err(memory_db_error)?,
+                generated_at: int_col(&row, 4).map_err(memory_db_error)?,
             })),
             None => Ok(None),
         }
@@ -329,7 +351,7 @@ impl MemoryStore for TursoAgentStorage {
         &self,
         scope_id: Uuid,
         limit: usize,
-    ) -> Result<Vec<MemoryEntry>, StorageError> {
+    ) -> Result<Vec<MemoryEntry>, agentik_memory::MemoryError> {
         let mut rows = self
             .conn
             .query(
@@ -341,9 +363,10 @@ impl MemoryStore for TursoAgentStorage {
                  LIMIT ?2",
                 params_from_iter([uuid_value(scope_id), Value::Integer(limit as i64)]),
             )
-            .await?;
+            .await
+            .map_err(memory_db_error)?;
         let mut entries = Vec::new();
-        while let Some(row) = rows.next().await? {
+        while let Some(row) = rows.next().await.map_err(memory_db_error)? {
             entries.push(row_to_entry(&row)?);
         }
         Ok(entries)
@@ -353,7 +376,7 @@ impl MemoryStore for TursoAgentStorage {
         &self,
         scope_id: Uuid,
         entry_id: Uuid,
-    ) -> Result<Option<MemoryEntry>, StorageError> {
+    ) -> Result<Option<MemoryEntry>, agentik_memory::MemoryError> {
         let mut rows = self
             .conn
             .query(
@@ -362,14 +385,18 @@ impl MemoryStore for TursoAgentStorage {
                  FROM memory_entries WHERE scope_id = ?1 AND id = ?2",
                 params_from_iter([uuid_value(scope_id), uuid_value(entry_id)]),
             )
-            .await?;
-        match rows.next().await? {
+            .await
+            .map_err(memory_db_error)?;
+        match rows.next().await.map_err(memory_db_error)? {
             Some(row) => Ok(Some(row_to_entry(&row)?)),
             None => Ok(None),
         }
     }
 
-    async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>, StorageError> {
+    async fn list_pending_notes(
+        &self,
+        scope_id: Uuid,
+    ) -> Result<Vec<MemoryNote>, agentik_memory::MemoryError> {
         let mut rows = self
             .conn
             .query(
@@ -379,9 +406,10 @@ impl MemoryStore for TursoAgentStorage {
                  ORDER BY created_at ASC, id ASC",
                 params_from_iter([uuid_value(scope_id)]),
             )
-            .await?;
+            .await
+            .map_err(memory_db_error)?;
         let mut notes = Vec::new();
-        while let Some(row) = rows.next().await? {
+        while let Some(row) = rows.next().await.map_err(memory_db_error)? {
             notes.push(row_to_note(&row)?);
         }
         Ok(notes)
@@ -392,7 +420,7 @@ impl MemoryStore for TursoAgentStorage {
         scope_id: Uuid,
         slug: &str,
         content: &str,
-    ) -> Result<MemoryNote, StorageError> {
+    ) -> Result<MemoryNote, agentik_memory::MemoryError> {
         let note = MemoryNote {
             id: Uuid::new_v4(),
             scope_id,
@@ -414,7 +442,8 @@ impl MemoryStore for TursoAgentStorage {
                     Value::Integer(note.created_at),
                 ]),
             )
-            .await?;
+            .await
+            .map_err(memory_db_error)?;
         Ok(note)
     }
 
@@ -423,7 +452,7 @@ impl MemoryStore for TursoAgentStorage {
         scope_id: Uuid,
         status: &str,
         limit: usize,
-    ) -> Result<Vec<SemanticObservation>, StorageError> {
+    ) -> Result<Vec<SemanticObservation>, agentik_memory::MemoryError> {
         let mut rows = self
             .conn
             .query(
@@ -439,9 +468,10 @@ impl MemoryStore for TursoAgentStorage {
                     Value::Integer(limit as i64),
                 ]),
             )
-            .await?;
+            .await
+            .map_err(memory_db_error)?;
         let mut observations = Vec::new();
-        while let Some(row) = rows.next().await? {
+        while let Some(row) = rows.next().await.map_err(memory_db_error)? {
             observations.push(row_to_observation(&row)?);
         }
         Ok(observations)
@@ -453,7 +483,7 @@ impl MemoryStore for TursoAgentStorage {
         observation_id: Uuid,
         status: &str,
         error: Option<&str>,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), agentik_memory::MemoryError> {
         let changed = self
             .conn
             .execute(
@@ -469,9 +499,10 @@ impl MemoryStore for TursoAgentStorage {
                     uuid_value(observation_id),
                 ]),
             )
-            .await?;
+            .await
+            .map_err(memory_db_error)?;
         if changed == 0 {
-            return Err(StorageError::NotFound(format!(
+            return Err(agentik_memory::MemoryError::Storage(format!(
                 "semantic observation {observation_id}"
             )));
         }

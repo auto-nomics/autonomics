@@ -418,7 +418,13 @@ mod tests {
             Some(semantic_grounding),
         ));
 
-        run_memory_pipeline(agent_id, turso_store, Arc::clone(&memory), model).await;
+        run_memory_pipeline(
+            agent_id,
+            agentik_core::memory::agent_storage_memory_source(turso_store),
+            Arc::clone(&memory),
+            model,
+        )
+        .await;
 
         let observations = memory
             .store

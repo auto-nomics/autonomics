@@ -16,6 +16,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use crate::error::Result;
+
 #[derive(Clone)]
 pub struct Storage {
     conn: Arc<Mutex<turso::Connection>>,
@@ -32,7 +34,7 @@ impl Storage {
     /// the WAL index points past EOF), the matching `-wal` / `-shm` /
     /// `-twal` / `-tshm` sidecars are quarantined and the open is retried
     /// once; the main `.db` file is never touched.
-    pub async fn new(db_path: &str) -> Result<Self, String> {
+    pub async fn new(db_path: &str) -> Result<Self> {
         if db_path != ":memory:" {
             if let Some(parent) = Path::new(db_path).parent() {
                 if !parent.as_os_str().is_empty() {
@@ -43,7 +45,7 @@ impl Storage {
 
         match Self::try_open_local(db_path).await {
             Ok(storage) => Ok(storage),
-            Err(error) if db_path != ":memory:" && is_torn_wal_error(&error) => {
+            Err(error) if db_path != ":memory:" && is_torn_wal_error(&error.to_string()) => {
                 tracing::warn!(
                     db = db_path,
                     error = %error,
@@ -58,37 +60,35 @@ impl Storage {
 
     /// Internal: actually open the database without recovery. Split out so
     /// the recovery wrapper can call it twice.
-    async fn try_open_local(db_path: &str) -> Result<Self, String> {
+    async fn try_open_local(db_path: &str) -> Result<Self> {
         let mut builder = turso::Builder::new_local(db_path);
         if db_path != ":memory:" {
             builder = builder.experimental_multiprocess_wal(true);
         }
-        let db = builder.build().await.map_err(|e| e.to_string())?;
-        let conn = db.connect().map_err(|e| e.to_string())?;
+        let db = builder.build().await?;
+        let conn = db.connect()?;
 
         if db_path != ":memory:" {
-            conn.pragma_update("busy_timeout", 5000)
-                .await
-                .map_err(|e| e.to_string())?;
+            conn.pragma_update("busy_timeout", 5000).await?;
         }
 
         Self::from_shared_connection(Arc::new(Mutex::new(conn))).await
     }
 
     /// Create an in-memory database (useful for tests).
-    pub async fn open_in_memory() -> Result<Self, String> {
+    pub async fn open_in_memory() -> Result<Self> {
         Self::new(":memory:").await
     }
 
     /// Initialize the KMS schema on an already-open Turso connection.
     /// Internal: [`Storage::new`] finishes opening the database file here.
-    async fn from_shared_connection(conn: Arc<Mutex<turso::Connection>>) -> Result<Self, String> {
+    async fn from_shared_connection(conn: Arc<Mutex<turso::Connection>>) -> Result<Self> {
         let storage = Self { conn };
-        storage.init_schema().await.map_err(|e| e.to_string())?;
+        storage.init_schema().await?;
         Ok(storage)
     }
 
-    async fn init_schema(&self) -> Result<(), turso::Error> {
+    async fn init_schema(&self) -> Result<()> {
         let conn = self.conn.lock().await;
 
         // V2: `knowledge_type` was an unenforced presentation detail. Aspect

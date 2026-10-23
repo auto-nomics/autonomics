@@ -13,7 +13,6 @@
 
 pub mod diagnostics;
 pub mod error;
-pub mod error;
 mod language;
 pub mod service;
 pub mod storage;

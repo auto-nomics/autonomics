@@ -210,24 +210,7 @@ pub struct AgentRuntimeOverrides {
     pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
 
-/// Fully resolved per-agent settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct AgentRuntimeConfig {
-    pub use_memory: bool,
-    pub generate_memory: bool,
-    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
-}
-
-impl AgentRuntimeConfig {
-    #[must_use]
-    pub fn new(use_memory: bool, generate_memory: bool) -> Self {
-        Self {
-            use_memory,
-            generate_memory,
-            reasoning_effort: None,
-        }
-    }
-}
+pub use agentik_memory::AgentRuntimeConfig;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Error

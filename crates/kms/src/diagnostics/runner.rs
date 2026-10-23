@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use crate::error::Result;
+
 use turso::Value;
 use uuid::Uuid;
 
@@ -54,7 +56,7 @@ fn format_location_with_leaf_marker(path: &str, leaf_kind: LocationLeafKind) -> 
 
 async fn run_index_diagnostics(
     storage: &Storage,
-) -> Result<(Vec<Diagnostic>, HashMap<Uuid, String>), String> {
+) -> Result<(Vec<Diagnostic>, HashMap<Uuid, String>)> {
     use super::index_rules::{
         DuplicateSiblingTitles, EmptyLeaf, ExcessiveChildren, InconsistentPrefixes,
     };
@@ -70,12 +72,8 @@ async fn run_index_diagnostics(
     let mut path_map = HashMap::new();
 
     let conn = &*storage.conn().await;
-    let root = repo::index_find_root(conn)
-        .await
-        .map_err(|e| e.to_string())?;
-    let all_nodes = repo::index_list_all(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    let root = repo::index_find_root(conn).await?;
+    let all_nodes = repo::index_list_all(conn).await?;
 
     let mut children_map: HashMap<Option<Uuid>, Vec<Index>> = HashMap::new();
     for node in &all_nodes {
@@ -124,7 +122,7 @@ async fn run_index_diagnostics(
 async fn run_knowledge_diagnostics(
     storage: &Storage,
     index_path_map: &HashMap<Uuid, String>,
-) -> Result<Vec<Diagnostic>, String> {
+) -> Result<Vec<Diagnostic>> {
     use super::knowledge_rules::{
         BoldAsHeading, EmptyContent, NoEntities, OrphanKnowledge, TitleMissingEntityPrefix,
     };
@@ -142,9 +140,7 @@ async fn run_knowledge_diagnostics(
     let mut issues: Vec<Diagnostic> = Vec::new();
     let conn = &*storage.conn().await;
 
-    let orphan_titles = repo::index_orphan_knowledge_titles(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    let orphan_titles = repo::index_orphan_knowledge_titles(conn).await?;
 
     // Fetch (index_id, target) pairs for knowledge-type entries via Turso.
     let mut linking_rows = conn
@@ -152,8 +148,7 @@ async fn run_knowledge_diagnostics(
             "SELECT id, target FROM indexes WHERE target_type = 'knowledge' AND target IS NOT NULL",
             turso::params_from_iter([] as [Value; 0]),
         )
-        .await
-        .map_err(|e| e.to_string())?;
+        .await?;
 
     let mut knowledge_location: HashMap<Uuid, String> = HashMap::new();
     loop {
@@ -176,13 +171,11 @@ async fn run_knowledge_diagnostics(
                 }
             }
             Ok(None) => break,
-            Err(e) => return Err(e.to_string()),
+            Err(e) => return Err(e.into()),
         }
     }
 
-    let all_knowledges = repo::knowledge_list_all(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    let all_knowledges = repo::knowledge_list_all(conn).await?;
 
     for k in all_knowledges {
         let raw_location = knowledge_location
@@ -225,7 +218,7 @@ async fn run_knowledge_diagnostics(
 
 // ── Entity diagnostics ───────────────────────────────────────────
 
-async fn run_entity_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>, String> {
+async fn run_entity_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>> {
     use super::entity_rules::{EmptyDefinition, MissingZhNomenclature, NoNomenclature};
 
     let rules: Vec<Box<dyn EntityDiagnosticRule>> = vec![
@@ -237,9 +230,7 @@ async fn run_entity_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>, St
     let mut issues = Vec::new();
     let conn = &*storage.conn().await;
 
-    let all_entities = repo::entity_list_all(conn)
-        .await
-        .map_err(|e| e.to_string())?;
+    let all_entities = repo::entity_list_all(conn).await?;
 
     for entity in all_entities {
         for rule in &rules {
@@ -254,7 +245,7 @@ async fn run_entity_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>, St
 
 // ── Entry point ──────────────────────────────────────────────────
 
-pub async fn run_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>, String> {
+pub async fn run_diagnostics(storage: &Storage) -> Result<Vec<Diagnostic>> {
     let mut all_issues = Vec::new();
 
     let (index_issues, index_path_map) = run_index_diagnostics(storage).await?;

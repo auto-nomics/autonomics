@@ -294,6 +294,7 @@ impl Agent {
                 if memory_config.generate_memory && memory_config.is_root_agent(&self.shared.path) {
                     let agent_id = self.shared.id;
                     let storage = Arc::clone(&storage);
+                    let storage = crate::memory::agent_storage_memory_source(storage);
                     let memory = Arc::clone(memory);
                     let model = Arc::clone(&self.shared.model);
                     crate::supervise::spawn_safe_drop(

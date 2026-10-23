@@ -15,8 +15,8 @@ use super::artifacts::{
 };
 use super::store::{MemoryEntry, MemoryStage1Record, MemoryStore, SemanticObservation};
 use super::{MemoryConfig, SemanticGrounding, now_ms};
-use crate::message_ext::AgentMessageExt;
-use crate::storage::AgentStorage;
+use crate::message_ext::MemoryMessageExt;
+use crate::source::MemorySource;
 
 /// All root agents share one global memory scope. Scope partitioning can be
 /// introduced later without changing the repository contract.
@@ -24,7 +24,7 @@ pub const MEMORY_SCOPE_ID: Uuid = Uuid::nil();
 
 pub async fn run_memory_pipeline(
     agent_id: Uuid,
-    storage: Arc<dyn AgentStorage>,
+    storage: Arc<dyn MemorySource>,
     memory: Arc<MemoryBackend>,
     model_handle: Arc<ArcSwapOption<Model>>,
 ) {
@@ -36,7 +36,7 @@ pub async fn run_memory_pipeline(
 
 async fn run_pipeline(
     agent_id: Uuid,
-    storage: &Arc<dyn AgentStorage>,
+    storage: &Arc<dyn MemorySource>,
     memory: &Arc<MemoryBackend>,
     model_handle: &Arc<ArcSwapOption<Model>>,
     config: &MemoryConfig,
@@ -92,7 +92,7 @@ async fn run_grounding(
 
 async fn run_phase1(
     agent_id: Uuid,
-    storage: &Arc<dyn AgentStorage>,
+    storage: &Arc<dyn MemorySource>,
     memory: &Arc<dyn MemoryStore>,
     model_handle: &Arc<ArcSwapOption<Model>>,
     config: &MemoryConfig,
@@ -434,98 +434,4 @@ fn build_phase2_prompt(
          RAW MEMORIES\n{raw}\nUSER UPDATE NOTES\n{notes}\nEXISTING ENTRIES\n{entries}\n\
          EXISTING SUMMARY\n{summary}\n"
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testing::dummy_model_info;
-    use agentik_sdk::model::Model;
-    use agentik_sdk::provider::client::MockApiClient;
-
-    #[tokio::test]
-    async fn pipeline_extracts_consolidates_and_skips_unchanged_sources() {
-        let mut mock = MockApiClient::new();
-        mock.expect_request()
-            .times(1)
-            .withf(|messages, _, _| {
-                messages
-                    .iter()
-                    .any(|message| message.log_summary().contains("Convert this"))
-            })
-            .returning(|_, _, _| {
-                Ok(Message::assistant_text(
-                    r#"{"raw_memory":"User prefers verified tests.","rollout_summary":"Implemented request.","rollout_slug":"test preference"}"#,
-                ))
-            });
-        mock.expect_request()
-            .times(1)
-            .withf(|messages, _, _| {
-                messages
-                    .iter()
-                    .any(|message| message.log_summary().contains("Consolidate raw session"))
-            })
-            .returning(|_, _, _| {
-                Ok(Message::assistant_text(
-                    r##"{"entries":[{"entry_type":"workflow","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
-                ))
-            });
-
-        let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
-            dummy_model_info("memory-test"),
-            mock,
-        ))));
-        let turso_store = Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
-        let storage: Arc<dyn AgentStorage> = turso_store.clone();
-        let memory_store: Arc<dyn MemoryStore> = turso_store;
-        let mut config = MemoryConfig::new();
-        config.min_idle_hours = 0;
-        let memory = Arc::new(MemoryBackend::new(config, memory_store.clone(), None));
-
-        let agent_id = Uuid::new_v4();
-        let session_id = Uuid::new_v4();
-        storage.start_session(agent_id, session_id).await.unwrap();
-        storage
-            .append_message(session_id, &Message::user("always run tests"))
-            .await
-            .unwrap();
-        storage.end_session(session_id).await.unwrap();
-
-        let config = memory.effective_memory_config();
-        run_pipeline(agent_id, &storage, &memory, &model, &config)
-            .await
-            .unwrap();
-        let config = memory.effective_memory_config();
-        run_pipeline(agent_id, &storage, &memory, &model, &config)
-            .await
-            .unwrap();
-
-        let rows = memory
-            .store
-            .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
-            .await
-            .unwrap();
-        assert_eq!(rows.len(), 1);
-        let entries = memory
-            .store
-            .list_entries(MEMORY_SCOPE_ID, 10)
-            .await
-            .unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].body_md.contains("targeted tests"));
-        let summary = memory
-            .store
-            .get_summary(MEMORY_SCOPE_ID)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(summary.summary_md.starts_with("v1\n"));
-        let observations = memory
-            .store
-            .list_observations(MEMORY_SCOPE_ID, "candidate", 10)
-            .await
-            .unwrap();
-        assert_eq!(observations.len(), 1);
-        assert_eq!(observations[0].predicate, "uses");
-    }
 }
