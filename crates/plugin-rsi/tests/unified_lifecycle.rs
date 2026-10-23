@@ -6,9 +6,9 @@ use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::PluginStateLayout;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginLifecycle,
-    PluginPublisher, PluginPullRequestPublisher, PluginStatus, PluginStore, PublishOutcome,
-    PullRequestOutcome, ValidationOutcome,
+    Environment, EnvironmentCatalog, GitRepo, MergeOutcome, PluginLifecycle, PluginPublisher,
+    PluginPullRequestPublisher, PluginStatus, PluginStore, PublishOutcome, PullRequestOutcome,
+    ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -141,8 +141,7 @@ async fn plugin_is_developed_published_updated_and_installed_in_one_workspace() 
         )
         .unwrap();
 
-    let profile = AgentProfile::new("unified-plugin-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("unified-plugin-agent");
     execute(
         &tools,
         "plugin_node_create",

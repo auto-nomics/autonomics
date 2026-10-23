@@ -6,9 +6,9 @@ mod common;
 
 use plugin_rsi::GitRepo;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GhPublisher,
-    GhPublisherConfig, InstalledPluginSource, PluginInfra, PluginLifecycle, PluginStatus,
-    PluginStore, ValidationOutcome,
+    Environment, EnvironmentCatalog, EnvironmentRegistry, GhPublisher, GhPublisherConfig,
+    InstalledPluginSource, PluginInfra, PluginLifecycle, PluginStatus, PluginStore,
+    ValidationOutcome,
 };
 use serde_json::{Value, json};
 
@@ -97,8 +97,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         )
         .unwrap();
 
-    let profile = AgentProfile::new("reference-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("reference-agent");
     execute(
         &tools,
         "plugin_node_create",
@@ -152,8 +151,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     plugin_rsi::PluginDevelopmentToolsetRegistry::global()
         .configure_environments(EnvironmentRegistry::ephemeral(catalog()))
         .unwrap();
-    let profile = AgentProfile::new("fork-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("fork-agent");
     let fork_result = execute(
         &tools,
         "plugin_fork",

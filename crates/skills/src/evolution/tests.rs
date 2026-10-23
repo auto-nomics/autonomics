@@ -381,7 +381,10 @@ mod channel_funnel {
         };
         assert_eq!(final_status.phase, CyclePhase::Idle);
         assert!(
-            final_status.last_triggers.iter().any(|t| t == "observation"),
+            final_status
+                .last_triggers
+                .iter()
+                .any(|t| t == "observation"),
             "last_triggers missing: {:?}",
             final_status.last_triggers
         );

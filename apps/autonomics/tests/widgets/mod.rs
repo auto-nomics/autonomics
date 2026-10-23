@@ -4,12 +4,12 @@
 //! integration tests can reach them. Paths resolve relative to this
 //! directory (`tests/widgets/`).
 
-#[path = "../../src/widgets/observation_browser_widget.rs"]
-pub mod observation_browser_widget;
+// `evolution_widget/mod.rs` declares `pub mod skill_browser;` /
+// `pub mod observation_browser;`, which resolve relative to the mod.rs
+// directory both in the src tree and under this `#[path]` inclusion,
+// so only popup needs an explicit shim here.
+
+#[path = "../../src/widgets/evolution_widget/mod.rs"]
+pub mod evolution_widget;
 #[path = "../../src/widgets/popup.rs"]
 pub mod popup;
-#[path = "../../src/widgets/skill_browser_widget.rs"]
-pub mod skill_browser_widget;
-#[path = "../../src/widgets/skill_evolution_widget.rs"]
-#[allow(dead_code)]
-pub mod skill_evolution_widget;

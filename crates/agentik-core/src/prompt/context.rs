@@ -1,6 +1,6 @@
 use agentik_sdk::types::Message;
 
-use crate::message_ext::AgentMessageExt;
+use agentik_sdk::AgentMessageExt;
 
 #[derive(Debug, Default)]
 pub struct Context {

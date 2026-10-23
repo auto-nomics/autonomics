@@ -210,24 +210,7 @@ pub struct AgentRuntimeOverrides {
     pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
 
-/// Fully resolved per-agent settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct AgentRuntimeConfig {
-    pub use_memory: bool,
-    pub generate_memory: bool,
-    pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
-}
-
-impl AgentRuntimeConfig {
-    #[must_use]
-    pub fn new(use_memory: bool, generate_memory: bool) -> Self {
-        Self {
-            use_memory,
-            generate_memory,
-            reasoning_effort: None,
-        }
-    }
-}
+pub use agentik_memory::AgentRuntimeConfig;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Error
@@ -435,56 +418,6 @@ pub trait AgentStorage: Send + Sync {
         status: Option<&str>,
         limit: u32,
     ) -> Result<Vec<AgentDelegationRecord>, StorageError>;
-    // ── Cross-session memories ─────────────────────────────
-
-    async fn get_memory_stage1_output(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<Option<crate::memory::MemoryStage1Record>, StorageError>;
-
-    async fn claim_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool, StorageError>;
-
-    async fn complete_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        output: crate::memory::MemoryStage1Record,
-    ) -> Result<(), StorageError>;
-
-    async fn fail_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<(), StorageError>;
-
-    async fn list_memory_stage1_outputs(
-        &self,
-        scope_id: Uuid,
-        limit: usize,
-    ) -> Result<Vec<crate::memory::MemoryStage1Record>, StorageError>;
-
-    async fn claim_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool, StorageError>;
-
-    async fn fail_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<(), StorageError>;
-
     // ── Session plan (per-conversation persistent task plan) ──
 
     /// Persist a session's current plan (full-snapshot upsert).

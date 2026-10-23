@@ -61,6 +61,11 @@ pub const MAX_CLUSTERS_PER_PARTITION: usize = 32;
 /// pattern", not merely "similar".
 pub const MERGE_THRESHOLD: f32 = 0.90;
 
+/// Default trigger threshold for callers that have not wired a
+/// configured value yet: every pass runs, matching the pre-threshold
+/// behavior.
+pub const DEFAULT_TRIGGER_THRESHOLD: usize = 1;
+
 /// One recurring pattern: the member observation ids, their mean
 /// vector, and the partition the pattern recruits from. This is the
 /// unit downstream consumers (distillation) receive — they hydrate
@@ -109,6 +114,32 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// What happened to one cluster during a pass, with the concrete
+/// observation ids involved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClusterChange {
+    /// Cluster founded this pass; the observations are its founding
+    /// members plus any later joins.
+    Created { observations: Vec<String> },
+    /// Existing cluster gained observations — new joins and/or
+    /// members absorbed from a merged-away sibling.
+    Added { observations: Vec<String> },
+    /// Cluster absorbed into a sibling by consolidation; its
+    /// observations moved to the surviving cluster id.
+    Removed {
+        into: String,
+        observations: Vec<String>,
+    },
+}
+
+/// One cluster-level mutation from a pass, addressed by cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterEvent {
+    pub cluster_id: String,
+    pub partition_key: String,
+    pub change: ClusterChange,
+}
+
 /// Outcome of one clustering pass.
 pub struct ClusterReport {
     /// Clusters whose membership met [`MIN_CLUSTER`].
@@ -118,11 +149,16 @@ pub struct ClusterReport {
     /// Clusters absorbed into a same-partition sibling by the
     /// post-pass consolidation.
     pub merged: usize,
+    /// Per-cluster membership mutations this pass, in pass order:
+    /// creations/joins/absorptions of surviving clusters first, then
+    /// merge-away removals. Empty when the pass was below threshold.
+    pub changes: Vec<ClusterEvent>,
 }
 
 /// Incremental clustering executor: loads persisted clusters,
 /// assigns only the not-yet-clustered observations, persists the
 /// deltas.
+#[derive(Clone)]
 pub struct ClusterProcessor {
     storage: Arc<dyn ObservationStorage>,
 }
@@ -132,11 +168,60 @@ impl ClusterProcessor {
         Self { storage }
     }
 
+    /// Step 1 of pending retrieval: anchored observations that no
+    /// persisted cluster holds yet — metadata only, no vector IO.
+    /// `list()` is ordered by id, so assignment order — and
+    /// therefore cluster ids — stay stable across replays.
+    async fn get_pending_observations(&self, assigned_ids: &HashSet<String>) -> Vec<Observation> {
+        self.storage
+            .list()
+            .await
+            .into_iter()
+            // Skip observations that already have been clustered
+            .filter(|observation| {
+                partition_key(observation).is_some() && !assigned_ids.contains(&observation.id)
+            })
+            .collect()
+    }
+
+    /// Step 2: attach each pending observation's vector under
+    /// `signature`; observations without one are dropped here.
+    async fn load_pending_vectors(
+        &self,
+        pending: Vec<Observation>,
+        signature: &str,
+    ) -> Result<Vec<(Observation, Vec<f32>)>> {
+        let mut with_vectors = Vec::with_capacity(pending.len());
+        for observation in pending {
+            let Some(vector) = self
+                .storage
+                .load_embedding(&observation.id, signature)
+                .await?
+            else {
+                continue;
+            };
+            with_vectors.push((observation, vector));
+        }
+        Ok(with_vectors)
+    }
+
     /// One incremental pass under `signature` (the current
     /// embedder's identity, from the hub). Clusters persisted under
     /// a different signature are discarded and rebuilt from the
     /// full observation set.
-    pub async fn execute_cluster(&self, signature: &str) -> Result<ClusterReport> {
+    ///
+    /// # Arguments
+    ///
+    /// * `signature` — identity of the embedding model the current
+    ///   vectors carry (from
+    ///   [`ObservationHub::embedding_signature`](crate::ObservationHub::embedding_signature)).
+    ///   Observations without a stored vector under this signature
+    ///   are skipped; persisted clusters whose
+    ///   [`Cluster::model_signature`] differs are cleared and
+    ///   rebuilt from the full observation set.
+    ///
+    /// * `threshold` - accumulated number of observations when trigger clustering
+    pub async fn clustering(&self, signature: &str, threshold: usize) -> Result<ClusterReport> {
         let mut clusters = self.storage.load_clusters().await?;
         if clusters.iter().any(|c| c.model_signature != signature) {
             self.storage.clear_clusters().await?;
@@ -148,27 +233,30 @@ impl ClusterProcessor {
             .flat_map(|c| c.members.iter().cloned())
             .collect();
 
-        // Candidates: anchored observations with a vector under the
-        // current signature that no persisted cluster holds yet.
-        // `list()` is ordered by id, so assignment order — and
-        // therefore cluster ids — stay stable across replays.
-        let mut pending = Vec::new();
-        for observation in self.storage.list().await {
-            if partition_key(&observation).is_none() || assigned_ids.contains(&observation.id) {
-                continue;
-            }
-            let Some(vector) = self
-                .storage
-                .load_embedding(&observation.id, signature)
-                .await?
-            else {
-                continue;
-            };
-            pending.push((observation, vector));
-        }
-
         let mut dirty: HashSet<String> = HashSet::new();
         let mut assigned = 0;
+        // Per-cluster membership ledger for the change report:
+        // observation ids that joined each cluster this pass, and
+        // which clusters were founded (vs merely joined).
+        let mut joined: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        let mut founded: HashSet<String> = HashSet::new();
+        // Two-step retrieval: the observation scan is cheap metadata
+        // IO; embeddings are only loaded once the trigger threshold
+        // is met, so a below-threshold pass costs one `list()`.
+        let pending = self.get_pending_observations(&assigned_ids).await;
+        if pending.len() < threshold {
+            return Ok(ClusterReport {
+                surfaced: clusters
+                    .into_iter()
+                    .filter(|c| c.members.len() >= MIN_CLUSTER)
+                    .collect(),
+                assigned,
+                merged: 0,
+                changes: Vec::new(),
+            });
+        }
+        let pending = self.load_pending_vectors(pending, signature).await?;
         for (observation, vector) in pending {
             assigned += 1;
             // Anchored by the eligibility filter above; if that
@@ -205,12 +293,15 @@ impl ClusterProcessor {
                         .find(|c| c.id == id)
                         .expect("similarity scanned live clusters");
                     join_cluster(cluster, &vector, observation.id.clone());
-                    dirty.insert(id);
+                    dirty.insert(id.clone());
+                    joined.entry(id).or_default().push(observation.id);
                 }
                 None => {
                     let mut members = BTreeSet::new();
                     members.insert(observation.id.clone());
                     let id = cluster_hash(&members);
+                    founded.insert(id.clone());
+                    joined.entry(id.clone()).or_default().push(observation.id);
                     clusters.push(Cluster {
                         id: id.clone(),
                         model_signature: signature.to_string(),
@@ -226,8 +317,13 @@ impl ClusterProcessor {
         // Post-pass consolidation: drift can leave two centroids of
         // one partition nearly parallel — one pattern split in two.
         let merge = merge_close_clusters(&mut clusters)?;
-        for id in &merge.removed {
-            self.storage.delete_cluster(id).await?;
+        for away in &merge.removed {
+            self.storage.delete_cluster(&away.id).await?;
+            // The survivor's report gains the absorbed observations.
+            joined
+                .entry(away.into.clone())
+                .or_default()
+                .extend(away.observations.iter().cloned());
         }
         dirty.extend(merge.changed.iter().cloned());
         dirty.retain(|id| clusters.iter().any(|c| &c.id == id));
@@ -238,6 +334,41 @@ impl ClusterProcessor {
             }
         }
 
+        // Assemble the per-cluster change report: surviving clusters
+        // first (in storage order), then the merge-away removals in
+        // the order consolidation dropped them.
+        let mut changes: Vec<ClusterEvent> = clusters
+            .iter()
+            .filter_map(|cluster| {
+                let observations = joined.get(&cluster.id)?;
+                if observations.is_empty() {
+                    return None;
+                }
+                let change = if founded.contains(&cluster.id) {
+                    ClusterChange::Created {
+                        observations: observations.clone(),
+                    }
+                } else {
+                    ClusterChange::Added {
+                        observations: observations.clone(),
+                    }
+                };
+                Some(ClusterEvent {
+                    cluster_id: cluster.id.clone(),
+                    partition_key: cluster.partition_key.clone(),
+                    change,
+                })
+            })
+            .collect();
+        changes.extend(merge.removed.iter().map(|away| ClusterEvent {
+            cluster_id: away.id.clone(),
+            partition_key: away.partition_key.clone(),
+            change: ClusterChange::Removed {
+                into: away.into.clone(),
+                observations: away.observations.clone(),
+            },
+        }));
+
         Ok(ClusterReport {
             surfaced: clusters
                 .into_iter()
@@ -245,6 +376,7 @@ impl ClusterProcessor {
                 .collect(),
             assigned,
             merged: merge.removed.len(),
+            changes,
         })
     }
 }
@@ -309,16 +441,32 @@ fn merge_close_clusters(clusters: &mut Vec<Cluster>) -> Result<MergeOutcome> {
         // cluster — or past the end when the survivor was last.
         let survivor_id = clusters[survivor].id.clone();
         let outcome = clusters.remove(dropped);
-        removed.push(outcome.id);
+        removed.push(MergedAway {
+            id: outcome.id,
+            partition_key: outcome.partition_key,
+            into: survivor_id.clone(),
+            observations: outcome.members.iter().cloned().collect(),
+        });
         changed.push(survivor_id);
     }
     Ok(MergeOutcome { removed, changed })
 }
 
-/// Which clusters a consolidation pass dropped and rewrote.
+/// Which clusters a consolidation pass dropped and rewrote. Each
+/// removal records where the dropped cluster's observations went.
 struct MergeOutcome {
-    removed: Vec<String>,
+    removed: Vec<MergedAway>,
     changed: Vec<String>,
+}
+
+/// One merge-away: the dropped cluster, its surviving sibling, and
+/// the observations that moved between them.
+#[derive(Debug)]
+struct MergedAway {
+    id: String,
+    partition_key: String,
+    into: String,
+    observations: Vec<String>,
 }
 
 #[cfg(test)]
@@ -332,7 +480,7 @@ mod tests {
     async fn clustered(hub: &ObservationHub) -> Vec<Cluster> {
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap()
             .surfaced
@@ -525,13 +673,79 @@ mod tests {
         assert_eq!(first.len(), 1);
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         let report = processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap();
         assert_eq!(report.assigned, 0);
         assert_eq!(report.surfaced.len(), 1);
         assert_eq!(report.surfaced[0].id, first[0].id);
         assert_eq!(report.surfaced[0].members, first[0].members);
+        // Nothing moved, so the change report is empty.
+        assert!(report.changes.is_empty());
+    }
+
+    /// The change report names clusters and the concrete observations
+    /// that moved: a founding pass reports `Created` with every
+    /// founding member; a later join reports `Added` with just the
+    /// newcomer.
+    #[tokio::test]
+    async fn change_report_tracks_creations_and_joins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hub = ObservationHub::new(tmp.path());
+        for i in 0..3 {
+            observe(&hub, "boom at step N", &format!("fix {i}")).await;
+        }
+        let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
+        let first = processor
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
+            .await
+            .unwrap();
+        assert_eq!(first.changes.len(), 1);
+        let event = &first.changes[0];
+        assert_eq!(event.partition_key, "failure\u{1f}file_to_dataframe");
+        match &event.change {
+            ClusterChange::Created { observations } => {
+                assert_eq!(observations.len(), 3);
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+
+        // A later similar observation joins the existing cluster.
+        observe(&hub, "boom at step N", "fix later").await;
+        let second = processor
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
+            .await
+            .unwrap();
+        let id = &event.cluster_id;
+        let join_event = second
+            .changes
+            .iter()
+            .find(|e| &e.cluster_id == id)
+            .expect("the joined cluster reports a change");
+        match &join_event.change {
+            ClusterChange::Added { observations } => assert_eq!(observations.len(), 1),
+            other => panic!("expected Added, got {other:?}"),
+        }
+    }
+
+    /// Below the trigger threshold the pass reports no changes even
+    /// when clusters exist.
+    #[tokio::test]
+    async fn below_threshold_reports_no_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hub = ObservationHub::new(tmp.path());
+        for i in 0..3 {
+            observe(&hub, "boom at step N", &format!("fix {i}")).await;
+        }
+        assert_eq!(clustered(&hub).await.len(), 1);
+        observe(&hub, "boom at step N", "fix pending").await;
+        let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
+        let report = processor
+            .clustering(&hub.embedding_signature(), 2)
+            .await
+            .unwrap();
+        assert_eq!(report.assigned, 0);
+        assert!(report.changes.is_empty());
     }
 
     /// A model swap discards stale clusters and replays from the
@@ -587,7 +801,12 @@ mod tests {
             cluster("other", "q", vec![1.0, 0.0], &["d1"]),
         ];
         let outcome = merge_close_clusters(&mut clusters).unwrap();
-        assert_eq!(outcome.removed, vec!["small".to_string()]);
+        let away = &outcome.removed[0];
+        assert_eq!(away.id, "small");
+        assert_eq!(away.into, "big");
+        assert_eq!(away.partition_key, "p");
+        assert_eq!(away.observations, vec!["b1".to_string()]);
+        assert_eq!(outcome.removed.len(), 1);
         let big = clusters.iter().find(|c| c.id == "big").unwrap();
         assert_eq!(big.members.len(), 3);
         // Weighted mean of (2×[1,0] + 1×[0.99,0.141]) / 3.
@@ -624,7 +843,12 @@ mod tests {
             cluster("far", "p", vec![0.0, 1.0], &["c1"]),
         ];
         let outcome = merge_close_clusters(&mut clusters).unwrap();
-        assert_eq!(outcome.removed, vec!["small".to_string()]);
+        let away = &outcome.removed[0];
+        assert_eq!(away.id, "small");
+        assert_eq!(away.into, "big");
+        assert_eq!(away.partition_key, "p");
+        assert_eq!(away.observations, vec!["b1".to_string()]);
+        assert_eq!(outcome.removed.len(), 1);
         assert_eq!(outcome.changed, vec!["big".to_string()]);
         let big = clusters.iter().find(|c| c.id == "big").unwrap();
         assert_eq!(big.members.len(), 4);
@@ -676,7 +900,7 @@ mod tests {
 
         let processor = ClusterProcessor::new(Arc::clone(hub.storage()));
         let report = processor
-            .execute_cluster(&hub.embedding_signature())
+            .clustering(&hub.embedding_signature(), DEFAULT_TRIGGER_THRESHOLD)
             .await
             .unwrap();
         assert_eq!(report.assigned, count);

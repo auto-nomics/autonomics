@@ -335,6 +335,13 @@ impl SkillManager {
         self.hub.storage().list().await
     }
 
+    /// Persisted clusters under the current embedder signature, as
+    /// the clustering pass wrote them (member ids only — callers
+    /// hydrate readable fields through [`Self::observations`]).
+    pub async fn clusters(&self) -> Vec<evolution_core::cluster::Cluster> {
+        self.hub.storage().load_clusters().await.unwrap_or_default()
+    }
+
     /// The hub this manager reads evidence from.
     pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
         Arc::clone(&self.hub)
@@ -347,10 +354,6 @@ impl SkillManager {
 
     /// Run one deterministic distillation pass for skill-eligible evidence.
     ///
-    /// Observations are shared across evolution subsystems. A route ledger
-    /// entry explicitly selects which observations reach skill distillation;
-    /// legacy un-routed observations remain skill-eligible for compatibility.
-    ///
     /// No model runs here: the hub embedded every observation at record
     /// time and this pass only reads those vectors back.
     pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
@@ -360,12 +363,13 @@ impl SkillManager {
             self.hub.storage(),
         ));
         let report = processor
-            .execute_cluster(&self.hub.embedding_signature())
+            .clustering(
+                &self.hub.embedding_signature(),
+                evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD,
+            )
             .await
             .map_err(SkillError::Evolution)?;
-        // The skill subsystem hydrates only its own audience: routing
-        // decides which members reach skill distillation.
-        let observations = self.skill_eligible_observations().await;
+        let observations = self.hub.storage().list().await;
         let ids: Vec<String> = observations.iter().map(|o| o.id.clone()).collect();
         let embeddings = self
             .hub
@@ -379,29 +383,6 @@ impl SkillManager {
             &self.proposals(),
             &self.registry(),
         )
-    }
-
-    async fn skill_eligible_observations(&self) -> Vec<evolution_core::Observation> {
-        let observations = self.hub.storage().list().await;
-        let routes = self.hub.routes().list();
-        let mut routed = std::collections::HashSet::new();
-        let mut eligible = std::collections::HashSet::new();
-        for route in routes {
-            routed.insert(route.observation_id.clone());
-            if matches!(
-                route.audience,
-                evolution_core::ObservationAudience::Skill
-                    | evolution_core::ObservationAudience::Both
-            ) {
-                eligible.insert(route.observation_id);
-            }
-        }
-        observations
-            .into_iter()
-            .filter(|observation| {
-                eligible.contains(&observation.id) || !routed.contains(&observation.id)
-            })
-            .collect()
     }
 
     /// Apply a pending proposal into the live library. Creates land
@@ -448,55 +429,9 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evolution_core::routing::{ObservationRouteStore, observation_route};
 
     fn manager_in(tmp: &std::path::Path) -> SkillManager {
         SkillManager::new(tmp.join("state"))
-    }
-
-    #[tokio::test]
-    async fn distillation_respects_observation_routes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let manager = manager_in(tmp.path());
-        let routes = ObservationRouteStore::open(&tmp.path().join("state"));
-
-        for index in 0..3 {
-            let observation = manager
-                .observation_hub()
-                .record(evolution_core::ObservationInput {
-                    kind: evolution_core::ObservationKind::Failure,
-                    source: evolution_core::ObservationSource::Agent,
-                    summary: format!("plugin failure {index}"),
-                    body: format!("Fix attempt {index}."),
-                    node_kind: Some("plugin_adapter".into()),
-                    error: Some("adapter rejected input".into()),
-                })
-                .await
-                .unwrap();
-            let (_, route) = observation_route(&observation, Some("demo-plugin"), None);
-            routes.record(route).unwrap();
-        }
-        for index in 0..3 {
-            let observation = manager
-                .observation_hub()
-                .record(evolution_core::ObservationInput {
-                    kind: evolution_core::ObservationKind::Recipe,
-                    source: evolution_core::ObservationSource::Agent,
-                    summary: format!("generic recipe {index}"),
-                    body: format!("Useful generic procedure {index}."),
-                    node_kind: Some("generic_node".into()),
-                    error: None,
-                })
-                .await
-                .unwrap();
-            let (_, route) = observation_route(&observation, None, None);
-            routes.record(route).unwrap();
-        }
-
-        manager.distill().await.unwrap();
-        let proposals = manager.proposals().list();
-        assert_eq!(proposals.len(), 1, "{proposals:?}");
-        assert_eq!(proposals[0].name, "generic-node-generic-recipe-recipe");
     }
 
     fn make_skill(root: &std::path::Path, name: &str) {

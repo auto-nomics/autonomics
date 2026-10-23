@@ -47,6 +47,12 @@ pub enum Error {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// The evolution worker has stopped or its reply channel was
+    /// dropped before responding. Always indicates the worker is no
+    /// longer running — restart required.
+    #[error("evolution worker gone: {0}")]
+    WorkerGone(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

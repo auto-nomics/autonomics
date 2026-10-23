@@ -5,7 +5,7 @@ mod common;
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
 use plugin_rsi::{
-    AgentProfile, Environment, EnvironmentCatalog, EnvironmentRegistry, GitRepo, MergeOutcome,
+    Environment, EnvironmentCatalog, EnvironmentRegistry, GitRepo, MergeOutcome,
     PluginDevelopmentToolsetRegistry, PluginDistiller, PluginInfra, PluginPublisher,
     PluginPullRequestPublisher, PluginStatus, PublishOutcome, PullRequestOutcome,
 };
@@ -154,8 +154,7 @@ async fn local_activation_is_distilled_to_github_without_blocking_the_agent() {
             &catalog(),
         )
         .unwrap();
-    let profile = AgentProfile::new("distillation-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("distillation-agent");
     let environments = execute(&tools, "plugin_environments_list", json!({}))
         .await
         .unwrap();

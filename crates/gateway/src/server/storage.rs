@@ -1,6 +1,6 @@
 //! Handlers for persisted agents, sessions, history, and plans.
 
-use agentik_core::message_ext::AgentMessageExt as _;
+use agentik_sdk::AgentMessageExt as _;
 use agentik_sdk::types::messages::Message;
 use agentik_types::AgentPlan;
 use axum::Json;

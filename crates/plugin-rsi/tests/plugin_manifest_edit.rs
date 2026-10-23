@@ -12,7 +12,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use agentik_core::tools::{ToolError, ToolRegistration, ToolResult};
 use agentik_sdk::types::ToolResultContent;
-use plugin_rsi::{AgentProfile, Environment, EnvironmentCatalog, PluginStateLayout, PluginStore};
+use plugin_rsi::{Environment, EnvironmentCatalog, PluginStateLayout, PluginStore};
 use serde_json::{Value, json};
 
 const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
@@ -112,8 +112,7 @@ async fn manifest_edits_are_validated_before_they_land() {
         )
         .unwrap();
 
-    let profile = AgentProfile::new("manifest-edit-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("manifest-edit-agent");
     let plugin_path = "/plugins/dev/manifest-plugin";
     json_result(
         &tools,

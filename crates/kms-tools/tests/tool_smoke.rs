@@ -145,7 +145,6 @@ async fn test_create_and_get_knowledge_via_tool() {
         .implementation
         .execute(json!({
             "title": "Rust · 内存安全",
-            "knowledge_type": "aspect",
             "entities": ["Rust"],
             "content": "Rust achieves memory safety via [[Ownership]] and [[Borrow checker]]."
         }))
@@ -228,7 +227,6 @@ async fn test_vague_title_rejected() {
         .implementation
         .execute(json!({
             "title": "Docker · 概述",
-            "knowledge_type": "aspect",
             "entities": ["Docker"],
             "content": "Some content"
         }))

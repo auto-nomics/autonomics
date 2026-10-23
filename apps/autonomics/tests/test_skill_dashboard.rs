@@ -29,8 +29,7 @@
 mod widgets;
 
 use gateway::proto::{
-    SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillObservationView,
-    SkillProposalView,
+    ObservationView, SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView,
 };
 use ratatui::{
     backend::TestBackend,
@@ -41,7 +40,7 @@ use ratatui::{
     text::Line,
     widgets::{Paragraph, StatefulWidget as _, Widget as _},
 };
-use widgets::skill_evolution_widget::{
+use widgets::evolution_widget::{
     EvolutionTab, PanelFocus, SkillEvolutionState, SkillEvolutionWidget,
 };
 
@@ -176,8 +175,8 @@ fn fixture_state() -> SkillEvolutionState {
     state
 }
 
-fn fixture_observation(id: &str, summary: &str) -> SkillObservationView {
-    SkillObservationView {
+fn fixture_observation(id: &str, summary: &str) -> ObservationView {
+    ObservationView {
         id: id.into(),
         created_at: 1,
         kind: "failure".into(),
@@ -522,7 +521,7 @@ fn run_interactive_loop(
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use std::time::Duration;
 
-    use widgets::skill_evolution_widget::EvolutionTab;
+    use widgets::evolution_widget::EvolutionTab;
 
     let mut state = fixture_state();
     let mut next_canned = 0;

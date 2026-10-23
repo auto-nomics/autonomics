@@ -460,10 +460,10 @@ mod tests {
 
 // ── Skill evolution ───────────────────────────────────────────────────
 
-/// `GET /api/v1/skills/evolution/observations` — recorded evidence,
+/// `GET /api/v1/evolution/observations` — recorded evidence,
 /// newest first. Includes the full reusable body for the TUI browser.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillObservationView {
+pub struct ObservationView {
     pub id: String,
     pub created_at: i64,
     pub kind: String,
@@ -472,6 +472,30 @@ pub struct SkillObservationView {
     pub body: String,
     pub node_kind: Option<String>,
     pub error: Option<String>,
+}
+
+/// One member row of a [`ClusterView`] — enough for list rendering;
+/// the full observation hydrates through the observations endpoint.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ClusterMemberView {
+    pub id: String,
+    pub created_at: i64,
+    pub summary: String,
+}
+
+/// `GET /api/v1/evolution/clusters` — one surfaced recurring
+/// pattern: which partition it recruits from and the observations
+/// that formed it, oldest member first for a stable display order.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ClusterView {
+    pub id: String,
+    /// Observation kind half of the partition key.
+    pub kind: String,
+    /// Node-kind anchor half of the partition key.
+    pub node_kind: String,
+    /// Identity of the embedding model the cluster vectors use.
+    pub model_signature: String,
+    pub members: Vec<ClusterMemberView>,
 }
 
 /// `GET /api/v1/skills/evolution` — the dashboard's data snapshot.

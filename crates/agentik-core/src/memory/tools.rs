@@ -7,7 +7,7 @@ use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::{MEMORY_SCOPE_ID, MemoryBackend, artifacts::redact_secrets};
+use super::{MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
 use crate::tools::{ToolError, ToolFunction, ToolRegistration};
 
 const DEFAULT_READ_LINES: usize = 200;
@@ -352,7 +352,7 @@ fn note_slug(raw: Option<&str>) -> String {
     }
 }
 
-fn store_error(error: crate::storage::StorageError) -> ToolError {
+fn store_error(error: agentik_memory::MemoryError) -> ToolError {
     ToolError::ExecutionFailed {
         source: Box::new(error),
     }
@@ -365,8 +365,11 @@ mod tests {
 
     #[tokio::test]
     async fn search_read_list_and_note_use_turso() {
-        let store: Arc<dyn crate::memory::MemoryStore> =
-            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let store: Arc<dyn crate::memory::MemoryStore> = Arc::new(
+            crate::memory::TursoMemoryStorage::open_in_memory()
+                .await
+                .unwrap(),
+        );
         let backend = Arc::new(MemoryBackend::new(
             MemoryConfig::new(),
             Arc::clone(&store),

@@ -19,10 +19,10 @@ use uuid::Uuid;
 use crate::agent::InternalEvent;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result, Retryable};
-use crate::message_ext::AgentMessageExt;
 use crate::prompt::system_prompt_builder;
 use crate::supervise::spawn_safe_drop;
 use crate::tools::task_runtime::{TaskStatus, TaskStore};
+use agentik_sdk::AgentMessageExt;
 use agentik_types::{AgentPlan, TurnExecutionStatus};
 
 use super::Session;
@@ -1424,8 +1424,11 @@ mod tests {
         let model = Model::with_client(dummy_model_info("mem-section"), mock);
 
         // Seed a memory summary the way phase 2 consolidation would.
-        let store: Arc<dyn MemoryStore> =
-            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let store: Arc<dyn MemoryStore> = Arc::new(
+            crate::memory::TursoMemoryStorage::open_in_memory()
+                .await
+                .unwrap(),
+        );
         store
             .complete_phase2(
                 MEMORY_SCOPE_ID,

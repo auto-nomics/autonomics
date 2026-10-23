@@ -357,7 +357,7 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::AgentConfig,
         },
         Command {
-            title: "Skill evolution dashboard".into(),
+            title: "Evolution dashboard".into(),
             keywords: "skills evolution proposals distill observe auto refine dashboard".into(),
             category: "skills".into(),
             action: CommandAction::SkillEvolutionPanel,

@@ -12,12 +12,14 @@
 //! to the agent.
 
 pub mod diagnostics;
+pub mod error;
 mod language;
 pub mod service;
 pub mod storage;
 pub mod view;
 
 pub use diagnostics::{CodeDescription, Diagnostic, Severity};
+pub use error::Error;
 pub use language::Language;
 pub use service::{
     BatchKnowledgeResult, BatchStatus, EntityFilter, KmsDocumentStore, KmsService,
@@ -25,8 +27,5 @@ pub use service::{
 };
 pub use storage::Storage;
 pub use storage::error::StorageError;
-pub use storage::types::{Entity, Index, Knowledge, KnowledgeType, Nomenclature, TargetType};
+pub use storage::types::{Entity, Index, Knowledge, Nomenclature, TargetType};
 pub use view::{IndexView, LocalView, SUBTREE_TITLES_LIMIT, SubtreeSummary};
-
-#[cfg(test)]
-mod tests;

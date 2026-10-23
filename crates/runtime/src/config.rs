@@ -63,10 +63,15 @@ const DEFAULT_DAG_HISTORY_DB: &str = "dag-history.db";
 /// Default agent persistence database filename (relative to `state_dir`).
 const DEFAULT_AGENT_DB: &str = "agent.db";
 
-/// Default KMS knowledge database filename (relative to `state_dir`).
+/// Default persistent-memory knowledge database filename.
+///
+/// Override via builder `.knowledge_db_path(…)` or env `AUTONOMICS_KNOWLEDGE_DB`.
+const DEFAULT_KNOWLEDGE_DB: &str = "knowledge.db";
+
+/// Default KMS database filename (relative to `state_dir`).
 ///
 /// Override via builder `.kms_db_path(…)` or env `AUTONOMICS_KMS_DB`.
-const DEFAULT_KMS_DB: &str = "knowledge.db";
+const DEFAULT_KMS_DB: &str = "kms.db";
 
 /// Default bibliography database path.
 ///
@@ -105,6 +110,9 @@ pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
 
 /// Env var overriding the KMS knowledge DB path.
 pub const ENV_KMS_DB: &str = "AUTONOMICS_KMS_DB";
+
+/// Env var overriding the persistent-memory knowledge DB path.
+pub const ENV_KNOWLEDGE_DB: &str = "AUTONOMICS_KNOWLEDGE_DB";
 
 /// Env var overriding the writing-system DB path.
 pub const ENV_WRITING_DB: &str = "AUTONOMICS_WRITING_DB";
@@ -507,6 +515,10 @@ pub struct RuntimeConfig {
     /// recovery.
     pub agent_db: PathBuf,
 
+    /// Path to the persistent-memory knowledge database (Turso/SQLite).
+    #[serde(default = "default_knowledge_db_path")]
+    pub knowledge_db_path: PathBuf,
+
     /// Path to the KMS knowledge database (Turso/SQLite). Legacy rows are
     /// migrated out of `agent.db` into this file once on startup.
     #[serde(default = "default_kms_db_path")]
@@ -653,6 +665,16 @@ fn default_kms_db_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_KMS_DB))
 }
 
+fn default_knowledge_db_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| {
+            PathBuf::from(h)
+                .join(DEFAULT_STATE_DIR)
+                .join(DEFAULT_KNOWLEDGE_DB)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_KNOWLEDGE_DB))
+}
+
 /// Six hours: frequent enough that overnight accumulation is dealt
 /// with, rare enough that the sweep is noise on any metric.
 const DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS: u64 = 6 * 60 * 60;
@@ -715,6 +737,11 @@ impl RuntimeConfig {
             .and_then(|b| b.agent_db.clone())
             .unwrap_or_else(|| state_dir.join(DEFAULT_AGENT_DB));
 
+        let knowledge_db_path = base
+            .and_then(|b| b.knowledge_db_path.clone())
+            .or_else(|| env_path(ENV_KNOWLEDGE_DB))
+            .unwrap_or_else(|| state_dir.join(DEFAULT_KNOWLEDGE_DB));
+
         let kms_db_path = base
             .and_then(|b| b.kms_db_path.clone())
             .or_else(|| env_path(ENV_KMS_DB))
@@ -765,6 +792,7 @@ impl RuntimeConfig {
             writing_db_path,
             app_db_path,
             agent_db,
+            knowledge_db_path,
             kms_db_path,
             opengwas_token,
             opengwas_cache_dir,
@@ -1391,7 +1419,7 @@ impl RuntimeConfig {
     pub fn summary(&self) -> String {
         format!(
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
-             dag_history_db: {}, bib_db: {}, app_db: {}, kms_db: {}, \
+             dag_history_db: {}, bib_db: {}, app_db: {}, knowledge_db: {}, kms_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
              browser_headless: {}, browser_no_sandbox: {}, \
@@ -1403,6 +1431,7 @@ impl RuntimeConfig {
             self.dag_history_db.display(),
             self.bib_db_path.display(),
             self.app_db_path.display(),
+            self.knowledge_db_path.display(),
             self.kms_db_path.display(),
             self.enable_dag_history,
             self.enable_bibliography,
@@ -1443,6 +1472,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
+    pub(crate) knowledge_db_path: Option<PathBuf>,
     pub(crate) kms_db_path: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
@@ -1526,6 +1556,12 @@ impl RuntimeConfigBuilder {
     /// Path to the agent persistence database (Turso/SQLite).
     pub fn agent_db(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_db = Some(path.into());
+        self
+    }
+
+    /// Path to the persistent-memory knowledge database.
+    pub fn knowledge_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.knowledge_db_path = Some(path.into());
         self
     }
 

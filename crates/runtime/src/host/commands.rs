@@ -493,7 +493,9 @@ impl RuntimeHost {
                             })
                             && let Some(agent_id) = entry.info.agent_id
                         {
-                            let storage = self.infra.storage.clone();
+                            let storage = agentik_core::memory::agent_storage_memory_source(
+                                self.infra.storage.clone(),
+                            );
                             let memory = Arc::clone(&entry.memory);
                             let model = Arc::clone(&entry.model);
                             let task_name = format!("memory_runtime_update::{key}");

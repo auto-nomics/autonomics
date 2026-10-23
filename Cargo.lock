@@ -75,6 +75,7 @@ dependencies = [
 name = "agentik-core"
 version = "0.1.0"
 dependencies = [
+ "agentik-memory",
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
@@ -92,6 +93,24 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "turso",
+ "uuid",
+]
+
+[[package]]
+name = "agentik-memory"
+version = "0.1.0"
+dependencies = [
+ "agentik-sdk",
+ "agentik-types",
+ "arc-swap",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
  "turso",
  "uuid",
 ]

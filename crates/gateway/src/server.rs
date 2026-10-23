@@ -9,6 +9,7 @@ mod events;
 mod hydration;
 mod lifecycle;
 mod model_config;
+mod observations;
 pub(crate) mod plugin_environments;
 mod plugins;
 mod router;

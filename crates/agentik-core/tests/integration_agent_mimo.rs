@@ -3,7 +3,7 @@
 #[tokio::test]
 #[ignore]
 async fn test_sdk_mimo_stream_smoke() {
-    use agentik_core::message_ext::AgentMessageExt;
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::Message;
     use agentik_sdk::http::auth::AuthMethod;
     use agentik_sdk::model::Model;

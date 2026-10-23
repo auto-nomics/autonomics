@@ -75,7 +75,6 @@ use uuid::Uuid;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use agentik_types::AgentPlan;
 
-use crate::memory::MemoryStage1Record;
 use crate::storage::{
     AgentLayoutSnapshot, AgentRecord, AgentRelation, AgentSnapshot, AgentStorage,
     PersistedAgentGraph, RelationKind, StorageError,
@@ -382,77 +381,6 @@ impl TursoAgentStorage {
                     ON agent_delegations(target_path, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_agent_delegations_status
                     ON agent_delegations(status, updated_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_stage1 (
-                    scope_id        TEXT NOT NULL,
-                    session_id      TEXT NOT NULL,
-                    source_hash     TEXT NOT NULL,
-                    raw_memory      TEXT NOT NULL,
-                    rollout_summary TEXT NOT NULL,
-                    rollout_slug    TEXT,
-                    status          TEXT NOT NULL,
-                    generated_at    INTEGER NOT NULL,
-                    lease_until     INTEGER NOT NULL DEFAULT 0,
-                    attempts        INTEGER NOT NULL DEFAULT 0,
-                    last_error      TEXT,
-                    updated_at      INTEGER NOT NULL,
-                    PRIMARY KEY (scope_id, session_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_stage1_generated
-                    ON memory_stage1(generated_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_jobs (
-                    scope_id     TEXT PRIMARY KEY,
-                    status       TEXT NOT NULL,
-                    source_hash  TEXT NOT NULL,
-                    lease_until  INTEGER NOT NULL,
-                    attempts     INTEGER NOT NULL DEFAULT 0,
-                    last_error   TEXT,
-                    updated_at   INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_entries (
-                    id          TEXT PRIMARY KEY,
-                    scope_id    TEXT NOT NULL,
-                    entry_type  TEXT NOT NULL,
-                    title       TEXT NOT NULL,
-                    body_md     TEXT NOT NULL,
-                    status      TEXT NOT NULL,
-                    confidence  REAL NOT NULL,
-                    created_at  INTEGER NOT NULL,
-                    updated_at  INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_status
-                    ON memory_entries(scope_id, status, updated_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_summaries (
-                    scope_id       TEXT PRIMARY KEY,
-                    schema_version TEXT NOT NULL,
-                    summary_md     TEXT NOT NULL,
-                    source_hash    TEXT NOT NULL,
-                    generated_at   INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_notes (
-                    id         TEXT PRIMARY KEY,
-                    scope_id   TEXT NOT NULL,
-                    slug       TEXT NOT NULL,
-                    content    TEXT NOT NULL,
-                    status     TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_notes_scope_status
-                    ON memory_notes(scope_id, status, created_at);
-                CREATE TABLE IF NOT EXISTS memory_semantic_observations (
-                    id          TEXT PRIMARY KEY,
-                    scope_id    TEXT NOT NULL,
-                    subject     TEXT NOT NULL,
-                    predicate   TEXT NOT NULL,
-                    object      TEXT NOT NULL,
-                    content     TEXT NOT NULL,
-                    status      TEXT NOT NULL,
-                    confidence  REAL NOT NULL,
-                    source_hash TEXT NOT NULL,
-                    created_at  INTEGER NOT NULL,
-                    last_error  TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_semantic_scope_status
-                    ON memory_semantic_observations(scope_id, status, created_at DESC);
                 CREATE TABLE IF NOT EXISTS agent_storage_metadata (
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -499,15 +427,6 @@ impl TursoAgentStorage {
         let _ = self
             .conn
             .execute("ALTER TABLE snapshots ADD COLUMN session_id TEXT", ())
-            .await;
-        // Add diagnostic outcome column to observations created by earlier
-        // database-backed memory builds.
-        let _ = self
-            .conn
-            .execute(
-                "ALTER TABLE memory_semantic_observations ADD COLUMN last_error TEXT",
-                (),
-            )
             .await;
         // Create per-session snapshot index (safe now that column exists).
         let _ = self
@@ -665,25 +584,6 @@ fn row_to_record(row: &turso::Row) -> Result<AgentRecord, StorageError> {
         config_json: serde_json::from_str(&config_str)?,
         created_at,
         last_active,
-    })
-}
-
-fn row_to_memory_stage1(row: &turso::Row) -> Result<MemoryStage1Record, StorageError> {
-    let session_id_str = text_col(row, 0)?;
-    let rollout_slug = match row.get_value(4)? {
-        Value::Text(s) if !s.is_empty() => Some(s),
-        _ => None,
-    };
-    Ok(MemoryStage1Record {
-        session_id: Uuid::parse_str(&session_id_str)
-            .map_err(|e| StorageError::Other(format!("parse memory session_id: {e}").into()))?,
-        source_hash: text_col(row, 1)?,
-        raw_memory: text_col(row, 2)?,
-        rollout_summary: text_col(row, 3)?,
-        rollout_slug,
-        status: text_col(row, 5)?,
-        generated_at: int_col(row, 6)?,
-        lease_until: int_col(row, 7)?,
     })
 }
 
@@ -1698,229 +1598,6 @@ impl AgentStorage for TursoAgentStorage {
         Ok(records)
     }
 
-    async fn get_memory_stage1_output(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
-                        status, generated_at, lease_until
-                 FROM memory_stage1
-                 WHERE scope_id = ?1 AND session_id = ?2",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(session_id.to_string()),
-                ]),
-            )
-            .await?;
-        match rows.next().await {
-            Ok(Some(row)) => Ok(Some(row_to_memory_stage1(&row)?)),
-            Ok(None) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn claim_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool, StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        let changed = self
-            .conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts, updated_at)
-                 VALUES (?1, ?2, ?3, '', '', NULL, 'running', 0, ?4, 1, ?5)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    status = 'running',
-                    lease_until = excluded.lease_until,
-                    attempts = memory_stage1.attempts + 1,
-                    updated_at = excluded.updated_at
-                 WHERE memory_stage1.source_hash <> excluded.source_hash
-                    OR memory_stage1.status = 'failed'
-                    OR (memory_stage1.status = 'running'
-                        AND memory_stage1.lease_until <= excluded.updated_at)",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(session_id.to_string()),
-                    Value::Text(source_hash.to_string()),
-                    Value::Integer(lease_until),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(changed > 0)
-    }
-
-    async fn complete_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        output: MemoryStage1Record,
-    ) -> Result<(), StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'succeeded', ?7, 0, 1, ?8)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    raw_memory = excluded.raw_memory,
-                    rollout_summary = excluded.rollout_summary,
-                    rollout_slug = excluded.rollout_slug,
-                    status = 'succeeded',
-                    generated_at = excluded.generated_at,
-                    lease_until = 0,
-                    attempts = memory_stage1.attempts + 1,
-                    last_error = NULL,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(output.session_id.to_string()),
-                    Value::Text(output.source_hash),
-                    Value::Text(output.raw_memory),
-                    Value::Text(output.rollout_summary),
-                    output.rollout_slug.map(Value::Text).unwrap_or(Value::Null),
-                    Value::Integer(output.generated_at),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn fail_memory_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<(), StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts,
-                     last_error, updated_at)
-                 VALUES (?1, ?2, ?3, '', '', NULL, 'failed', 0, 0, 1, ?4, ?5)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    status = 'failed',
-                    lease_until = 0,
-                    attempts = memory_stage1.attempts + 1,
-                    last_error = excluded.last_error,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(session_id.to_string()),
-                    Value::Text(source_hash.to_string()),
-                    Value::Text(error.to_string()),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn list_memory_stage1_outputs(
-        &self,
-        scope_id: Uuid,
-        limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
-                        status, generated_at, lease_until
-                 FROM memory_stage1
-                 WHERE scope_id = ?1 AND status = 'succeeded'
-                 ORDER BY generated_at DESC, session_id DESC
-                 LIMIT ?2",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Integer(limit as i64),
-                ]),
-            )
-            .await?;
-        collect_rows(&mut rows, row_to_memory_stage1).await
-    }
-
-    async fn claim_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool, StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        let changed = self
-            .conn
-            .execute(
-                "INSERT INTO memory_jobs
-                    (scope_id, status, source_hash, lease_until, attempts, updated_at)
-                 VALUES (?1, 'running', ?2, ?3, 1, ?4)
-                 ON CONFLICT(scope_id) DO UPDATE SET
-                    status = 'running',
-                    source_hash = excluded.source_hash,
-                    lease_until = excluded.lease_until,
-                    attempts = memory_jobs.attempts + 1,
-                    last_error = NULL,
-                    updated_at = excluded.updated_at
-                 WHERE NOT (memory_jobs.status = 'succeeded'
-                        AND memory_jobs.source_hash = excluded.source_hash)
-                    AND (memory_jobs.status <> 'running'
-                        OR memory_jobs.lease_until <= excluded.updated_at)",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(source_hash.to_string()),
-                    Value::Integer(lease_until),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(changed > 0)
-    }
-
-    async fn fail_memory_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<(), StorageError> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_jobs
-                    (scope_id, status, source_hash, lease_until, attempts,
-                     last_error, updated_at)
-                 VALUES (?1, 'failed', ?2, 0, 1, ?3, ?4)
-                 ON CONFLICT(scope_id) DO UPDATE SET
-                    status = 'failed',
-                    source_hash = excluded.source_hash,
-                    lease_until = 0,
-                    attempts = memory_jobs.attempts + 1,
-                    last_error = excluded.last_error,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    Value::Text(scope_id.to_string()),
-                    Value::Text(source_hash.to_string()),
-                    Value::Text(error.to_string()),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await?;
-        Ok(())
-    }
-
     async fn get_latest_snapshot_for_session(
         &self,
         _agent_id: Uuid,
@@ -2287,10 +1964,10 @@ where
 mod tests {
     use super::*;
     use crate::lifecycle::AgentLifecycleStatus;
-    use crate::message_ext::AgentMessageExt;
     use crate::profile::{AgentKind, AgentProfileConfig};
     use crate::session::SessionState;
     use crate::storage::AgentRuntimeOverrides;
+    use agentik_sdk::AgentMessageExt;
 
     fn now_ms() -> i64 {
         chrono::Utc::now().timestamp_millis()
@@ -3809,6 +3486,3 @@ mod wal_recovery_tests {
 #[cfg(test)]
 #[path = "turso_storage/memory_tests.rs"]
 mod memory_tests;
-
-#[path = "turso_storage/memory_store_impl.rs"]
-mod memory_store_impl;

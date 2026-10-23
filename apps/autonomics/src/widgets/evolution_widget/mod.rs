@@ -1,11 +1,12 @@
 //! Skill evolution dashboard: service status plus Skills and Observations tabs.
 
-pub use crate::widgets::skill_browser_widget::PanelFocus;
-use crate::widgets::{
-    observation_browser_widget::{ObservationBrowserState, ObservationBrowserWidget},
-    popup::{Popup, PopupControls},
-    skill_browser_widget::{SkillBrowserState, SkillBrowserWidget},
-};
+pub mod observation_browser;
+pub mod skill_browser;
+
+use self::observation_browser::{ObservationBrowserState, ObservationBrowserWidget};
+pub use self::skill_browser::PanelFocus;
+use self::skill_browser::{SkillBrowserState, SkillBrowserWidget};
+use crate::widgets::popup::{Popup, PopupControls};
 use gateway::proto::SkillEvolutionStatus;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -219,7 +220,7 @@ impl StatefulWidget for SkillEvolutionWidget {
                 Line::raw("Tab/1/2 tabs · ←→ panel · ↑↓ move/scroll · Esc close"),
                 Line::raw(match state.active_tab {
                     EvolutionTab::Skills => "t trigger · g refresh",
-                    EvolutionTab::Observations => "t trigger · g refresh",
+                    EvolutionTab::Observations => "t trigger · g refresh · c clusters",
                 }),
             ])
             .style(Style::new().fg(Color::DarkGray)),

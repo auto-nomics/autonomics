@@ -387,6 +387,7 @@ impl App {
                 status,
                 library,
                 observations,
+                clusters,
             } => {
                 match status {
                     Ok(status) => {
@@ -414,6 +415,17 @@ impl App {
                         .observations
                         .set_observations(observations),
                     Err(error) => self.state.skill_evolution.observations.error = Some(error),
+                }
+                match clusters {
+                    Ok(clusters) => self
+                        .state
+                        .skill_evolution
+                        .observations
+                        .set_clusters(clusters),
+                    // Clusters are a derived view over the same
+                    // observations: a failure degrades to the flat
+                    // list rather than an error banner.
+                    Err(_) => {}
                 }
             }
             crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {

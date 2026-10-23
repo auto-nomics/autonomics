@@ -5,7 +5,9 @@ use std::sync::Arc;
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use evolution_core::{ObservationHub, ObservationInput, ObservationKind, ObservationSource};
+use evolution_core::{
+    ObservationInput, ObservationKind, ObservationSource, handle::EvolutionHandle,
+};
 use serde_json::json;
 
 /// Record one durable evolution observation for the skill-evolution worker.
@@ -21,14 +23,15 @@ pub struct EvoObserveInput {
     pub body: String,
     /// Observation kind: failure, recipe, or caveat.
     pub kind: Option<String>,
-    /// DAG node address (`plugin/node`) or legacy bare kind used as metadata.
+    /// DAG node address (`plugin/node`) or legacy bare kind, stored as
+    /// the observation's structural anchor for clustering.
     pub node_kind: Option<String>,
     /// Exact error text for failure observations.
     pub error: Option<String>,
 }
 
 pub struct EvoObserveTool {
-    observations: Arc<ObservationHub>,
+    handle: Arc<EvolutionHandle>,
     /// The skill-evolution control handle, when the service runs.
     control: Option<skills::evolution::SkillControlHandle>,
 }
@@ -74,8 +77,8 @@ impl ToolFunction for EvoObserveTool {
                 .map(str::to_string),
         };
         let observation = self
-            .observations
-            .record(observation)
+            .handle
+            .record_observation(observation)
             .await
             .map_err(|error| ToolError::ExecutionFailed {
                 source: Box::new(std::io::Error::other(error.to_string())),
@@ -102,13 +105,10 @@ impl ToolFunction for EvoObserveTool {
 
 /// Build the host-owned unified observation tool.
 pub fn evo_observe_registration(
-    observations: Arc<ObservationHub>,
+    handle: Arc<EvolutionHandle>,
     control: Option<skills::evolution::SkillControlHandle>,
 ) -> ToolRegistration {
-    ToolRegistration::from(EvoObserveTool {
-        observations,
-        control,
-    })
+    ToolRegistration::from(EvoObserveTool { handle, control })
 }
 
 #[cfg(test)]
@@ -116,20 +116,113 @@ mod tests {
     use super::*;
     use agentik_core::tools::ToolFunction as _;
     use agentik_sdk::types::ToolResultContent;
+    use std::sync::Arc;
 
-    fn observations_with_skills(
+    fn skills_with_hub(
         state: &std::path::Path,
-    ) -> (Arc<ObservationHub>, Arc<skills::SkillManager>) {
+    ) -> (
+        Arc<skills::SkillManager>,
+        Arc<evolution_core::ObservationHub>,
+    ) {
         let skills = skills::SkillManager::init(skills::SkillManager::new(state));
-        (skills.observation_hub(), skills)
+        let hub = skills.observation_hub();
+        (skills, hub)
+    }
+
+    /// Start a worker over the shared hub so `EvoObserveTool`'s
+    /// `record_observation` calls land in the same store the skills
+    /// manager reads. Without this the tool would record into a parallel
+    /// hub and the distillation tests would observe empty proposals.
+    fn handle_for(
+        hub: &Arc<evolution_core::ObservationHub>,
+    ) -> Arc<evolution_core::handle::EvolutionHandle> {
+        Arc::new(evolution_core::worker::start(Arc::clone(hub)))
+    }
+
+    #[tokio::test]
+    async fn recorded_observations_persist_into_the_shared_ledger() {
+        let state = tempfile::tempdir().unwrap();
+        let (_skills, hub) = skills_with_hub(state.path());
+        let tool = EvoObserveTool {
+            handle: handle_for(&hub),
+            control: None,
+        };
+
+        let recipe = tool
+            .run(EvoObserveInput {
+                summary: "Generic SQL recipe".into(),
+                body: "Use lowercase identifiers.".into(),
+                kind: Some("recipe".into()),
+                node_kind: Some("sql".into()),
+                error: None,
+            })
+            .await
+            .unwrap();
+        let ToolResultContent::Json(value) = recipe.content else {
+            panic!("evo_observe must return JSON");
+        };
+        let id = value["observation_id"].as_str().expect("id").to_string();
+        assert_eq!(value["kind"], "recipe", "{value}");
+
+        let failure = tool
+            .run(EvoObserveInput {
+                summary: "Unknown node failed".into(),
+                body: "This failure needs triage.".into(),
+                kind: None,
+                node_kind: Some("unknown_node".into()),
+                error: Some("node not found".into()),
+            })
+            .await
+            .unwrap();
+        let ToolResultContent::Json(failure_value) = failure.content else {
+            panic!("evo_observe must return JSON");
+        };
+        let failure_id = failure_value["observation_id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        assert_eq!(failure_value["kind"], "failure", "{failure_value}");
+
+        let stored = hub.storage().list().await;
+        assert!(stored.iter().any(|o| o.id == id));
+        assert!(stored.iter().any(|o| o.id == failure_id));
+    }
+
+    #[tokio::test]
+    async fn recorded_recipes_distill_into_skill_proposals() {
+        let state = tempfile::tempdir().unwrap();
+        let (skills, hub) = skills_with_hub(state.path());
+        let tool = EvoObserveTool {
+            handle: handle_for(&hub),
+            control: None,
+        };
+
+        for index in 0..3 {
+            tool.run(EvoObserveInput {
+                summary: format!("Generic node recipe {index}"),
+                body: format!("Generic procedure {index}."),
+                kind: Some("recipe".into()),
+                node_kind: Some("generic_node".into()),
+                error: None,
+            })
+            .await
+            .unwrap();
+        }
+        skills.distill().await.unwrap();
+        let proposals = skills.proposals().list();
+        assert_eq!(proposals.len(), 1, "{proposals:?}");
+        // `{node_kind}-{signature}-recipe` with the signature derived
+        // from the summary keywords ("generic node recipe") — the
+        // kind slug and the keyword slug overlap by design here.
+        assert_eq!(proposals[0].name, "generic-node-generic-node-recipe-recipe");
     }
 
     #[tokio::test]
     async fn all_observations_feed_skill_evolution() {
         let state = tempfile::tempdir().unwrap();
-        let (observations, skills) = observations_with_skills(state.path());
+        let (_skills, hub) = skills_with_hub(state.path());
         let tool = EvoObserveTool {
-            observations,
+            handle: handle_for(&hub),
             control: None,
         };
 
@@ -155,13 +248,13 @@ mod tests {
             assert!(value["observation_id"].as_str().is_some(), "{value}");
         }
 
-        assert_eq!(skills.observation_hub().storage().list().await.len(), 2);
+        assert_eq!(hub.storage().list().await.len(), 2);
     }
 
     #[tokio::test]
     async fn recorded_observations_trigger_evolution_cycles() {
         let state = tempfile::tempdir().unwrap();
-        let (observations, skills) = observations_with_skills(state.path());
+        let (skills, hub) = skills_with_hub(state.path());
         let control = skills::evolution::start(
             skills.clone(),
             skills::evolution::EvolutionOptions {
@@ -172,7 +265,7 @@ mod tests {
         );
         let mut reports = control.subscribe_reports();
         let tool = EvoObserveTool {
-            observations,
+            handle: handle_for(&hub),
             control: Some(control),
         };
 

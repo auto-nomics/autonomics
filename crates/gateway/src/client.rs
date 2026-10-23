@@ -675,8 +675,14 @@ impl GatewayClient {
     }
 
     /// Recorded evolution evidence, newest first, with full bodies.
-    pub async fn skill_observations(&self) -> Result<Vec<SkillObservationView>> {
-        self.get("/skills/evolution/observations").await
+    pub async fn observations(&self) -> Result<Vec<ObservationView>> {
+        self.get("/evolution/observations").await
+    }
+
+    /// Surfaced observation clusters (recurring patterns), largest
+    /// first, with hydrated member summaries.
+    pub async fn clusters(&self) -> Result<Vec<ClusterView>> {
+        self.get("/evolution/clusters").await
     }
 
     /// Run one evolution cycle now. The cycle installs what it

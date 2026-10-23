@@ -1,7 +1,7 @@
 use agentik_core::tools::{ToolError, ToolRegistration};
 mod common;
 
-use plugin_rsi::{AgentProfile, Environment, EnvironmentCatalog, PluginStatus, PluginStore};
+use plugin_rsi::{Environment, EnvironmentCatalog, PluginStatus, PluginStore};
 use serde_json::{Value, json};
 
 const ENVIRONMENT_REFERENCE: &str = "docker.io/library/alpine@sha256:0123456789012345678901234567890123456789012345678901234567890123";
@@ -107,8 +107,7 @@ async fn plugin_store_develops_one_repository_in_place() {
         "/plugins/dev/direct-plugin"
     );
 
-    let profile = AgentProfile::new("direct-plugin-agent").unwrap();
-    let tools = profile.tool_registrations();
+    let tools = plugin_rsi::plugin_development_tool_registrations("direct-plugin-agent");
     execute(
         &tools,
         "plugin_node_create",

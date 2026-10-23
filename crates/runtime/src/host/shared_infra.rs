@@ -7,7 +7,9 @@ use std::sync::{Arc, Weak};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
-use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
+use agentik_core::memory::{
+    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, TursoMemoryStorage,
+};
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
 use arc_swap::ArcSwapOption;
@@ -147,6 +149,14 @@ pub struct SharedInfra {
     /// ledger shared by skills, plugins, and gateway handlers. Neither
     /// downstream owns it; both resolve the same instance.
     pub observations: Arc<evolution_core::ObservationHub>,
+    /// Control handle for the clustering worker spawned over the
+    /// observation hub. `Arc` so multiple subsystems (tools, gateway
+    /// handlers, future mutation paths) can hold the same handle and
+    /// cheaply clone it without taking `&SharedInfra` borrows. The
+    /// inner handle's `mpsc::Sender` already shares via Arc, so this
+    /// is a thin extra layer that mostly standardizes sharing across
+    /// the host's other `Arc`-backed subsystems.
+    pub evolution_handle: Arc<evolution_core::handle::EvolutionHandle>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -160,10 +170,9 @@ pub struct SharedInfra {
     /// The unified skill control handle, when the service is
     /// enabled. `None` means the loop is disabled at the daemon
     /// level — every gateway mutation request then returns HTTP
-    /// 503 (the dashboard, the agent `skill_evolve` tool, and the
-    /// observation-recording tools all funnel through this handle;
-    /// with the service off they record without the nudge and the
-    /// on-demand paths still run cycles directly).
+    /// 503 (the dashboard and the agent skill tools all funnel
+    /// through this handle; the on-demand paths still run cycles
+    /// directly).
     pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
@@ -228,310 +237,46 @@ impl SharedInfra {
         let observations = skills.observation_hub();
         skills.load_usage();
 
-        // ── Remote Ollama embedding model ──────────────────────────
-        // The hub embeds every observation at record time, so the
-        // model is opened inline — BEFORE the evolution service
-        // starts — and the swap backfills vectors recorded under
-        // whatever embedder served before. With `enable_local_embedding`
-        // (the default) a missing or unopenable model is a hard
-        // startup error: `autonomics prepare` installs it, and a
-        // daemon that silently served lexical vectors while the config
-        // asks for the real model would only defer the confusion.
-        // With the feature off, BM25 statistics are fitted over the
-        // observation corpus instead (pure local I/O, no session):
-        // clustering keeps working on weighted lexical vectors, and
-        // only a fit failure leaves the hub on the unfitted default.
-        let embedding = if config.embedding.enabled {
-            let service = text_embedding::RemoteEmbeddingService::init(&config.embedding)
-                .await
-                .map_err(|error| {
-                    crate::error::Error::Other(format!(
-                        "Ollama embedding service unavailable: {error}"
-                    ))
-                })?;
-            swap_embedder(&observations, &service).await;
-            Arc::new(ArcSwapOption::from_pointee(service))
-        } else {
-            // Disabled: keep the network provider out, but clustering
-            // still gets weighted lexical vectors from the local corpus.
-            install_bm25_fallback(&observations).await;
-            Arc::new(ArcSwapOption::empty())
-        };
-        let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
-        plugin_layout
-            .ensure_v2_directories()
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+        let embedding = open_embedding(config, &observations).await?;
+        let (rsi, environments) = open_plugin_rsi(config).await?;
 
-        // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
-        // container-plugin remains the protocol and checkout tool layer.
-        let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
-            config.plugin_rsi.publisher.clone(),
-        ));
-        let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
-        let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
-        let environments = plugin_rsi::EnvironmentRegistry::open(
-            config.state_dir.join("plugin-environments.toml"),
-            config.plugin_rsi.environments.clone(),
-        )
-        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        let rsi = Arc::new(
-            plugin_rsi::PluginInfra::open_with_environments(
-                &config.state_dir,
-                "main",
-                "Autonomics RSI",
-                "rsi@autonomics.example",
-                environments.clone(),
-                plugin_publisher,
-                pull_request_publisher,
-            )
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?,
-        );
-        let plugin_report = rsi
-            .store()
-            .materialize_registry()
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        if !plugin_report.outcomes.is_empty() {
-            tracing::info!("plugins: {}", plugin_report.summary());
-        }
-
-        // Build the VFS mount table first so we can attach it to the
-        // agent-facing `OpendalFileStorage`. This makes the `vfs`
-        // tool see mounted paths (otherwise it would only see the
-        // bare `data_dir` local FS).
-        let (vfs, catalog_bundles, catalog_service) = build_vfs_with_catalog(config).await?;
-        let vfs = Arc::new(vfs);
-        let file_storage = Arc::new(OpendalFileStorage::with_mounts(
-            &config.data_dir,
-            vfs.clone(),
-        ));
-        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_infra(rsi.clone())
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_environments(environments.clone())
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_vfs((*file_storage).clone(), rsi.store().root())
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-        let container_execution =
-            Arc::new(ContainerExecutionInfra::try_from_env().map_err(crate::error::Error::Other)?);
-        tracing::info!(
-            workspace_root = %container_execution.config.workspace_root.display(),
-            panel_cache_root = %container_execution.config.panel_cache_root.display(),
-            "SharedInfra::open: Podman execution infrastructure ready"
-        );
-        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-            .configure_runtime(Arc::clone(&container_execution.runtime))
-            .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-
-        // Environment (image) development shares the plugin toolset registry.
-        // The builder is a second PodmanRuntime handle: the execution infra
-        // stores its runtime as `Arc<dyn PodmanConnection>`, which cannot be
-        // upcast to the separate `ImageBuildConnection` trait. Both handles
-        // resolve the same CLI from the environment and hold no mutable state.
-        let environment_dev_config = config.plugin_rsi.environment_dev.clone();
-        let environment_dev = if environment_dev_config.enabled {
-            let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
-                Arc::new(container_runtime::PodmanRuntime::from_env());
-            let image_publisher: plugin_rsi::SharedImagePublisher =
-                Arc::new(plugin_rsi::PodmanImagePublisher::new(
-                    plugin_rsi::ImageRegistryConfig {
-                        enabled: true,
-                        registry: environment_dev_config.registry.clone(),
-                        namespace: environment_dev_config.namespace.clone(),
-                    },
-                    Arc::clone(&image_builder),
-                ));
-            let environment_dev = Arc::new(
-                plugin_rsi::EnvironmentDevInfra::open(
-                    &config.state_dir,
-                    "main",
-                    "Autonomics RSI",
-                    "rsi@autonomics.example",
-                    &environment_dev_config.namespace,
-                    environments.clone(),
-                    image_publisher,
-                )
-                .map_err(|error| crate::error::Error::Other(error.to_string()))?,
-            );
-            environment_dev.configure_builder(Arc::clone(&image_builder));
-            environment_dev.configure_runner(Arc::clone(&container_execution.runtime));
-            plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-                .configure_environment_dev(Arc::clone(&environment_dev))
-                .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-            spawn_environment_distiller(&environment_dev, &environment_dev_config);
-            Some(environment_dev)
-        } else {
-            tracing::info!("environment development disabled");
-            None
-        };
+        let (vfs, catalog_service, file_storage, catalog_bundles) =
+            open_vfs_and_storage(config, &rsi, &environments).await?;
+        let container_execution = open_container_execution()?;
+        let environment_dev =
+            open_environment_dev(config, &environments, &container_execution).await?;
         // Reclaim crash residue and expired scratch from previous runs once at
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
         spawn_container_gc(&container_execution);
         spawn_dag_task_gc();
 
-        tracing::info!(
-            mounts = ?vfs.mount_paths(),
-            "SharedInfra::open: VFS mounted"
-        );
-        tracing::info!("SharedInfra::open: building DataEngine");
-        let user_bundle_registry = build_bundle_registry(config)?;
-        let bundle_registry = catalog_bundles
-            .with_overriding_bundles(
-                user_bundle_registry
-                    .iter()
-                    .map(|(_, bundle)| bundle.clone()),
-            )
-            .map_err(|error| Error::Other(error.to_string()))?;
-        let engine_builder = DataEngine::builder()
-            .register_opendal_fs(file_storage.clone())?
-            .with_vfs((*vfs).clone())
-            .with_bundle_registry(bundle_registry)
-            .with_container_execution(Arc::clone(&container_execution));
+        let engine_manager = build_engine_manager(
+            config,
+            &file_storage,
+            &vfs,
+            &container_execution,
+            catalog_bundles,
+            &rsi,
+        )
+        .await?;
 
-        let mut engine = engine_builder.build();
-        tracing::info!("SharedInfra::open: DataEngine built");
-
-        // ── DAG history ──────────────────────────────────────────────
-        if config.enable_dag_history {
-            let history_db = config.dag_history_db.clone();
-            if let Some(parent) = history_db.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            engine = match DagHistory::open(&history_db).await {
-                Ok(history) => {
-                    tracing::info!(
-                        path = %history_db.display(),
-                        "DAG history store opened"
-                    );
-                    engine.with_history(history)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %history_db.display(),
-                        error = %e,
-                        "failed to open DAG history store; history/ref tools disabled"
-                    );
-                    engine
-                }
-            };
-        }
-
-        let engine_manager = Arc::new(DataEngineManager::new(engine));
-        engine_manager.spawn_maintenance();
-        rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
-            manager: Arc::clone(&engine_manager),
-            execution: Arc::clone(&container_execution),
-            store: rsi.store(),
-        }));
-        spawn_plugin_distiller(&rsi, &config.plugin_rsi);
-        tracing::info!("SharedInfra::open: DataEngineManager created");
-
-        // ── Agent storage ────────────────────────────────────────────
-        // Resolve DB paths from the catalog (allows provider overrides and
-        // persistence-backed path changes; falls back to RuntimeConfig).
-        let agent_db = config.agent_db.clone();
-        // Open once and clone — both trait objects share the same underlying
-        // connection (and its Mutex).  Opening the file twice creates two
-        // separate Database objects and risks file-lock contention.
-        tracing::info!(
-            "SharedInfra::open: opening agent storage at {}",
-            agent_db.display()
-        );
-        let turso_store = Arc::new(match TursoAgentStorage::open(&agent_db).await {
-            Ok(s) => {
-                tracing::info!(path = %agent_db.display(), "agent storage opened");
-                s
-            }
-            Err(e) => {
-                return Err(Error::Storage(e));
-            }
-        });
+        let turso_store = open_agent_storage(config).await?;
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        // Initialize the KMS schema in its own knowledge.db unconditionally;
-        // expose tools and semantic grounding only when the runtime feature
-        // is enabled.
-        let kms_db = config.kms_db_path.clone();
-        tracing::info!(
-            path = %kms_db.display(),
-            "SharedInfra::open: opening KMS knowledge db"
-        );
-        let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
-            Ok(storage) => storage,
-            Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
-        };
-        let kms = if config.enable_kms {
-            match kms::KmsService::from_storage(kms_storage).await {
-                Ok(service) => Some(Arc::new(service)),
-                Err(error) => return Err(Error::Other(format!("open KMS: {error}"))),
-            }
-        } else {
-            None
-        };
-        let memory_store: Arc<dyn MemoryStore> = turso_store;
-        let grounding: Option<Arc<dyn SemanticGrounding>> = kms
-            .as_ref()
-            .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
-        let mut memory_config = MemoryConfig::new();
-        memory_config.use_memory = config.use_memory;
-        memory_config.generate_memory = config.generate_memory;
-        let memory = Arc::new(MemoryBackend::new(memory_config, memory_store, grounding));
+        let kms = open_kms(config, &turso_store).await?;
+        let memory = open_memory(config, &kms).await?;
+        let bib = open_bibliography(config, &file_storage).await?;
+        let writing = open_writing(config, &bib).await?;
 
-        let bib_db_path = config.bib_db_path.clone();
-        tracing::info!(
-            "SharedInfra::open: opening bibliography db at {}",
-            bib_db_path.display()
-        );
-        // Library-backed DAG nodes (literature_fulltext) resolve through
-        // this exact handle, so node outputs share the host's storage and
-        // connection pool.
-        let bib = Arc::new(
-            bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
-                .await?
-                .with_file_storage(file_storage.clone()),
-        );
-        // Library-backed DAG nodes (literature_fulltext) resolve through this
-        // exact handle, so their outputs share the host's storage view and
-        // connection pool.
-        bib_base::nodes::set_shared_bib(bib.clone());
+        // One clustering worker over the shared hub. Triggers land on
+        // a buffered channel, so callers never block on a slow pass.
+        let evolution_handle = Arc::new(evolution_core::worker::start(Arc::clone(&observations)));
+        tracing::info!("SharedInfra::open: clustering worker started");
 
-        let writing_db_path = config.writing_db_path.clone();
-        tracing::info!(
-            "SharedInfra::open: opening writing db at {}",
-            writing_db_path.display()
-        );
-        let writing = Arc::new(
-            writing_base::WritingShared::open_with(
-                &writing_db_path.to_string_lossy(),
-                Some(bib.clone()),
-            )
-            .await?,
-        );
+        let skill_evolution = start_skill_evolution(config, &skills);
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
-
-        let skill_evolution = if config.enable_skill_evolution {
-            let handle = skills::evolution::start(
-                skills.clone(),
-                skills::evolution::EvolutionOptions {
-                    policy: skills::evolution::EvolutionPolicy::default(),
-                    quiet_window: std::time::Duration::from_millis(500),
-                    timer: Some(std::time::Duration::from_secs(
-                        config.skill_evolution_interval_secs.max(60),
-                    )),
-                },
-            );
-            tracing::info!(
-                interval_secs = config.skill_evolution_interval_secs,
-                "SharedInfra::open: skill evolution service started"
-            );
-            Some(handle)
-        } else {
-            tracing::info!("SharedInfra::open: skill evolution disabled");
-            None
-        };
 
         let mut browser_options = BrowserOptions::default();
         browser_options.headless = config.browser_headless;
@@ -562,6 +307,7 @@ impl SharedInfra {
             memory,
             kms,
             observations,
+            evolution_handle,
             skills,
             embedding,
             skill_evolution,
@@ -737,7 +483,7 @@ impl SharedInfra {
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
         tools.push(crate::evolution_tools::evo_observe_registration(
-            Arc::clone(&self.observations),
+            Arc::clone(&self.evolution_handle),
             self.skill_evolution.clone(),
         ));
         tools.extend(skills::skill_registrations(
@@ -837,6 +583,409 @@ impl SharedInfra {
 
         Ok(tools)
     }
+}
+
+// ── SharedInfra::open, one section per function ─────────────────────
+// The call order below is the construction order: evidence hub first,
+// then everything downstream of it, heavy stores last. Each function
+// owns its section's inline commentary.
+
+/// Install the remote embedding service into the hub, or fit the BM25
+/// fallback when the feature is off.
+///
+/// The hub embeds every observation at record time, so the service is
+/// opened before the evolution worker starts and the swap backfills
+/// vectors recorded under whatever embedder served before. When the
+/// feature is off, BM25 statistics are fitted over the observation
+/// corpus instead: clustering keeps working on weighted lexical vectors.
+async fn open_embedding(
+    config: &RuntimeConfig,
+    observations: &Arc<evolution_core::ObservationHub>,
+) -> Result<Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>> {
+    if config.embedding.enabled {
+        let service = text_embedding::RemoteEmbeddingService::init(&config.embedding)
+            .await
+            .map_err(|error| {
+                crate::error::Error::Other(format!("Ollama embedding service unavailable: {error}"))
+            })?;
+        swap_embedder(observations, &service).await;
+        Ok(Arc::new(ArcSwapOption::from_pointee(service)))
+    } else {
+        install_bm25_fallback(observations).await;
+        Ok(Arc::new(ArcSwapOption::empty()))
+    }
+}
+
+/// Open the plugin RSI store over the shared observation hub: the
+/// state layout, the publishers, the environment registry, and the
+/// registry materialization. Returns the registry too — environment
+/// development and the VFS section open against the same one.
+async fn open_plugin_rsi(
+    config: &RuntimeConfig,
+) -> Result<(
+    Arc<plugin_rsi::PluginInfra>,
+    plugin_rsi::EnvironmentRegistry,
+)> {
+    let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
+    plugin_layout
+        .ensure_v2_directories()
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+
+    // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
+    // container-plugin remains the protocol and checkout tool layer.
+    let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
+        config.plugin_rsi.publisher.clone(),
+    ));
+    let plugin_publisher: plugin_rsi::SharedPluginPublisher = gh_publisher.clone();
+    let pull_request_publisher: plugin_rsi::SharedPullRequestPublisher = gh_publisher;
+    let environments = plugin_rsi::EnvironmentRegistry::open(
+        config.state_dir.join("plugin-environments.toml"),
+        config.plugin_rsi.environments.clone(),
+    )
+    .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    let rsi = Arc::new(
+        plugin_rsi::PluginInfra::open_with_environments(
+            &config.state_dir,
+            "main",
+            "Autonomics RSI",
+            "rsi@autonomics.example",
+            environments.clone(),
+            plugin_publisher,
+            pull_request_publisher,
+        )
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?,
+    );
+    let plugin_report = rsi
+        .store()
+        .materialize_registry()
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    if !plugin_report.outcomes.is_empty() {
+        tracing::info!("plugins: {}", plugin_report.summary());
+    }
+    Ok((rsi, environments))
+}
+
+/// Build the VFS mount table, the agent-facing file storage, and the
+/// plugin toolset registry's view of both. Returns the catalog
+/// bundles too — the DataEngine builder overrides its built-ins with
+/// them.
+async fn open_vfs_and_storage(
+    config: &RuntimeConfig,
+    rsi: &Arc<plugin_rsi::PluginInfra>,
+    environments: &plugin_rsi::EnvironmentRegistry,
+) -> Result<(
+    Arc<vfs::MountedObjectStore>,
+    Option<Arc<crate::catalog_tools::CatalogState>>,
+    Arc<OpendalFileStorage>,
+    dag_core::BundleRegistry,
+)> {
+    // Build the VFS mount table first so we can attach it to the
+    // agent-facing `OpendalFileStorage`. This makes the `vfs`
+    // tool see mounted paths (otherwise it would only see the
+    // bare `data_dir` local FS).
+    let (vfs, catalog_bundles, catalog_service) = build_vfs_with_catalog(config).await?;
+    let vfs = Arc::new(vfs);
+    let file_storage = Arc::new(OpendalFileStorage::with_mounts(
+        &config.data_dir,
+        vfs.clone(),
+    ));
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_infra(rsi.clone())
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_environments(environments.clone())
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_vfs((*file_storage).clone(), rsi.store().root())
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    Ok((vfs, catalog_service, file_storage, catalog_bundles))
+}
+
+/// Open the process-wide Podman execution infrastructure and teach
+/// the plugin toolset registry its runtime.
+fn open_container_execution() -> Result<Arc<ContainerExecutionInfra>> {
+    let container_execution =
+        Arc::new(ContainerExecutionInfra::try_from_env().map_err(crate::error::Error::Other)?);
+    tracing::info!(
+        workspace_root = %container_execution.config.workspace_root.display(),
+        panel_cache_root = %container_execution.config.panel_cache_root.display(),
+        "SharedInfra::open: Podman execution infrastructure ready"
+    );
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_runtime(Arc::clone(&container_execution.runtime))
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    Ok(container_execution)
+}
+
+/// Open the environment (image) development subsystem when enabled:
+/// a second Podman handle for image builds, the publisher, and the
+/// dev infra wired into the plugin toolset registry.
+async fn open_environment_dev(
+    config: &RuntimeConfig,
+    environments: &plugin_rsi::EnvironmentRegistry,
+    container_execution: &Arc<ContainerExecutionInfra>,
+) -> Result<Option<Arc<plugin_rsi::EnvironmentDevInfra>>> {
+    let environment_dev_config = config.plugin_rsi.environment_dev.clone();
+    if !environment_dev_config.enabled {
+        tracing::info!("environment development disabled");
+        return Ok(None);
+    }
+    // Environment (image) development shares the plugin toolset registry.
+    // The builder is a second PodmanRuntime handle: the execution infra
+    // stores its runtime as `Arc<dyn PodmanConnection>`, which cannot be
+    // upcast to the separate `ImageBuildConnection` trait. Both handles
+    // resolve the same CLI from the environment and hold no mutable state.
+    let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
+        Arc::new(container_runtime::PodmanRuntime::from_env());
+    let image_publisher: plugin_rsi::SharedImagePublisher =
+        Arc::new(plugin_rsi::PodmanImagePublisher::new(
+            plugin_rsi::ImageRegistryConfig {
+                enabled: true,
+                registry: environment_dev_config.registry.clone(),
+                namespace: environment_dev_config.namespace.clone(),
+            },
+            Arc::clone(&image_builder),
+        ));
+    let environment_dev = Arc::new(
+        plugin_rsi::EnvironmentDevInfra::open(
+            &config.state_dir,
+            "main",
+            "Autonomics RSI",
+            "rsi@autonomics.example",
+            &environment_dev_config.namespace,
+            environments.clone(),
+            image_publisher,
+        )
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?,
+    );
+    environment_dev.configure_builder(Arc::clone(&image_builder));
+    environment_dev.configure_runner(Arc::clone(&container_execution.runtime));
+    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+        .configure_environment_dev(Arc::clone(&environment_dev))
+        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
+    spawn_environment_distiller(&environment_dev, &environment_dev_config);
+    Ok(Some(environment_dev))
+}
+
+/// Build the DAG engine — bundle registry, storage mounts, container
+/// execution, optional DAG history — wrap it in the manager, bridge
+/// plugin registry reloads onto it, and start the plugin distiller.
+async fn build_engine_manager(
+    config: &RuntimeConfig,
+    file_storage: &Arc<OpendalFileStorage>,
+    vfs: &Arc<vfs::MountedObjectStore>,
+    container_execution: &Arc<ContainerExecutionInfra>,
+    catalog_bundles: dag_core::BundleRegistry,
+    rsi: &Arc<plugin_rsi::PluginInfra>,
+) -> Result<Arc<DataEngineManager>> {
+    tracing::info!(
+        mounts = ?vfs.mount_paths(),
+        "SharedInfra::open: VFS mounted"
+    );
+    tracing::info!("SharedInfra::open: building DataEngine");
+    let user_bundle_registry = build_bundle_registry(config)?;
+    let bundle_registry = catalog_bundles
+        .with_overriding_bundles(
+            user_bundle_registry
+                .iter()
+                .map(|(_, bundle)| bundle.clone()),
+        )
+        .map_err(|error| Error::Other(error.to_string()))?;
+    let engine_builder = DataEngine::builder()
+        .register_opendal_fs(file_storage.clone())?
+        .with_vfs((**vfs).clone())
+        .with_bundle_registry(bundle_registry)
+        .with_container_execution(Arc::clone(container_execution));
+
+    let mut engine = engine_builder.build();
+    tracing::info!("SharedInfra::open: DataEngine built");
+
+    // ── DAG history ──────────────────────────────────────────────
+    if config.enable_dag_history {
+        let history_db = config.dag_history_db.clone();
+        if let Some(parent) = history_db.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        engine = match DagHistory::open(&history_db).await {
+            Ok(history) => {
+                tracing::info!(
+                    path = %history_db.display(),
+                    "DAG history store opened"
+                );
+                engine.with_history(history)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %history_db.display(),
+                    error = %e,
+                    "failed to open DAG history store; history/ref tools disabled"
+                );
+                engine
+            }
+        };
+    }
+
+    let engine_manager = Arc::new(DataEngineManager::new(engine));
+    rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
+        manager: Arc::clone(&engine_manager),
+        execution: Arc::clone(container_execution),
+        store: rsi.store(),
+    }));
+    spawn_plugin_distiller(rsi, &config.plugin_rsi);
+    tracing::info!("SharedInfra::open: DataEngineManager created");
+    Ok(engine_manager)
+}
+
+/// Open the shared agent storage — the one connection later upcast to
+/// both the `AgentStorage` and `MemoryStore` trait objects.
+///
+/// Resolve DB paths from the catalog (allows provider overrides and
+/// persistence-backed path changes; falls back to RuntimeConfig).
+async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStorage>> {
+    let agent_db = config.agent_db.clone();
+    tracing::info!(
+        "SharedInfra::open: opening agent storage at {}",
+        agent_db.display()
+    );
+    let store = match TursoAgentStorage::open(&agent_db).await {
+        Ok(s) => {
+            tracing::info!(path = %agent_db.display(), "agent storage opened");
+            s
+        }
+        Err(e) => {
+            return Err(Error::Storage(e));
+        }
+    };
+    Ok(Arc::new(store))
+}
+
+/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
+/// and build the service when the feature is enabled.
+async fn open_kms(
+    config: &RuntimeConfig,
+    _turso_store: &Arc<TursoAgentStorage>,
+) -> Result<Option<Arc<kms::KmsService>>> {
+    // Initialize the KMS schema in its own knowledge.db unconditionally;
+    // expose tools and semantic grounding only when the runtime feature
+    // is enabled.
+    let kms_db = config.kms_db_path.clone();
+    tracing::info!(
+        path = %kms_db.display(),
+        "SharedInfra::open: opening KMS knowledge db"
+    );
+    let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
+        Ok(storage) => storage,
+        Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
+    };
+    if !config.enable_kms {
+        return Ok(None);
+    }
+    match kms::KmsService::from_storage(kms_storage).await {
+        Ok(service) => Ok(Some(Arc::new(service))),
+        Err(error) => Err(Error::Other(format!("open KMS: {error}"))),
+    }
+}
+
+/// Open the dedicated memory knowledge database and build the process-wide
+/// backend, with KMS semantic grounding when the service is available.
+async fn open_memory(
+    config: &RuntimeConfig,
+    kms: &Option<Arc<kms::KmsService>>,
+) -> Result<Arc<MemoryBackend>> {
+    let started = std::time::Instant::now();
+    tracing::info!(
+        path = %config.knowledge_db_path.display(),
+        "SharedInfra::open: opening memory knowledge db"
+    );
+    let store = TursoMemoryStorage::open(&config.knowledge_db_path).await?;
+    store.migrate_from_agent_db(&config.agent_db).await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "memory knowledge db opened and legacy migration checked"
+    );
+
+    let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
+    let grounding: Option<Arc<dyn SemanticGrounding>> = kms
+        .as_ref()
+        .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
+    let mut memory_config = MemoryConfig::new();
+    memory_config.use_memory = config.use_memory;
+    memory_config.generate_memory = config.generate_memory;
+    Ok(Arc::new(MemoryBackend::new(
+        memory_config,
+        memory_store,
+        grounding,
+    )))
+}
+
+/// Open the bibliography store + literature gateway once and publish
+/// it to the library-backed DAG nodes, so their outputs share the
+/// host's storage view and connection pool.
+async fn open_bibliography(
+    config: &RuntimeConfig,
+    file_storage: &Arc<OpendalFileStorage>,
+) -> Result<Arc<bib_base::BibShared>> {
+    let bib_db_path = config.bib_db_path.clone();
+    tracing::info!(
+        "SharedInfra::open: opening bibliography db at {}",
+        bib_db_path.display()
+    );
+    let bib = Arc::new(
+        bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
+            .await?
+            .with_file_storage(file_storage.clone()),
+    );
+    bib_base::nodes::set_shared_bib(bib.clone());
+    Ok(bib)
+}
+
+/// Open the LaTeX writing system (store + optional engine) over the
+/// bibliography store.
+async fn open_writing(
+    config: &RuntimeConfig,
+    bib: &Arc<bib_base::BibShared>,
+) -> Result<Arc<writing_base::WritingShared>> {
+    let writing_db_path = config.writing_db_path.clone();
+    tracing::info!(
+        "SharedInfra::open: opening writing db at {}",
+        writing_db_path.display()
+    );
+    let writing = Arc::new(
+        writing_base::WritingShared::open_with(
+            &writing_db_path.to_string_lossy(),
+            Some(bib.clone()),
+        )
+        .await?,
+    );
+    Ok(writing)
+}
+
+/// Start the unified skill evolution loop when enabled. `None` means
+/// the loop is disabled at the daemon level — every gateway mutation
+/// request then returns HTTP 503.
+fn start_skill_evolution(
+    config: &RuntimeConfig,
+    skills: &Arc<skills::SkillManager>,
+) -> Option<skills::SkillControlHandle> {
+    if !config.enable_skill_evolution {
+        tracing::info!("SharedInfra::open: skill evolution disabled");
+        return None;
+    }
+    let handle = skills::evolution::start(
+        skills.clone(),
+        skills::evolution::EvolutionOptions {
+            policy: skills::evolution::EvolutionPolicy::default(),
+            quiet_window: std::time::Duration::from_millis(500),
+            timer: Some(std::time::Duration::from_secs(
+                config.skill_evolution_interval_secs.max(60),
+            )),
+        },
+    );
+    tracing::info!(
+        interval_secs = config.skill_evolution_interval_secs,
+        "SharedInfra::open: skill evolution service started"
+    );
+    Some(handle)
 }
 
 /// Swap the service's provider into the observation hub. The swap

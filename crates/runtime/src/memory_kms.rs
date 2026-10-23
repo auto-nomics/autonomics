@@ -5,10 +5,8 @@ use std::sync::Arc;
 
 use agentik_core::memory::{SemanticGrounding, SemanticGroundingOutcome, SemanticObservation};
 use async_trait::async_trait;
-use kms::storage::repo;
 use kms::{
-    Diagnostic, Entity, Index, KmsService, Knowledge, KnowledgeType, Language, Nomenclature,
-    Severity, TargetType,
+    Diagnostic, Entity, Index, KmsService, Knowledge, Language, Nomenclature, Severity, TargetType,
 };
 use uuid::Uuid;
 
@@ -120,7 +118,6 @@ async fn apply_observation(
             let knowledge = service
                 .create_knowledge(
                     &title,
-                    KnowledgeType::Relation,
                     vec![subject_entity.id, object_entity.id],
                     Some(knowledge_content(observation, &subject, &object)),
                 )
@@ -254,21 +251,17 @@ fn new_error_diagnostics(before: &[Diagnostic], after: &[Diagnostic]) -> Vec<Str
 }
 
 async fn cleanup(service: &KmsService, draft: &mut GroundingDraft) {
-    let conn = &*service.lock_conn().await;
     for index in draft.indexes.iter().rev() {
-        if let Err(error) = repo::index_delete(conn, index.id).await {
+        if let Err(error) = service.delete_index_by_id(index.id).await {
             tracing::warn!(
                 index_id = %index.id,
                 error = %error,
                 "failed to roll back KMS index"
             );
         }
-        if let Some(parent) = index.parent_id {
-            let _ = repo::index_reindex_positions(conn, Some(parent)).await;
-        }
     }
     for knowledge in draft.knowledge.iter().rev() {
-        if let Err(error) = repo::knowledge_delete(conn, knowledge.id).await {
+        if let Err(error) = service.delete_knowledge_by_id(knowledge.id).await {
             tracing::warn!(
                 knowledge_id = %knowledge.id,
                 error = %error,
@@ -277,7 +270,7 @@ async fn cleanup(service: &KmsService, draft: &mut GroundingDraft) {
         }
     }
     for entity in draft.entities.iter().rev() {
-        if let Err(error) = repo::entity_delete(conn, entity.id).await {
+        if let Err(error) = service.delete_entity(entity.id).await {
             tracing::warn!(
                 entity_id = %entity.id,
                 error = %error,
@@ -297,10 +290,13 @@ mod tests {
     use agentik_core::memory::MemoryBackend;
     use agentik_core::memory::MemoryConfig;
     use agentik_core::memory::run_memory_pipeline;
-    use agentik_core::message_ext::AgentMessageExt;
     use agentik_core::storage::AgentStorage;
     use agentik_core::testing::dummy_model_info;
-    use agentik_core::{TursoAgentStorage, memory::MemoryStore};
+    use agentik_core::{
+        TursoAgentStorage,
+        memory::{MemoryStore, TursoMemoryStorage},
+    };
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
     use agentik_sdk::types::messages::Message;
@@ -416,7 +412,8 @@ mod tests {
         let grounding = KmsMemoryGrounding::new(Arc::new(kms));
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory_store: Arc<dyn MemoryStore> = turso_store.clone();
+        let memory_store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
         let semantic_grounding: Arc<dyn agentik_core::memory::SemanticGrounding> =
             Arc::new(grounding.clone());
         let memory = Arc::new(MemoryBackend::new(
@@ -425,7 +422,13 @@ mod tests {
             Some(semantic_grounding),
         ));
 
-        run_memory_pipeline(agent_id, turso_store, Arc::clone(&memory), model).await;
+        run_memory_pipeline(
+            agent_id,
+            agentik_core::memory::agent_storage_memory_source(turso_store),
+            Arc::clone(&memory),
+            model,
+        )
+        .await;
 
         let observations = memory
             .store

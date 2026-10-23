@@ -17,6 +17,7 @@ tokio = { version = "1", features = [
 uuid = { version = "1.12", features = ["v4", "serde"] }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
+agentik-memory = { path = "../agentik-memory" }
 agentik-proc = { path = "../agentik-proc" }
 async-trait = "0.1"
 futures = "0.3"

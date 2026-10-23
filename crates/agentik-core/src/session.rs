@@ -530,7 +530,7 @@ pub(crate) fn make_test_session() -> Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_ext::AgentMessageExt;
+    use agentik_sdk::AgentMessageExt;
 
     /// A fork inherits a snapshot of the parent's plan (revision included)
     /// and diverges independently afterwards.

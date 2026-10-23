@@ -294,6 +294,7 @@ impl Agent {
                 if memory_config.generate_memory && memory_config.is_root_agent(&self.shared.path) {
                     let agent_id = self.shared.id;
                     let storage = Arc::clone(&storage);
+                    let storage = crate::memory::agent_storage_memory_source(storage);
                     let memory = Arc::clone(memory);
                     let model = Arc::clone(&self.shared.model);
                     crate::supervise::spawn_safe_drop(
@@ -902,8 +903,8 @@ async fn persist_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_ext::AgentMessageExt;
     use crate::testing::dummy_model_info;
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::model::model_info::ModelInfo;
     use agentik_sdk::provider::client::MockApiClient;
