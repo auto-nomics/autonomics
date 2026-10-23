@@ -365,8 +365,11 @@ mod tests {
 
     #[tokio::test]
     async fn search_read_list_and_note_use_turso() {
-        let store: Arc<dyn crate::memory::MemoryStore> =
-            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let store: Arc<dyn crate::memory::MemoryStore> = Arc::new(
+            crate::memory::TursoMemoryStorage::open_in_memory()
+                .await
+                .unwrap(),
+        );
         let backend = Arc::new(MemoryBackend::new(
             MemoryConfig::new(),
             Arc::clone(&store),

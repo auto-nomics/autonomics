@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 use agentik_core::error::AgentError;
+use agentik_core::memory::MemoryError;
 use agentik_core::storage::StorageError;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -20,6 +21,9 @@ pub enum Error {
 
     #[error("agent storage error: {0}")]
     Storage(#[from] StorageError),
+
+    #[error("memory knowledge store error: {0}")]
+    Memory(#[from] MemoryError),
 
     #[error("bibliography init failed: {0}")]
     Bib(#[from] bib_base::Error),

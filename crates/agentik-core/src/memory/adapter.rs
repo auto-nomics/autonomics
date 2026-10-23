@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::storage::{AgentStorage, StorageError};
-use agentik_memory::{MemoryError, MemorySessionRecord, MemorySource};
+use agentik_memory::{MemoryError, MemorySessionRecord, MemorySource, TursoMemoryStorage};
 
 pub(crate) fn storage_error(error: StorageError) -> MemoryError {
     MemoryError::Storage(error.to_string())
@@ -64,7 +64,8 @@ mod tests {
     use std::sync::Arc;
 
     use agentik_memory::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, run_memory_pipeline,
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
+        run_memory_pipeline,
     };
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
@@ -107,10 +108,11 @@ mod tests {
             dummy_model_info("memory-test"),
             mock,
         ))));
-        let turso_store = Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
-        let storage: Arc<dyn crate::storage::AgentStorage> = turso_store.clone();
+        let storage: Arc<dyn crate::storage::AgentStorage> =
+            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
         let source = agent_storage_memory_source(storage.clone());
-        let memory_store: Arc<dyn MemoryStore> = turso_store;
+        let memory_store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
         let memory = Arc::new(MemoryBackend::new(config, memory_store.clone(), None));

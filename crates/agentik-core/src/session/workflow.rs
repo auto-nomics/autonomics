@@ -1424,8 +1424,11 @@ mod tests {
         let model = Model::with_client(dummy_model_info("mem-section"), mock);
 
         // Seed a memory summary the way phase 2 consolidation would.
-        let store: Arc<dyn MemoryStore> =
-            Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
+        let store: Arc<dyn MemoryStore> = Arc::new(
+            crate::memory::TursoMemoryStorage::open_in_memory()
+                .await
+                .unwrap(),
+        );
         store
             .complete_phase2(
                 MEMORY_SCOPE_ID,

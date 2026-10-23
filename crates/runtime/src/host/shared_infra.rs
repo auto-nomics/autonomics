@@ -7,7 +7,9 @@ use std::sync::{Arc, Weak};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
-use agentik_core::memory::{MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding};
+use agentik_core::memory::{
+    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, TursoMemoryStorage,
+};
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
 use arc_swap::ArcSwapOption;
@@ -257,7 +259,7 @@ impl SharedInfra {
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
         let kms = open_kms(config, &turso_store).await?;
-        let memory = open_memory(config, turso_store, &kms);
+        let memory = open_memory(config, &kms).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
 
@@ -865,21 +867,36 @@ async fn open_kms(
     }
 }
 
-/// Build the process-wide memory backend over the shared agent
-/// storage, with KMS semantic grounding when the service is open.
-fn open_memory(
+/// Open the dedicated memory knowledge database and build the process-wide
+/// backend, with KMS semantic grounding when the service is available.
+async fn open_memory(
     config: &RuntimeConfig,
-    store: Arc<TursoAgentStorage>,
     kms: &Option<Arc<kms::KmsService>>,
-) -> Arc<MemoryBackend> {
-    let memory_store: Arc<dyn MemoryStore> = store;
+) -> Result<Arc<MemoryBackend>> {
+    let started = std::time::Instant::now();
+    tracing::info!(
+        path = %config.knowledge_db_path.display(),
+        "SharedInfra::open: opening memory knowledge db"
+    );
+    let store = TursoMemoryStorage::open(&config.knowledge_db_path).await?;
+    store.migrate_from_agent_db(&config.agent_db).await?;
+    tracing::info!(
+        elapsed_ms = started.elapsed().as_millis(),
+        "memory knowledge db opened and legacy migration checked"
+    );
+
+    let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
     let grounding: Option<Arc<dyn SemanticGrounding>> = kms
         .as_ref()
         .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    Arc::new(MemoryBackend::new(memory_config, memory_store, grounding))
+    Ok(Arc::new(MemoryBackend::new(
+        memory_config,
+        memory_store,
+        grounding,
+    )))
 }
 
 /// Open the bibliography store + literature gateway once and publish

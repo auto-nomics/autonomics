@@ -6,6 +6,7 @@ mod backend;
 mod grounding;
 mod pipeline;
 mod store;
+mod turso_store;
 
 pub use artifacts::{
     MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, SemanticObservationDraft,
@@ -19,6 +20,7 @@ pub use source::{MemorySessionRecord, MemorySource};
 pub use store::{
     MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
 };
+pub use turso_store::TursoMemoryStorage;
 
 /// Fully resolved runtime settings carried by the memory backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

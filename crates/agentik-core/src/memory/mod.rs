@@ -12,6 +12,6 @@ pub use agentik_memory::{
     AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry,
     MemoryEntryDraft, MemoryError, MemoryNote, MemoryResult, MemorySource, MemoryStage1Record,
     MemoryStore, MemorySummary, SemanticGrounding, SemanticGroundingOutcome, SemanticObservation,
-    memory_prompt_section, now_ms, redact_secrets, run_memory_pipeline,
+    TursoMemoryStorage, memory_prompt_section, now_ms, redact_secrets, run_memory_pipeline,
 };
 pub use tools::memory_registrations;

@@ -292,7 +292,10 @@ mod tests {
     use agentik_core::memory::run_memory_pipeline;
     use agentik_core::storage::AgentStorage;
     use agentik_core::testing::dummy_model_info;
-    use agentik_core::{TursoAgentStorage, memory::MemoryStore};
+    use agentik_core::{
+        TursoAgentStorage,
+        memory::{MemoryStore, TursoMemoryStorage},
+    };
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
@@ -409,7 +412,8 @@ mod tests {
         let grounding = KmsMemoryGrounding::new(Arc::new(kms));
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory_store: Arc<dyn MemoryStore> = turso_store.clone();
+        let memory_store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
         let semantic_grounding: Arc<dyn agentik_core::memory::SemanticGrounding> =
             Arc::new(grounding.clone());
         let memory = Arc::new(MemoryBackend::new(
