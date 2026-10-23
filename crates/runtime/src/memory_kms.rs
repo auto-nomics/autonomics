@@ -290,10 +290,10 @@ mod tests {
     use agentik_core::memory::MemoryBackend;
     use agentik_core::memory::MemoryConfig;
     use agentik_core::memory::run_memory_pipeline;
-    use agentik_core::message_ext::AgentMessageExt;
     use agentik_core::storage::AgentStorage;
     use agentik_core::testing::dummy_model_info;
     use agentik_core::{TursoAgentStorage, memory::MemoryStore};
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
     use agentik_sdk::types::messages::Message;

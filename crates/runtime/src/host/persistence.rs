@@ -484,9 +484,7 @@ mod agent_persistence_tests {
             .returning(|_, _, _, _| {
                 Ok(agentik_sdk::streaming::MessageStream::from_events(
                     Vec::new(),
-                    agentik_core::message_ext::AgentMessageExt::assistant_text(
-                        "delegated work done",
-                    ),
+                    agentik_sdk::AgentMessageExt::assistant_text("delegated work done"),
                 ))
             });
         let model: Arc<ArcSwapOption<Model>> =

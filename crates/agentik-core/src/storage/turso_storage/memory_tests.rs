@@ -4,8 +4,8 @@ use uuid::Uuid;
 use super::TursoAgentStorage;
 use crate::memory::MemoryStage1Record;
 use crate::memory::{MEMORY_SCOPE_ID, MemoryStore};
-use crate::message_ext::AgentMessageExt;
 use crate::storage::AgentStorage;
+use agentik_sdk::AgentMessageExt;
 
 fn stage1(session_id: Uuid, source_hash: &str, raw_memory: &str) -> MemoryStage1Record {
     MemoryStage1Record {

@@ -2287,10 +2287,10 @@ where
 mod tests {
     use super::*;
     use crate::lifecycle::AgentLifecycleStatus;
-    use crate::message_ext::AgentMessageExt;
     use crate::profile::{AgentKind, AgentProfileConfig};
     use crate::session::SessionState;
     use crate::storage::AgentRuntimeOverrides;
+    use agentik_sdk::AgentMessageExt;
 
     fn now_ms() -> i64 {
         chrono::Utc::now().timestamp_millis()

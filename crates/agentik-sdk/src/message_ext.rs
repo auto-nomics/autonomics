@@ -1,9 +1,11 @@
-use agentik_sdk::types::messages::{ContentBlock, Message, Role, StopReason};
-use agentik_sdk::types::shared::Usage;
+//! Convenience constructors and accessors for `Message`.
+
+use crate::types::messages::{ContentBlock, Message, Role, StopReason};
+use crate::types::shared::Usage;
 use serde_json::Value;
 use uuid::Uuid;
 
-/// Convenience extension trait for constructing `Message` values.
+/// Extension trait for constructing and inspecting `Message` values.
 pub trait AgentMessageExt {
     fn system(text: impl Into<String>) -> Self;
     fn user(text: impl Into<String>) -> Self;

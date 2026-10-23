@@ -19,10 +19,10 @@ use uuid::Uuid;
 use crate::agent::InternalEvent;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result, Retryable};
-use crate::message_ext::AgentMessageExt;
 use crate::prompt::system_prompt_builder;
 use crate::supervise::spawn_safe_drop;
 use crate::tools::task_runtime::{TaskStatus, TaskStore};
+use agentik_sdk::AgentMessageExt;
 use agentik_types::{AgentPlan, TurnExecutionStatus};
 
 use super::Session;

@@ -14,7 +14,7 @@ use agentik_sdk::types::tools::{
 };
 
 use crate::error::Result;
-use crate::message_ext::AgentMessageExt;
+use agentik_sdk::AgentMessageExt;
 
 use super::Session;
 
@@ -176,13 +176,13 @@ impl Session {
 mod tests {
     use super::*;
     use crate::agent::AgentConfig;
-    use crate::message_ext::AgentMessageExt;
     use crate::session::{AgentShared, make_test_session};
     use crate::testing::dummy_model_info;
     use crate::tools::error::ToolError;
     use crate::tools::function::{ToolContext, ToolFunction};
     use crate::tools::toolset::ToolRegistration;
     use agentik_proc::tool;
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::model::sanitize::sanitize_messages;
     use agentik_sdk::provider::client::MockApiClient;

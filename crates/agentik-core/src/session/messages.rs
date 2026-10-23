@@ -7,8 +7,8 @@ use agentik_sdk::types::messages::{ContentBlock, Message, Role};
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::message_ext::AgentMessageExt;
 use crate::storage::PersistOp;
+use agentik_sdk::AgentMessageExt;
 
 use super::Session;
 use super::SessionState;
@@ -309,8 +309,8 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_ext::AgentMessageExt;
     use crate::session::make_test_session;
+    use agentik_sdk::AgentMessageExt;
     use agentik_types::messages::ContentBlock;
 
     /// Regression for `add_message` collapsing duplicate `tool_result` blocks

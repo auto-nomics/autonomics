@@ -4,7 +4,6 @@ pub mod source;
 mod artifacts;
 mod backend;
 mod grounding;
-mod message_ext;
 mod pipeline;
 mod store;
 
@@ -15,7 +14,6 @@ pub use artifacts::{
 pub use backend::{MemoryBackend, memory_prompt_section};
 pub use error::{MemoryError, MemoryResult};
 pub use grounding::{SemanticGrounding, SemanticGroundingOutcome};
-pub use message_ext::MemoryMessageExt;
 pub use pipeline::{MEMORY_SCOPE_ID, run_memory_pipeline};
 pub use source::{MemorySessionRecord, MemorySource};
 pub use store::{

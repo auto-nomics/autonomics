@@ -66,6 +66,7 @@ mod tests {
     use agentik_memory::{
         MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, run_memory_pipeline,
     };
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
     use arc_swap::ArcSwapOption;
@@ -85,7 +86,7 @@ mod tests {
                     .any(|message| message.log_summary().contains("Convert this"))
             })
             .returning(|_, _, _| {
-                Ok(agentik_memory::MemoryMessageExt::assistant_text(
+                Ok(AgentMessageExt::assistant_text(
                     r#"{"raw_memory":"User prefers verified tests.","rollout_summary":"Implemented request.","rollout_slug":"test preference"}"#,
                 ))
             });
@@ -97,7 +98,7 @@ mod tests {
                     .any(|message| message.log_summary().contains("Consolidate raw session"))
             })
             .returning(|_, _, _| {
-                Ok(agentik_memory::MemoryMessageExt::assistant_text(
+                Ok(AgentMessageExt::assistant_text(
                     r##"{"entries":[{"entry_type":"workflow","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
                 ))
             });
@@ -118,10 +119,7 @@ mod tests {
         let session_id = Uuid::new_v4();
         storage.start_session(agent_id, session_id).await.unwrap();
         storage
-            .append_message(
-                session_id,
-                &agentik_memory::MemoryMessageExt::user("always run tests"),
-            )
+            .append_message(session_id, &AgentMessageExt::user("always run tests"))
             .await
             .unwrap();
         storage.end_session(session_id).await.unwrap();

@@ -28,9 +28,9 @@ use chrono::Utc;
 use futures::StreamExt;
 
 use crate::error::{AgentError, Result};
-use crate::message_ext::AgentMessageExt;
 use crate::prompt::compact;
 use crate::storage::PersistOp;
+use agentik_sdk::AgentMessageExt;
 
 use super::{Session, SessionState};
 

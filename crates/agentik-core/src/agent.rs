@@ -903,8 +903,8 @@ async fn persist_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_ext::AgentMessageExt;
     use crate::testing::dummy_model_info;
+    use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::model::model_info::ModelInfo;
     use agentik_sdk::provider::client::MockApiClient;

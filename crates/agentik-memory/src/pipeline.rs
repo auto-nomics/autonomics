@@ -15,8 +15,8 @@ use super::artifacts::{
 };
 use super::store::{MemoryEntry, MemoryStage1Record, MemoryStore, SemanticObservation};
 use super::{MemoryConfig, SemanticGrounding, now_ms};
-use crate::message_ext::MemoryMessageExt;
 use crate::source::MemorySource;
+use agentik_sdk::AgentMessageExt;
 
 /// All root agents share one global memory scope. Scope partitioning can be
 /// introduced later without changing the repository contract.
