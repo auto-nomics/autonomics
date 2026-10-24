@@ -23,7 +23,7 @@ mod stages;
 pub use crate::store::KnowledgeQueue;
 pub use error::Error as PipelineError;
 pub use event::KnowledgeEvent;
-pub use job::KnowledgeJob;
+pub use job::{KnowledgeJob, KnowledgeJobKind};
 pub use service::{KnowledgePipeline, KnowledgeRunSummary};
 pub use session_extract_worker::{
     SessionExtractWorker, SessionExtractWorkerConfig, SessionExtractWorkerHandle,
@@ -33,7 +33,7 @@ pub use stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 
 pub async fn run_memory_pipeline(
     agent_id: Uuid,
-    storage: Arc<dyn MemorySource>,
+    _storage: Arc<dyn MemorySource>,
     memory: Arc<KmsAgentHandle>,
     model_handle: Arc<ArcSwapOption<Model>>,
 ) {
@@ -42,17 +42,13 @@ pub async fn run_memory_pipeline(
         return;
     }
 
-    let system = memory.system();
-    let pipeline =
-        KnowledgePipeline::new(system.queue(), storage, Arc::clone(&system), model_handle);
-    let dispatch_result = pipeline
-        .dispatch(KnowledgeEvent::AgentStarted { agent_id })
-        .await;
-    let result = match dispatch_result {
-        Ok(_) => pipeline.run_due(16).await,
-        Err(error) => Err(error),
-    };
-    if let Err(error) = result {
+    if let Some(model) = model_handle.load_full() {
+        memory.system().model_slot().store(Some(model));
+    }
+    if let Err(error) = memory
+        .submit_knowledge_event(KnowledgeEvent::AgentStarted { agent_id })
+        .await
+    {
         tracing::warn!(agent_id = %agent_id, error = %error, "knowledge pipeline failed");
     }
 }

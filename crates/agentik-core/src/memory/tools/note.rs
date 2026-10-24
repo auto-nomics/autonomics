@@ -84,16 +84,25 @@ fn note_slug(raw: Option<&str>) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use crate::memory::{KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage};
+    use crate::memory::{
+        EmptyMemorySource, KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage,
+    };
 
     use super::*;
 
     #[tokio::test]
     async fn queues_redacted_note() {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), Arc::clone(&store)));
+        let backend = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                Arc::clone(&store),
+                Arc::new(EmptyMemorySource),
+            )
+            .await,
+        );
 
-        let result = MemoryNoteTool::new(backend)
+        let result = MemoryNoteTool::new(Arc::clone(&backend))
             .run(MemoryNoteInput {
                 content: "token=abc\nPrefer concise summaries.".into(),
                 slug: Some("User Preference!".into()),
@@ -105,5 +114,6 @@ mod tests {
         let notes = store.list_pending_notes().await.unwrap();
         assert_eq!(notes.len(), 1);
         assert!(notes[0].content.contains("REDACTED"));
+        backend.system().shutdown();
     }
 }

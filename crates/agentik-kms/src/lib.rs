@@ -21,14 +21,14 @@ pub use artifacts::{
 pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{
-    KnowledgeEvent, KnowledgeJob, KnowledgePipeline, KnowledgeQueue, KnowledgeStage, PipelineError,
-    StageContext, StageOutcome, StageStatus, run_memory_pipeline,
+    KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, KnowledgeQueue,
+    KnowledgeStage, PipelineError, StageContext, StageOutcome, StageStatus, run_memory_pipeline,
 };
 pub use pipeline::{
     SessionExtractWorker, SessionExtractWorkerConfig, SessionExtractWorkerHandle,
     SessionExtractWorkerStatus, start_session_extract_worker,
 };
-pub use source::{MemorySessionRecord, MemorySource};
+pub use source::{EmptyMemorySource, MemorySessionRecord, MemorySource};
 pub use store::error::Error as StoreError;
 pub use store::turso_store::TursoKmsStorage;
 pub use store::{

@@ -77,7 +77,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore, TursoKmsStorage,
+        EmptyMemorySource, KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore,
+        TursoKmsStorage,
     };
 
     use super::*;
@@ -85,7 +86,14 @@ mod tests {
     #[tokio::test]
     async fn lists_active_entries() {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), Arc::clone(&store)));
+        let backend = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                Arc::clone(&store),
+                Arc::new(EmptyMemorySource),
+            )
+            .await,
+        );
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
@@ -105,10 +113,12 @@ mod tests {
             .await
             .unwrap();
 
+        let system = backend.system();
         let result = MemoryListTool::new(backend)
             .run(MemoryListInput { limit: Some(1) })
             .await
             .unwrap();
         assert!(result.text_content().contains("Verification workflow"));
+        system.shutdown();
     }
 }

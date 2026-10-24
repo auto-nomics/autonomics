@@ -1439,7 +1439,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let memory = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), store));
+        let memory = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                store,
+                Arc::new(crate::memory::EmptyMemorySource),
+            )
+            .await,
+        );
+        let memory_system = memory.system();
 
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentShared {
@@ -1483,6 +1491,7 @@ mod tests {
             profile_at < memory_at,
             "profile section must render before the memory section"
         );
+        memory_system.shutdown();
     }
 
     /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system

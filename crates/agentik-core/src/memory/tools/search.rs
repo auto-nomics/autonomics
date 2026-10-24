@@ -157,7 +157,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore, TursoKmsStorage,
+        EmptyMemorySource, KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore,
+        TursoKmsStorage,
     };
 
     use super::*;
@@ -165,7 +166,14 @@ mod tests {
     #[tokio::test]
     async fn search_entries_and_pending_notes() {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), Arc::clone(&store)));
+        let backend = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                Arc::clone(&store),
+                Arc::new(EmptyMemorySource),
+            )
+            .await,
+        );
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
@@ -199,6 +207,7 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("Verification workflow"));
 
+        let system = backend.system();
         let result = MemorySearchTool::new(backend)
             .run(MemorySearchInput {
                 queries: vec!["checklist".into()],
@@ -208,5 +217,6 @@ mod tests {
             .await
             .unwrap();
         assert!(result.text_content().contains("pending_note"));
+        system.shutdown();
     }
 }

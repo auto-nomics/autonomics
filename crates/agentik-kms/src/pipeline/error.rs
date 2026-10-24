@@ -24,6 +24,9 @@ pub enum Error {
     #[error("serialization error: {0}")]
     Serialization(String),
 
+    #[error("knowledge system unavailable: {0}")]
+    SystemUnavailable(String),
+
     #[error("{operation}: {source}")]
     ModelRequest {
         operation: String,
@@ -73,6 +76,15 @@ impl From<StoreError> for Error {
         Self::Store {
             operation: "knowledge pipeline queue".to_string(),
             source,
+        }
+    }
+}
+
+impl From<crate::Error> for Error {
+    fn from(source: crate::Error) -> Self {
+        Self::Source {
+            operation: "submit knowledge jobs".to_string(),
+            source: Box::new(source),
         }
     }
 }

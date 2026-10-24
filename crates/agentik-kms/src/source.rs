@@ -12,6 +12,28 @@ pub struct MemorySessionRecord {
     pub ended_at: Option<i64>,
 }
 
+/// A source with no rollouts, for builders and tests that only need memory
+/// read/write tools without starting an extraction-capable runtime.
+pub struct EmptyMemorySource;
+
+#[async_trait]
+impl MemorySource for EmptyMemorySource {
+    async fn list_session_records(
+        &self,
+        _agent_id: Uuid,
+    ) -> Result<Vec<MemorySessionRecord>, Error> {
+        Ok(Vec::new())
+    }
+
+    async fn get_messages_since_for_session(
+        &self,
+        _session_id: Uuid,
+        _sequence: i64,
+    ) -> Result<Vec<Message>, Error> {
+        Ok(Vec::new())
+    }
+}
+
 /// Read-only view of persisted agent rollouts consumed by memory extraction.
 #[async_trait]
 pub trait MemorySource: Send + Sync {

@@ -113,8 +113,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        KmsAgentHandle, Knowledge, KnowledgePath, KnowledgeStore, MemoryConfig, MemoryStore,
-        TursoKmsStorage,
+        EmptyMemorySource, KmsAgentHandle, Knowledge, KnowledgePath, KnowledgeStore, MemoryConfig,
+        MemoryStore, TursoKmsStorage,
     };
 
     use super::*;
@@ -122,7 +122,14 @@ mod tests {
     #[tokio::test]
     async fn reads_summary_and_entry() {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), Arc::clone(&store)));
+        let backend = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                Arc::clone(&store),
+                Arc::new(EmptyMemorySource),
+            )
+            .await,
+        );
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
@@ -159,6 +166,7 @@ mod tests {
             .into_iter()
             .find(|node| !node.structural)
             .unwrap();
+        let system = backend.system();
         let result = MemoryReadTool::new(backend)
             .run(MemoryReadInput {
                 target: node.id.to_string(),
@@ -168,5 +176,6 @@ mod tests {
             .await
             .unwrap();
         assert!(result.text_content().contains("targeted tests"));
+        system.shutdown();
     }
 }

@@ -8,7 +8,9 @@ use uuid::Uuid;
 use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
-use crate::memory::{KmsAgentHandle, MemoryConfig, TursoKmsStorage, memory_registrations};
+use crate::memory::{
+    EmptyMemorySource, KmsAgentHandle, MemoryConfig, TursoKmsStorage, memory_registrations,
+};
 use crate::session::AgentShared;
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
@@ -119,8 +121,9 @@ impl AgentBuilder {
     ///
     /// Root-level agents generate and consolidate memory; all agents receive
     /// read/search tools and summary injection when `use_memory` is enabled.
-    pub fn with_memory(mut self, config: MemoryConfig, store: Arc<TursoKmsStorage>) -> Self {
-        self.memory = Some(Arc::new(KmsAgentHandle::new(config, store)));
+    pub async fn with_memory(mut self, config: MemoryConfig, store: Arc<TursoKmsStorage>) -> Self {
+        let memory = KmsAgentHandle::new(config, store, Arc::new(EmptyMemorySource)).await;
+        self.memory = Some(Arc::new(memory));
         self
     }
 

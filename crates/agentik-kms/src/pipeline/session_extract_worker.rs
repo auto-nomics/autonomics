@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use tokio::sync::{Notify, watch};
 
-use super::KnowledgePipeline;
+use super::{KnowledgeJobKind, KnowledgePipeline};
 use crate::now_ms;
 
-const SESSION_EXTRACT_JOB_KIND: &str = "extract_agent_sessions";
+const SESSION_EXTRACT_JOB_KIND: KnowledgeJobKind = KnowledgeJobKind::SessionExtract;
 
 /// Tune the resident session-extraction consumer without changing its protocol.
 #[derive(Debug, Clone)]
@@ -196,7 +196,7 @@ mod tests {
     use crate::KmsSystem;
     use crate::source::{MemorySessionRecord, MemorySource};
     use crate::store::{KnowledgeQueue, MemoryStore};
-    use crate::{Error, KnowledgeJob, TursoKmsStorage};
+    use crate::{Error, KnowledgeEvent, KnowledgeJob, TursoKmsStorage};
 
     struct OneSessionSource {
         agent_id: Uuid,
@@ -276,18 +276,13 @@ mod tests {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let mut config = crate::MemoryConfig::new();
         config.min_idle_hours = 0;
-        let system = Arc::new(KmsSystem::new(config, Arc::clone(&store)));
         let agent_id = Uuid::new_v4();
         let source = Arc::new(OneSessionSource {
             agent_id,
             session_id: Uuid::new_v4(),
         });
-        let pipeline = Arc::new(KnowledgePipeline::new(
-            system.queue(),
-            source,
-            Arc::clone(&system),
-            model,
-        ));
+        let system = KmsSystem::new(config, Arc::clone(&store), source).await;
+        system.model_slot().store(model.load_full());
 
         store
             .enqueue(KnowledgeJob::ConsolidateKnowledge {
@@ -295,19 +290,12 @@ mod tests {
             })
             .await
             .unwrap();
-        store
-            .enqueue(KnowledgeJob::ExtractAgentSessions { agent_id })
+        system
+            .submit_event(KnowledgeEvent::AgentStarted { agent_id })
             .await
             .unwrap();
 
-        let handle = start_session_extract_worker(
-            pipeline,
-            SessionExtractWorkerConfig {
-                batch_limit: 8,
-                poll_interval: Duration::from_millis(10),
-            },
-        );
-        handle.wake();
+        let handle = system.session_extract_worker().expect("worker mounted");
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while system

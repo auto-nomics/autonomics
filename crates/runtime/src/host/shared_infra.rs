@@ -253,7 +253,7 @@ impl SharedInfra {
         let turso_store = open_agent_storage(config).await?;
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        let kms = open_kms_system(config).await?;
+        let kms = open_kms_system(config, &turso_store).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
 
@@ -827,7 +827,10 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
 
 /// Open the dedicated memory knowledge database and build the process-wide
 /// backend.
-async fn open_kms_system(config: &RuntimeConfig) -> Result<Arc<KmsSystem>> {
+async fn open_kms_system(
+    config: &RuntimeConfig,
+    agent_storage: &Arc<TursoAgentStorage>,
+) -> Result<Arc<KmsSystem>> {
     let started = std::time::Instant::now();
     tracing::info!(
         path = %config.knowledge_db_path.display(),
@@ -850,7 +853,9 @@ async fn open_kms_system(config: &RuntimeConfig) -> Result<Arc<KmsSystem>> {
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    Ok(Arc::new(KmsSystem::new(memory_config, store)))
+    let source =
+        agentik_core::memory::agent_storage_memory_source(Arc::clone(agent_storage) as Arc<_>);
+    Ok(KmsSystem::new(memory_config, store, source).await)
 }
 
 /// Open the bibliography store + literature gateway once and publish

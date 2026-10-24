@@ -1,9 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
+use agentik_sdk::model::Model;
 use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 
 use super::{AgentRuntimeConfig, MemoryConfig, MemoryStore, TursoKmsStorage};
-use crate::pipeline::KnowledgeEvent;
+use crate::pipeline::{
+    KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, SessionExtractWorkerConfig,
+    SessionExtractWorkerHandle, start_session_extract_worker,
+};
+use crate::source::MemorySource;
 use crate::store::KnowledgeQueue;
 
 /// Process-wide KMS domain root.
@@ -15,16 +21,50 @@ pub struct KmsSystem {
     default_config: ArcSwap<MemoryConfig>,
     store: Arc<dyn MemoryStore>,
     queue: Arc<dyn KnowledgeQueue>,
+    pipeline: Arc<KnowledgePipeline>,
+    model: Arc<ArcSwapOption<Model>>,
+    session_extract_worker: OnceLock<SessionExtractWorkerHandle>,
 }
 
 impl KmsSystem {
+    /// Build the process-wide KMS root and start its resident consumers.
+    ///
+    /// The returned `Arc` is deliberate: the session-extract pipeline needs a
+    /// shared view of config and storage. The model slot starts empty so the
+    /// host can start before its default model is resolved; extraction jobs
+    /// retry while the slot is empty.
     #[must_use]
-    pub fn new(config: MemoryConfig, storage: Arc<TursoKmsStorage>) -> Self {
-        Self {
-            default_config: ArcSwap::new(Arc::new(config)),
-            store: Arc::clone(&storage) as Arc<_>,
-            queue: Arc::clone(&storage) as Arc<_>,
-        }
+    pub async fn new(
+        config: MemoryConfig,
+        storage: Arc<TursoKmsStorage>,
+        source: Arc<dyn MemorySource>,
+    ) -> Arc<Self> {
+        let model = Arc::new(ArcSwapOption::empty());
+        // The pipeline owns KMS weakly: KmsSystem is the process root and owns
+        // the pipeline strongly, so a worker can outlive a shutdown without
+        // leaking the entire system through a reference cycle.
+        let system = Arc::new_cyclic(|weak: &Weak<Self>| {
+            let pipeline = Arc::new(KnowledgePipeline::new(
+                Arc::clone(&storage) as Arc<_>,
+                Arc::clone(&source),
+                Weak::clone(weak),
+                Arc::clone(&model),
+            ));
+            Self {
+                default_config: ArcSwap::new(Arc::new(config)),
+                store: Arc::clone(&storage) as Arc<_>,
+                queue: Arc::clone(&storage) as Arc<_>,
+                pipeline,
+                model: Arc::clone(&model),
+                session_extract_worker: OnceLock::new(),
+            }
+        });
+        let worker = start_session_extract_worker(
+            Arc::clone(&system.pipeline),
+            SessionExtractWorkerConfig::default(),
+        );
+        let _ = system.session_extract_worker.set(worker);
+        system
     }
 
     #[must_use]
@@ -35,6 +75,21 @@ impl KmsSystem {
     #[must_use]
     pub fn queue(&self) -> Arc<dyn KnowledgeQueue> {
         Arc::clone(&self.queue)
+    }
+
+    #[must_use]
+    pub fn pipeline(&self) -> Arc<KnowledgePipeline> {
+        Arc::clone(&self.pipeline)
+    }
+
+    #[must_use]
+    pub fn model_slot(&self) -> Arc<ArcSwapOption<Model>> {
+        Arc::clone(&self.model)
+    }
+
+    #[must_use]
+    pub fn session_extract_worker(&self) -> Option<SessionExtractWorkerHandle> {
+        self.session_extract_worker.get().cloned()
     }
 
     #[must_use]
@@ -67,11 +122,43 @@ impl KmsSystem {
         &self,
         event: KnowledgeEvent,
     ) -> Result<Vec<uuid::Uuid>, crate::Error> {
+        self.submit_jobs(event.jobs()).await
+    }
+
+    /// Enqueue durable jobs and wake only the consumers that accept them.
+    ///
+    /// External events and stage continuations both funnel through this
+    /// method so queue insertion and worker notification cannot diverge.
+    pub async fn submit_jobs(
+        &self,
+        jobs: Vec<KnowledgeJob>,
+    ) -> Result<Vec<uuid::Uuid>, crate::Error> {
         let mut ids = Vec::new();
-        for job in event.jobs() {
-            ids.push(self.queue.enqueue(job).await?);
+        for job in jobs {
+            ids.push(self.queue.enqueue(job.clone()).await?);
+            self.wake_for_job(job);
         }
         Ok(ids)
+    }
+
+    fn wake_for_job(&self, job: KnowledgeJob) {
+        match job.kind() {
+            KnowledgeJobKind::SessionExtract => {
+                if let Some(worker) = self.session_extract_worker() {
+                    worker.wake();
+                }
+            }
+            KnowledgeJobKind::ConsolidateKnowledge => {
+                // No resident consolidation worker yet. Register its future
+                // handle here without changing the submission contract.
+            }
+        }
+    }
+
+    pub fn shutdown(&self) {
+        if let Some(worker) = self.session_extract_worker() {
+            worker.request_shutdown();
+        }
     }
 }
 
@@ -83,8 +170,12 @@ pub struct KmsAgentHandle {
 
 impl KmsAgentHandle {
     #[must_use]
-    pub fn new(config: MemoryConfig, storage: Arc<TursoKmsStorage>) -> Self {
-        let system = Arc::new(KmsSystem::new(config, storage));
+    pub async fn new(
+        config: MemoryConfig,
+        storage: Arc<TursoKmsStorage>,
+        source: Arc<dyn MemorySource>,
+    ) -> Self {
+        let system = KmsSystem::new(config, storage, source).await;
         let runtime_config = system.runtime_config();
         Self {
             system,
@@ -173,7 +264,12 @@ mod tests {
     #[tokio::test]
     async fn agent_handles_isolate_runtime_config_over_one_system() {
         let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let system = Arc::new(KmsSystem::new(MemoryConfig::new(), storage));
+        let system = KmsSystem::new(
+            MemoryConfig::new(),
+            storage,
+            Arc::new(crate::EmptyMemorySource),
+        )
+        .await;
         let enabled = system.agent_handle(AgentRuntimeConfig::new(true, true));
         let disabled = system.agent_handle(AgentRuntimeConfig::new(false, false));
 
@@ -186,5 +282,28 @@ mod tests {
         assert!(disabled.effective_memory_config().use_memory);
         assert!(!disabled.effective_memory_config().generate_memory);
         assert!(enabled.effective_memory_config().generate_memory);
+        system.shutdown();
+    }
+
+    #[tokio::test]
+    async fn system_starts_and_shuts_down_session_extract_worker() {
+        let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let system = KmsSystem::new(
+            MemoryConfig::new(),
+            storage,
+            Arc::new(crate::EmptyMemorySource),
+        )
+        .await;
+        let worker = system.session_extract_worker().expect("worker mounted");
+        system.shutdown();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while worker.status().running {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "session extract worker did not stop"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 }

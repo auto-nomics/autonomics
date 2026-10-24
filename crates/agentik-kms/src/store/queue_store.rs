@@ -26,5 +26,7 @@ pub trait KnowledgeQueue: Send + Sync {
     /// to the next consumer immediately.
     async fn release(&self, job_id: Uuid) -> Result<()>;
 
+    /// Complete the claimed job only. Stage continuations are submitted by
+    /// [`KmsSystem::submit_jobs`](crate::KmsSystem::submit_jobs).
     async fn complete(&self, job_id: Uuid, outcome: StageOutcome) -> Result<()>;
 }

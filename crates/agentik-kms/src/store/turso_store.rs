@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn knowledge_queue_deduplicates_retries_and_chains_jobs() {
+    async fn knowledge_queue_deduplicates_retries_and_leaves_continuations_to_caller() {
         let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
         let job = KnowledgeJob::ExtractAgentSessions { agent_id };
@@ -1215,6 +1215,21 @@ mod tests {
             )
             .await
             .unwrap();
+        assert!(
+            store
+                .claim_due(crate::now_ms(), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let continuation_id = store
+            .enqueue(KnowledgeJob::ConsolidateKnowledge {
+                trigger: "test".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_ne!(continuation_id, first_id);
         let claimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
         assert_eq!(claimed.len(), 1);
         assert!(matches!(

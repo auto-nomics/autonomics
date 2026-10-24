@@ -234,9 +234,10 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     config.embedding.enabled = false;
 
     let mut host = RuntimeHost::open(&config).await.unwrap();
-    // One slot shared by the host and the gateway state — exactly like
+    // One slot shared by KMS, the host, and the gateway state — exactly like
     // the real daemon wires it.
-    let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
+    let model_slot = host.infra().kms.model_slot();
+    model_slot.store(Some(Arc::new(model)));
     host.set_model(model_slot.clone());
 
     let hub = EventHub::new();
@@ -246,7 +247,8 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let storage =
         Arc::new(runtime::model_bootstrap::SqliteModelStorage::open(&config.app_db_path).unwrap());
     let (model_events, model_event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let models = runtime::model_actor::start(storage, model_events);
+    let models =
+        runtime::model_actor::start_with_model_slot(storage, model_events, model_slot.clone());
     crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
     // Report the injected mock through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers

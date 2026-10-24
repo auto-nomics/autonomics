@@ -129,9 +129,13 @@ pub async fn run_daemon(
     };
 
     let (model_events, model_event_rx) = mpsc::unbounded_channel();
-    let models = runtime::model_actor::start(models_storage, model_events);
+    let model_slot = host.infra().kms.model_slot();
+    let models = runtime::model_actor::start_with_model_slot(
+        models_storage,
+        model_events,
+        model_slot.clone(),
+    );
     spawn_model_event_bridge(model_event_rx, hub.clone());
-    let model_slot = models.model_slot();
     host.set_model(model_slot.clone());
     // Install the startup default before restoring agents — the restore
     // loop skips preference-less agents while the slot is empty.

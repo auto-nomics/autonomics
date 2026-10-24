@@ -153,9 +153,6 @@ impl KnowledgeQueue for TursoKmsStorage {
             .await
             .map_err(db_err)?;
 
-        for job in outcome.next_jobs {
-            self.enqueue(job).await?;
-        }
         Ok(())
     }
 }

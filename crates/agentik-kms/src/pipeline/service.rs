@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use agentik_sdk::model::Model;
 use arc_swap::ArcSwapOption;
@@ -8,7 +8,7 @@ use super::event::KnowledgeEvent;
 use super::job::KnowledgeJob;
 use super::stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 use super::stages::default_stages;
-use super::{MemorySource, error::Error};
+use super::{KnowledgeJobKind, MemorySource, error::Error};
 use crate::KmsSystem;
 use crate::now_ms;
 use crate::store::KnowledgeQueue;
@@ -16,7 +16,7 @@ use crate::store::KnowledgeQueue;
 pub struct KnowledgePipeline {
     queue: Arc<dyn KnowledgeQueue>,
     source: Arc<dyn MemorySource>,
-    system: Arc<KmsSystem>,
+    system: Weak<KmsSystem>,
     model: Arc<ArcSwapOption<Model>>,
     stages: Vec<Arc<dyn KnowledgeStage>>,
 }
@@ -34,7 +34,7 @@ impl KnowledgePipeline {
     pub fn new(
         queue: Arc<dyn KnowledgeQueue>,
         source: Arc<dyn MemorySource>,
-        system: Arc<KmsSystem>,
+        system: Weak<KmsSystem>,
         model: Arc<ArcSwapOption<Model>>,
     ) -> Self {
         Self {
@@ -47,12 +47,10 @@ impl KnowledgePipeline {
     }
 
     pub async fn dispatch(&self, event: KnowledgeEvent) -> Result<Vec<Uuid>, Error> {
-        let jobs = event.jobs();
-        let mut ids = Vec::new();
-        for job in jobs {
-            ids.push(self.queue.enqueue(job).await?);
-        }
-        Ok(ids)
+        self.system()?
+            .submit_event(event)
+            .await
+            .map_err(Error::from)
     }
 
     pub async fn run_due(&self, limit: usize) -> Result<usize, Error> {
@@ -66,7 +64,7 @@ impl KnowledgePipeline {
     /// lease for an hour.
     pub async fn run_due_for_kind(
         &self,
-        job_kind: &'static str,
+        job_kind: KnowledgeJobKind,
         limit: usize,
     ) -> Result<KnowledgeRunSummary, Error> {
         self.run_due_internal(Some(job_kind), limit).await
@@ -74,7 +72,7 @@ impl KnowledgePipeline {
 
     async fn run_due_internal(
         &self,
-        job_kind: Option<&'static str>,
+        job_kind: Option<KnowledgeJobKind>,
         limit: usize,
     ) -> Result<KnowledgeRunSummary, Error> {
         let mut summary = KnowledgeRunSummary::default();
@@ -86,8 +84,8 @@ impl KnowledgePipeline {
             summary.claimed += claimed.len();
             let mut executed = 0;
             for queued in claimed {
-                if let Some(kind) = job_kind
-                    && queued.job.kind() != kind
+                if let Some(expected_kind) = job_kind
+                    && queued.job.kind() != expected_kind
                 {
                     self.queue.release(queued.id).await?;
                     summary.released += 1;
@@ -105,6 +103,7 @@ impl KnowledgePipeline {
     }
 
     async fn execute_queued(&self, queued: crate::store::QueuedKnowledgeJob) -> Result<(), Error> {
+        let system = self.system()?;
         let Some(stage) = self
             .stages
             .iter()
@@ -114,7 +113,10 @@ impl KnowledgePipeline {
             self.queue
                 .complete(
                     queued.id,
-                    StageOutcome::failed(format!("no stage accepts {}", queued.job.kind())),
+                    StageOutcome::failed(format!(
+                        "no stage accepts {}",
+                        queued.job.kind().as_str()
+                    )),
                 )
                 .await?;
             return Ok(());
@@ -122,7 +124,7 @@ impl KnowledgePipeline {
 
         let context = StageContext {
             source: Arc::clone(&self.source),
-            system: Arc::clone(&self.system),
+            system: Arc::clone(&system),
             model: Arc::clone(&self.model),
         };
         let mut outcome = match stage.execute(context, queued.job.clone()).await {
@@ -141,7 +143,17 @@ impl KnowledgePipeline {
         {
             outcome = StageOutcome::failed("job exhausted retry attempts");
         }
+        let next_jobs = std::mem::take(&mut outcome.next_jobs);
         self.queue.complete(queued.id, outcome).await?;
+        if !next_jobs.is_empty() {
+            system.submit_jobs(next_jobs).await?;
+        }
         Ok(())
+    }
+
+    fn system(&self) -> Result<Arc<KmsSystem>, Error> {
+        self.system.upgrade().ok_or_else(|| {
+            Error::SystemUnavailable("KmsSystem was dropped while pipeline was active".into())
+        })
     }
 }
