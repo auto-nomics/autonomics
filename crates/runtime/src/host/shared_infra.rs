@@ -8,8 +8,8 @@ use std::sync::{Arc, Weak};
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::memory::{
-    Error as MemoryError, MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding,
-    TursoMemoryStorage,
+    Error as MemoryError, KnowledgeQueue, MemoryBackend, MemoryConfig, MemoryStore,
+    SemanticGrounding, TursoMemoryStorage,
 };
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
@@ -879,9 +879,11 @@ async fn open_memory(
         path = %config.knowledge_db_path.display(),
         "SharedInfra::open: opening memory knowledge db"
     );
-    let store = TursoMemoryStorage::open(&config.knowledge_db_path)
-        .await
-        .map_err(MemoryError::from)?;
+    let store = Arc::new(
+        TursoMemoryStorage::open(&config.knowledge_db_path)
+            .await
+            .map_err(MemoryError::from)?,
+    );
     store
         .migrate_from_agent_db(&config.agent_db)
         .await
@@ -891,16 +893,18 @@ async fn open_memory(
         "memory knowledge db opened and legacy migration checked"
     );
 
-    let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
+    let memory_store: Arc<dyn MemoryStore> = Arc::clone(&store) as Arc<_>;
+    let queue: Arc<dyn KnowledgeQueue> = Arc::clone(&store) as Arc<_>;
     let grounding: Option<Arc<dyn SemanticGrounding>> = kms
         .as_ref()
         .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    Ok(Arc::new(MemoryBackend::new(
+    Ok(Arc::new(MemoryBackend::with_queue(
         memory_config,
         memory_store,
+        queue,
         grounding,
     )))
 }

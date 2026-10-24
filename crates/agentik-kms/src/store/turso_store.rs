@@ -1,6 +1,7 @@
 //! Turso-backed persistent memory repository.
 mod knowledge;
 mod memory_store;
+mod queue;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -277,6 +278,22 @@ impl TursoMemoryStorage {
                     last_error TEXT,
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS knowledge_pipeline_jobs (
+                    id TEXT PRIMARY KEY,
+                    job_json TEXT NOT NULL,
+                    dedup_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    run_after INTEGER NOT NULL,
+                    lease_until INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    max_attempts INTEGER NOT NULL DEFAULT 5,
+                    last_error TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(dedup_key)
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_due
+                    ON knowledge_pipeline_jobs(status, run_after, updated_at);
                 CREATE TABLE IF NOT EXISTS memory_entries (
                     id TEXT PRIMARY KEY,
                     scope_id TEXT NOT NULL,
@@ -857,6 +874,8 @@ impl TursoMemoryStorage {
 mod tests {
     use super::*;
     use crate::MEMORY_SCOPE_ID;
+    use crate::pipeline::{KnowledgeJob, StageOutcome, StageStatus};
+    use crate::store::KnowledgeQueue;
     use crate::store::MemoryStore;
     use crate::store::knowledge_store::KnowledgeStore;
 
@@ -876,6 +895,52 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn knowledge_queue_deduplicates_retries_and_chains_jobs() {
+        let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        let job = KnowledgeJob::ExtractAgentSessions { agent_id };
+        let first_id = store.enqueue(job.clone()).await.unwrap();
+        let second_id = store.enqueue(job).await.unwrap();
+        assert_eq!(first_id, second_id);
+
+        let now = crate::now_ms();
+        let claimed = store.claim_due(now, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, first_id);
+        assert_eq!(claimed[0].attempts, 1);
+        assert!(store.claim_due(now, 10).await.unwrap().is_empty());
+
+        store
+            .complete(
+                first_id,
+                StageOutcome {
+                    status: StageStatus::RetryLater {
+                        after_secs: 60,
+                        reason: "model unavailable".to_string(),
+                    },
+                    next_jobs: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(store.claim_due(now + 59_000, 10).await.unwrap().is_empty());
+        let claimed = store.claim_due(now + 61_000, 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].attempts, 2);
+
+        store
+            .complete(
+                first_id,
+                StageOutcome::completed(vec![KnowledgeJob::GroundObservations]),
+            )
+            .await
+            .unwrap();
+        let claimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(matches!(claimed[0].job, KnowledgeJob::GroundObservations));
     }
 
     #[tokio::test]

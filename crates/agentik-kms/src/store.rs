@@ -6,6 +6,7 @@
 
 pub mod error;
 mod knowledge_store;
+mod queue_store;
 pub mod turso_store;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use crate::knowledge::Knowledge;
 use error::Result;
 
 pub use knowledge_store::KnowledgeStore;
+pub use queue_store::{KnowledgeQueue, QueuedKnowledgeJob};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryStage1Record {

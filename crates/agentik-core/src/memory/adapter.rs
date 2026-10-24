@@ -111,11 +111,15 @@ mod tests {
         let storage: Arc<dyn crate::storage::AgentStorage> =
             Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
         let source = agent_storage_memory_source(storage.clone());
-        let memory_store: Arc<dyn MemoryStore> =
-            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let memory_store = Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory = Arc::new(MemoryBackend::new(config, memory_store.clone(), None));
+        let memory = Arc::new(MemoryBackend::with_queue(
+            config,
+            Arc::clone(&memory_store) as Arc<dyn MemoryStore>,
+            Arc::clone(&memory_store) as _,
+            None,
+        ));
 
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
@@ -135,11 +139,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
-        let nodes = memory
-            .store
-            .list_knowledge(10)
-            .await
-            .unwrap();
+        let nodes = memory.store.list_knowledge(10).await.unwrap();
         assert_eq!(nodes.iter().filter(|node| !node.structural).count(), 1);
         assert!(
             nodes

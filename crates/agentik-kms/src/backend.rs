@@ -5,11 +5,14 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 
 use super::{AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, SemanticGrounding};
+use crate::pipeline::KnowledgeEvent;
+use crate::store::KnowledgeQueue;
 
 pub struct MemoryBackend {
     config: ArcSwap<MemoryConfig>,
     pub store: Arc<dyn MemoryStore>,
     pub grounding: Option<Arc<dyn SemanticGrounding>>,
+    queue: Option<Arc<dyn KnowledgeQueue>>,
 }
 
 impl Clone for MemoryBackend {
@@ -19,6 +22,7 @@ impl Clone for MemoryBackend {
             config: ArcSwap::new(Arc::new(MemoryConfig::clone(&config))),
             store: Arc::clone(&self.store),
             grounding: self.grounding.clone(),
+            queue: self.queue.clone(),
         }
     }
 }
@@ -34,7 +38,42 @@ impl MemoryBackend {
             config: ArcSwap::new(std::sync::Arc::new(config)),
             store,
             grounding,
+            queue: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_queue(
+        config: MemoryConfig,
+        store: Arc<dyn MemoryStore>,
+        queue: Arc<dyn KnowledgeQueue>,
+        grounding: Option<Arc<dyn SemanticGrounding>>,
+    ) -> Self {
+        Self {
+            config: ArcSwap::new(std::sync::Arc::new(config)),
+            store,
+            grounding,
+            queue: Some(queue),
+        }
+    }
+
+    #[must_use]
+    pub fn pipeline_queue(&self) -> Option<Arc<dyn KnowledgeQueue>> {
+        self.queue.clone()
+    }
+
+    pub async fn submit_knowledge_event(
+        &self,
+        event: KnowledgeEvent,
+    ) -> Result<Vec<uuid::Uuid>, crate::Error> {
+        let Some(queue) = &self.queue else {
+            return Ok(Vec::new());
+        };
+        let mut ids = Vec::new();
+        for job in event.jobs() {
+            ids.push(queue.enqueue(job).await?);
+        }
+        Ok(ids)
     }
 
     #[must_use]

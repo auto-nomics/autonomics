@@ -23,12 +23,16 @@ pub use backend::{MemoryBackend, memory_prompt_section};
 pub use error::{Error, Result};
 pub use grounding::{SemanticGrounding, SemanticGroundingOutcome};
 pub use knowledge::{Knowledge, KnowledgePath};
-pub use pipeline::{MEMORY_SCOPE_ID, run_memory_pipeline};
+pub use pipeline::{
+    KnowledgeEvent, KnowledgeJob, KnowledgePipeline, KnowledgeQueue, KnowledgeStage,
+    MEMORY_SCOPE_ID, PipelineError, StageContext, StageOutcome, StageStatus, run_memory_pipeline,
+};
 pub use source::{MemorySessionRecord, MemorySource};
 pub use store::error::Error as StoreError;
 pub use store::turso_store::TursoMemoryStorage;
 pub use store::{
-    KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
+    KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob,
+    SemanticObservation,
 };
 
 /// Fully resolved runtime settings carried by the memory backend.

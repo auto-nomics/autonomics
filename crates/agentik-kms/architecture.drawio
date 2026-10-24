@@ -13,13 +13,19 @@
                 <mxCell id="trig2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="&lt;b&gt;API Hot Toggle&lt;/b&gt;&lt;br&gt;generate_memory false → true" vertex="1">
                     <mxGeometry height="55" width="220" x="420" y="70" as="geometry"/>
                 </mxCell>
-                <mxCell id="pipeline_entry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" value="run_memory_pipeline()" vertex="1">
+                <mxCell id="pipeline_queue" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1" value="KnowledgeEvent → knowledge_pipeline_jobs&#xa;(dedup + lease + retry)" vertex="1">
+                    <mxGeometry height="55" width="240" x="700" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="pipeline_entry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" value="KnowledgePipeline&#xa;dispatch + run_due" vertex="1">
                     <mxGeometry height="40" width="220" x="260" y="165" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_trig1" edge="1" parent="1" source="trig1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_entry">
+                <mxCell id="e_trig1" edge="1" parent="1" source="trig1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_trig2" edge="1" parent="1" source="trig2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_entry">
+                <mxCell id="e_trig2" edge="1" parent="1" source="trig2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_queue_pipeline" edge="1" parent="1" source="pipeline_queue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_entry">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="session_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" value="Session Storage&#xa;(rollouts / WAL)" vertex="1">

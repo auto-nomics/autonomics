@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
+use crate::memory::{KnowledgeEvent, MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -48,6 +48,12 @@ impl ToolFunction for MemoryNoteTool {
             .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
             .await
             .map_err(store_error)?;
+        self.backend
+            .submit_knowledge_event(KnowledgeEvent::MemoryNoteCreated { note_id: note.id })
+            .await
+            .map_err(|error| ToolError::ExecutionFailed {
+                source: Box::new(error),
+            })?;
         Ok(ToolResult::success_json(serde_json::json!({
             "id": note.id,
             "slug": note.slug,

@@ -8,7 +8,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors raised while extracting and consolidating durable memory.
 #[derive(Debug, Error)]
-pub(super) enum Error {
+pub enum Error {
     #[error("{operation}: {source}")]
     Source {
         operation: String,
@@ -64,6 +64,15 @@ impl Error {
         Self::ModelOutput {
             operation: operation.into(),
             message: message.into(),
+        }
+    }
+}
+
+impl From<StoreError> for Error {
+    fn from(source: StoreError) -> Self {
+        Self::Store {
+            operation: "knowledge pipeline queue".to_string(),
+            source,
         }
     }
 }
