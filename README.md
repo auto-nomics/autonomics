@@ -71,8 +71,9 @@ Node registry + scheduler
               read-only mounts, immutable panel bundles
               artifact publication to VFS
 
-Self-improvement substrate (agents draft · gates validate · humans promote):
-  skills     evo_observe → deterministic distill → proposal → human approve
+Self-improvement and knowledge substrate (agents draft · gates validate · humans promote):
+  skills     evaluation/internal observations → deterministic distill → human approve
+  knowledge  memory_note → knowledge pipeline → Wiki tree
   plugin RSI requests → dev workspaces → validation gates → install/publish
   environments  /environments/dev image authoring → build → smoke → catalog
 
@@ -103,7 +104,7 @@ A skill is a directory with a `SKILL.md` (YAML frontmatter + operational body), 
 
 The evolution loop has no auxiliary LLM anywhere:
 
-1. **Observe** — `evo_observe` records durable failures, recipes, and caveats as content-addressed observations (duplicates are no-ops). Eval failures are captured automatically.
+1. **Observe** — evaluation failures and internal evidence paths record content-addressed observations (duplicates are no-ops). Agents record reusable lessons separately with `memory_note`, feeding the unified knowledge pipeline.
 2. **Route** — each observation is routed to the skill domain, the plugin domain, both, or triage, anchored on the DAG node address.
 3. **Distill** — pure code clusters anchored observations by node kind and normalized error signature; three occurrences of the same pattern synthesize a conservative skill proposal that only ever cites recorded fixes, never invents advice.
 4. **Review** — proposals stage in `~/.autonomics/skill-proposals/` and are approved or rejected from the TUI skill-evolution dashboard or the gateway API. Auto-approval is off by default, and agent-authored proposals are never auto-approved.

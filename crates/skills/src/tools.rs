@@ -358,7 +358,7 @@ impl ToolFunction for SkillEvolveTool {
                 if report.installed.is_empty() {
                     out.push_str(
                         "No new patterns. Anchored failure patterns distill at >= 3 \
-                         occurrences; record more with evo_observe.",
+                         occurrences; provide more evaluation or internal evidence.",
                     );
                 } else if report.deferred > 0 {
                     out.push_str(&format!(

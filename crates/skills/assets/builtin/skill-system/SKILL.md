@@ -43,28 +43,25 @@ reusable node/edge graphs over the registered node kinds.
 3. Prefer a bundled workflow over hand-assembling an equivalent DAG:
    it encodes proven port wiring and defaults.
 
-## Growing the library (observations)
+## Durable knowledge and evolution
 
 When you learn something a future session would otherwise rediscover
-the hard way, record it with `evo_observe`: a failure and its fix
-(`kind: failure`, anchored with the node kind and error text), a
-verified recipe (`recipe`), or a caveat (`caveat`) — anchor each with
-the node kind; unanchored observations stay searchable but never
-auto-distill. Repeated anchored observations of every kind cluster
-deterministically — failures by node kind and error signature,
-recipes and caveats per node kind — and surface as skill proposals
-the user reviews. Failing evals feed the same channel automatically.
+the hard way, record it with `memory_note`: include the component,
+exact error text when relevant, and the reusable fix, recipe, or
+caveat in one concise note with a stable slug. Record the reusable
+pattern, never the transcript.
 
 `skill_evolve` runs one evolution cycle immediately instead of
-waiting for the background sweep. It is propose-only by design: it
-writes and revises proposals for the user to review, and never
-approves them itself.
+waiting for the background sweep. It processes evidence captured
+by evaluation and internal observation paths, is propose-only by
+design, and never approves its proposals itself. Do not call it merely
+because you just recorded a memory note.
 
 When you can articulate a reusable procedure better than the
 distiller's raw fix listing, draft it yourself with `skill_propose`:
 supply the name, a one-line description, tags, the markdown body, and
-the ids of observations that back the claim (evidence is mandatory —
-record it with `evo_observe` first). Your proposal lands in the
+the ids of existing observations that back the claim (evidence is
+mandatory). Your proposal lands in the
 same human-review queue, marked as agent-authored; it is never
 auto-approved. Create-only: for improving an existing skill, record
 observations and let the loop propose the update.

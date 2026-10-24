@@ -1042,7 +1042,7 @@ Promptly spawn a Developer child agent with `spawn_agent`\n\
 `delegate_to`. Delegation reaches only your own direct children — reuse an\n\
 existing Developer child for follow-up requests instead of looking for a\n\
 sibling. Record the capability gap with\n\
-`evo_observe`. Provide the scientific objective, expected inputs and outputs,\n\
+`memory_note`. Provide the scientific objective, expected inputs and outputs,\n\
 data shape, error/edge cases, acceptance checks, and a small representative\n\
 sample when available.\n\
 \n\
