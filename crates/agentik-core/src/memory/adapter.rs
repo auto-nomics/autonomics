@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::storage::{AgentStorage, StorageError};
-use agentik_memory::{Error, MemorySessionRecord, MemorySource, TursoMemoryStorage};
+use agentik_kms::{Error, MemorySessionRecord, MemorySource, TursoMemoryStorage};
 
 pub(crate) fn storage_error(error: StorageError) -> Error {
     Error::Source(error.to_string())
@@ -54,7 +54,7 @@ impl MemorySource for AgentStorageMemorySource {
     }
 }
 
-/// Wrap the core storage object into the source expected by `agentik-memory`.
+/// Wrap the core storage object into the source expected by `agentik-kms`.
 pub fn agent_storage_memory_source(storage: Arc<dyn AgentStorage>) -> Arc<dyn MemorySource> {
     Arc::new(AgentStorageMemorySource(storage))
 }
@@ -63,7 +63,7 @@ pub fn agent_storage_memory_source(storage: Arc<dyn AgentStorage>) -> Arc<dyn Me
 mod tests {
     use std::sync::Arc;
 
-    use agentik_memory::{
+    use agentik_kms::{
         MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
         run_memory_pipeline,
     };

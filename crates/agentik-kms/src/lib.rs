@@ -1,3 +1,10 @@
+//! Unified knowledge, memory, and skill management.
+//!
+//! The crate currently owns the durable knowledge tree and the extraction
+//! pipeline that turns agent rollouts and explicit notes into wiki-style
+//! knowledge nodes. Legacy KMS and skill subsystems can migrate onto these
+//! contracts without becoming dependencies of `agentik-core`.
+
 pub mod error;
 pub mod source;
 

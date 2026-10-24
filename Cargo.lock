@@ -75,7 +75,7 @@ dependencies = [
 name = "agentik-core"
 version = "0.1.0"
 dependencies = [
- "agentik-memory",
+ "agentik-kms",
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
@@ -98,7 +98,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentik-memory"
+name = "agentik-kms"
 version = "0.1.0"
 dependencies = [
  "agentik-sdk",

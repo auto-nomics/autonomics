@@ -1,4 +1,4 @@
-use agentik_memory::StoreError;
+use agentik_kms::StoreError;
 
 use crate::tools::ToolError;
 

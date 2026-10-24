@@ -1,4 +1,4 @@
-use agentik_memory::TursoMemoryStorage;
+use agentik_kms::TursoMemoryStorage;
 
 #[tokio::main]
 async fn main() {

@@ -2,7 +2,7 @@
 members = [
   "crates/agentik-sdk",
   "crates/agentik-types",
-  "crates/agentik-memory",
+  "crates/agentik-kms",
   "crates/agentik-core",
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",

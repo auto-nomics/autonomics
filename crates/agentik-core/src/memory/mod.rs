@@ -8,7 +8,7 @@ mod adapter;
 mod tools;
 
 pub use adapter::{AgentStorageMemorySource, agent_storage_memory_source};
-pub use agentik_memory::{
+pub use agentik_kms::{
     AgentRuntimeConfig, Error, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend,
     MemoryConfig, MemoryNote, MemorySource, MemoryStage1Record, MemoryStore, MemorySummary, Result,
     SemanticGrounding, SemanticGroundingOutcome, SemanticObservation, TursoMemoryStorage,

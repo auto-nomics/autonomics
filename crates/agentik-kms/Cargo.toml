@@ -1,9 +1,9 @@
 [package]
-name = "agentik-memory"
+name = "agentik-kms"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
-description = "Persistent cross-session memory domain model and pipeline."
+description = "Unified knowledge, memory, and skill management domain and pipeline."
 license.workspace = true
 
 [dependencies]
