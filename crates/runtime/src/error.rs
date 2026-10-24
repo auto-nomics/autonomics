@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use agentik_core::error::AgentError;
-use agentik_core::memory::MemoryError;
+use agentik_core::memory::Error as MemoryError;
 use agentik_core::storage::StorageError;
 
 pub type Result<T> = std::result::Result<T, Error>;

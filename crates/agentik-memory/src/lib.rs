@@ -4,23 +4,26 @@ pub mod source;
 mod artifacts;
 mod backend;
 mod grounding;
+mod knowledge;
 mod pipeline;
 mod store;
-mod turso_store;
 
 pub use artifacts::{
     MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, SemanticObservationDraft,
     parse_json_object, redact_secrets,
 };
 pub use backend::{MemoryBackend, memory_prompt_section};
-pub use error::{MemoryError, MemoryResult};
+pub use error::{Error, Result};
 pub use grounding::{SemanticGrounding, SemanticGroundingOutcome};
+pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{MEMORY_SCOPE_ID, run_memory_pipeline};
 pub use source::{MemorySessionRecord, MemorySource};
+pub use store::error::Error as StoreError;
+pub use store::turso_store::TursoMemoryStorage;
 pub use store::{
-    MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
+    KnowledgeStore, MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary,
+    SemanticObservation,
 };
-pub use turso_store::TursoMemoryStorage;
 
 /// Fully resolved runtime settings carried by the memory backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

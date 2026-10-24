@@ -201,7 +201,12 @@
                     <mxGeometry height="60" width="220" x="1120" y="1090" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_summary_read" edge="1" parent="1" source="summary_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="read_prompt">
-                    <mxGeometry relative="1" as="geometry"/>
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="570" y="1020"/>
+                            <mxPoint x="180" y="1020"/>
+                        </Array>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="e_entries_tools" edge="1" parent="1" source="entries_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="tool_search">
                     <mxGeometry relative="1" as="geometry"/>

@@ -8,7 +8,8 @@ use std::sync::{Arc, Weak};
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::memory::{
-    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, TursoMemoryStorage,
+    Error as MemoryError, MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding,
+    TursoMemoryStorage,
 };
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
@@ -878,8 +879,13 @@ async fn open_memory(
         path = %config.knowledge_db_path.display(),
         "SharedInfra::open: opening memory knowledge db"
     );
-    let store = TursoMemoryStorage::open(&config.knowledge_db_path).await?;
-    store.migrate_from_agent_db(&config.agent_db).await?;
+    let store = TursoMemoryStorage::open(&config.knowledge_db_path)
+        .await
+        .map_err(MemoryError::from)?;
+    store
+        .migrate_from_agent_db(&config.agent_db)
+        .await
+        .map_err(MemoryError::from)?;
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),
         "memory knowledge db opened and legacy migration checked"

@@ -4,10 +4,16 @@
 //! rollouts and WAL replay, while this trait owns durable memory state and the
 //! candidate semantic observations that will later be grounded into KMS.
 
+pub mod error;
+mod knowledge_store;
+pub mod turso_store;
+
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::MemoryError;
+use error::Result;
+
+pub use knowledge_store::KnowledgeStore;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryStage1Record {
@@ -77,7 +83,7 @@ pub trait MemoryStore: Send + Sync {
         &self,
         scope_id: Uuid,
         session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>, crate::error::MemoryError>;
+    ) -> Result<Option<MemoryStage1Record>>;
 
     async fn claim_stage1(
         &self,
@@ -85,13 +91,9 @@ pub trait MemoryStore: Send + Sync {
         session_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> Result<bool, crate::error::MemoryError>;
+    ) -> Result<bool>;
 
-    async fn complete_stage1(
-        &self,
-        scope_id: Uuid,
-        output: MemoryStage1Record,
-    ) -> Result<(), crate::error::MemoryError>;
+    async fn complete_stage1(&self, scope_id: Uuid, output: MemoryStage1Record) -> Result<()>;
 
     async fn fail_stage1(
         &self,
@@ -99,20 +101,20 @@ pub trait MemoryStore: Send + Sync {
         session_id: Uuid,
         source_hash: &str,
         error: &str,
-    ) -> Result<(), crate::error::MemoryError>;
+    ) -> Result<()>;
 
     async fn list_stage1_outputs(
         &self,
         scope_id: Uuid,
         limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>, crate::error::MemoryError>;
+    ) -> Result<Vec<MemoryStage1Record>>;
 
     async fn claim_phase2(
         &self,
         scope_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> Result<bool, crate::error::MemoryError>;
+    ) -> Result<bool>;
 
     async fn complete_phase2(
         &self,
@@ -122,50 +124,26 @@ pub trait MemoryStore: Send + Sync {
         summary_md: &str,
         observations: Vec<SemanticObservation>,
         consumed_note_ids: Vec<Uuid>,
-    ) -> Result<(), crate::error::MemoryError>;
+    ) -> Result<()>;
 
-    async fn fail_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<(), crate::error::MemoryError>;
+    async fn fail_phase2(&self, scope_id: Uuid, source_hash: &str, error: &str) -> Result<()>;
 
-    async fn get_summary(
-        &self,
-        scope_id: Uuid,
-    ) -> Result<Option<MemorySummary>, crate::error::MemoryError>;
+    async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>>;
 
-    async fn list_entries(
-        &self,
-        scope_id: Uuid,
-        limit: usize,
-    ) -> Result<Vec<MemoryEntry>, crate::error::MemoryError>;
+    async fn list_entries(&self, scope_id: Uuid, limit: usize) -> Result<Vec<MemoryEntry>>;
 
-    async fn get_entry(
-        &self,
-        scope_id: Uuid,
-        entry_id: Uuid,
-    ) -> Result<Option<MemoryEntry>, crate::error::MemoryError>;
+    async fn get_entry(&self, scope_id: Uuid, entry_id: Uuid) -> Result<Option<MemoryEntry>>;
 
-    async fn list_pending_notes(
-        &self,
-        scope_id: Uuid,
-    ) -> Result<Vec<MemoryNote>, crate::error::MemoryError>;
+    async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>>;
 
-    async fn insert_note(
-        &self,
-        scope_id: Uuid,
-        slug: &str,
-        content: &str,
-    ) -> Result<MemoryNote, crate::error::MemoryError>;
+    async fn insert_note(&self, scope_id: Uuid, slug: &str, content: &str) -> Result<MemoryNote>;
 
     async fn list_observations(
         &self,
         scope_id: Uuid,
         status: &str,
         limit: usize,
-    ) -> Result<Vec<SemanticObservation>, crate::error::MemoryError>;
+    ) -> Result<Vec<SemanticObservation>>;
 
     async fn set_observation_status(
         &self,
@@ -173,5 +151,5 @@ pub trait MemoryStore: Send + Sync {
         observation_id: Uuid,
         status: &str,
         error: Option<&str>,
-    ) -> Result<(), crate::error::MemoryError>;
+    ) -> Result<()>;
 }

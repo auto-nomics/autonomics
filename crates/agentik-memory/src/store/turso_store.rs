@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use turso::{Builder, IntoParams, Value, params_from_iter};
 use uuid::Uuid;
 
-use crate::error::{MemoryError, MemoryResult};
+use super::error::{Error, Result};
 use crate::store::{
     MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
 };
@@ -59,55 +59,55 @@ impl LockedConn {
     }
 }
 
-fn db_err(error: impl std::fmt::Display) -> MemoryError {
-    MemoryError::Storage(error.to_string())
+fn db_err(error: impl std::fmt::Display) -> Error {
+    Error::Storage(error.to_string())
 }
 
 fn uuid_value(id: Uuid) -> Value {
     Value::Text(id.to_string())
 }
 
-fn text(row: &turso::Row, idx: usize) -> MemoryResult<String> {
+fn text(row: &turso::Row, idx: usize) -> Result<String> {
     match row.get_value(idx).map_err(db_err)? {
         Value::Text(value) => Ok(value),
         Value::Null => Ok(String::new()),
-        other => Err(MemoryError::Storage(format!(
+        other => Err(Error::Storage(format!(
             "expected TEXT at column {idx}, got {other:?}"
         ))),
     }
 }
 
-fn opt_text(row: &turso::Row, idx: usize) -> MemoryResult<Option<String>> {
+fn opt_text(row: &turso::Row, idx: usize) -> Result<Option<String>> {
     match row.get_value(idx).map_err(db_err)? {
         Value::Text(value) => Ok(Some(value)),
         _ => Ok(None),
     }
 }
 
-fn int(row: &turso::Row, idx: usize) -> MemoryResult<i64> {
+fn int(row: &turso::Row, idx: usize) -> Result<i64> {
     match row.get_value(idx).map_err(db_err)? {
         Value::Integer(value) => Ok(value),
-        other => Err(MemoryError::Storage(format!(
+        other => Err(Error::Storage(format!(
             "expected INTEGER at column {idx}, got {other:?}"
         ))),
     }
 }
 
-fn real(row: &turso::Row, idx: usize) -> MemoryResult<f64> {
+fn real(row: &turso::Row, idx: usize) -> Result<f64> {
     match row.get_value(idx).map_err(db_err)? {
         Value::Real(value) => Ok(value),
         Value::Integer(value) => Ok(value as f64),
-        other => Err(MemoryError::Storage(format!(
+        other => Err(Error::Storage(format!(
             "expected REAL at column {idx}, got {other:?}"
         ))),
     }
 }
 
-fn parse_uuid(value: String, field: &str) -> MemoryResult<Uuid> {
-    Uuid::parse_str(&value).map_err(|e| MemoryError::Storage(format!("parse memory {field}: {e}")))
+fn parse_uuid(value: String, field: &str) -> Result<Uuid> {
+    Uuid::parse_str(&value).map_err(|e| Error::Storage(format!("parse memory {field}: {e}")))
 }
 
-fn row_to_stage1(row: &turso::Row) -> MemoryResult<MemoryStage1Record> {
+fn row_to_stage1(row: &turso::Row) -> Result<MemoryStage1Record> {
     Ok(MemoryStage1Record {
         session_id: parse_uuid(text(row, 0)?, "session_id")?,
         source_hash: text(row, 1)?,
@@ -120,7 +120,7 @@ fn row_to_stage1(row: &turso::Row) -> MemoryResult<MemoryStage1Record> {
     })
 }
 
-fn row_to_entry(row: &turso::Row) -> MemoryResult<MemoryEntry> {
+fn row_to_entry(row: &turso::Row) -> Result<MemoryEntry> {
     Ok(MemoryEntry {
         id: parse_uuid(text(row, 0)?, "entry_id")?,
         scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
@@ -134,7 +134,7 @@ fn row_to_entry(row: &turso::Row) -> MemoryResult<MemoryEntry> {
     })
 }
 
-fn row_to_summary(row: &turso::Row) -> MemoryResult<MemorySummary> {
+fn row_to_summary(row: &turso::Row) -> Result<MemorySummary> {
     Ok(MemorySummary {
         scope_id: parse_uuid(text(row, 0)?, "scope_id")?,
         schema_version: text(row, 1)?,
@@ -144,7 +144,7 @@ fn row_to_summary(row: &turso::Row) -> MemoryResult<MemorySummary> {
     })
 }
 
-fn row_to_note(row: &turso::Row) -> MemoryResult<MemoryNote> {
+fn row_to_note(row: &turso::Row) -> Result<MemoryNote> {
     Ok(MemoryNote {
         id: parse_uuid(text(row, 0)?, "note_id")?,
         scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
@@ -155,7 +155,7 @@ fn row_to_note(row: &turso::Row) -> MemoryResult<MemoryNote> {
     })
 }
 
-fn row_to_observation(row: &turso::Row) -> MemoryResult<SemanticObservation> {
+fn row_to_observation(row: &turso::Row) -> Result<SemanticObservation> {
     Ok(SemanticObservation {
         id: parse_uuid(text(row, 0)?, "observation_id")?,
         scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
@@ -172,14 +172,14 @@ fn row_to_observation(row: &turso::Row) -> MemoryResult<SemanticObservation> {
 }
 
 impl TursoMemoryStorage {
-    pub async fn open(path: impl AsRef<Path>) -> MemoryResult<Self> {
+    pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
         let path = path_ref
             .to_str()
-            .ok_or_else(|| MemoryError::Storage("memory db path is not valid UTF-8".into()))?;
+            .ok_or_else(|| Error::Storage("memory db path is not valid UTF-8".into()))?;
         if let Some(parent) = path_ref.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| MemoryError::Storage(format!("create memory db parent: {e}")))?;
+                .map_err(|e| Error::Storage(format!("create memory db parent: {e}")))?;
         }
 
         let db = Builder::new_local(path)
@@ -198,7 +198,7 @@ impl TursoMemoryStorage {
         Ok(storage)
     }
 
-    pub async fn open_in_memory() -> MemoryResult<Self> {
+    pub async fn open_in_memory() -> Result<Self> {
         let db = Builder::new_local(":memory:")
             .build()
             .await
@@ -211,7 +211,7 @@ impl TursoMemoryStorage {
         Ok(storage)
     }
 
-    async fn init_schema(&self) -> MemoryResult<()> {
+    async fn init_schema(&self) -> Result<()> {
         self.conn
             .execute_batch(
                 r#"
@@ -301,11 +301,11 @@ impl TursoMemoryStorage {
     /// The migration is row-by-row and marker-based, so repeated startup is a
     /// no-op and concurrent writers in the old database are not required to
     /// support cross-database transactions.
-    pub async fn migrate_from_agent_db(&self, path: impl AsRef<Path>) -> MemoryResult<()> {
+    pub async fn migrate_from_agent_db(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path
             .as_ref()
             .to_str()
-            .ok_or_else(|| MemoryError::Storage("agent db path is not valid UTF-8".into()))?
+            .ok_or_else(|| Error::Storage("agent db path is not valid UTF-8".into()))?
             .to_string();
 
         let marker = self
@@ -317,7 +317,7 @@ impl TursoMemoryStorage {
             .await
             .map_err(db_err)?;
         let mut marker = marker;
-        if matches!(marker.next().await.map_err(db_err)?, Some(_)) {
+        if marker.next().await.map_err(db_err)?.is_some() {
             return Ok(());
         }
         if !Path::new(&path).exists() {
@@ -450,7 +450,7 @@ impl TursoMemoryStorage {
         }
     }
 
-    async fn set_migration_marker(&self) -> MemoryResult<()> {
+    async fn set_migration_marker(&self) -> Result<()> {
         self.conn
             .execute(
                 "INSERT INTO memory_storage_metadata(key, value) VALUES (?1, 'missing_source')
@@ -467,7 +467,7 @@ impl TursoMemoryStorage {
         source: &turso::Connection,
         table: &str,
         columns: &[&str],
-    ) -> MemoryResult<()> {
+    ) -> Result<()> {
         let mut exists = source
             .query(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -475,7 +475,7 @@ impl TursoMemoryStorage {
             )
             .await
             .map_err(db_err)?;
-        if matches!(exists.next().await.map_err(db_err)?, None) {
+        if exists.next().await.map_err(db_err)?.is_none() {
             return Ok(());
         }
 
@@ -495,7 +495,7 @@ impl TursoMemoryStorage {
         while let Some(row) = rows.next().await.map_err(db_err)? {
             let values = (0..columns.len())
                 .map(|idx| row.get_value(idx).map_err(db_err))
-                .collect::<MemoryResult<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
             self.conn
                 .execute(&sql, params_from_iter(values))
                 .await
@@ -504,9 +504,9 @@ impl TursoMemoryStorage {
         Ok(())
     }
 
-    async fn collect<T, F>(&self, sql: &str, params: Vec<Value>, map: F) -> MemoryResult<Vec<T>>
+    async fn collect<T, F>(&self, sql: &str, params: Vec<Value>, map: F) -> Result<Vec<T>>
     where
-        F: Fn(&turso::Row) -> MemoryResult<T>,
+        F: Fn(&turso::Row) -> Result<T>,
     {
         let mut rows = self
             .conn
@@ -527,7 +527,7 @@ impl MemoryStore for TursoMemoryStorage {
         &self,
         scope_id: Uuid,
         session_id: Uuid,
-    ) -> MemoryResult<Option<MemoryStage1Record>> {
+    ) -> Result<Option<MemoryStage1Record>> {
         let mut rows = self
             .conn
             .query(
@@ -550,7 +550,7 @@ impl MemoryStore for TursoMemoryStorage {
         session_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> MemoryResult<bool> {
+    ) -> Result<bool> {
         let updated_at = chrono::Utc::now().timestamp_millis();
         let changed = self
             .conn
@@ -582,11 +582,7 @@ impl MemoryStore for TursoMemoryStorage {
         Ok(changed > 0)
     }
 
-    async fn complete_stage1(
-        &self,
-        scope_id: Uuid,
-        output: MemoryStage1Record,
-    ) -> MemoryResult<()> {
+    async fn complete_stage1(&self, scope_id: Uuid, output: MemoryStage1Record) -> Result<()> {
         let updated_at = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
@@ -627,7 +623,7 @@ impl MemoryStore for TursoMemoryStorage {
         session_id: Uuid,
         source_hash: &str,
         error: &str,
-    ) -> MemoryResult<()> {
+    ) -> Result<()> {
         let updated_at = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
@@ -660,7 +656,7 @@ impl MemoryStore for TursoMemoryStorage {
         &self,
         scope_id: Uuid,
         limit: usize,
-    ) -> MemoryResult<Vec<MemoryStage1Record>> {
+    ) -> Result<Vec<MemoryStage1Record>> {
         self.collect(
             "SELECT session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
                     status, generated_at, lease_until
@@ -678,7 +674,7 @@ impl MemoryStore for TursoMemoryStorage {
         scope_id: Uuid,
         source_hash: &str,
         lease_until: i64,
-    ) -> MemoryResult<bool> {
+    ) -> Result<bool> {
         let updated_at = chrono::Utc::now().timestamp_millis();
         let changed = self
             .conn
@@ -717,7 +713,7 @@ impl MemoryStore for TursoMemoryStorage {
         summary_md: &str,
         observations: Vec<SemanticObservation>,
         consumed_note_ids: Vec<Uuid>,
-    ) -> MemoryResult<()> {
+    ) -> Result<()> {
         let now = crate::now_ms();
         self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
         let result = async {
@@ -874,12 +870,7 @@ impl MemoryStore for TursoMemoryStorage {
         }
     }
 
-    async fn fail_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> MemoryResult<()> {
+    async fn fail_phase2(&self, scope_id: Uuid, source_hash: &str, error: &str) -> Result<()> {
         let updated_at = chrono::Utc::now().timestamp_millis();
         self.conn
             .execute(
@@ -902,7 +893,7 @@ impl MemoryStore for TursoMemoryStorage {
         Ok(())
     }
 
-    async fn get_summary(&self, scope_id: Uuid) -> MemoryResult<Option<MemorySummary>> {
+    async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>> {
         let mut rows = self
             .conn
             .query(
@@ -918,7 +909,7 @@ impl MemoryStore for TursoMemoryStorage {
         }
     }
 
-    async fn list_entries(&self, scope_id: Uuid, limit: usize) -> MemoryResult<Vec<MemoryEntry>> {
+    async fn list_entries(&self, scope_id: Uuid, limit: usize) -> Result<Vec<MemoryEntry>> {
         self.collect(
             "SELECT id, scope_id, entry_type, title, body_md, status, confidence,
                     created_at, updated_at
@@ -930,7 +921,7 @@ impl MemoryStore for TursoMemoryStorage {
         .await
     }
 
-    async fn get_entry(&self, scope_id: Uuid, entry_id: Uuid) -> MemoryResult<Option<MemoryEntry>> {
+    async fn get_entry(&self, scope_id: Uuid, entry_id: Uuid) -> Result<Option<MemoryEntry>> {
         let mut rows = self
             .conn
             .query(
@@ -947,7 +938,7 @@ impl MemoryStore for TursoMemoryStorage {
         }
     }
 
-    async fn list_pending_notes(&self, scope_id: Uuid) -> MemoryResult<Vec<MemoryNote>> {
+    async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>> {
         self.collect(
             "SELECT id, scope_id, slug, content, status, created_at
              FROM memory_notes WHERE scope_id = ?1 AND status = 'pending'
@@ -958,12 +949,7 @@ impl MemoryStore for TursoMemoryStorage {
         .await
     }
 
-    async fn insert_note(
-        &self,
-        scope_id: Uuid,
-        slug: &str,
-        content: &str,
-    ) -> MemoryResult<MemoryNote> {
+    async fn insert_note(&self, scope_id: Uuid, slug: &str, content: &str) -> Result<MemoryNote> {
         let note = MemoryNote {
             id: Uuid::new_v4(),
             scope_id,
@@ -995,7 +981,7 @@ impl MemoryStore for TursoMemoryStorage {
         scope_id: Uuid,
         status: &str,
         limit: usize,
-    ) -> MemoryResult<Vec<SemanticObservation>> {
+    ) -> Result<Vec<SemanticObservation>> {
         self.collect(
             "SELECT id, scope_id, subject, predicate, object, content, status,
                     confidence, source_hash, created_at, last_error
@@ -1018,7 +1004,7 @@ impl MemoryStore for TursoMemoryStorage {
         observation_id: Uuid,
         status: &str,
         error: Option<&str>,
-    ) -> MemoryResult<()> {
+    ) -> Result<()> {
         let changed = self
             .conn
             .execute(
@@ -1036,7 +1022,7 @@ impl MemoryStore for TursoMemoryStorage {
             .await
             .map_err(db_err)?;
         if changed == 0 {
-            return Err(MemoryError::Storage(format!(
+            return Err(Error::Storage(format!(
                 "semantic observation {observation_id} not found"
             )));
         }

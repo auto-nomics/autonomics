@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::MemoryError;
+use crate::error::Error;
 use agentik_sdk::types::messages::Message;
 
 #[derive(Debug, Clone)]
@@ -15,14 +15,12 @@ pub struct MemorySessionRecord {
 /// Read-only view of persisted agent rollouts consumed by memory extraction.
 #[async_trait]
 pub trait MemorySource: Send + Sync {
-    async fn list_session_records(
-        &self,
-        agent_id: Uuid,
-    ) -> Result<Vec<MemorySessionRecord>, MemoryError>;
+    async fn list_session_records(&self, agent_id: Uuid)
+    -> Result<Vec<MemorySessionRecord>, Error>;
 
     async fn get_messages_since_for_session(
         &self,
         session_id: Uuid,
         sequence: i64,
-    ) -> Result<Vec<Message>, MemoryError>;
+    ) -> Result<Vec<Message>, Error>;
 }

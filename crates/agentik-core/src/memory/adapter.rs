@@ -4,13 +4,13 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::storage::{AgentStorage, StorageError};
-use agentik_memory::{MemoryError, MemorySessionRecord, MemorySource, TursoMemoryStorage};
+use agentik_memory::{Error, MemorySessionRecord, MemorySource, TursoMemoryStorage};
 
-pub(crate) fn storage_error(error: StorageError) -> MemoryError {
-    MemoryError::Storage(error.to_string())
+pub(crate) fn storage_error(error: StorageError) -> Error {
+    Error::Source(error.to_string())
 }
 
-impl From<StorageError> for MemoryError {
+impl From<StorageError> for Error {
     fn from(error: StorageError) -> Self {
         storage_error(error)
     }
@@ -24,7 +24,7 @@ impl MemorySource for AgentStorageMemorySource {
     async fn list_session_records(
         &self,
         agent_id: Uuid,
-    ) -> Result<Vec<MemorySessionRecord>, MemoryError> {
+    ) -> Result<Vec<MemorySessionRecord>, Error> {
         self.0
             .list_session_records(agent_id)
             .await
@@ -46,7 +46,7 @@ impl MemorySource for AgentStorageMemorySource {
         &self,
         session_id: Uuid,
         sequence: i64,
-    ) -> Result<Vec<agentik_sdk::types::messages::Message>, MemoryError> {
+    ) -> Result<Vec<agentik_sdk::types::messages::Message>, Error> {
         self.0
             .get_messages_since_for_session(session_id, sequence)
             .await
