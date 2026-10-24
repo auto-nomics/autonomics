@@ -1,0 +1,110 @@
+use std::sync::Arc;
+
+use agentik_proc::tool;
+use agentik_sdk::types::tools::ToolResult;
+use async_trait::async_trait;
+
+use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
+use crate::tools::{ToolError, ToolFunction};
+
+use super::util::store_error;
+
+#[tool(
+    name = "memory_note",
+    description = "Queue one small user-requested memory update for the next consolidation run."
+)]
+pub struct MemoryNoteInput {
+    #[desc = "Concise user-requested addition, deletion, or correction."]
+    pub content: String,
+    #[desc = "Short stable slug for the note."]
+    pub slug: Option<String>,
+}
+
+pub struct MemoryNoteTool {
+    backend: Arc<MemoryBackend>,
+}
+
+impl MemoryNoteTool {
+    pub fn new(backend: Arc<MemoryBackend>) -> Self {
+        Self { backend }
+    }
+}
+
+#[async_trait]
+impl ToolFunction for MemoryNoteTool {
+    type Input = MemoryNoteInput;
+
+    async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        if !self.backend.effective_memory_config().use_memory {
+            return Ok(ToolResult::error("memory is disabled for this agent"));
+        }
+        let content = redact_secrets(input.content.trim());
+        if content.is_empty() {
+            return Ok(ToolResult::error("memory note content must not be empty"));
+        }
+        let note = self
+            .backend
+            .store
+            .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
+            .await
+            .map_err(store_error)?;
+        Ok(ToolResult::success_json(serde_json::json!({
+            "id": note.id,
+            "slug": note.slug,
+            "status": "pending",
+        })))
+    }
+}
+
+fn note_slug(raw: Option<&str>) -> String {
+    let fallback = "update";
+    let mut slug = String::new();
+    for ch in raw.unwrap_or(fallback).chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::memory::{
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn queues_redacted_note() {
+        let store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(MemoryBackend::new(
+            MemoryConfig::new(),
+            Arc::clone(&store),
+            None,
+        ));
+
+        let result = MemoryNoteTool::new(backend)
+            .run(MemoryNoteInput {
+                content: "token=abc\nPrefer concise summaries.".into(),
+                slug: Some("User Preference!".into()),
+            })
+            .await
+            .unwrap();
+        assert!(result.text_content().contains("user-preference"));
+
+        let notes = store.list_pending_notes(MEMORY_SCOPE_ID).await.unwrap();
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].content.contains("REDACTED"));
+    }
+}
