@@ -122,11 +122,7 @@ mod tests {
     #[tokio::test]
     async fn reads_summary_and_entry() {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(KmsAgentHandle::new(
-            MemoryConfig::new(),
-            Arc::clone(&store),
-            None,
-        ));
+        let backend = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), Arc::clone(&store)));
         let now = crate::memory::now_ms();
         store
             .complete_phase2(

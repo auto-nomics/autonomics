@@ -853,7 +853,7 @@ async fn open_kms_system(config: &RuntimeConfig) -> Result<Arc<KmsSystem>> {
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    Ok(Arc::new(KmsSystem::new(memory_config, store, None)))
+    Ok(Arc::new(KmsSystem::new(memory_config, store)))
 }
 
 /// Open the bibliography store + literature gateway once and publish

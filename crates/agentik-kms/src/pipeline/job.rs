@@ -7,7 +7,6 @@ use uuid::Uuid;
 pub enum KnowledgeJob {
     ExtractAgentSessions { agent_id: Uuid },
     ConsolidateKnowledge { trigger: String },
-    GroundObservations,
 }
 
 impl KnowledgeJob {
@@ -18,7 +17,6 @@ impl KnowledgeJob {
                 format!("extract-agent-sessions:{agent_id}")
             }
             Self::ConsolidateKnowledge { .. } => "consolidate-knowledge".to_string(),
-            Self::GroundObservations => "ground-observations".to_string(),
         }
     }
 
@@ -27,7 +25,6 @@ impl KnowledgeJob {
         match self {
             Self::ExtractAgentSessions { .. } => "extract_agent_sessions",
             Self::ConsolidateKnowledge { .. } => "consolidate_knowledge",
-            Self::GroundObservations => "ground_observations",
         }
     }
 }

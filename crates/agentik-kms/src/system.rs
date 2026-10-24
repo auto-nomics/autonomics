@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use super::{
-    AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, SemanticGrounding,
-    TursoKmsStorage,
-};
+use super::{AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage};
 use crate::pipeline::KnowledgeEvent;
 use crate::store::KnowledgeQueue;
 
@@ -18,21 +15,15 @@ pub struct KmsSystem {
     default_config: ArcSwap<MemoryConfig>,
     store: Arc<dyn MemoryStore>,
     queue: Arc<dyn KnowledgeQueue>,
-    grounding: Option<Arc<dyn SemanticGrounding>>,
 }
 
 impl KmsSystem {
     #[must_use]
-    pub fn new(
-        config: MemoryConfig,
-        storage: Arc<TursoKmsStorage>,
-        grounding: Option<Arc<dyn SemanticGrounding>>,
-    ) -> Self {
+    pub fn new(config: MemoryConfig, storage: Arc<TursoKmsStorage>) -> Self {
         Self {
             default_config: ArcSwap::new(Arc::new(config)),
             store: Arc::clone(&storage) as Arc<_>,
             queue: Arc::clone(&storage) as Arc<_>,
-            grounding,
         }
     }
 
@@ -44,11 +35,6 @@ impl KmsSystem {
     #[must_use]
     pub fn queue(&self) -> Arc<dyn KnowledgeQueue> {
         Arc::clone(&self.queue)
-    }
-
-    #[must_use]
-    pub fn grounding(&self) -> Option<Arc<dyn SemanticGrounding>> {
-        self.grounding.clone()
     }
 
     #[must_use]
@@ -97,12 +83,8 @@ pub struct KmsAgentHandle {
 
 impl KmsAgentHandle {
     #[must_use]
-    pub fn new(
-        config: MemoryConfig,
-        storage: Arc<TursoKmsStorage>,
-        grounding: Option<Arc<dyn SemanticGrounding>>,
-    ) -> Self {
-        let system = Arc::new(KmsSystem::new(config, storage, grounding));
+    pub fn new(config: MemoryConfig, storage: Arc<TursoKmsStorage>) -> Self {
+        let system = Arc::new(KmsSystem::new(config, storage));
         let runtime_config = system.runtime_config();
         Self {
             system,
@@ -197,7 +179,7 @@ mod tests {
     #[tokio::test]
     async fn agent_handles_isolate_runtime_config_over_one_system() {
         let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let system = Arc::new(KmsSystem::new(MemoryConfig::new(), storage, None));
+        let system = Arc::new(KmsSystem::new(MemoryConfig::new(), storage));
         let enabled = system.agent_handle(AgentRuntimeConfig::new(true, true));
         let disabled = system.agent_handle(AgentRuntimeConfig::new(false, false));
 

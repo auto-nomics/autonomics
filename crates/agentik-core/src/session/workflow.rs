@@ -1440,7 +1440,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let memory = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), store, None));
+        let memory = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), store));
 
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentShared {

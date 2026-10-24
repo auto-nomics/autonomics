@@ -114,7 +114,7 @@ mod tests {
         let memory_store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory = Arc::new(KmsAgentHandle::new(config, memory_store, None));
+        let memory = Arc::new(KmsAgentHandle::new(config, memory_store));
 
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::job::KnowledgeJob;
 use super::stage::{KnowledgeStage, StageContext, StageOutcome};
-use super::{grounding, phase1, phase2};
+use super::{phase1, phase2};
 use crate::pipeline::error::Result;
 
 pub struct Phase1Stage;
@@ -63,38 +63,11 @@ impl KnowledgeStage for Phase2Stage {
         let _ = trigger;
         let config = context.system.effective_config();
         phase2::run(&context.system.store(), &context.model, &config).await?;
-        Ok(StageOutcome::completed(vec![
-            KnowledgeJob::GroundObservations,
-        ]))
-    }
-}
-
-pub struct GroundingStage;
-
-#[async_trait::async_trait]
-impl KnowledgeStage for GroundingStage {
-    fn name(&self) -> &'static str {
-        "ground_observations"
-    }
-
-    fn accepts(&self, job: &KnowledgeJob) -> bool {
-        matches!(job, KnowledgeJob::GroundObservations)
-    }
-
-    async fn execute(&self, context: StageContext, _job: KnowledgeJob) -> Result<StageOutcome> {
-        let Some(grounding) = context.system.grounding() else {
-            return Ok(StageOutcome::completed(Vec::new()));
-        };
-        grounding::run(&context.system, &grounding).await?;
         Ok(StageOutcome::completed(Vec::new()))
     }
 }
 
 #[must_use]
 pub fn default_stages() -> Vec<Arc<dyn KnowledgeStage>> {
-    vec![
-        Arc::new(Phase1Stage),
-        Arc::new(Phase2Stage),
-        Arc::new(GroundingStage),
-    ]
+    vec![Arc::new(Phase1Stage), Arc::new(Phase2Stage)]
 }

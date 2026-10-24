@@ -124,7 +124,7 @@
                 <mxCell id="summary_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_summaries&#xa;(v1, per scope)" vertex="1">
                     <mxGeometry height="80" width="160" x="210" y="915" as="geometry"/>
                 </mxCell>
-                <mxCell id="obs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_semantic_observations&#xa;(candidate → accepted/rejected/error)" vertex="1">
+                <mxCell id="obs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_semantic_observations&#xa;(candidate relation triples for future graph layer)" vertex="1">
                     <mxGeometry height="80" width="240" x="700" y="920" as="geometry"/>
                 </mxCell>
                 <mxCell id="jobs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_jobs&#xa;(lease + status + hash)" vertex="1">

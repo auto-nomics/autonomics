@@ -9,7 +9,6 @@ pub mod error;
 pub mod source;
 
 mod artifacts;
-mod grounding;
 mod knowledge;
 mod pipeline;
 mod store;
@@ -20,7 +19,6 @@ pub use artifacts::{
     parse_json_object, redact_secrets,
 };
 pub use error::{Error, Result};
-pub use grounding::{SemanticGrounding, SemanticGroundingOutcome};
 pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{
     KnowledgeEvent, KnowledgeJob, KnowledgePipeline, KnowledgeQueue, KnowledgeStage,

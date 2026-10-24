@@ -934,13 +934,18 @@ mod tests {
         store
             .complete(
                 first_id,
-                StageOutcome::completed(vec![KnowledgeJob::GroundObservations]),
+                StageOutcome::completed(vec![KnowledgeJob::ConsolidateKnowledge {
+                    trigger: "test".to_string(),
+                }]),
             )
             .await
             .unwrap();
         let claimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
         assert_eq!(claimed.len(), 1);
-        assert!(matches!(claimed[0].job, KnowledgeJob::GroundObservations));
+        assert!(matches!(
+            claimed[0].job,
+            KnowledgeJob::ConsolidateKnowledge { .. }
+        ));
     }
 
     #[tokio::test]
