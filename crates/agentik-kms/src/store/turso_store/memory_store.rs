@@ -1,11 +1,11 @@
-//! Persistent memory repository operations for [`TursoMemoryStorage`].
+//! Persistent memory repository operations for [`TursoKmsStorage`].
 
 use async_trait::async_trait;
 use turso::{Value, params_from_iter};
 use uuid::Uuid;
 
 use super::{
-    Error, Result, TursoMemoryStorage, db_err, parse_uuid, row_to_note, row_to_observation,
+    Error, Result, TursoKmsStorage, db_err, parse_uuid, row_to_note, row_to_observation,
     row_to_stage1, row_to_summary, text, uuid_value,
 };
 use crate::knowledge::Knowledge;
@@ -14,7 +14,7 @@ use crate::store::{
 };
 
 #[async_trait]
-impl MemoryStore for TursoMemoryStorage {
+impl MemoryStore for TursoKmsStorage {
     async fn get_stage1_output(
         &self,
         scope_id: Uuid,

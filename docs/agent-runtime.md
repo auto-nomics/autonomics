@@ -39,25 +39,13 @@ pipeline:
    then atomically stores active memory entries, a `v1` summary, and candidate
    semantic observations in Turso.
 
-All agents can search or read memory through dedicated tools; only the compact
+All agents can search or read knowledge through dedicated tools; only the compact
 summary is automatically prompt-loaded. Set `AUTONOMICS_USE_MEMORY` and
-`AUTONOMICS_GENERATE_MEMORY` to override the runtime defaults. Candidate
-semantic observations are grounded into KMS when `enable_kms` is set: each
-subject and object becomes an entity, the relation becomes a relation knowledge
-entry, and the entry is mounted under `/Semantic Memory/<subject>`.
-The write is committed only when it introduces no new KMS Error diagnostics;
-otherwise the generated entities, knowledge, and index mounts are rolled back
-and the observation is marked rejected with its reason. KMS tables live in a
-dedicated `knowledge.db` Turso database (default `~/.autonomics/knowledge.db`,
-override with `AUTONOMICS_KMS_DB`), opened in multiprocess-WAL mode so the
-daemon and the `autonomics kms` TUI can share it. On startup, legacy KMS rows
-are migrated out of `agent.db` once — the old tables are left in place and can
-be dropped manually after verifying the migration.
-
-KMS tool access follows the same boundary: task-facing agents receive only
-`kms_readonly_registrations`, while `kms_write_registrations` is reserved for
-the memory/KMS maintenance process (initially deterministic grounding, later a
-dedicated subconscious maintenance agent).
+`AUTONOMICS_GENERATE_MEMORY` to override the runtime defaults. Unified KMS state
+lives in a dedicated `knowledge.db` Turso database (default
+`~/.autonomics/knowledge.db`, override with `AUTONOMICS_KNOWLEDGE_DB`). Legacy
+memory rows are migrated out of `agent.db` once; the old tables remain available
+for rollback.
 
 ## Proc macros (`agentik-proc`)
 

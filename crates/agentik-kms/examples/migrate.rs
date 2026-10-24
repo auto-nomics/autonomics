@@ -1,4 +1,4 @@
-use agentik_kms::TursoMemoryStorage;
+use agentik_kms::TursoKmsStorage;
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +12,7 @@ async fn main() {
     let source = shellexpand(&source);
     let destination = shellexpand(&destination);
 
-    let store = match TursoMemoryStorage::open(&destination).await {
+    let store = match TursoKmsStorage::open(&destination).await {
         Ok(store) => store,
         Err(error) => {
             eprintln!("open destination {destination}: {error}");

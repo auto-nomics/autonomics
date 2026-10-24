@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{KnowledgeEvent, MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
+use crate::memory::{KmsAgentHandle, KnowledgeEvent, MEMORY_SCOPE_ID, redact_secrets};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -21,11 +21,11 @@ pub struct MemoryNoteInput {
 }
 
 pub struct MemoryNoteTool {
-    backend: Arc<MemoryBackend>,
+    backend: Arc<KmsAgentHandle>,
 }
 
 impl MemoryNoteTool {
-    pub fn new(backend: Arc<MemoryBackend>) -> Self {
+    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
         Self { backend }
     }
 }
@@ -44,7 +44,7 @@ impl ToolFunction for MemoryNoteTool {
         }
         let note = self
             .backend
-            .store
+            .store()
             .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
             .await
             .map_err(store_error)?;
@@ -85,16 +85,15 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
+        KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn queues_redacted_note() {
-        let store: Arc<dyn MemoryStore> =
-            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(MemoryBackend::new(
+        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(KmsAgentHandle::new(
             MemoryConfig::new(),
             Arc::clone(&store),
             None,

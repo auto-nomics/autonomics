@@ -8,14 +8,15 @@ use super::event::KnowledgeEvent;
 use super::job::KnowledgeJob;
 use super::stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 use super::stages::default_stages;
-use super::{MemoryBackend, MemorySource, error::Error};
+use super::{MemorySource, error::Error};
+use crate::KmsSystem;
 use crate::now_ms;
 use crate::store::KnowledgeQueue;
 
 pub struct KnowledgePipeline {
     queue: Arc<dyn KnowledgeQueue>,
     source: Arc<dyn MemorySource>,
-    backend: Arc<MemoryBackend>,
+    system: Arc<KmsSystem>,
     model: Arc<ArcSwapOption<Model>>,
     stages: Vec<Arc<dyn KnowledgeStage>>,
 }
@@ -25,13 +26,13 @@ impl KnowledgePipeline {
     pub fn new(
         queue: Arc<dyn KnowledgeQueue>,
         source: Arc<dyn MemorySource>,
-        backend: Arc<MemoryBackend>,
+        system: Arc<KmsSystem>,
         model: Arc<ArcSwapOption<Model>>,
     ) -> Self {
         Self {
             queue,
             source,
-            backend,
+            system,
             model,
             stages: default_stages(),
         }
@@ -79,7 +80,7 @@ impl KnowledgePipeline {
 
         let context = StageContext {
             source: Arc::clone(&self.source),
-            backend: Arc::clone(&self.backend),
+            system: Arc::clone(&self.system),
             model: Arc::clone(&self.model),
         };
         let mut outcome = match stage.execute(context, queued.job.clone()).await {

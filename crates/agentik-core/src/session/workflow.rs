@@ -1402,7 +1402,7 @@ mod tests {
     /// summary silently lost its profile prompt.
     #[tokio::test]
     async fn memory_summary_appends_to_custom_system_section() {
-        use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore};
+        use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore};
         use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
@@ -1424,8 +1424,8 @@ mod tests {
         let model = Model::with_client(dummy_model_info("mem-section"), mock);
 
         // Seed a memory summary the way phase 2 consolidation would.
-        let store: Arc<dyn MemoryStore> = Arc::new(
-            crate::memory::TursoMemoryStorage::open_in_memory()
+        let store = Arc::new(
+            crate::memory::TursoKmsStorage::open_in_memory()
                 .await
                 .unwrap(),
         );
@@ -1440,7 +1440,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let memory = Arc::new(MemoryBackend::new(MemoryConfig::new(), store, None));
+        let memory = Arc::new(KmsAgentHandle::new(MemoryConfig::new(), store, None));
 
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentShared {

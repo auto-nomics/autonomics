@@ -24,11 +24,11 @@ impl KnowledgeStage for Phase1Stage {
         if context.model.load_full().is_none() {
             return Ok(StageOutcome::retry(60, "no active model"));
         }
-        let config = context.backend.effective_memory_config();
+        let config = context.system.effective_config();
         phase1::run(
             agent_id,
             &context.source,
-            &context.backend.store,
+            &context.system.store(),
             &context.model,
             &config,
         )
@@ -61,8 +61,8 @@ impl KnowledgeStage for Phase2Stage {
             return Ok(StageOutcome::retry(60, "no active model"));
         }
         let _ = trigger;
-        let config = context.backend.effective_memory_config();
-        phase2::run(&context.backend.store, &context.model, &config).await?;
+        let config = context.system.effective_config();
+        phase2::run(&context.system.store(), &context.model, &config).await?;
         Ok(StageOutcome::completed(vec![
             KnowledgeJob::GroundObservations,
         ]))
@@ -82,10 +82,10 @@ impl KnowledgeStage for GroundingStage {
     }
 
     async fn execute(&self, context: StageContext, _job: KnowledgeJob) -> Result<StageOutcome> {
-        let Some(grounding) = context.backend.grounding.clone() else {
+        let Some(grounding) = context.system.grounding() else {
             return Ok(StageOutcome::completed(Vec::new()));
         };
-        grounding::run(&context.backend, &grounding).await?;
+        grounding::run(&context.system, &grounding).await?;
         Ok(StageOutcome::completed(Vec::new()))
     }
 }

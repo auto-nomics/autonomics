@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use turso::{Value, params_from_iter};
 use uuid::Uuid;
 
-use super::{Error, Result, TursoMemoryStorage, db_err, int, text, uuid_value};
+use super::{Error, Result, TursoKmsStorage, db_err, int, text, uuid_value};
 use crate::now_ms;
 use crate::pipeline::{KnowledgeJob, StageOutcome, StageStatus};
 use crate::store::{KnowledgeQueue, QueuedKnowledgeJob};
@@ -11,7 +11,7 @@ const DEFAULT_MAX_ATTEMPTS: i64 = 5;
 const LEASE_MS: i64 = 3_600_000;
 
 #[async_trait]
-impl KnowledgeQueue for TursoMemoryStorage {
+impl KnowledgeQueue for TursoKmsStorage {
     async fn enqueue(&self, job: KnowledgeJob) -> Result<Uuid> {
         let now = now_ms();
         let dedup_key = job.dedup_key();

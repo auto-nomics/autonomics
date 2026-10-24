@@ -18,7 +18,7 @@ const MIGRATION_MARKER: &str = "legacy_agent_db_memory_migrated_v1";
 const KNOWLEDGE_TREE_MIGRATION_MARKER: &str = "memory_entries_to_knowledge_nodes_v1";
 
 #[derive(Clone)]
-pub struct TursoMemoryStorage {
+pub struct TursoKmsStorage {
     conn: LockedConn,
 }
 
@@ -208,7 +208,7 @@ fn row_to_observation(row: &turso::Row) -> Result<SemanticObservation> {
     })
 }
 
-impl TursoMemoryStorage {
+impl TursoKmsStorage {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
         let path = path_ref
@@ -881,7 +881,7 @@ mod tests {
 
     #[tokio::test]
     async fn opens_schema_and_stores_notes() {
-        let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let note = store
             .insert_note(MEMORY_SCOPE_ID, "test", "hello")
             .await
@@ -899,7 +899,7 @@ mod tests {
 
     #[tokio::test]
     async fn knowledge_queue_deduplicates_retries_and_chains_jobs() {
-        let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
         let job = KnowledgeJob::ExtractAgentSessions { agent_id };
         let first_id = store.enqueue(job.clone()).await.unwrap();
@@ -945,7 +945,7 @@ mod tests {
 
     #[tokio::test]
     async fn phase2_upserts_nodes_by_knowledge_path() {
-        let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let path = KnowledgePath::normalize("/engineering/testing/verification").unwrap();
         let first = Knowledge::leaf(
             path.clone(),
@@ -1012,7 +1012,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrates_active_legacy_entries_to_knowledge_nodes() {
-        let destination = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let destination = TursoKmsStorage::open_in_memory().await.unwrap();
         let entry_id = Uuid::new_v4();
         destination
             .conn
@@ -1045,8 +1045,8 @@ mod tests {
 
     #[tokio::test]
     async fn migrates_legacy_agent_memory_tables_once() {
-        let source = TursoMemoryStorage::open_in_memory().await.unwrap();
-        let destination = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let source = TursoKmsStorage::open_in_memory().await.unwrap();
+        let destination = TursoKmsStorage::open_in_memory().await.unwrap();
         source
             .insert_note(MEMORY_SCOPE_ID, "legacy", "old memory")
             .await

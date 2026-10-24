@@ -13,7 +13,6 @@ pub mod evolution_tools;
 pub mod host;
 pub mod host_tools;
 pub mod instance_lock;
-pub mod memory_kms;
 pub mod model_actor;
 pub mod model_bootstrap;
 pub mod skill_workflow_tools;

@@ -4,13 +4,14 @@ use agentik_sdk::model::Model;
 use arc_swap::ArcSwapOption;
 use async_trait::async_trait;
 
+use super::MemorySource;
 use super::job::KnowledgeJob;
-use super::{MemoryBackend, MemorySource};
+use crate::KmsSystem;
 
 #[derive(Clone)]
 pub struct StageContext {
     pub source: Arc<dyn MemorySource>,
-    pub backend: Arc<MemoryBackend>,
+    pub system: Arc<KmsSystem>,
     pub model: Arc<ArcSwapOption<Model>>,
 }
 

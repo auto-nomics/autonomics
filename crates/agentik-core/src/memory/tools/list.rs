@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend};
+use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -22,11 +22,11 @@ pub struct MemoryListInput {
 }
 
 pub struct MemoryListTool {
-    backend: Arc<MemoryBackend>,
+    backend: Arc<KmsAgentHandle>,
 }
 
 impl MemoryListTool {
-    pub fn new(backend: Arc<MemoryBackend>) -> Self {
+    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
         Self { backend }
     }
 }
@@ -45,7 +45,7 @@ impl ToolFunction for MemoryListTool {
             .clamp(1, MAX_LIST_RESULTS);
         let stored_nodes = self
             .backend
-            .store
+            .store()
             .list_knowledge(MAX_LIST_RESULTS)
             .await
             .map_err(store_error)?;
@@ -77,17 +77,16 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore,
-        TursoMemoryStorage,
+        KmsAgentHandle, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore,
+        TursoKmsStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn lists_active_entries() {
-        let store: Arc<dyn MemoryStore> =
-            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(MemoryBackend::new(
+        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(KmsAgentHandle::new(
             MemoryConfig::new(),
             Arc::clone(&store),
             None,

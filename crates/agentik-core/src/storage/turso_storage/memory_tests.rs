@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::TursoAgentStorage;
 use crate::memory::MemoryStage1Record;
-use crate::memory::{MEMORY_SCOPE_ID, MemoryStore, TursoMemoryStorage};
+use crate::memory::{MEMORY_SCOPE_ID, MemoryStore, TursoKmsStorage};
 use crate::storage::AgentStorage;
 use agentik_sdk::AgentMessageExt;
 
@@ -22,7 +22,7 @@ fn stage1(session_id: Uuid, source_hash: &str, raw_memory: &str) -> MemoryStage1
 
 #[tokio::test]
 async fn memory_stage1_claims_are_lease_and_hash_idempotent() {
-    let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+    let store = TursoKmsStorage::open_in_memory().await.unwrap();
     let session_id = Uuid::new_v4();
     let lease_until = crate::memory::now_ms() + 3_600_000;
 
@@ -68,7 +68,7 @@ async fn memory_stage1_claims_are_lease_and_hash_idempotent() {
 
 #[tokio::test]
 async fn memory_phase2_lock_is_singleton_and_source_idempotent() {
-    let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+    let store = TursoKmsStorage::open_in_memory().await.unwrap();
     let lease_until = crate::memory::now_ms() + 3_600_000;
 
     assert!(

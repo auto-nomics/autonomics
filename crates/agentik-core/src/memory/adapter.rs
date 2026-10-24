@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::storage::{AgentStorage, StorageError};
-use agentik_kms::{Error, MemorySessionRecord, MemorySource, TursoMemoryStorage};
+use agentik_kms::{Error, MemorySessionRecord, MemorySource, TursoKmsStorage};
 
 pub(crate) fn storage_error(error: StorageError) -> Error {
     Error::Source(error.to_string())
@@ -64,7 +64,7 @@ mod tests {
     use std::sync::Arc;
 
     use agentik_kms::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
+        KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage,
         run_memory_pipeline,
     };
     use agentik_sdk::AgentMessageExt;
@@ -111,15 +111,10 @@ mod tests {
         let storage: Arc<dyn crate::storage::AgentStorage> =
             Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
         let source = agent_storage_memory_source(storage.clone());
-        let memory_store = Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let memory_store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory = Arc::new(MemoryBackend::with_queue(
-            config,
-            Arc::clone(&memory_store) as Arc<dyn MemoryStore>,
-            Arc::clone(&memory_store) as _,
-            None,
-        ));
+        let memory = Arc::new(KmsAgentHandle::new(config, memory_store, None));
 
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
@@ -134,12 +129,12 @@ mod tests {
         run_memory_pipeline(agent_id, source, memory.clone(), model).await;
 
         let rows = memory
-            .store
+            .store()
             .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
-        let nodes = memory.store.list_knowledge(10).await.unwrap();
+        let nodes = memory.store().list_knowledge(10).await.unwrap();
         assert_eq!(nodes.iter().filter(|node| !node.structural).count(), 1);
         assert!(
             nodes
@@ -147,14 +142,14 @@ mod tests {
                 .any(|node| node.body_md.contains("targeted tests"))
         );
         let summary = memory
-            .store
+            .store()
             .get_summary(MEMORY_SCOPE_ID)
             .await
             .unwrap()
             .unwrap();
         assert!(summary.summary_md.starts_with("v1\n"));
         let observations = memory
-            .store
+            .store()
             .list_observations(MEMORY_SCOPE_ID, "candidate", 10)
             .await
             .unwrap();

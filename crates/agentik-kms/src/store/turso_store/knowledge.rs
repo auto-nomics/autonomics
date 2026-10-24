@@ -2,12 +2,12 @@ use async_trait::async_trait;
 use turso::{Value, params_from_iter};
 use uuid::Uuid;
 
-use super::{Error, Result, TursoMemoryStorage, db_err, row_to_knowledge, uuid_value};
+use super::{Error, Result, TursoKmsStorage, db_err, row_to_knowledge, uuid_value};
 use crate::knowledge::Knowledge;
 use crate::store::knowledge_store::KnowledgeStore;
 
 #[async_trait]
-impl KnowledgeStore for TursoMemoryStorage {
+impl KnowledgeStore for TursoKmsStorage {
     async fn create_knowledge(&self, knowledge: Knowledge) -> Result<Knowledge> {
         self.ensure_knowledge_node(&knowledge).await?;
         let path = knowledge.knowledge_path.as_str();

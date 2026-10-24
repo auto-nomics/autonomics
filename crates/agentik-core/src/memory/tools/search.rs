@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend};
+use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -27,11 +27,11 @@ pub struct MemorySearchInput {
 }
 
 pub struct MemorySearchTool {
-    backend: Arc<MemoryBackend>,
+    backend: Arc<KmsAgentHandle>,
 }
 
 impl MemorySearchTool {
-    pub fn new(backend: Arc<MemoryBackend>) -> Self {
+    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
         Self { backend }
     }
 }
@@ -49,13 +49,13 @@ impl ToolFunction for MemorySearchTool {
         }
         let nodes = self
             .backend
-            .store
+            .store()
             .list_knowledge(MAX_SEARCH_RESULTS * 10)
             .await
             .map_err(store_error)?;
         let notes = self
             .backend
-            .store
+            .store()
             .list_pending_notes(MEMORY_SCOPE_ID)
             .await
             .map_err(store_error)?;
@@ -157,17 +157,16 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore,
-        TursoMemoryStorage,
+        KmsAgentHandle, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore,
+        TursoKmsStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn search_entries_and_pending_notes() {
-        let store: Arc<dyn MemoryStore> =
-            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(MemoryBackend::new(
+        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(KmsAgentHandle::new(
             MemoryConfig::new(),
             Arc::clone(&store),
             None,

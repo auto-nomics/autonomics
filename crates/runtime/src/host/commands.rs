@@ -468,7 +468,7 @@ impl RuntimeHost {
                 overrides,
                 reply_tx,
             } => {
-                let defaults = self.infra.memory.runtime_config();
+                let defaults = self.infra.kms.runtime_config();
                 let resolved = self.resolve_agent(&name).and_then(|key| {
                     self.agents.get(&key).map(|entry| {
                         let previous = entry.memory.runtime_config();
@@ -486,10 +486,7 @@ impl RuntimeHost {
                         if !previous.generate_memory
                             && config.generate_memory
                             && agentik_types::AgentPath::try_from(key.as_str()).is_ok_and(|path| {
-                                self.infra
-                                    .memory
-                                    .effective_memory_config()
-                                    .is_root_agent(&path)
+                                self.infra.kms.effective_config().is_root_agent(&path)
                             })
                             && let Some(agent_id) = entry.info.agent_id
                         {
@@ -1319,7 +1316,7 @@ mod communication_policy_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("knowledge.db");
+        config.knowledge_db_path = dir.path().join("knowledge.db");
         // Keep the embedding model (network install + ONNX session)
         // out of these tests.
         config.embedding.enabled = false;

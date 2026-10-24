@@ -78,8 +78,6 @@ members = [
   "crates/europepmc",
   "crates/openalex",
   "crates/semantic-scholar",
-  "crates/kms",
-  "crates/kms-tools",
   "crates/agentik-network",
   "stat_crates/ml",
   "stat_crates/mice",

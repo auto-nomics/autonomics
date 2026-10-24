@@ -16,17 +16,26 @@
                 <mxCell id="pipeline_queue" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1" value="KnowledgeEvent → knowledge_pipeline_jobs&#xa;(dedup + lease + retry)" vertex="1">
                     <mxGeometry height="55" width="240" x="700" y="70" as="geometry"/>
                 </mxCell>
-                <mxCell id="pipeline_entry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" value="KnowledgePipeline&#xa;dispatch + run_due" vertex="1">
+                <mxCell id="pipeline_entry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" value="KmsSystem&#xa;KnowledgePipeline dispatch + run_due&#xa;KmsAgentHandle = agent runtime view" vertex="1">
                     <mxGeometry height="40" width="220" x="260" y="165" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_trig1" edge="1" parent="1" source="trig1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
-                    <mxGeometry relative="1" as="geometry"/>
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="210" y="60"/>
+                            <mxPoint x="820" y="60"/>
+                        </Array>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="e_trig2" edge="1" parent="1" source="trig2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_queue_pipeline" edge="1" parent="1" source="pipeline_queue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_entry">
-                    <mxGeometry relative="1" as="geometry"/>
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="820" y="180"/>
+                        </Array>
+                    </mxGeometry>
                 </mxCell>
                 <mxCell id="session_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" value="Session Storage&#xa;(rollouts / WAL)" vertex="1">
                     <mxGeometry height="90" width="150" x="30" y="240" as="geometry"/>
@@ -142,48 +151,6 @@
                 </mxCell>
                 <mxCell id="e_write_jobs" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="jobs_db">
                     <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#ab47bc;dashed=1;opacity=40;" value="" vertex="1">
-                    <mxGeometry height="440" width="380" x="990" y="70" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#6a1b9a;align=left;" value="KMS Grounding (optional)" vertex="1">
-                    <mxGeometry height="25" width="250" x="1010" y="80" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" value="List candidate observations&#xa;(status=candidate, ≤1000)" vertex="1">
-                    <mxGeometry height="45" width="320" x="1020" y="120" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_entities" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" value="Create / reuse entities&#xa;subject + object" vertex="1">
-                    <mxGeometry height="45" width="320" x="1020" y="195" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_knowledge" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" value="Create / reuse knowledge&#xa;title: &quot;subject · predicate: object&quot;" vertex="1">
-                    <mxGeometry height="45" width="320" x="1020" y="270" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_mount" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" value="Mount under index tree&#xa;Semantic Memory / subject" vertex="1">
-                    <mxGeometry height="45" width="320" x="1020" y="345" as="geometry"/>
-                </mxCell>
-                <mxCell id="kms_diag" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1" value="diagnose() before vs after&#xa;→ accepted | rejected | error" vertex="1">
-                    <mxGeometry height="50" width="320" x="1020" y="420" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_kms_list_ent" edge="1" parent="1" source="kms_list" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="kms_entities">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_kms_ent_know" edge="1" parent="1" source="kms_entities" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="kms_knowledge">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_kms_know_mount" edge="1" parent="1" source="kms_knowledge" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="kms_mount">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_kms_mount_diag" edge="1" parent="1" source="kms_mount" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="kms_diag">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_obs_kms" edge="1" parent="1" source="obs_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;strokeColor=#9673a6;" target="kms_list" value="grounding">
-                    <mxGeometry relative="1" x="0.1339" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="820" y="1020"/>
-                            <mxPoint x="1370" y="1020"/>
-                            <mxPoint x="1370" y="142.5"/>
-                        </Array>
-                    </mxGeometry>
                 </mxCell>
                 <mxCell id="read_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#66bb6a;dashed=1;opacity=40;" value="" vertex="1">
                     <mxGeometry height="190" width="1340" x="30" y="1040" as="geometry"/>
