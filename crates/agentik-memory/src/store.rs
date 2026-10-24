@@ -11,6 +11,7 @@ pub mod turso_store;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::knowledge::Knowledge;
 use error::Result;
 
 pub use knowledge_store::KnowledgeStore;
@@ -25,19 +26,6 @@ pub struct MemoryStage1Record {
     pub status: String,
     pub generated_at: i64,
     pub lease_until: i64,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct MemoryEntry {
-    pub id: Uuid,
-    pub scope_id: Uuid,
-    pub entry_type: String,
-    pub title: String,
-    pub body_md: String,
-    pub status: String,
-    pub confidence: f64,
-    pub created_at: i64,
-    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -78,7 +66,7 @@ pub struct SemanticObservation {
 }
 
 #[async_trait]
-pub trait MemoryStore: Send + Sync {
+pub trait MemoryStore: KnowledgeStore + Send + Sync {
     async fn get_stage1_output(
         &self,
         scope_id: Uuid,
@@ -120,7 +108,7 @@ pub trait MemoryStore: Send + Sync {
         &self,
         scope_id: Uuid,
         source_hash: &str,
-        entries: Vec<MemoryEntry>,
+        nodes: Vec<Knowledge>,
         summary_md: &str,
         observations: Vec<SemanticObservation>,
         consumed_note_ids: Vec<Uuid>,
@@ -129,10 +117,6 @@ pub trait MemoryStore: Send + Sync {
     async fn fail_phase2(&self, scope_id: Uuid, source_hash: &str, error: &str) -> Result<()>;
 
     async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>>;
-
-    async fn list_entries(&self, scope_id: Uuid, limit: usize) -> Result<Vec<MemoryEntry>>;
-
-    async fn get_entry(&self, scope_id: Uuid, entry_id: Uuid) -> Result<Option<MemoryEntry>>;
 
     async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>>;
 

@@ -9,9 +9,9 @@ mod tools;
 
 pub use adapter::{AgentStorageMemorySource, agent_storage_memory_source};
 pub use agentik_memory::{
-    AgentRuntimeConfig, Error, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry,
-    MemoryEntryDraft, MemoryNote, MemorySource, MemoryStage1Record, MemoryStore, MemorySummary,
-    Result, SemanticGrounding, SemanticGroundingOutcome, SemanticObservation, TursoMemoryStorage,
+    AgentRuntimeConfig, Error, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend,
+    MemoryConfig, MemoryNote, MemorySource, MemoryStage1Record, MemoryStore, MemorySummary, Result,
+    SemanticGrounding, SemanticGroundingOutcome, SemanticObservation, TursoMemoryStorage,
     memory_prompt_section, now_ms, redact_secrets, run_memory_pipeline,
 };
 pub use tools::memory_registrations;

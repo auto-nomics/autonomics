@@ -4,7 +4,8 @@ use agentik_sdk::types::messages::{ContentBlock, Message};
 
 use super::error::{Error, Result};
 use crate::artifacts::{MemoryExtraction, parse_json_object};
-use crate::store::{MemoryEntry, MemoryNote, MemoryStage1Record};
+use crate::knowledge::Knowledge;
+use crate::store::{MemoryNote, MemoryStage1Record};
 
 pub(super) fn parse_extraction(response: &Message) -> Result<MemoryExtraction> {
     parse_json_object::<MemoryExtraction>(&message_text(response))
@@ -43,7 +44,7 @@ pub(super) fn build_phase1_prompt(
 pub(super) fn build_phase2_prompt(
     rows: &[MemoryStage1Record],
     notes: &[MemoryNote],
-    entries: &[MemoryEntry],
+    nodes: &[Knowledge],
     summary: &str,
 ) -> String {
     let raw = rows
@@ -65,25 +66,32 @@ pub(super) fn build_phase2_prompt(
         .iter()
         .map(|note| format!("## {}\n{}\n", note.slug, note.content))
         .collect::<String>();
-    let entries = entries
+    let existing_nodes = nodes
         .iter()
-        .map(|entry| {
+        .map(|node| {
             format!(
-                "## {} ({})\n{}\n",
-                entry.title, entry.entry_type, entry.body_md
+                "## {}\nTitle: {}\nStructural: {}\nContent:\n{}\n",
+                node.knowledge_path.as_str(),
+                node.title,
+                node.structural,
+                node.body_md
             )
         })
         .collect::<String>();
 
     format!(
-        "Consolidate raw session memories and explicit user update notes into durable rows. \
-         Return ONLY minified JSON with fields entries, summary, and semantic_updates.\n\n\
-         Each entry has entry_type (preference|workflow|failure_shield|task_map), title, \
-         body_md, and confidence. summary starts with v1 and is compact. semantic_updates \
-         contain subject, predicate (snake_case), object, content, and confidence; emit them \
-         only for durable entity or workflow relationships. Merge duplicates, remove stale \
-         guidance, preserve scope, redact secrets, and do not invent verification.\n\n\
-         RAW MEMORIES\n{raw}\nUSER UPDATE NOTES\n{notes}\nEXISTING ENTRIES\n{entries}\n\
+        "Consolidate raw session memories and explicit user update notes into a knowledge tree. \
+         Return ONLY minified JSON with fields nodes, summary, and semantic_updates.\n\n\
+         Each node has knowledge_path, title, body_md, and confidence. knowledge_path is an \
+         absolute slash-separated path of 2-8 lowercase, stable, domain-controlled segments \
+         such as /user/preferences/language or /statistics/regression/linear-regression. \
+         Do not output a type field. Reuse an existing path exactly when rewriting that node; \
+         create a child or sibling path for a new domain; use a deeper branch when conflicting \
+         guidance needs scoped variants. Merge duplicates, remove stale guidance, preserve \
+         scope, redact secrets, and do not invent verification. summary starts with v1 and is \
+         compact. semantic_updates contain subject, predicate (snake_case), object, content, \
+         and confidence; emit them only for durable entity or workflow relationships.\n\n\
+         RAW MEMORIES\n{raw}\nUSER UPDATE NOTES\n{notes}\nEXISTING KNOWLEDGE TREE\n{existing_nodes}\n\
          EXISTING SUMMARY\n{summary}\n"
     )
 }

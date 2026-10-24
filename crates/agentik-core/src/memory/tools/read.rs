@@ -15,10 +15,10 @@ const MAX_READ_LINES: usize = 1_000;
 
 #[tool(
     name = "memory_read",
-    description = "Read the current memory summary or one active memory entry by UUID."
+    description = "Read the current memory summary or one active knowledge node by UUID."
 )]
 pub struct MemoryReadInput {
-    #[desc = "'summary' for the compact summary, or an entry UUID returned by memory_search."]
+    #[desc = "'summary' for the compact summary, or a knowledge node UUID returned by memory_search."]
     pub target: String,
     #[desc = "Starting 1-indexed line. Default 1."]
     pub offset: Option<usize>,
@@ -81,23 +81,24 @@ impl ToolFunction for MemoryReadTool {
             Uuid::parse_str(input.target.trim()).map_err(|e| ToolError::ValidationFailed {
                 message: format!("invalid memory entry UUID: {e}"),
             })?;
-        let entry = self
+        let node = self
             .backend
             .store
-            .get_entry(MEMORY_SCOPE_ID, entry_id)
+            .get_knowledge(entry_id)
             .await
             .map_err(store_error)?
             .ok_or_else(|| ToolError::ValidationFailed {
-                message: format!("memory entry {entry_id} not found"),
+                message: format!("knowledge node {entry_id} not found"),
             })?;
-        let lines: Vec<&str> = entry.body_md.lines().skip(offset - 1).take(limit).collect();
+        let lines: Vec<&str> = node.body_md.lines().skip(offset - 1).take(limit).collect();
         Ok(ToolResult::success_json(serde_json::json!({
-            "kind": "entry",
-            "id": entry.id,
-            "entry_type": entry.entry_type,
-            "title": entry.title,
-            "status": entry.status,
-            "confidence": entry.confidence,
+            "kind": "knowledge_node",
+            "id": node.id,
+            "knowledge_path": node.knowledge_path.as_str(),
+            "title": node.title,
+            "status": node.status,
+            "confidence": node.confidence,
+            "structural": node.structural,
             "offset": offset,
             "lines": lines,
             "returned": lines.len(),
@@ -112,7 +113,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry, MemoryStore, TursoMemoryStorage,
+        Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore,
+        TursoMemoryStorage,
     };
 
     use super::*;
@@ -131,17 +133,14 @@ mod tests {
             .complete_phase2(
                 MEMORY_SCOPE_ID,
                 "source",
-                vec![MemoryEntry {
-                    id: Uuid::new_v4(),
-                    scope_id: MEMORY_SCOPE_ID,
-                    entry_type: "workflow".into(),
-                    title: "Verification workflow".into(),
-                    body_md: "Always run targeted tests before cargo check.".into(),
-                    status: "active".into(),
-                    confidence: 0.9,
-                    created_at: now,
-                    updated_at: now,
-                }],
+                vec![Knowledge::leaf(
+                    KnowledgePath::new(["engineering", "testing", "verification"]),
+                    "Verification workflow".into(),
+                    "Always run targeted tests before cargo check.".into(),
+                    0.9,
+                    "source",
+                    now,
+                )],
                 "v1\n\nRun tests.",
                 Vec::new(),
                 Vec::new(),
@@ -159,10 +158,16 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("Run tests."));
 
-        let entry = store.list_entries(MEMORY_SCOPE_ID, 1).await.unwrap()[0].clone();
+        let node = store
+            .list_knowledge(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|node| !node.structural)
+            .unwrap();
         let result = MemoryReadTool::new(backend)
             .run(MemoryReadInput {
-                target: entry.id.to_string(),
+                target: node.id.to_string(),
                 offset: None,
                 limit: None,
             })

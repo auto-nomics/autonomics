@@ -9,7 +9,7 @@ mod pipeline;
 mod store;
 
 pub use artifacts::{
-    MemoryConsolidation, MemoryEntryDraft, MemoryExtraction, SemanticObservationDraft,
+    KnowledgeDraft, MemoryConsolidation, MemoryExtraction, SemanticObservationDraft,
     parse_json_object, redact_secrets,
 };
 pub use backend::{MemoryBackend, memory_prompt_section};
@@ -21,8 +21,7 @@ pub use source::{MemorySessionRecord, MemorySource};
 pub use store::error::Error as StoreError;
 pub use store::turso_store::TursoMemoryStorage;
 pub use store::{
-    KnowledgeStore, MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary,
-    SemanticObservation,
+    KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
 };
 
 /// Fully resolved runtime settings carried by the memory backend.

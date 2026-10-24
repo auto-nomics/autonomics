@@ -100,7 +100,7 @@ mod tests {
             })
             .returning(|_, _, _| {
                 Ok(AgentMessageExt::assistant_text(
-                    r##"{"entries":[{"entry_type":"workflow","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
+                    r##"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
                 ))
             });
 
@@ -135,13 +135,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
-        let entries = memory
+        let nodes = memory
             .store
-            .list_entries(MEMORY_SCOPE_ID, 10)
+            .list_knowledge(10)
             .await
             .unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].body_md.contains("targeted tests"));
+        assert_eq!(nodes.iter().filter(|node| !node.structural).count(), 1);
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node.body_md.contains("targeted tests"))
+        );
         let summary = memory
             .store
             .get_summary(MEMORY_SCOPE_ID)

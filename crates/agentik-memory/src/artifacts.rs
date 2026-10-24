@@ -27,7 +27,7 @@ impl MemoryExtraction {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct MemoryConsolidation {
     #[serde(default)]
-    pub entries: Vec<MemoryEntryDraft>,
+    pub nodes: Vec<KnowledgeDraft>,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]
@@ -35,9 +35,8 @@ pub struct MemoryConsolidation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MemoryEntryDraft {
-    #[serde(default = "default_entry_type")]
-    pub entry_type: String,
+pub struct KnowledgeDraft {
+    pub knowledge_path: String,
     pub title: String,
     pub body_md: String,
     #[serde(default = "default_confidence")]
@@ -52,10 +51,6 @@ pub struct SemanticObservationDraft {
     pub content: String,
     #[serde(default = "default_confidence")]
     pub confidence: f64,
-}
-
-fn default_entry_type() -> String {
-    "workflow".to_string()
 }
 
 fn default_confidence() -> f64 {

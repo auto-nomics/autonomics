@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="agentik-memory" name="Memory Architecture">
-        <mxGraphModel dx="1376" dy="942" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1250" math="0" shadow="0">
+        <mxGraphModel dx="1655" dy="1133" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1250" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -70,16 +70,16 @@
                 <mxCell id="phase2_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#333333;align=left;" value="Phase 2: Consolidation" vertex="1">
                     <mxGeometry height="25" width="250" x="270" y="590" as="geometry"/>
                 </mxCell>
-                <mxCell id="p2_load" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Load stage1 (≤100)&#xa;+ pending memory_notes&#xa;+ existing active entries&#xa;+ existing summary" vertex="1">
+                <mxCell id="p2_load" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Load stage1 (≤100)&#xa;+ pending memory_notes&#xa;+ existing knowledge tree&#xa;+ existing summary" vertex="1">
                     <mxGeometry height="80" width="190" x="280" y="630" as="geometry"/>
                 </mxCell>
                 <mxCell id="p2_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_phase2&#xa;(global lease per scope)" vertex="1">
                     <mxGeometry height="50" width="190" x="280" y="740" as="geometry"/>
                 </mxCell>
-                <mxCell id="p2_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Consolidate&#xa;entries[] + summary + semantic_updates[]&#xa;(merge duplicates, remove stale)" vertex="1">
+                <mxCell id="p2_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Route knowledge tree&#xa;nodes[knowledge_path] + summary&#xa;+ semantic_updates[] (rewrite/create/branch)" vertex="1">
                     <mxGeometry height="65" width="300" x="540" y="630" as="geometry"/>
                 </mxCell>
-                <mxCell id="p2_normalize" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Normalize: entry_type enum, clamp confidence,&#xa;predicate → snake_case, redact secrets" vertex="1">
+                <mxCell id="p2_normalize" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Normalize: knowledge_path, clamp confidence,&#xa;predicate → snake_case, redact secrets" vertex="1">
                     <mxGeometry height="55" width="300" x="540" y="730" as="geometry"/>
                 </mxCell>
                 <mxCell id="p2_write" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1" value="Transactional Write&#xa;(BEGIN → writes → COMMIT&#xa;ROLLBACK on error)" vertex="1">
@@ -103,11 +103,11 @@
                 <mxCell id="e_notes_p2" edge="1" parent="1" source="notes_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_load">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="entries_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_entries&#xa;(active / superseded)" vertex="1">
-                    <mxGeometry height="80" width="160" x="280" y="920" as="geometry"/>
+                <mxCell id="entries_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="knowledge_nodes&#xa;(tree: parent_id + knowledge_path&#xa;active / superseded)" vertex="1">
+                    <mxGeometry height="80" width="160" x="490" y="915" as="geometry"/>
                 </mxCell>
                 <mxCell id="summary_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_summaries&#xa;(v1, per scope)" vertex="1">
-                    <mxGeometry height="80" width="160" x="490" y="920" as="geometry"/>
+                    <mxGeometry height="80" width="160" x="210" y="915" as="geometry"/>
                 </mxCell>
                 <mxCell id="obs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_semantic_observations&#xa;(candidate → accepted/rejected/error)" vertex="1">
                     <mxGeometry height="80" width="240" x="700" y="920" as="geometry"/>
@@ -116,18 +116,18 @@
                     <mxGeometry height="80" width="160" x="990" y="920" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_write_entries" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="entries_db">
-                    <mxGeometry relative="1" as="geometry">
+                    <mxGeometry relative="1" x="0.5938" as="geometry">
                         <Array as="points">
                             <mxPoint x="990" y="800"/>
-                            <mxPoint x="360" y="800"/>
+                            <mxPoint x="570" y="800"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
                 <mxCell id="e_write_summary" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="summary_db">
-                    <mxGeometry relative="1" as="geometry">
+                    <mxGeometry relative="1" x="0.0435" as="geometry">
                         <Array as="points">
                             <mxPoint x="990" y="790"/>
-                            <mxPoint x="570" y="790"/>
+                            <mxPoint x="290" y="790"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
@@ -188,22 +188,22 @@
                 <mxCell id="read_prompt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="prompt_section()&#xa;Inject compact summary&#xa;into system prompt (≤16KB)" vertex="1">
                     <mxGeometry height="60" width="240" x="60" y="1090" as="geometry"/>
                 </mxCell>
-                <mxCell id="tool_search" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_search&#xa;(case-insensitive substring&#xa;across entries + notes)" vertex="1">
+                <mxCell id="tool_search" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_search&#xa;(path/title/body substrings&#xa;across nodes + notes)" vertex="1">
                     <mxGeometry height="60" width="220" x="350" y="1090" as="geometry"/>
                 </mxCell>
-                <mxCell id="tool_read" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_read&#xa;(summary or entry by UUID&#xa;with offset + limit)" vertex="1">
+                <mxCell id="tool_read" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_read&#xa;(summary or node by UUID&#xa;with offset + limit)" vertex="1">
                     <mxGeometry height="60" width="220" x="620" y="1090" as="geometry"/>
                 </mxCell>
-                <mxCell id="tool_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_list&#xa;(active entries,&#xa;most recent first)" vertex="1">
+                <mxCell id="tool_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_list&#xa;(active knowledge leaves,&#xa;most recent first)" vertex="1">
                     <mxGeometry height="60" width="180" x="890" y="1090" as="geometry"/>
                 </mxCell>
                 <mxCell id="tool_note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_note&#xa;(queue user correction&#xa;for next consolidation)" vertex="1">
                     <mxGeometry height="60" width="220" x="1120" y="1090" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_summary_read" edge="1" parent="1" source="summary_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="read_prompt">
-                    <mxGeometry relative="1" as="geometry">
+                    <mxGeometry relative="1" x="0.3951" as="geometry">
                         <Array as="points">
-                            <mxPoint x="570" y="1020"/>
+                            <mxPoint x="290" y="1020"/>
                             <mxPoint x="180" y="1020"/>
                         </Array>
                     </mxGeometry>

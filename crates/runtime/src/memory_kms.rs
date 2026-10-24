@@ -385,7 +385,7 @@ mod tests {
             })
             .returning(|_, _, _| {
                 Ok(Message::assistant_text(
-                    r##"{"entries":[],"summary":"v1\n\nmemory","semantic_updates":[{"subject":"Agent Runtime","predicate":"uses","object":"Turso Memory","content":"Memory is grounded through KMS diagnostics.","confidence":0.95}]}"##,
+                    r##"{"nodes":[],"summary":"v1\n\nmemory","semantic_updates":[{"subject":"Agent Runtime","predicate":"uses","object":"Turso Memory","content":"Memory is grounded through KMS diagnostics.","confidence":0.95}]}"##,
                 ))
             });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(

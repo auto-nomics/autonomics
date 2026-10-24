@@ -14,10 +14,10 @@ const MAX_LIST_RESULTS: usize = 500;
 
 #[tool(
     name = "memory_list",
-    description = "List active persistent memory entries ordered by most recent update."
+    description = "List active knowledge nodes ordered by most recent update."
 )]
 pub struct MemoryListInput {
-    #[desc = "Maximum entries returned. Default 100; max 500."]
+    #[desc = "Maximum nodes returned. Default 100; max 500."]
     pub limit: Option<usize>,
 }
 
@@ -43,25 +43,28 @@ impl ToolFunction for MemoryListTool {
             .limit
             .unwrap_or(DEFAULT_LIST_RESULTS)
             .clamp(1, MAX_LIST_RESULTS);
-        let entries = self
+        let stored_nodes = self
             .backend
             .store
-            .list_entries(MEMORY_SCOPE_ID, limit)
+            .list_knowledge(MAX_LIST_RESULTS)
             .await
             .map_err(store_error)?;
-        let values: Vec<serde_json::Value> = entries
+        let values: Vec<serde_json::Value> = stored_nodes
             .iter()
-            .map(|entry| {
+            .filter(|node| !node.structural)
+            .take(limit)
+            .map(|node| {
                 serde_json::json!({
-                    "id": entry.id,
-                    "entry_type": entry.entry_type,
-                    "title": entry.title,
-                    "updated_at": entry.updated_at,
+                    "id": node.id,
+                    "knowledge_path": node.knowledge_path.as_str(),
+                    "title": node.title,
+                    "structural": node.structural,
+                    "updated_at": node.updated_at,
                 })
             })
             .collect();
         Ok(ToolResult::success_json(serde_json::json!({
-            "entries": values,
+            "nodes": values,
             "returned": values.len(),
         })))
     }
@@ -74,7 +77,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry, MemoryStore, TursoMemoryStorage,
+        Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore,
+        TursoMemoryStorage,
     };
 
     use super::*;
@@ -93,17 +97,14 @@ mod tests {
             .complete_phase2(
                 MEMORY_SCOPE_ID,
                 "source",
-                vec![MemoryEntry {
-                    id: Uuid::new_v4(),
-                    scope_id: MEMORY_SCOPE_ID,
-                    entry_type: "workflow".into(),
-                    title: "Verification workflow".into(),
-                    body_md: "Always run targeted tests before cargo check.".into(),
-                    status: "active".into(),
-                    confidence: 0.9,
-                    created_at: now,
-                    updated_at: now,
-                }],
+                vec![Knowledge::leaf(
+                    KnowledgePath::new(["engineering", "testing", "verification"]),
+                    "Verification workflow".into(),
+                    "Always run targeted tests before cargo check.".into(),
+                    0.9,
+                    "source",
+                    now,
+                )],
                 "v1\n\nRun tests.",
                 Vec::new(),
                 Vec::new(),

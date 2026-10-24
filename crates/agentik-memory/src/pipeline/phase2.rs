@@ -10,10 +10,11 @@ use super::MEMORY_SCOPE_ID;
 use super::error::{Error, Result};
 use super::prompting::{build_phase2_prompt, message_text};
 use crate::artifacts::{
-    MemoryConsolidation, MemoryEntryDraft, hash_source, normalize_summary, parse_json_object,
+    KnowledgeDraft, MemoryConsolidation, hash_source, normalize_summary, parse_json_object,
     redact_secrets,
 };
-use crate::store::{MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, SemanticObservation};
+use crate::knowledge::{Knowledge, KnowledgePath};
+use crate::store::{MemoryNote, MemoryStage1Record, MemoryStore, SemanticObservation};
 use crate::{MemoryConfig, now_ms};
 
 pub(super) async fn run(
@@ -32,10 +33,10 @@ pub(super) async fn run(
         .list_pending_notes(MEMORY_SCOPE_ID)
         .await
         .map_err(|e| Error::store("list memory notes", e))?;
-    let existing_entries = memory
-        .list_entries(MEMORY_SCOPE_ID, config.phase2_inputs)
+    let existing_nodes = memory
+        .list_knowledge(config.phase2_inputs)
         .await
-        .map_err(|e| Error::store("list memory entries", e))?;
+        .map_err(|e| Error::store("list knowledge nodes", e))?;
     let existing_summary = memory
         .get_summary(MEMORY_SCOPE_ID)
         .await
@@ -57,7 +58,7 @@ pub(super) async fn run(
     let prompt = build_phase2_prompt(
         &rows,
         &notes,
-        &existing_entries,
+        &existing_nodes,
         existing_summary
             .as_ref()
             .map(|summary| summary.summary_md.as_str())
@@ -75,7 +76,7 @@ pub(super) async fn run(
     match consolidation {
         Ok(output) => {
             let now = now_ms();
-            let entries = normalized_entries(output.entries, now);
+            let nodes = normalized_nodes(output.nodes, &source_hash, now);
             let summary = if output.summary.trim().is_empty() {
                 normalize_summary("No durable memories yet.")
             } else {
@@ -87,7 +88,7 @@ pub(super) async fn run(
                 .complete_phase2(
                     MEMORY_SCOPE_ID,
                     &source_hash,
-                    entries,
+                    nodes,
                     &summary,
                     observations,
                     consumed_note_ids,
@@ -130,34 +131,28 @@ fn build_observations(
         .collect()
 }
 
-fn normalized_entries(drafts: Vec<MemoryEntryDraft>, now: i64) -> Vec<MemoryEntry> {
-    drafts
-        .into_iter()
-        .filter_map(|draft| {
-            let title = draft.title.trim().to_string();
-            let body = redact_secrets(draft.body_md.trim());
-            if title.is_empty() || body.is_empty() {
-                return None;
-            }
-            let entry_type = match draft.entry_type.trim() {
-                "preference" | "workflow" | "failure_shield" | "task_map" => {
-                    draft.entry_type.trim().to_string()
-                }
-                _ => "workflow".to_string(),
-            };
-            Some(MemoryEntry {
-                id: Uuid::new_v4(),
-                scope_id: MEMORY_SCOPE_ID,
-                entry_type,
-                title,
-                body_md: body,
-                status: "active".to_string(),
-                confidence: draft.confidence.clamp(0.0, 1.0),
-                created_at: now,
-                updated_at: now,
-            })
-        })
-        .collect()
+fn normalized_nodes(drafts: Vec<KnowledgeDraft>, source_hash: &str, now: i64) -> Vec<Knowledge> {
+    let mut by_path = std::collections::BTreeMap::new();
+    for draft in drafts {
+        let title = draft.title.trim().to_string();
+        let body = redact_secrets(draft.body_md.trim());
+        let Some(path) = KnowledgePath::normalize(&draft.knowledge_path) else {
+            continue;
+        };
+        if title.is_empty() || body.is_empty() {
+            continue;
+        }
+        let node = Knowledge::leaf(
+            path.clone(),
+            title,
+            body,
+            draft.confidence.clamp(0.0, 1.0),
+            source_hash,
+            now,
+        );
+        by_path.insert(path, node);
+    }
+    by_path.into_values().collect()
 }
 
 fn normalize_predicate(raw: &str) -> String {

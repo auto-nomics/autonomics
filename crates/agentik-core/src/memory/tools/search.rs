@@ -47,10 +47,10 @@ impl ToolFunction for MemorySearchTool {
         if input.queries.iter().any(String::is_empty) {
             return Ok(ToolResult::error("memory search queries must not be empty"));
         }
-        let entries = self
+        let nodes = self
             .backend
             .store
-            .list_entries(MEMORY_SCOPE_ID, MAX_SEARCH_RESULTS * 10)
+            .list_knowledge(MAX_SEARCH_RESULTS * 10)
             .await
             .map_err(store_error)?;
         let notes = self
@@ -66,16 +66,23 @@ impl ToolFunction for MemorySearchTool {
             .clamp(1, MAX_SEARCH_RESULTS);
 
         let mut matches = Vec::new();
-        for entry in entries {
-            let haystack = format!("{}\n{}", entry.title, entry.body_md).to_lowercase();
+        for node in nodes {
+            let haystack = format!(
+                "{}\n{}\n{}",
+                node.knowledge_path.as_str(),
+                node.title,
+                node.body_md
+            )
+            .to_lowercase();
             if matches_queries(&input.queries, &haystack, require_all) {
                 matches.push(serde_json::json!({
-                    "kind": "entry",
-                    "id": entry.id,
-                    "entry_type": entry.entry_type,
-                    "title": entry.title,
-                    "snippet": snippet(&entry.body_md, &input.queries),
-                    "updated_at": entry.updated_at,
+                    "kind": "knowledge_node",
+                    "id": node.id,
+                    "knowledge_path": node.knowledge_path.as_str(),
+                    "title": node.title,
+                    "structural": node.structural,
+                    "snippet": snippet(&node.body_md, &input.queries),
+                    "updated_at": node.updated_at,
                 }));
                 if matches.len() >= max_results {
                     break;
@@ -150,7 +157,8 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry, MemoryStore, TursoMemoryStorage,
+        Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore,
+        TursoMemoryStorage,
     };
 
     use super::*;
@@ -169,17 +177,14 @@ mod tests {
             .complete_phase2(
                 MEMORY_SCOPE_ID,
                 "source",
-                vec![MemoryEntry {
-                    id: Uuid::new_v4(),
-                    scope_id: MEMORY_SCOPE_ID,
-                    entry_type: "workflow".into(),
-                    title: "Verification workflow".into(),
-                    body_md: "Always run targeted tests before cargo check.".into(),
-                    status: "active".into(),
-                    confidence: 0.9,
-                    created_at: now,
-                    updated_at: now,
-                }],
+                vec![Knowledge::leaf(
+                    KnowledgePath::new(["engineering", "testing", "verification"]),
+                    "Verification workflow".into(),
+                    "Always run targeted tests before cargo check.".into(),
+                    0.9,
+                    "source",
+                    now,
+                )],
                 "v1\n\nRun tests.",
                 Vec::new(),
                 Vec::new(),

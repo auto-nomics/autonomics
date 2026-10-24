@@ -1,19 +1,20 @@
 //! Turso-backed persistent memory repository.
+mod knowledge;
+mod memory_store;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tokio::sync::Mutex;
 use turso::{Builder, IntoParams, Value, params_from_iter};
 use uuid::Uuid;
 
 use super::error::{Error, Result};
-use crate::store::{
-    MemoryEntry, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
-};
+use crate::knowledge::{Knowledge, KnowledgePath};
+use crate::store::{MemoryNote, MemoryStage1Record, MemorySummary, SemanticObservation};
 
 const MIGRATION_MARKER: &str = "legacy_agent_db_memory_migrated_v1";
+const KNOWLEDGE_TREE_MIGRATION_MARKER: &str = "memory_entries_to_knowledge_nodes_v1";
 
 #[derive(Clone)]
 pub struct TursoMemoryStorage {
@@ -120,10 +121,20 @@ fn row_to_stage1(row: &turso::Row) -> Result<MemoryStage1Record> {
     })
 }
 
-fn row_to_entry(row: &turso::Row) -> Result<MemoryEntry> {
-    Ok(MemoryEntry {
+struct LegacyMemoryEntry {
+    id: Uuid,
+    entry_type: String,
+    title: String,
+    body_md: String,
+    status: String,
+    confidence: f64,
+    created_at: i64,
+    updated_at: i64,
+}
+
+fn row_to_entry(row: &turso::Row) -> Result<LegacyMemoryEntry> {
+    Ok(LegacyMemoryEntry {
         id: parse_uuid(text(row, 0)?, "entry_id")?,
-        scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
         entry_type: text(row, 2)?,
         title: text(row, 3)?,
         body_md: text(row, 4)?,
@@ -132,6 +143,31 @@ fn row_to_entry(row: &turso::Row) -> Result<MemoryEntry> {
         created_at: int(row, 7)?,
         updated_at: int(row, 8)?,
     })
+}
+
+fn row_to_knowledge(row: &turso::Row) -> Result<Knowledge> {
+    let id = text(row, 0)?;
+    let segments = text(row, 2)?
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    Ok(Knowledge::new(
+        parse_uuid(id.clone(), "knowledge_id")?,
+        opt_text(row, 1)?
+            .map(|value| parse_uuid(value, "parent_id"))
+            .transpose()?,
+        KnowledgePath::from_segments(segments)
+            .ok_or_else(|| Error::Storage(format!("invalid knowledge path in row {id}")))?,
+        text(row, 3)?,
+        text(row, 4)?,
+        text(row, 5)?,
+        real(row, 6)?,
+        text(row, 7)?,
+        int(row, 8)? != 0,
+        int(row, 9)?,
+        int(row, 10)?,
+    ))
 }
 
 fn row_to_summary(row: &turso::Row) -> Result<MemorySummary> {
@@ -254,6 +290,22 @@ impl TursoMemoryStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_status
                     ON memory_entries(scope_id, status, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_nodes (
+                    id TEXT PRIMARY KEY,
+                    parent_id TEXT,
+                    knowledge_path TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body_md TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    structural INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(knowledge_path)
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_parent
+                    ON knowledge_nodes(parent_id);
                 CREATE TABLE IF NOT EXISTS memory_summaries (
                     scope_id TEXT PRIMARY KEY,
                     schema_version TEXT NOT NULL,
@@ -293,7 +345,284 @@ impl TursoMemoryStorage {
                 "#,
             )
             .await
-            .map_err(db_err)
+            .map_err(db_err)?;
+        self.migrate_knowledge_nodes_to_global_schema().await?;
+        self.conn
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_status
+                    ON knowledge_nodes(status, updated_at DESC);",
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn knowledge_nodes_have_scope_column(&self) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM pragma_table_info('knowledge_nodes') WHERE name = 'scope_id'",
+                (),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    /// Convert the transitional scoped knowledge tree to the global schema.
+    ///
+    /// The tree is intentionally global: its namespace is `knowledge_path`.
+    /// Legacy memory jobs and notes remain scoped until their pipeline is
+    /// migrated, but knowledge-tree identity no longer carries a scope.
+    async fn migrate_knowledge_nodes_to_global_schema(&self) -> Result<()> {
+        if !self.knowledge_nodes_have_scope_column().await? {
+            return Ok(());
+        }
+
+        let mut scopes = self
+            .conn
+            .query("SELECT COUNT(DISTINCT scope_id) FROM knowledge_nodes", ())
+            .await
+            .map_err(db_err)?;
+        let scope_count = match scopes.next().await.map_err(db_err)? {
+            Some(row) => int(&row, 0)?,
+            None => 0,
+        };
+        if scope_count > 1 {
+            return Err(Error::Storage(format!(
+                "cannot collapse {scope_count} knowledge scopes into one global tree"
+            )));
+        }
+
+        self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
+        let result = async {
+            self.conn
+                .execute("DROP INDEX IF EXISTS idx_knowledge_nodes_parent", ())
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute(
+                    "ALTER TABLE knowledge_nodes RENAME TO knowledge_nodes_scoped",
+                    (),
+                )
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute_batch(
+                    "CREATE TABLE knowledge_nodes (
+                        id TEXT PRIMARY KEY,
+                        parent_id TEXT,
+                        knowledge_path TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        body_md TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        source_hash TEXT NOT NULL,
+                        structural INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        UNIQUE(knowledge_path)
+                    );",
+                )
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute(
+                    "INSERT INTO knowledge_nodes
+                        (id, parent_id, knowledge_path, title, body_md, status, confidence,
+                         source_hash, structural, created_at, updated_at)
+                     SELECT id, parent_id, knowledge_path, title, body_md, status, confidence,
+                            source_hash, structural, created_at, updated_at
+                     FROM knowledge_nodes_scoped",
+                    (),
+                )
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute("DROP TABLE knowledge_nodes_scoped", ())
+                .await
+                .map_err(db_err)?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
+                self.conn
+                    .execute_batch(
+                        "CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_parent
+                            ON knowledge_nodes(parent_id);",
+                    )
+                    .await
+                    .map_err(db_err)?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
+    }
+
+    pub(super) async fn ensure_knowledge_node(&self, node: &Knowledge) -> Result<Uuid> {
+        let mut chain = vec![node.clone()];
+        while let Some(parent_path) = chain
+            .last()
+            .and_then(|current| current.knowledge_path.parent())
+        {
+            let parent = Knowledge::structural(parent_path, node.updated_at);
+            chain.push(parent);
+        }
+        chain.reverse();
+
+        let mut parent_id = None;
+        for current in chain {
+            parent_id = Some(self.upsert_knowledge_node(&current, parent_id).await?);
+        }
+        parent_id.ok_or_else(|| Error::Storage("knowledge node chain was empty".into()))
+    }
+
+    async fn knowledge_node_id_by_path(&self, path: &KnowledgePath) -> Result<Option<Uuid>> {
+        let mut existing = self
+            .conn
+            .query(
+                "SELECT id FROM knowledge_nodes WHERE knowledge_path = ?1",
+                params_from_iter([Value::Text(path.as_str())]),
+            )
+            .await
+            .map_err(db_err)?;
+        match existing.next().await.map_err(db_err)? {
+            Some(row) => Ok(Some(parse_uuid(text(&row, 0)?, "knowledge_id")?)),
+            None => Ok(None),
+        }
+    }
+
+    async fn upsert_knowledge_node(
+        &self,
+        node: &Knowledge,
+        parent_id: Option<Uuid>,
+    ) -> Result<Uuid> {
+        if let Some(id) = self.knowledge_node_id_by_path(&node.knowledge_path).await? {
+            if node.structural {
+                self.conn
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET title = ?1, status = 'active', updated_at = ?2
+                         WHERE id = ?3",
+                        params_from_iter([
+                            Value::Text(node.title.clone()),
+                            Value::Integer(node.updated_at),
+                            uuid_value(id),
+                        ]),
+                    )
+                    .await
+                    .map_err(db_err)?;
+            } else {
+                self.conn
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET title = ?1, body_md = ?2, status = 'active', confidence = ?3,
+                             source_hash = ?4, structural = 0, updated_at = ?5
+                         WHERE id = ?6",
+                        params_from_iter([
+                            Value::Text(node.title.clone()),
+                            Value::Text(node.body_md.clone()),
+                            Value::Real(node.confidence),
+                            Value::Text(node.source_hash.clone()),
+                            Value::Integer(node.updated_at),
+                            uuid_value(id),
+                        ]),
+                    )
+                    .await
+                    .map_err(db_err)?;
+            }
+            return Ok(id);
+        }
+
+        self.conn
+            .execute(
+                "INSERT INTO knowledge_nodes
+                    (id, parent_id, knowledge_path, title, body_md, status,
+                     confidence, source_hash, structural, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                params_from_iter([
+                    uuid_value(node.id),
+                    parent_id.map(uuid_value).unwrap_or(Value::Null),
+                    Value::Text(node.knowledge_path.as_str()),
+                    Value::Text(node.title.clone()),
+                    Value::Text(node.body_md.clone()),
+                    Value::Text(node.status.clone()),
+                    Value::Real(node.confidence),
+                    Value::Text(node.source_hash.clone()),
+                    Value::Integer(i64::from(node.structural)),
+                    Value::Integer(node.updated_at),
+                ]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(node.id)
+    }
+
+    async fn migrate_legacy_entries_to_knowledge_nodes(&self) -> Result<()> {
+        let mut marker = self
+            .conn
+            .query(
+                "SELECT value FROM memory_storage_metadata WHERE key = ?1",
+                params_from_iter([Value::Text(KNOWLEDGE_TREE_MIGRATION_MARKER.into())]),
+            )
+            .await
+            .map_err(db_err)?;
+        if marker.next().await.map_err(db_err)?.is_some() {
+            return Ok(());
+        }
+
+        let entries = self
+            .collect(
+                "SELECT id, scope_id, entry_type, title, body_md, status, confidence,
+                        created_at, updated_at
+                 FROM memory_entries WHERE status = 'active'
+                 ORDER BY updated_at DESC, id ASC",
+                vec![],
+                row_to_entry,
+            )
+            .await?;
+        for entry in entries {
+            let root = match entry.entry_type.as_str() {
+                "preference" => "/agent/preferences",
+                "failure_shield" => "/operations/failure-shields",
+                "task_map" => "/architecture/task-maps",
+                _ => "/engineering/workflows",
+            };
+            let segment = crate::artifacts::normalize_slug(Some(&entry.title), entry.id);
+            let proposed = format!("{}/{}", root, segment);
+            let path = KnowledgePath::normalize(&proposed)
+                .or_else(|| KnowledgePath::normalize(&format!("{}/{}", root, entry.id)))
+                .ok_or_else(|| Error::Storage("generate legacy knowledge path".into()))?;
+            let node = Knowledge::new(
+                entry.id,
+                None,
+                path,
+                entry.title,
+                entry.body_md,
+                entry.status,
+                entry.confidence,
+                String::new(),
+                false,
+                entry.created_at,
+                entry.updated_at,
+            );
+            self.ensure_knowledge_node(&node).await?;
+        }
+
+        self.conn
+            .execute(
+                "INSERT INTO memory_storage_metadata(key, value) VALUES (?1, 'migrated')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params_from_iter([Value::Text(KNOWLEDGE_TREE_MIGRATION_MARKER.into())]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 
     /// Copy legacy in-agent.db memory tables into this knowledge database.
@@ -318,10 +647,12 @@ impl TursoMemoryStorage {
             .map_err(db_err)?;
         let mut marker = marker;
         if marker.next().await.map_err(db_err)?.is_some() {
+            self.migrate_legacy_entries_to_knowledge_nodes().await?;
             return Ok(());
         }
         if !Path::new(&path).exists() {
             self.set_migration_marker().await?;
+            self.migrate_legacy_entries_to_knowledge_nodes().await?;
             return Ok(());
         }
 
@@ -441,6 +772,7 @@ impl TursoMemoryStorage {
         match result {
             Ok(()) => {
                 self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
+                self.migrate_legacy_entries_to_knowledge_nodes().await?;
                 Ok(())
             }
             Err(error) => {
@@ -521,519 +853,12 @@ impl TursoMemoryStorage {
     }
 }
 
-#[async_trait]
-impl MemoryStore for TursoMemoryStorage {
-    async fn get_stage1_output(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
-                        status, generated_at, lease_until
-                 FROM memory_stage1 WHERE scope_id = ?1 AND session_id = ?2",
-                params_from_iter([uuid_value(scope_id), uuid_value(session_id)]),
-            )
-            .await
-            .map_err(db_err)?;
-        match rows.next().await.map_err(db_err)? {
-            Some(row) => Ok(Some(row_to_stage1(&row)?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn claim_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        let changed = self
-            .conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts, updated_at)
-                 VALUES (?1, ?2, ?3, '', '', NULL, 'running', 0, ?4, 1, ?5)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    status = 'running',
-                    lease_until = excluded.lease_until,
-                    attempts = memory_stage1.attempts + 1,
-                    updated_at = excluded.updated_at
-                 WHERE memory_stage1.source_hash <> excluded.source_hash
-                    OR memory_stage1.status = 'failed'
-                    OR (memory_stage1.status = 'running'
-                        AND memory_stage1.lease_until <= excluded.updated_at)",
-                params_from_iter([
-                    uuid_value(scope_id),
-                    uuid_value(session_id),
-                    Value::Text(source_hash.into()),
-                    Value::Integer(lease_until),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(changed > 0)
-    }
-
-    async fn complete_stage1(&self, scope_id: Uuid, output: MemoryStage1Record) -> Result<()> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'succeeded', ?7, 0, 1, ?8)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    raw_memory = excluded.raw_memory,
-                    rollout_summary = excluded.rollout_summary,
-                    rollout_slug = excluded.rollout_slug,
-                    status = 'succeeded',
-                    generated_at = excluded.generated_at,
-                    lease_until = 0,
-                    attempts = memory_stage1.attempts + 1,
-                    last_error = NULL,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    uuid_value(scope_id),
-                    uuid_value(output.session_id),
-                    Value::Text(output.source_hash),
-                    Value::Text(output.raw_memory),
-                    Value::Text(output.rollout_summary),
-                    output.rollout_slug.map(Value::Text).unwrap_or(Value::Null),
-                    Value::Integer(output.generated_at),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(())
-    }
-
-    async fn fail_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<()> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_stage1
-                    (scope_id, session_id, source_hash, raw_memory, rollout_summary,
-                     rollout_slug, status, generated_at, lease_until, attempts,
-                     last_error, updated_at)
-                 VALUES (?1, ?2, ?3, '', '', NULL, 'failed', 0, 0, 1, ?4, ?5)
-                 ON CONFLICT(scope_id, session_id) DO UPDATE SET
-                    source_hash = excluded.source_hash,
-                    status = 'failed',
-                    lease_until = 0,
-                    attempts = memory_stage1.attempts + 1,
-                    last_error = excluded.last_error,
-                    updated_at = excluded.updated_at",
-                params_from_iter([
-                    uuid_value(scope_id),
-                    uuid_value(session_id),
-                    Value::Text(source_hash.into()),
-                    Value::Text(error.into()),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(())
-    }
-
-    async fn list_stage1_outputs(
-        &self,
-        scope_id: Uuid,
-        limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>> {
-        self.collect(
-            "SELECT session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
-                    status, generated_at, lease_until
-             FROM memory_stage1
-             WHERE scope_id = ?1 AND status = 'succeeded'
-             ORDER BY generated_at DESC, session_id DESC LIMIT ?2",
-            vec![uuid_value(scope_id), Value::Integer(limit as i64)],
-            row_to_stage1,
-        )
-        .await
-    }
-
-    async fn claim_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        let changed = self
-            .conn
-            .execute(
-                "INSERT INTO memory_jobs
-                    (scope_id, status, source_hash, lease_until, attempts, updated_at)
-                 VALUES (?1, 'running', ?2, ?3, 1, ?4)
-                 ON CONFLICT(scope_id) DO UPDATE SET
-                    status = 'running',
-                    source_hash = excluded.source_hash,
-                    lease_until = excluded.lease_until,
-                    attempts = memory_jobs.attempts + 1,
-                    last_error = NULL,
-                    updated_at = excluded.updated_at
-                 WHERE NOT (memory_jobs.status = 'succeeded'
-                        AND memory_jobs.source_hash = excluded.source_hash)
-                    AND (memory_jobs.status <> 'running'
-                        OR memory_jobs.lease_until <= excluded.updated_at)",
-                params_from_iter([
-                    uuid_value(scope_id),
-                    Value::Text(source_hash.into()),
-                    Value::Integer(lease_until),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(changed > 0)
-    }
-
-    async fn complete_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        entries: Vec<MemoryEntry>,
-        summary_md: &str,
-        observations: Vec<SemanticObservation>,
-        consumed_note_ids: Vec<Uuid>,
-    ) -> Result<()> {
-        let now = crate::now_ms();
-        self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
-        let result = async {
-            self.conn
-                .execute(
-                    "UPDATE memory_entries SET status = 'superseded', updated_at = ?1
-                     WHERE scope_id = ?2 AND status = 'active'",
-                    params_from_iter([Value::Integer(now), uuid_value(scope_id)]),
-                )
-                .await
-                .map_err(db_err)?;
-
-            for entry in entries {
-                self.conn
-                    .execute(
-                        "INSERT INTO memory_entries
-                            (id, scope_id, entry_type, title, body_md, status,
-                             confidence, created_at, updated_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?7)",
-                        params_from_iter([
-                            uuid_value(entry.id),
-                            uuid_value(scope_id),
-                            Value::Text(entry.entry_type),
-                            Value::Text(entry.title),
-                            Value::Text(entry.body_md),
-                            Value::Real(entry.confidence),
-                            Value::Integer(now),
-                        ]),
-                    )
-                    .await
-                    .map_err(db_err)?;
-            }
-
-            self.conn
-                .execute(
-                    "INSERT INTO memory_summaries
-                        (scope_id, schema_version, summary_md, source_hash, generated_at)
-                     VALUES (?1, 'v1', ?2, ?3, ?4)
-                     ON CONFLICT(scope_id) DO UPDATE SET
-                        schema_version = 'v1',
-                        summary_md = excluded.summary_md,
-                        source_hash = excluded.source_hash,
-                        generated_at = excluded.generated_at",
-                    params_from_iter([
-                        uuid_value(scope_id),
-                        Value::Text(summary_md.into()),
-                        Value::Text(source_hash.into()),
-                        Value::Integer(now),
-                    ]),
-                )
-                .await
-                .map_err(db_err)?;
-
-            for observation in observations {
-                let mut existing = self
-                    .conn
-                    .query(
-                        "SELECT id FROM memory_semantic_observations
-                         WHERE scope_id = ?1 AND subject = ?2 AND predicate = ?3 AND object = ?4",
-                        params_from_iter([
-                            uuid_value(scope_id),
-                            Value::Text(observation.subject.clone()),
-                            Value::Text(observation.predicate.clone()),
-                            Value::Text(observation.object.clone()),
-                        ]),
-                    )
-                    .await
-                    .map_err(db_err)?;
-                let existing_id = match existing.next().await.map_err(db_err)? {
-                    Some(row) => parse_uuid(text(&row, 0)?, "observation_id")?,
-                    None => Uuid::nil(),
-                };
-                if existing_id != Uuid::nil() {
-                    self.conn
-                        .execute(
-                            "UPDATE memory_semantic_observations SET
-                                content = ?1, status = 'candidate', confidence = ?2,
-                                source_hash = ?3, created_at = ?4, last_error = NULL
-                             WHERE id = ?5 AND scope_id = ?6",
-                            params_from_iter([
-                                Value::Text(observation.content),
-                                Value::Real(observation.confidence),
-                                Value::Text(observation.source_hash),
-                                Value::Integer(observation.created_at),
-                                uuid_value(existing_id),
-                                uuid_value(scope_id),
-                            ]),
-                        )
-                        .await
-                        .map_err(db_err)?;
-                    continue;
-                }
-                self.conn
-                    .execute(
-                        "INSERT INTO memory_semantic_observations
-                            (id, scope_id, subject, predicate, object, content, status,
-                             confidence, source_hash, created_at, last_error)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'candidate', ?7, ?8, ?9, NULL)",
-                        params_from_iter([
-                            uuid_value(observation.id),
-                            uuid_value(scope_id),
-                            Value::Text(observation.subject),
-                            Value::Text(observation.predicate),
-                            Value::Text(observation.object),
-                            Value::Text(observation.content),
-                            Value::Real(observation.confidence),
-                            Value::Text(observation.source_hash),
-                            Value::Integer(now),
-                        ]),
-                    )
-                    .await
-                    .map_err(db_err)?;
-            }
-
-            for note_id in consumed_note_ids {
-                self.conn
-                    .execute(
-                        "UPDATE memory_notes SET status = 'consumed' WHERE id = ?1 AND scope_id = ?2",
-                        params_from_iter([uuid_value(note_id), uuid_value(scope_id)]),
-                    )
-                    .await
-                    .map_err(db_err)?;
-            }
-
-            self.conn
-                .execute(
-                    "INSERT INTO memory_jobs
-                        (scope_id, status, source_hash, lease_until, attempts, updated_at)
-                     VALUES (?1, 'succeeded', ?2, 0, 1, ?3)
-                     ON CONFLICT(scope_id) DO UPDATE SET
-                        status = 'succeeded', source_hash = excluded.source_hash,
-                        lease_until = 0, last_error = NULL, updated_at = excluded.updated_at",
-                    params_from_iter([
-                        uuid_value(scope_id),
-                        Value::Text(source_hash.into()),
-                        Value::Integer(now),
-                    ]),
-                )
-                .await
-                .map_err(db_err)?;
-            Ok(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
-                Ok(())
-            }
-            Err(error) => {
-                let _ = self.conn.execute("ROLLBACK", ()).await;
-                Err(error)
-            }
-        }
-    }
-
-    async fn fail_phase2(&self, scope_id: Uuid, source_hash: &str, error: &str) -> Result<()> {
-        let updated_at = chrono::Utc::now().timestamp_millis();
-        self.conn
-            .execute(
-                "INSERT INTO memory_jobs
-                    (scope_id, status, source_hash, lease_until, attempts, last_error, updated_at)
-                 VALUES (?1, 'failed', ?2, 0, 1, ?3, ?4)
-                 ON CONFLICT(scope_id) DO UPDATE SET
-                    status = 'failed', source_hash = excluded.source_hash,
-                    lease_until = 0, attempts = memory_jobs.attempts + 1,
-                    last_error = excluded.last_error, updated_at = excluded.updated_at",
-                params_from_iter([
-                    uuid_value(scope_id),
-                    Value::Text(source_hash.into()),
-                    Value::Text(error.into()),
-                    Value::Integer(updated_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(())
-    }
-
-    async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT scope_id, schema_version, summary_md, source_hash, generated_at
-                 FROM memory_summaries WHERE scope_id = ?1",
-                params_from_iter([uuid_value(scope_id)]),
-            )
-            .await
-            .map_err(db_err)?;
-        match rows.next().await.map_err(db_err)? {
-            Some(row) => Ok(Some(row_to_summary(&row)?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn list_entries(&self, scope_id: Uuid, limit: usize) -> Result<Vec<MemoryEntry>> {
-        self.collect(
-            "SELECT id, scope_id, entry_type, title, body_md, status, confidence,
-                    created_at, updated_at
-             FROM memory_entries WHERE scope_id = ?1 AND status = 'active'
-             ORDER BY updated_at DESC, title ASC LIMIT ?2",
-            vec![uuid_value(scope_id), Value::Integer(limit as i64)],
-            row_to_entry,
-        )
-        .await
-    }
-
-    async fn get_entry(&self, scope_id: Uuid, entry_id: Uuid) -> Result<Option<MemoryEntry>> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT id, scope_id, entry_type, title, body_md, status, confidence,
-                        created_at, updated_at
-                 FROM memory_entries WHERE scope_id = ?1 AND id = ?2",
-                params_from_iter([uuid_value(scope_id), uuid_value(entry_id)]),
-            )
-            .await
-            .map_err(db_err)?;
-        match rows.next().await.map_err(db_err)? {
-            Some(row) => Ok(Some(row_to_entry(&row)?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>> {
-        self.collect(
-            "SELECT id, scope_id, slug, content, status, created_at
-             FROM memory_notes WHERE scope_id = ?1 AND status = 'pending'
-             ORDER BY created_at ASC, id ASC",
-            vec![uuid_value(scope_id)],
-            row_to_note,
-        )
-        .await
-    }
-
-    async fn insert_note(&self, scope_id: Uuid, slug: &str, content: &str) -> Result<MemoryNote> {
-        let note = MemoryNote {
-            id: Uuid::new_v4(),
-            scope_id,
-            slug: slug.into(),
-            content: content.into(),
-            status: "pending".into(),
-            created_at: crate::now_ms(),
-        };
-        self.conn
-            .execute(
-                "INSERT INTO memory_notes
-                    (id, scope_id, slug, content, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
-                params_from_iter([
-                    uuid_value(note.id),
-                    uuid_value(note.scope_id),
-                    Value::Text(note.slug.clone()),
-                    Value::Text(note.content.clone()),
-                    Value::Integer(note.created_at),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        Ok(note)
-    }
-
-    async fn list_observations(
-        &self,
-        scope_id: Uuid,
-        status: &str,
-        limit: usize,
-    ) -> Result<Vec<SemanticObservation>> {
-        self.collect(
-            "SELECT id, scope_id, subject, predicate, object, content, status,
-                    confidence, source_hash, created_at, last_error
-             FROM memory_semantic_observations
-             WHERE scope_id = ?1 AND status = ?2
-             ORDER BY created_at DESC, id DESC LIMIT ?3",
-            vec![
-                uuid_value(scope_id),
-                Value::Text(status.into()),
-                Value::Integer(limit as i64),
-            ],
-            row_to_observation,
-        )
-        .await
-    }
-
-    async fn set_observation_status(
-        &self,
-        scope_id: Uuid,
-        observation_id: Uuid,
-        status: &str,
-        error: Option<&str>,
-    ) -> Result<()> {
-        let changed = self
-            .conn
-            .execute(
-                "UPDATE memory_semantic_observations
-                 SET status = ?1, last_error = ?2 WHERE scope_id = ?3 AND id = ?4",
-                params_from_iter([
-                    Value::Text(status.into()),
-                    error
-                        .map(|value| Value::Text(value.into()))
-                        .unwrap_or(Value::Null),
-                    uuid_value(scope_id),
-                    uuid_value(observation_id),
-                ]),
-            )
-            .await
-            .map_err(db_err)?;
-        if changed == 0 {
-            return Err(Error::Storage(format!(
-                "semantic observation {observation_id} not found"
-            )));
-        }
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::MEMORY_SCOPE_ID;
+    use crate::store::MemoryStore;
+    use crate::store::knowledge_store::KnowledgeStore;
 
     #[tokio::test]
     async fn opens_schema_and_stores_notes() {
@@ -1054,20 +879,119 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrates_legacy_agent_memory_tables_once() {
-        let dir = std::env::temp_dir().join(format!("agentik-memory-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let source_path = dir.join("agent.db");
-        let destination_path = dir.join("knowledge.db");
+    async fn phase2_upserts_nodes_by_knowledge_path() {
+        let store = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let path = KnowledgePath::normalize("/engineering/testing/verification").unwrap();
+        let first = Knowledge::leaf(
+            path.clone(),
+            "Verification workflow".into(),
+            "Run targeted tests.".into(),
+            0.8,
+            "source-a",
+            crate::now_ms(),
+        );
+        let first_id = first.id;
+        store
+            .complete_phase2(
+                MEMORY_SCOPE_ID,
+                "source-a",
+                vec![first],
+                "v1\n\nfirst",
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
 
-        let source = TursoMemoryStorage::open(&source_path).await.unwrap();
+        let updated = Knowledge::leaf(
+            path.clone(),
+            "Verification workflow".into(),
+            "Run targeted tests before check.".into(),
+            0.9,
+            "source-b",
+            crate::now_ms(),
+        );
+        let branch = Knowledge::leaf(
+            KnowledgePath::normalize("/engineering/testing/database-migrations").unwrap(),
+            "Database migrations".into(),
+            "Use idempotent migrations.".into(),
+            0.9,
+            "source-b",
+            crate::now_ms(),
+        );
+        store
+            .complete_phase2(
+                MEMORY_SCOPE_ID,
+                "source-b",
+                vec![updated, branch],
+                "v1\n\nsecond",
+                Vec::new(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+        let nodes = store.list_knowledge(100).await.unwrap();
+        let verification = nodes
+            .iter()
+            .find(|node| node.knowledge_path == path)
+            .unwrap();
+        assert_eq!(verification.id, first_id);
+        assert!(verification.body_md.contains("before check"));
+        assert_eq!(
+            nodes.iter().filter(|node| node.structural).count(),
+            2,
+            "engineering and testing structure nodes are absent or wrong"
+        );
+    }
+
+    #[tokio::test]
+    async fn migrates_active_legacy_entries_to_knowledge_nodes() {
+        let destination = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let entry_id = Uuid::new_v4();
+        destination
+            .conn
+            .execute(
+                "INSERT INTO memory_entries
+                    (id, scope_id, entry_type, title, body_md, status, confidence,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, 'failure_shield', 'Torn WAL Recovery', ?3, 'active', 0.9, 1, 2)",
+                params_from_iter([
+                    uuid_value(entry_id),
+                    uuid_value(MEMORY_SCOPE_ID),
+                    Value::Text("Use sqlite3 instead of Turso for recovery.".into()),
+                ]),
+            )
+            .await
+            .unwrap();
+        destination
+            .migrate_legacy_entries_to_knowledge_nodes()
+            .await
+            .unwrap();
+        let nodes = destination.list_knowledge(100).await.unwrap();
+        let entry = nodes.iter().find(|node| node.id == entry_id).unwrap();
+        assert_eq!(
+            entry.knowledge_path.as_str(),
+            "/operations/failure-shields/torn-wal-recovery"
+        );
+        assert!(entry.body_md.contains("sqlite3"));
+        assert!(nodes.iter().any(|node| node.structural));
+    }
+
+    #[tokio::test]
+    async fn migrates_legacy_agent_memory_tables_once() {
+        let source = TursoMemoryStorage::open_in_memory().await.unwrap();
+        let destination = TursoMemoryStorage::open_in_memory().await.unwrap();
         source
             .insert_note(MEMORY_SCOPE_ID, "legacy", "old memory")
             .await
             .unwrap();
-        let destination = TursoMemoryStorage::open(&destination_path).await.unwrap();
         destination
-            .migrate_from_agent_db(&source_path)
+            .copy_table(
+                &*source.conn.0.lock().await,
+                "memory_notes",
+                &["id", "scope_id", "slug", "content", "status", "created_at"],
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -1085,7 +1009,16 @@ mod tests {
             .await
             .unwrap();
         destination
-            .migrate_from_agent_db(&source_path)
+            .conn
+            .execute(
+                "INSERT INTO memory_storage_metadata(key, value)
+                 VALUES ('legacy_agent_db_memory_migrated_v1', 'test')",
+                (),
+            )
+            .await
+            .unwrap();
+        destination
+            .migrate_from_agent_db("/definitely/missing/agentik/source.db")
             .await
             .unwrap();
         assert_eq!(
@@ -1096,9 +1029,5 @@ mod tests {
                 .len(),
             1
         );
-
-        let _ = std::fs::remove_file(&source_path);
-        let _ = std::fs::remove_file(&destination_path);
-        let _ = std::fs::remove_dir(&dir);
     }
 }
