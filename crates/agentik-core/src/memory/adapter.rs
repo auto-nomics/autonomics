@@ -64,8 +64,7 @@ mod tests {
     use std::sync::Arc;
 
     use agentik_kms::{
-        KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage,
-        run_memory_pipeline,
+        KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage, run_memory_pipeline,
     };
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
@@ -128,11 +127,7 @@ mod tests {
         run_memory_pipeline(agent_id, source.clone(), memory.clone(), model.clone()).await;
         run_memory_pipeline(agent_id, source, memory.clone(), model).await;
 
-        let rows = memory
-            .store()
-            .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
-            .await
-            .unwrap();
+        let rows = memory.store().list_stage1_outputs(10).await.unwrap();
         assert_eq!(rows.len(), 1);
         let nodes = memory.store().list_knowledge(10).await.unwrap();
         assert_eq!(nodes.iter().filter(|node| !node.structural).count(), 1);
@@ -141,16 +136,11 @@ mod tests {
                 .iter()
                 .any(|node| node.body_md.contains("targeted tests"))
         );
-        let summary = memory
-            .store()
-            .get_summary(MEMORY_SCOPE_ID)
-            .await
-            .unwrap()
-            .unwrap();
+        let summary = memory.store().get_summary().await.unwrap().unwrap();
         assert!(summary.summary_md.starts_with("v1\n"));
         let observations = memory
             .store()
-            .list_observations(MEMORY_SCOPE_ID, "candidate", 10)
+            .list_observations("candidate", 10)
             .await
             .unwrap();
         assert_eq!(observations.len(), 1);

@@ -87,8 +87,8 @@ pub(super) fn build_phase2_prompt(
          such as /user/preferences/language or /statistics/regression/linear-regression. \
          Do not output a type field. Reuse an existing path exactly when rewriting that node; \
          create a child or sibling path for a new domain; use a deeper branch when conflicting \
-         guidance needs scoped variants. Merge duplicates, remove stale guidance, preserve \
-         scope, redact secrets, and do not invent verification. summary starts with v1 and is \
+         guidance needs path-specific variants. Merge duplicates, remove stale guidance, \
+         redact secrets, and do not invent verification. summary starts with v1 and is \
          compact. semantic_updates contain subject, predicate (snake_case), object, content, \
          and confidence; emit them only for durable entity or workflow relationships.\n\n\
          RAW MEMORIES\n{raw}\nUSER UPDATE NOTES\n{notes}\nEXISTING KNOWLEDGE TREE\n{existing_nodes}\n\

@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID};
+use crate::memory::KmsAgentHandle;
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -56,7 +56,7 @@ impl ToolFunction for MemorySearchTool {
         let notes = self
             .backend
             .store()
-            .list_pending_notes(MEMORY_SCOPE_ID)
+            .list_pending_notes()
             .await
             .map_err(store_error)?;
         let require_all = input.match_mode.as_deref().unwrap_or("any") == "all";
@@ -157,8 +157,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        KmsAgentHandle, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore,
-        TursoKmsStorage,
+        KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore, TursoKmsStorage,
     };
 
     use super::*;
@@ -170,7 +169,6 @@ mod tests {
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "source",
                 vec![Knowledge::leaf(
                     KnowledgePath::new(["engineering", "testing", "verification"]),
@@ -187,11 +185,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .insert_note(
-                MEMORY_SCOPE_ID,
-                "pending-note",
-                "Remember release checklist",
-            )
+            .insert_note("pending-note", "Remember release checklist")
             .await
             .unwrap();
 

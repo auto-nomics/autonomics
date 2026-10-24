@@ -88,7 +88,7 @@
                 <mxCell id="p2_load" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Load stage1 (≤100)&#xa;+ pending memory_notes&#xa;+ existing knowledge tree&#xa;+ existing summary" vertex="1">
                     <mxGeometry height="80" width="190" x="280" y="630" as="geometry"/>
                 </mxCell>
-                <mxCell id="p2_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_phase2&#xa;(global lease per scope)" vertex="1">
+                <mxCell id="p2_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_phase2&#xa;(global singleton lease)" vertex="1">
                     <mxGeometry height="50" width="190" x="280" y="740" as="geometry"/>
                 </mxCell>
                 <mxCell id="p2_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Route knowledge tree&#xa;nodes[knowledge_path] + summary&#xa;+ semantic_updates[] (rewrite/create/branch)" vertex="1">
@@ -121,7 +121,7 @@
                 <mxCell id="entries_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="knowledge_nodes&#xa;(tree: parent_id + knowledge_path&#xa;active / superseded)" vertex="1">
                     <mxGeometry height="80" width="160" x="490" y="915" as="geometry"/>
                 </mxCell>
-                <mxCell id="summary_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_summaries&#xa;(v1, per scope)" vertex="1">
+                <mxCell id="summary_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_summaries&#xa;(v1, global singleton)" vertex="1">
                     <mxGeometry height="80" width="160" x="210" y="915" as="geometry"/>
                 </mxCell>
                 <mxCell id="obs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_semantic_observations&#xa;(candidate relation triples for future graph layer)" vertex="1">

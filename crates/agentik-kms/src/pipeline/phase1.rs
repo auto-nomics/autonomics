@@ -7,7 +7,6 @@ use arc_swap::ArcSwapOption;
 use chrono::Utc;
 use uuid::Uuid;
 
-use super::MEMORY_SCOPE_ID;
 use super::error::{Error, Result};
 use super::prompting::{build_phase1_prompt, parse_extraction};
 use crate::artifacts::{hash_source, normalize_slug, redact_secrets, render_transcript};
@@ -49,7 +48,7 @@ pub(super) async fn run(
         let serialized = serde_json::to_string(&messages).map_err(Error::serialization)?;
         let source_hash = hash_source(&serialized);
         let previous = memory
-            .get_stage1_output(MEMORY_SCOPE_ID, record.session_id)
+            .get_stage1_output(record.session_id)
             .await
             .map_err(|e| Error::store("load memory stage 1", e))?;
         if previous.is_some_and(|row| {
@@ -61,12 +60,7 @@ pub(super) async fn run(
         }
         let lease_until = now_ms() + config.lease_seconds * 1000;
         if !memory
-            .claim_stage1(
-                MEMORY_SCOPE_ID,
-                record.session_id,
-                &source_hash,
-                lease_until,
-            )
+            .claim_stage1(record.session_id, &source_hash, lease_until)
             .await
             .map_err(|e| Error::store("claim memory stage 1", e))?
         {
@@ -99,18 +93,13 @@ pub(super) async fn run(
                     lease_until: 0,
                 };
                 memory
-                    .complete_stage1(MEMORY_SCOPE_ID, output)
+                    .complete_stage1(output)
                     .await
                     .map_err(|e| Error::store("save memory stage 1", e))?;
             }
             Err(error) => {
                 memory
-                    .fail_stage1(
-                        MEMORY_SCOPE_ID,
-                        record.session_id,
-                        &source_hash,
-                        &error.to_string(),
-                    )
+                    .fail_stage1(record.session_id, &source_hash, &error.to_string())
                     .await
                     .map_err(|e| Error::store("mark memory stage 1 failed", e))?;
             }

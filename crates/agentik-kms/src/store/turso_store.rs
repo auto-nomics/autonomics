@@ -136,13 +136,13 @@ struct LegacyMemoryEntry {
 fn row_to_entry(row: &turso::Row) -> Result<LegacyMemoryEntry> {
     Ok(LegacyMemoryEntry {
         id: parse_uuid(text(row, 0)?, "entry_id")?,
-        entry_type: text(row, 2)?,
-        title: text(row, 3)?,
-        body_md: text(row, 4)?,
-        status: text(row, 5)?,
-        confidence: real(row, 6)?,
-        created_at: int(row, 7)?,
-        updated_at: int(row, 8)?,
+        entry_type: text(row, 1)?,
+        title: text(row, 2)?,
+        body_md: text(row, 3)?,
+        status: text(row, 4)?,
+        confidence: real(row, 5)?,
+        created_at: int(row, 6)?,
+        updated_at: int(row, 7)?,
     })
 }
 
@@ -173,38 +173,35 @@ fn row_to_knowledge(row: &turso::Row) -> Result<Knowledge> {
 
 fn row_to_summary(row: &turso::Row) -> Result<MemorySummary> {
     Ok(MemorySummary {
-        scope_id: parse_uuid(text(row, 0)?, "scope_id")?,
-        schema_version: text(row, 1)?,
-        summary_md: text(row, 2)?,
-        source_hash: text(row, 3)?,
-        generated_at: int(row, 4)?,
+        schema_version: text(row, 0)?,
+        summary_md: text(row, 1)?,
+        source_hash: text(row, 2)?,
+        generated_at: int(row, 3)?,
     })
 }
 
 fn row_to_note(row: &turso::Row) -> Result<MemoryNote> {
     Ok(MemoryNote {
         id: parse_uuid(text(row, 0)?, "note_id")?,
-        scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
-        slug: text(row, 2)?,
-        content: text(row, 3)?,
-        status: text(row, 4)?,
-        created_at: int(row, 5)?,
+        slug: text(row, 1)?,
+        content: text(row, 2)?,
+        status: text(row, 3)?,
+        created_at: int(row, 4)?,
     })
 }
 
 fn row_to_observation(row: &turso::Row) -> Result<SemanticObservation> {
     Ok(SemanticObservation {
         id: parse_uuid(text(row, 0)?, "observation_id")?,
-        scope_id: parse_uuid(text(row, 1)?, "scope_id")?,
-        subject: text(row, 2)?,
-        predicate: text(row, 3)?,
-        object: text(row, 4)?,
-        content: text(row, 5)?,
-        status: text(row, 6)?,
-        confidence: real(row, 7)?,
-        source_hash: text(row, 8)?,
-        created_at: int(row, 9)?,
-        last_error: opt_text(row, 10)?.filter(|value| !value.is_empty()),
+        subject: text(row, 1)?,
+        predicate: text(row, 2)?,
+        object: text(row, 3)?,
+        content: text(row, 4)?,
+        status: text(row, 5)?,
+        confidence: real(row, 6)?,
+        source_hash: text(row, 7)?,
+        created_at: int(row, 8)?,
+        last_error: opt_text(row, 9)?.filter(|value| !value.is_empty()),
     })
 }
 
@@ -253,7 +250,6 @@ impl TursoKmsStorage {
             .execute_batch(
                 r#"
                 CREATE TABLE IF NOT EXISTS memory_stage1 (
-                    scope_id TEXT NOT NULL,
                     session_id TEXT NOT NULL,
                     source_hash TEXT NOT NULL,
                     raw_memory TEXT NOT NULL,
@@ -265,12 +261,12 @@ impl TursoKmsStorage {
                     attempts INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT,
                     updated_at INTEGER NOT NULL,
-                    PRIMARY KEY (scope_id, session_id)
+                    PRIMARY KEY (session_id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_stage1_generated
                     ON memory_stage1(generated_at DESC);
                 CREATE TABLE IF NOT EXISTS memory_jobs (
-                    scope_id TEXT PRIMARY KEY,
+                    singleton INTEGER PRIMARY KEY DEFAULT 0,
                     status TEXT NOT NULL,
                     source_hash TEXT NOT NULL,
                     lease_until INTEGER NOT NULL,
@@ -294,19 +290,6 @@ impl TursoKmsStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_jobs_due
                     ON knowledge_pipeline_jobs(status, run_after, updated_at);
-                CREATE TABLE IF NOT EXISTS memory_entries (
-                    id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
-                    entry_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    body_md TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_status
-                    ON memory_entries(scope_id, status, updated_at DESC);
                 CREATE TABLE IF NOT EXISTS knowledge_nodes (
                     id TEXT PRIMARY KEY,
                     parent_id TEXT,
@@ -324,7 +307,7 @@ impl TursoKmsStorage {
                 CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_parent
                     ON knowledge_nodes(parent_id);
                 CREATE TABLE IF NOT EXISTS memory_summaries (
-                    scope_id TEXT PRIMARY KEY,
+                    singleton INTEGER PRIMARY KEY DEFAULT 0,
                     schema_version TEXT NOT NULL,
                     summary_md TEXT NOT NULL,
                     source_hash TEXT NOT NULL,
@@ -332,17 +315,15 @@ impl TursoKmsStorage {
                 );
                 CREATE TABLE IF NOT EXISTS memory_notes (
                     id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
                     slug TEXT NOT NULL,
                     content TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at INTEGER NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_memory_notes_scope_status
-                    ON memory_notes(scope_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_memory_notes_status
+                    ON memory_notes(status, created_at);
                 CREATE TABLE IF NOT EXISTS memory_semantic_observations (
                     id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
                     subject TEXT NOT NULL,
                     predicate TEXT NOT NULL,
                     object TEXT NOT NULL,
@@ -353,8 +334,8 @@ impl TursoKmsStorage {
                     created_at INTEGER NOT NULL,
                     last_error TEXT
                 );
-                CREATE INDEX IF NOT EXISTS idx_memory_semantic_scope_status
-                    ON memory_semantic_observations(scope_id, status, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_semantic_status
+                    ON memory_semantic_observations(status, created_at DESC);
                 CREATE TABLE IF NOT EXISTS memory_storage_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -364,6 +345,7 @@ impl TursoKmsStorage {
             .await
             .map_err(db_err)?;
         self.migrate_knowledge_nodes_to_global_schema().await?;
+        self.migrate_memory_tables_to_global_schema().await?;
         self.conn
             .execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_knowledge_nodes_status
@@ -386,11 +368,207 @@ impl TursoKmsStorage {
         Ok(rows.next().await.map_err(db_err)?.is_some())
     }
 
+    async fn table_exists(&self, table: &str) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params_from_iter([Value::Text(table.to_string())]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    async fn table_has_scope_column(&self, table: &str) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                &format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = 'scope_id'"),
+                (),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    /// Collapse the transitional scoped memory tables into global tables.
+    ///
+    /// All production scopes were nil; rejecting multiple scopes here prevents
+    /// silent data loss if a non-global database is encountered.
+    async fn migrate_memory_tables_to_global_schema(&self) -> Result<()> {
+        let migrations: &[(&str, &str, &str, &str)] = &[
+            (
+                "memory_stage1",
+                "CREATE TABLE memory_stage1 (
+                    session_id TEXT NOT NULL PRIMARY KEY,
+                    source_hash TEXT NOT NULL,
+                    raw_memory TEXT NOT NULL,
+                    rollout_summary TEXT NOT NULL,
+                    rollout_slug TEXT,
+                    status TEXT NOT NULL,
+                    generated_at INTEGER NOT NULL,
+                    lease_until INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at INTEGER NOT NULL
+                )",
+                "session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
+                 status, generated_at, lease_until, attempts, updated_at",
+                "session_id, source_hash, raw_memory, rollout_summary, rollout_slug,
+                 status, generated_at, lease_until, attempts, updated_at",
+            ),
+            (
+                "memory_jobs",
+                "CREATE TABLE memory_jobs (
+                    singleton INTEGER PRIMARY KEY DEFAULT 0,
+                    status TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    lease_until INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at INTEGER NOT NULL
+                )",
+                "status, source_hash, lease_until, attempts, updated_at",
+                "status, source_hash, lease_until, attempts, updated_at",
+            ),
+            (
+                "memory_summaries",
+                "CREATE TABLE memory_summaries (
+                    singleton INTEGER PRIMARY KEY DEFAULT 0,
+                    schema_version TEXT NOT NULL,
+                    summary_md TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    generated_at INTEGER NOT NULL
+                )",
+                "schema_version, summary_md, source_hash, generated_at",
+                "schema_version, summary_md, source_hash, generated_at",
+            ),
+            (
+                "memory_notes",
+                "CREATE TABLE memory_notes (
+                    id TEXT PRIMARY KEY,
+                    slug TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )",
+                "id, slug, content, status, created_at",
+                "id, slug, content, status, created_at",
+            ),
+            (
+                "memory_semantic_observations",
+                "CREATE TABLE memory_semantic_observations (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_error TEXT
+                )",
+                "id, subject, predicate, object, content, status, confidence,
+                 source_hash, created_at, last_error",
+                "id, subject, predicate, object, content, status, confidence,
+                 source_hash, created_at, last_error",
+            ),
+        ];
+
+        for (table, create_table, insert_columns, select_columns) in migrations {
+            if !self.table_exists(table).await? || !self.table_has_scope_column(table).await? {
+                continue;
+            }
+            let mut scopes = self
+                .conn
+                .query(&format!("SELECT COUNT(DISTINCT scope_id) FROM {table}"), ())
+                .await
+                .map_err(db_err)?;
+            let scope_count = match scopes.next().await.map_err(db_err)? {
+                Some(row) => int(&row, 0)?,
+                None => 0,
+            };
+            if scope_count > 1 {
+                return Err(Error::Storage(format!(
+                    "cannot collapse {scope_count} scopes in {table} into global memory"
+                )));
+            }
+
+            self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
+            let result = async {
+                self.conn
+                    .execute(&format!("DROP INDEX IF EXISTS idx_{table}_generated"), ())
+                    .await
+                    .map_err(db_err)?;
+                self.conn
+                    .execute(
+                        &format!("DROP INDEX IF EXISTS idx_{table}_scope_status"),
+                        (),
+                    )
+                    .await
+                    .map_err(db_err)?;
+                self.conn
+                    .execute(&format!("ALTER TABLE {table} RENAME TO {table}_scoped"), ())
+                    .await
+                    .map_err(db_err)?;
+                self.conn
+                    .execute_batch(create_table)
+                    .await
+                    .map_err(db_err)?;
+                self.conn
+                    .execute(
+                        &format!(
+                            "INSERT INTO {table} ({insert_columns})
+                             SELECT {select_columns} FROM {table}_scoped"
+                        ),
+                        (),
+                    )
+                    .await
+                    .map_err(db_err)?;
+                if *table == "memory_jobs" || *table == "memory_summaries" {
+                    self.conn
+                        .execute(&format!("UPDATE {table} SET singleton = 0"), ())
+                        .await
+                        .map_err(db_err)?;
+                }
+                self.conn
+                    .execute(&format!("DROP TABLE {table}_scoped"), ())
+                    .await
+                    .map_err(db_err)?;
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
+                }
+                Err(error) => {
+                    let _ = self.conn.execute("ROLLBACK", ()).await;
+                    return Err(error);
+                }
+            }
+        }
+
+        self.conn
+            .execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_memory_stage1_generated
+                    ON memory_stage1(generated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_notes_status
+                    ON memory_notes(status, created_at);
+                CREATE INDEX IF NOT EXISTS idx_memory_semantic_status
+                    ON memory_semantic_observations(status, created_at DESC);",
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Convert the transitional scoped knowledge tree to the global schema.
     ///
     /// The tree is intentionally global: its namespace is `knowledge_path`.
-    /// Legacy memory jobs and notes remain scoped until their pipeline is
-    /// migrated, but knowledge-tree identity no longer carries a scope.
+    /// Convert any transitional scoped knowledge tree to the global tree.
     async fn migrate_knowledge_nodes_to_global_schema(&self) -> Result<()> {
         if !self.knowledge_nodes_have_scope_column().await? {
             return Ok(());
@@ -593,16 +771,29 @@ impl TursoKmsStorage {
             return Ok(());
         }
 
-        let entries = self
-            .collect(
-                "SELECT id, scope_id, entry_type, title, body_md, status, confidence,
+        let entries = if self.table_exists("memory_entries_staging").await? {
+            self.collect(
+                "SELECT id, entry_type, title, body_md, status, confidence,
+                        created_at, updated_at
+                 FROM memory_entries_staging WHERE status = 'active'
+                 ORDER BY updated_at DESC, id ASC",
+                vec![],
+                row_to_entry,
+            )
+            .await?
+        } else if self.table_exists("memory_entries").await? {
+            self.collect(
+                "SELECT id, entry_type, title, body_md, status, confidence,
                         created_at, updated_at
                  FROM memory_entries WHERE status = 'active'
                  ORDER BY updated_at DESC, id ASC",
                 vec![],
                 row_to_entry,
             )
-            .await?;
+            .await?
+        } else {
+            Vec::new()
+        };
         for entry in entries {
             let root = match entry.entry_type.as_str() {
                 "preference" => "/agent/preferences",
@@ -642,6 +833,18 @@ impl TursoKmsStorage {
         Ok(())
     }
 
+    async fn drop_legacy_memory_entries(&self) -> Result<()> {
+        self.conn
+            .execute("DROP TABLE IF EXISTS memory_entries", ())
+            .await
+            .map_err(db_err)?;
+        self.conn
+            .execute("DROP TABLE IF EXISTS memory_entries_staging", ())
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Copy legacy in-agent.db memory tables into this knowledge database.
     ///
     /// The migration is row-by-row and marker-based, so repeated startup is a
@@ -665,11 +868,13 @@ impl TursoKmsStorage {
         let mut marker = marker;
         if marker.next().await.map_err(db_err)?.is_some() {
             self.migrate_legacy_entries_to_knowledge_nodes().await?;
+            self.drop_legacy_memory_entries().await?;
             return Ok(());
         }
         if !Path::new(&path).exists() {
             self.set_migration_marker().await?;
             self.migrate_legacy_entries_to_knowledge_nodes().await?;
+            self.drop_legacy_memory_entries().await?;
             return Ok(());
         }
 
@@ -686,11 +891,24 @@ impl TursoKmsStorage {
 
         self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
         let result = async {
-            self.copy_table(
+            self.copy_rows(
                 &source,
                 "memory_stage1",
+                "memory_stage1",
                 &[
-                    "scope_id",
+                    "session_id",
+                    "source_hash",
+                    "raw_memory",
+                    "rollout_summary",
+                    "rollout_slug",
+                    "status",
+                    "generated_at",
+                    "lease_until",
+                    "attempts",
+                    "last_error",
+                    "updated_at",
+                ],
+                &[
                     "session_id",
                     "source_hash",
                     "raw_memory",
@@ -705,11 +923,19 @@ impl TursoKmsStorage {
                 ],
             )
             .await?;
-            self.copy_table(
+            self.copy_rows(
                 &source,
                 "memory_jobs",
+                "memory_jobs",
                 &[
-                    "scope_id",
+                    "status",
+                    "source_hash",
+                    "lease_until",
+                    "attempts",
+                    "last_error",
+                    "updated_at",
+                ],
+                &[
                     "status",
                     "source_hash",
                     "lease_until",
@@ -719,12 +945,42 @@ impl TursoKmsStorage {
                 ],
             )
             .await?;
-            self.copy_table(
+            self.conn
+                .execute("UPDATE memory_jobs SET singleton = 0", ())
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute(
+                    "CREATE TABLE memory_entries_staging (
+                        id TEXT PRIMARY KEY,
+                        entry_type TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        body_md TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL
+                    )",
+                    (),
+                )
+                .await
+                .map_err(db_err)?;
+            self.copy_rows(
                 &source,
                 "memory_entries",
+                "memory_entries_staging",
                 &[
                     "id",
-                    "scope_id",
+                    "entry_type",
+                    "title",
+                    "body_md",
+                    "status",
+                    "confidence",
+                    "created_at",
+                    "updated_at",
+                ],
+                &[
+                    "id",
                     "entry_type",
                     "title",
                     "body_md",
@@ -735,11 +991,17 @@ impl TursoKmsStorage {
                 ],
             )
             .await?;
-            self.copy_table(
+            self.copy_rows(
                 &source,
                 "memory_summaries",
+                "memory_summaries",
                 &[
-                    "scope_id",
+                    "schema_version",
+                    "summary_md",
+                    "source_hash",
+                    "generated_at",
+                ],
+                &[
                     "schema_version",
                     "summary_md",
                     "source_hash",
@@ -747,18 +1009,36 @@ impl TursoKmsStorage {
                 ],
             )
             .await?;
-            self.copy_table(
+            self.conn
+                .execute("UPDATE memory_summaries SET singleton = 0", ())
+                .await
+                .map_err(db_err)?;
+            self.copy_rows(
                 &source,
                 "memory_notes",
-                &["id", "scope_id", "slug", "content", "status", "created_at"],
+                "memory_notes",
+                &["id", "slug", "content", "status", "created_at"],
+                &["id", "slug", "content", "status", "created_at"],
             )
             .await?;
-            self.copy_table(
+            self.copy_rows(
                 &source,
+                "memory_semantic_observations",
                 "memory_semantic_observations",
                 &[
                     "id",
-                    "scope_id",
+                    "subject",
+                    "predicate",
+                    "object",
+                    "content",
+                    "status",
+                    "confidence",
+                    "source_hash",
+                    "created_at",
+                    "last_error",
+                ],
+                &[
+                    "id",
                     "subject",
                     "predicate",
                     "object",
@@ -790,6 +1070,7 @@ impl TursoKmsStorage {
             Ok(()) => {
                 self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
                 self.migrate_legacy_entries_to_knowledge_nodes().await?;
+                self.drop_legacy_memory_entries().await?;
                 Ok(())
             }
             Err(error) => {
@@ -811,16 +1092,18 @@ impl TursoKmsStorage {
         Ok(())
     }
 
-    async fn copy_table(
+    async fn copy_rows(
         &self,
         source: &turso::Connection,
-        table: &str,
-        columns: &[&str],
+        source_table: &str,
+        destination_table: &str,
+        source_columns: &[&str],
+        destination_columns: &[&str],
     ) -> Result<()> {
         let mut exists = source
             .query(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                params_from_iter([Value::Text(table.into())]),
+                params_from_iter([Value::Text(source_table.into())]),
             )
             .await
             .map_err(db_err)?;
@@ -828,21 +1111,24 @@ impl TursoKmsStorage {
             return Ok(());
         }
 
-        let column_list = columns.join(", ");
+        let destination_column_list = destination_columns.join(", ");
         let mut rows = source
-            .query(format!("SELECT {column_list} FROM {table}"), ())
+            .query(
+                format!("SELECT {} FROM {source_table}", source_columns.join(", ")),
+                (),
+            )
             .await
             .map_err(db_err)?;
-        let placeholders = (1..=columns.len())
+        let placeholders = (1..=source_columns.len())
             .map(|idx| format!("?{idx}"))
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "INSERT INTO {table} ({column_list}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+            "INSERT INTO {destination_table} ({destination_column_list}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
         );
 
         while let Some(row) = rows.next().await.map_err(db_err)? {
-            let values = (0..columns.len())
+            let values = (0..source_columns.len())
                 .map(|idx| row.get_value(idx).map_err(db_err))
                 .collect::<Result<Vec<_>>>()?;
             self.conn
@@ -873,7 +1159,6 @@ impl TursoKmsStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MEMORY_SCOPE_ID;
     use crate::pipeline::{KnowledgeJob, StageOutcome, StageStatus};
     use crate::store::KnowledgeQueue;
     use crate::store::MemoryStore;
@@ -882,19 +1167,9 @@ mod tests {
     #[tokio::test]
     async fn opens_schema_and_stores_notes() {
         let store = TursoKmsStorage::open_in_memory().await.unwrap();
-        let note = store
-            .insert_note(MEMORY_SCOPE_ID, "test", "hello")
-            .await
-            .unwrap();
+        let note = store.insert_note("test", "hello").await.unwrap();
         assert_eq!(note.content, "hello");
-        assert_eq!(
-            store
-                .list_pending_notes(MEMORY_SCOPE_ID)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(store.list_pending_notes().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -963,7 +1238,6 @@ mod tests {
         let first_id = first.id;
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "source-a",
                 vec![first],
                 "v1\n\nfirst",
@@ -991,7 +1265,6 @@ mod tests {
         );
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "source-b",
                 vec![updated, branch],
                 "v1\n\nsecond",
@@ -1016,22 +1289,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migrates_scoped_memory_tables_to_global_schema() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        store
+            .conn
+            .execute_batch(
+                "DROP TABLE memory_jobs;
+                CREATE TABLE memory_jobs (
+                    scope_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    lease_until INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at INTEGER NOT NULL
+                );
+                INSERT INTO memory_jobs
+                    (scope_id, status, source_hash, lease_until, attempts, updated_at)
+                 VALUES (
+                    '00000000-0000-0000-0000-000000000000',
+                    'succeeded',
+                    'source',
+                    0,
+                    1,
+                    1
+                 );
+                DROP TABLE memory_notes;
+                CREATE TABLE memory_notes (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                INSERT INTO memory_notes
+                    (id, scope_id, slug, content, status, created_at)
+                 VALUES (
+                    '00000000-0000-0000-0000-000000000001',
+                    '00000000-0000-0000-0000-000000000000',
+                    'test',
+                    'hello',
+                    'pending',
+                    1
+                 );",
+            )
+            .await
+            .unwrap();
+
+        store
+            .migrate_memory_tables_to_global_schema()
+            .await
+            .unwrap();
+
+        let mut jobs = store
+            .conn
+            .query("SELECT singleton, status FROM memory_jobs", ())
+            .await
+            .unwrap();
+        let job = jobs.next().await.unwrap().unwrap();
+        assert_eq!(int(&job, 0).unwrap(), 0);
+        assert_eq!(text(&job, 1).unwrap(), "succeeded");
+        assert_eq!(store.list_pending_notes().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn migrates_active_legacy_entries_to_knowledge_nodes() {
         let destination = TursoKmsStorage::open_in_memory().await.unwrap();
         let entry_id = Uuid::new_v4();
         destination
             .conn
-            .execute(
-                "INSERT INTO memory_entries
-                    (id, scope_id, entry_type, title, body_md, status, confidence,
-                     created_at, updated_at)
-                 VALUES (?1, ?2, 'failure_shield', 'Torn WAL Recovery', ?3, 'active', 0.9, 1, 2)",
-                params_from_iter([
-                    uuid_value(entry_id),
-                    uuid_value(MEMORY_SCOPE_ID),
-                    Value::Text("Use sqlite3 instead of Turso for recovery.".into()),
-                ]),
-            )
+            .execute_batch(format!(
+                "CREATE TABLE memory_entries (
+                id TEXT PRIMARY KEY,
+                scope_id TEXT NOT NULL,
+                entry_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body_md TEXT NOT NULL,
+                status TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO memory_entries
+                (id, scope_id, entry_type, title, body_md, status, confidence,
+                 created_at, updated_at)
+             VALUES (
+                '{entry_id}',
+                '00000000-0000-0000-0000-000000000000',
+                'failure_shield',
+                'Torn WAL Recovery',
+                'Use sqlite3 instead of Turso for recovery.',
+                'active',
+                0.9,
+                1,
+                2
+             );"
+            ))
             .await
             .unwrap();
         destination
@@ -1052,32 +1406,21 @@ mod tests {
     async fn migrates_legacy_agent_memory_tables_once() {
         let source = TursoKmsStorage::open_in_memory().await.unwrap();
         let destination = TursoKmsStorage::open_in_memory().await.unwrap();
-        source
-            .insert_note(MEMORY_SCOPE_ID, "legacy", "old memory")
-            .await
-            .unwrap();
+        source.insert_note("legacy", "old memory").await.unwrap();
         destination
-            .copy_table(
+            .copy_rows(
                 &*source.conn.0.lock().await,
                 "memory_notes",
-                &["id", "scope_id", "slug", "content", "status", "created_at"],
+                "memory_notes",
+                &["id", "slug", "content", "status", "created_at"],
+                &["id", "slug", "content", "status", "created_at"],
             )
             .await
             .unwrap();
-        assert_eq!(
-            destination
-                .list_pending_notes(MEMORY_SCOPE_ID)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(destination.list_pending_notes().await.unwrap().len(), 1);
 
         // A marker makes the second run a no-op even if source data changes.
-        source
-            .insert_note(MEMORY_SCOPE_ID, "second", "not migrated")
-            .await
-            .unwrap();
+        source.insert_note("second", "not migrated").await.unwrap();
         destination
             .conn
             .execute(
@@ -1091,13 +1434,6 @@ mod tests {
             .migrate_from_agent_db("/definitely/missing/agentik/source.db")
             .await
             .unwrap();
-        assert_eq!(
-            destination
-                .list_pending_notes(MEMORY_SCOPE_ID)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(destination.list_pending_notes().await.unwrap().len(), 1);
     }
 }

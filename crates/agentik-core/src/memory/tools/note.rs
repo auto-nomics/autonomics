@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{KmsAgentHandle, KnowledgeEvent, MEMORY_SCOPE_ID, redact_secrets};
+use crate::memory::{KmsAgentHandle, KnowledgeEvent, redact_secrets};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -45,7 +45,7 @@ impl ToolFunction for MemoryNoteTool {
         let note = self
             .backend
             .store()
-            .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
+            .insert_note(&note_slug(input.slug.as_deref()), &content)
             .await
             .map_err(store_error)?;
         self.backend
@@ -84,9 +84,7 @@ fn note_slug(raw: Option<&str>) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use crate::memory::{
-        KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage,
-    };
+    use crate::memory::{KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage};
 
     use super::*;
 
@@ -104,7 +102,7 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("user-preference"));
 
-        let notes = store.list_pending_notes(MEMORY_SCOPE_ID).await.unwrap();
+        let notes = store.list_pending_notes().await.unwrap();
         assert_eq!(notes.len(), 1);
         assert!(notes[0].content.contains("REDACTED"));
     }

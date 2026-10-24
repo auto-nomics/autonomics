@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID};
+use crate::memory::KmsAgentHandle;
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -77,8 +77,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        KmsAgentHandle, Knowledge, KnowledgePath, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore,
-        TursoKmsStorage,
+        KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore, TursoKmsStorage,
     };
 
     use super::*;
@@ -90,7 +89,6 @@ mod tests {
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "source",
                 vec![Knowledge::leaf(
                     KnowledgePath::new(["engineering", "testing", "verification"]),

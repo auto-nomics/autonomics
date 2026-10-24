@@ -10,8 +10,8 @@ mod tools;
 pub use adapter::{AgentStorageMemorySource, agent_storage_memory_source};
 pub use agentik_kms::{
     AgentRuntimeConfig, Error, KmsAgentHandle, KmsSystem, Knowledge, KnowledgeEvent, KnowledgePath,
-    KnowledgeQueue, KnowledgeStore, MEMORY_SCOPE_ID, MemoryConfig, MemoryNote, MemorySource,
-    MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob, Result,
-    SemanticObservation, TursoKmsStorage, now_ms, redact_secrets, run_memory_pipeline,
+    KnowledgeQueue, KnowledgeStore, MemoryConfig, MemoryNote, MemorySource, MemoryStage1Record,
+    MemoryStore, MemorySummary, QueuedKnowledgeJob, Result, SemanticObservation, TursoKmsStorage,
+    now_ms, redact_secrets, run_memory_pipeline,
 };
 pub use tools::memory_registrations;

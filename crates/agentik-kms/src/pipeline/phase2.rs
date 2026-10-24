@@ -6,7 +6,6 @@ use agentik_sdk::types::messages::Message;
 use arc_swap::ArcSwapOption;
 use uuid::Uuid;
 
-use super::MEMORY_SCOPE_ID;
 use super::error::{Error, Result};
 use super::prompting::{build_phase2_prompt, message_text};
 use crate::artifacts::{
@@ -23,14 +22,14 @@ pub(super) async fn run(
     config: &MemoryConfig,
 ) -> Result<()> {
     let mut rows = memory
-        .list_stage1_outputs(MEMORY_SCOPE_ID, config.phase2_inputs)
+        .list_stage1_outputs(config.phase2_inputs)
         .await
         .map_err(|e| Error::store("select memory stage 1 outputs", e))?;
     rows.retain(|row| !row.raw_memory.is_empty() || !row.rollout_summary.is_empty());
     rows.sort_by_key(|row| row.session_id);
 
     let notes = memory
-        .list_pending_notes(MEMORY_SCOPE_ID)
+        .list_pending_notes()
         .await
         .map_err(|e| Error::store("list memory notes", e))?;
     let existing_nodes = memory
@@ -38,13 +37,13 @@ pub(super) async fn run(
         .await
         .map_err(|e| Error::store("list knowledge nodes", e))?;
     let existing_summary = memory
-        .get_summary(MEMORY_SCOPE_ID)
+        .get_summary()
         .await
         .map_err(|e| Error::store("load memory summary", e))?;
     let source_hash = phase2_source_hash(&rows, &notes);
     let lease_until = now_ms() + config.lease_seconds * 1000;
     if !memory
-        .claim_phase2(MEMORY_SCOPE_ID, &source_hash, lease_until)
+        .claim_phase2(&source_hash, lease_until)
         .await
         .map_err(|e| Error::store("claim memory phase 2", e))?
     {
@@ -86,7 +85,6 @@ pub(super) async fn run(
             let consumed_note_ids = notes.iter().map(|note| note.id).collect::<Vec<_>>();
             memory
                 .complete_phase2(
-                    MEMORY_SCOPE_ID,
                     &source_hash,
                     nodes,
                     &summary,
@@ -97,7 +95,7 @@ pub(super) async fn run(
                 .map_err(|e| Error::store("complete memory phase 2", e))
         }
         Err(error) => memory
-            .fail_phase2(MEMORY_SCOPE_ID, &source_hash, &error.to_string())
+            .fail_phase2(&source_hash, &error.to_string())
             .await
             .map_err(|e| Error::store("mark memory phase 2 failed", e)),
     }
@@ -112,7 +110,6 @@ fn build_observations(
         .into_iter()
         .map(|observation| SemanticObservation {
             id: Uuid::new_v4(),
-            scope_id: MEMORY_SCOPE_ID,
             subject: redact_secrets(observation.subject.trim()),
             predicate: normalize_predicate(&observation.predicate),
             object: redact_secrets(observation.object.trim()),

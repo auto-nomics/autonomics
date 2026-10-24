@@ -32,7 +32,6 @@ pub struct MemoryStage1Record {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemorySummary {
-    pub scope_id: Uuid,
     pub schema_version: String,
     pub summary_md: String,
     pub source_hash: String,
@@ -42,7 +41,6 @@ pub struct MemorySummary {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MemoryNote {
     pub id: Uuid,
-    pub scope_id: Uuid,
     pub slug: String,
     pub content: String,
     pub status: String,
@@ -55,7 +53,6 @@ pub struct MemoryNote {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SemanticObservation {
     pub id: Uuid,
-    pub scope_id: Uuid,
     pub subject: String,
     pub predicate: String,
     pub object: String,
@@ -69,46 +66,25 @@ pub struct SemanticObservation {
 
 #[async_trait]
 pub trait MemoryStore: KnowledgeStore + Send + Sync {
-    async fn get_stage1_output(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-    ) -> Result<Option<MemoryStage1Record>>;
+    async fn get_stage1_output(&self, session_id: Uuid) -> Result<Option<MemoryStage1Record>>;
 
     async fn claim_stage1(
         &self,
-        scope_id: Uuid,
         session_id: Uuid,
         source_hash: &str,
         lease_until: i64,
     ) -> Result<bool>;
 
-    async fn complete_stage1(&self, scope_id: Uuid, output: MemoryStage1Record) -> Result<()>;
+    async fn complete_stage1(&self, output: MemoryStage1Record) -> Result<()>;
 
-    async fn fail_stage1(
-        &self,
-        scope_id: Uuid,
-        session_id: Uuid,
-        source_hash: &str,
-        error: &str,
-    ) -> Result<()>;
+    async fn fail_stage1(&self, session_id: Uuid, source_hash: &str, error: &str) -> Result<()>;
 
-    async fn list_stage1_outputs(
-        &self,
-        scope_id: Uuid,
-        limit: usize,
-    ) -> Result<Vec<MemoryStage1Record>>;
+    async fn list_stage1_outputs(&self, limit: usize) -> Result<Vec<MemoryStage1Record>>;
 
-    async fn claim_phase2(
-        &self,
-        scope_id: Uuid,
-        source_hash: &str,
-        lease_until: i64,
-    ) -> Result<bool>;
+    async fn claim_phase2(&self, source_hash: &str, lease_until: i64) -> Result<bool>;
 
     async fn complete_phase2(
         &self,
-        scope_id: Uuid,
         source_hash: &str,
         nodes: Vec<Knowledge>,
         summary_md: &str,
@@ -116,24 +92,22 @@ pub trait MemoryStore: KnowledgeStore + Send + Sync {
         consumed_note_ids: Vec<Uuid>,
     ) -> Result<()>;
 
-    async fn fail_phase2(&self, scope_id: Uuid, source_hash: &str, error: &str) -> Result<()>;
+    async fn fail_phase2(&self, source_hash: &str, error: &str) -> Result<()>;
 
-    async fn get_summary(&self, scope_id: Uuid) -> Result<Option<MemorySummary>>;
+    async fn get_summary(&self) -> Result<Option<MemorySummary>>;
 
-    async fn list_pending_notes(&self, scope_id: Uuid) -> Result<Vec<MemoryNote>>;
+    async fn list_pending_notes(&self) -> Result<Vec<MemoryNote>>;
 
-    async fn insert_note(&self, scope_id: Uuid, slug: &str, content: &str) -> Result<MemoryNote>;
+    async fn insert_note(&self, slug: &str, content: &str) -> Result<MemoryNote>;
 
     async fn list_observations(
         &self,
-        scope_id: Uuid,
         status: &str,
         limit: usize,
     ) -> Result<Vec<SemanticObservation>>;
 
     async fn set_observation_status(
         &self,
-        scope_id: Uuid,
         observation_id: Uuid,
         status: &str,
         error: Option<&str>,

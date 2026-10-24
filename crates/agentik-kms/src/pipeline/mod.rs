@@ -19,10 +19,6 @@ mod service;
 mod stage;
 mod stages;
 
-/// All root agents share one global memory scope. Scope partitioning can be
-/// introduced later without changing the repository contract.
-pub const MEMORY_SCOPE_ID: Uuid = Uuid::nil();
-
 pub use crate::store::KnowledgeQueue;
 pub use error::Error as PipelineError;
 pub use event::KnowledgeEvent;

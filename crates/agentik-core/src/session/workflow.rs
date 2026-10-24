@@ -1402,7 +1402,7 @@ mod tests {
     /// summary silently lost its profile prompt.
     #[tokio::test]
     async fn memory_summary_appends_to_custom_system_section() {
-        use crate::memory::{KmsAgentHandle, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore};
+        use crate::memory::{KmsAgentHandle, MemoryConfig, MemoryStore};
         use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
@@ -1431,7 +1431,6 @@ mod tests {
         );
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "test-source",
                 Vec::new(),
                 "v1\n\nPrefer targeted tests.",

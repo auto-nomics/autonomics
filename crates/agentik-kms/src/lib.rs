@@ -21,8 +21,8 @@ pub use artifacts::{
 pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{
-    KnowledgeEvent, KnowledgeJob, KnowledgePipeline, KnowledgeQueue, KnowledgeStage,
-    MEMORY_SCOPE_ID, PipelineError, StageContext, StageOutcome, StageStatus, run_memory_pipeline,
+    KnowledgeEvent, KnowledgeJob, KnowledgePipeline, KnowledgeQueue, KnowledgeStage, PipelineError,
+    StageContext, StageOutcome, StageStatus, run_memory_pipeline,
 };
 pub use source::{MemorySessionRecord, MemorySource};
 pub use store::error::Error as StoreError;

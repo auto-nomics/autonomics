@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use super::{AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryConfig, MemoryStore, TursoKmsStorage};
+use super::{AgentRuntimeConfig, MemoryConfig, MemoryStore, TursoKmsStorage};
 use crate::pipeline::KnowledgeEvent;
 use crate::store::KnowledgeQueue;
 
@@ -140,13 +140,7 @@ impl KmsAgentHandle {
         if !config.use_memory {
             return None;
         }
-        let summary = self
-            .system
-            .store
-            .get_summary(MEMORY_SCOPE_ID)
-            .await
-            .ok()
-            .flatten()?;
+        let summary = self.system.store.get_summary().await.ok().flatten()?;
         let mut summary = summary.summary_md.trim().to_string();
         if summary.is_empty() {
             return None;

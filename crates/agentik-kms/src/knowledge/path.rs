@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Paths, rather than a closed type enum, define the knowledge taxonomy. The
 /// consolidation model chooses and evolves paths; the repository normalizes
-/// them and enforces uniqueness per scope.
+/// them and enforces global uniqueness.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct KnowledgePath(Vec<String>);
