@@ -24,7 +24,7 @@ pub(super) fn message_text(message: &Message) -> String {
         .join("")
 }
 
-pub(super) fn build_phase1_prompt(
+pub(super) fn build_session_extract_prompt(
     session_id: Uuid,
     title: Option<&str>,
     transcript: &str,

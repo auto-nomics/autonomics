@@ -21,6 +21,14 @@ pub struct KnowledgePipeline {
     stages: Vec<Arc<dyn KnowledgeStage>>,
 }
 
+/// One `run_due` pass, separated by what the runner did with each claim.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KnowledgeRunSummary {
+    pub claimed: usize,
+    pub executed: usize,
+    pub released: usize,
+}
+
 impl KnowledgePipeline {
     #[must_use]
     pub fn new(
@@ -48,18 +56,52 @@ impl KnowledgePipeline {
     }
 
     pub async fn run_due(&self, limit: usize) -> Result<usize, Error> {
-        let mut count = 0;
+        Ok(self.run_due_internal(None, limit).await?.executed)
+    }
+
+    /// Claim due jobs, execute only `job_kind`, and release foreign jobs.
+    ///
+    /// This is the consumer primitive used by specialized workers. A Phase 1
+    /// worker can therefore leave Phase 2 work pending instead of holding its
+    /// lease for an hour.
+    pub async fn run_due_for_kind(
+        &self,
+        job_kind: &'static str,
+        limit: usize,
+    ) -> Result<KnowledgeRunSummary, Error> {
+        self.run_due_internal(Some(job_kind), limit).await
+    }
+
+    async fn run_due_internal(
+        &self,
+        job_kind: Option<&'static str>,
+        limit: usize,
+    ) -> Result<KnowledgeRunSummary, Error> {
+        let mut summary = KnowledgeRunSummary::default();
         for _ in 0..4 {
             let claimed = self.queue.claim_due(now_ms(), limit).await?;
             if claimed.is_empty() {
                 break;
             }
-            count += claimed.len();
+            summary.claimed += claimed.len();
+            let mut executed = 0;
             for queued in claimed {
+                if let Some(kind) = job_kind
+                    && queued.job.kind() != kind
+                {
+                    self.queue.release(queued.id).await?;
+                    summary.released += 1;
+                    continue;
+                }
+                executed += 1;
                 self.execute_queued(queued).await?;
             }
+            summary.executed += executed;
+            if executed == 0 {
+                break;
+            }
         }
-        Ok(count)
+        Ok(summary)
     }
 
     async fn execute_queued(&self, queued: crate::store::QueuedKnowledgeJob) -> Result<(), Error> {

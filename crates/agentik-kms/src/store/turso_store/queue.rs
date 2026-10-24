@@ -101,6 +101,22 @@ impl KnowledgeQueue for TursoKmsStorage {
             .collect())
     }
 
+    async fn release(&self, job_id: Uuid) -> Result<()> {
+        let now = now_ms();
+        self.conn
+            .execute(
+                "UPDATE knowledge_pipeline_jobs
+                 SET status = 'pending', run_after = ?1, lease_until = 0,
+                     attempts = CASE WHEN attempts > 0 THEN attempts - 1 ELSE 0 END,
+                     updated_at = ?1
+                 WHERE id = ?2 AND status = 'running'",
+                params_from_iter([Value::Integer(now), uuid_value(job_id)]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     async fn complete(&self, job_id: Uuid, outcome: StageOutcome) -> Result<()> {
         let now = now_ms();
         let (status, run_after, lease_until, last_error) = match &outcome.status {

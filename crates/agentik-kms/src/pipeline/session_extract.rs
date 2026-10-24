@@ -8,7 +8,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use super::error::{Error, Result};
-use super::prompting::{build_phase1_prompt, parse_extraction};
+use super::prompting::{build_session_extract_prompt, parse_extraction};
 use crate::artifacts::{hash_source, normalize_slug, redact_secrets, render_transcript};
 use crate::store::{MemoryStage1Record, MemoryStore};
 use crate::{MemoryConfig, MemorySource, now_ms};
@@ -72,7 +72,8 @@ pub(super) async fn run(
             return Ok(());
         };
         let transcript = render_transcript(&messages, transcript_limit(model.as_ref()));
-        let prompt = build_phase1_prompt(record.session_id, record.title.as_deref(), &transcript);
+        let prompt =
+            build_session_extract_prompt(record.session_id, record.title.as_deref(), &transcript);
         let extraction = match model.request(vec![Message::user(prompt)], &[]).await {
             Ok(response) => parse_extraction(&response),
             Err(error) => Err(Error::model_request("model request", error)),

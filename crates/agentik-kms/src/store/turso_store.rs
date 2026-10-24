@@ -1224,6 +1224,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn releasing_a_foreign_claim_does_not_consume_an_attempt() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        let phase2_id = store
+            .enqueue(KnowledgeJob::ConsolidateKnowledge {
+                trigger: "test".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let claimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].attempts, 1);
+
+        store.release(phase2_id).await.unwrap();
+        let reclaimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
+        assert_eq!(reclaimed.len(), 1);
+        assert_eq!(reclaimed[0].id, phase2_id);
+        assert_eq!(reclaimed[0].attempts, 1);
+    }
+
+    #[tokio::test]
     async fn phase2_upserts_nodes_by_knowledge_path() {
         let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let path = KnowledgePath::normalize("/engineering/testing/verification").unwrap();

@@ -2,15 +2,15 @@ use std::sync::Arc;
 
 use super::job::KnowledgeJob;
 use super::stage::{KnowledgeStage, StageContext, StageOutcome};
-use super::{phase1, phase2};
+use super::{phase2, session_extract};
 use crate::pipeline::error::Result;
 
-pub struct Phase1Stage;
+pub struct SessionExtractStage;
 
 #[async_trait::async_trait]
-impl KnowledgeStage for Phase1Stage {
+impl KnowledgeStage for SessionExtractStage {
     fn name(&self) -> &'static str {
-        "phase1_extract_agent_sessions"
+        "session_extract"
     }
 
     fn accepts(&self, job: &KnowledgeJob) -> bool {
@@ -25,7 +25,7 @@ impl KnowledgeStage for Phase1Stage {
             return Ok(StageOutcome::retry(60, "no active model"));
         }
         let config = context.system.effective_config();
-        phase1::run(
+        session_extract::run(
             agent_id,
             &context.source,
             &context.system.store(),
@@ -35,7 +35,7 @@ impl KnowledgeStage for Phase1Stage {
         .await?;
         Ok(StageOutcome::completed(vec![
             KnowledgeJob::ConsolidateKnowledge {
-                trigger: "phase1_completed".to_string(),
+                trigger: "session_extract_completed".to_string(),
             },
         ]))
     }
@@ -69,5 +69,5 @@ impl KnowledgeStage for Phase2Stage {
 
 #[must_use]
 pub fn default_stages() -> Vec<Arc<dyn KnowledgeStage>> {
-    vec![Arc::new(Phase1Stage), Arc::new(Phase2Stage)]
+    vec![Arc::new(SessionExtractStage), Arc::new(Phase2Stage)]
 }

@@ -12,10 +12,11 @@ use crate::source::MemorySource;
 mod error;
 mod event;
 mod job;
-mod phase1;
 mod phase2;
 mod prompting;
 mod service;
+mod session_extract;
+mod session_extract_worker;
 mod stage;
 mod stages;
 
@@ -23,7 +24,11 @@ pub use crate::store::KnowledgeQueue;
 pub use error::Error as PipelineError;
 pub use event::KnowledgeEvent;
 pub use job::KnowledgeJob;
-pub use service::KnowledgePipeline;
+pub use service::{KnowledgePipeline, KnowledgeRunSummary};
+pub use session_extract_worker::{
+    SessionExtractWorker, SessionExtractWorkerConfig, SessionExtractWorkerHandle,
+    SessionExtractWorkerStatus, start_session_extract_worker,
+};
 pub use stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 
 pub async fn run_memory_pipeline(

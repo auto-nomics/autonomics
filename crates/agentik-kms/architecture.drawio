@@ -40,43 +40,43 @@
                 <mxCell id="session_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" value="Session Storage&#xa;(rollouts / WAL)" vertex="1">
                     <mxGeometry height="90" width="150" x="30" y="240" as="geometry"/>
                 </mxCell>
-                <mxCell id="phase1_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#CCCCCC;dashed=1;opacity=40;" value="" vertex="1">
+                <mxCell id="session_extract_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#CCCCCC;dashed=1;opacity=40;" value="" vertex="1">
                     <mxGeometry height="270" width="740" x="250" y="235" as="geometry"/>
                 </mxCell>
-                <mxCell id="phase1_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#333333;align=left;" value="Phase 1: Session Extraction" vertex="1">
+                <mxCell id="session_extract_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#333333;align=left;" value="SessionExtract" vertex="1">
                     <mxGeometry height="25" width="250" x="270" y="245" as="geometry"/>
                 </mxCell>
-                <mxCell id="p1_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="List idle sessions&#xa;(≥12h idle, ≤90d, max 20)" vertex="1">
+                <mxCell id="session_extract_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="List idle sessions&#xa;(≥12h idle, ≤90d, max 20)" vertex="1">
                     <mxGeometry height="50" width="160" x="280" y="285" as="geometry"/>
                 </mxCell>
-                <mxCell id="p1_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_stage1&#xa;(lease + source_hash dedup)" vertex="1">
+                <mxCell id="session_extract_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_stage1&#xa;(lease + source_hash dedup)" vertex="1">
                     <mxGeometry height="50" width="160" x="280" y="365" as="geometry"/>
                 </mxCell>
-                <mxCell id="p1_render" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Render transcript&#xa;(context-window × 0.7)&#xa;single block ≤2KB" vertex="1">
+                <mxCell id="session_extract_render" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Render transcript&#xa;(context-window × 0.7)&#xa;single block ≤2KB" vertex="1">
                     <mxGeometry height="60" width="170" x="490" y="285" as="geometry"/>
                 </mxCell>
-                <mxCell id="p1_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Extract&#xa;raw_memory + rollout_summary&#xa;+ rollout_slug (JSON)" vertex="1">
+                <mxCell id="session_extract_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Extract&#xa;raw_memory + rollout_summary&#xa;+ rollout_slug (JSON)" vertex="1">
                     <mxGeometry height="55" width="230" x="710" y="285" as="geometry"/>
                 </mxCell>
-                <mxCell id="p1_redact" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Redact secrets&#xa;(token=, password=, bearer, etc.)" vertex="1">
+                <mxCell id="session_extract_redact" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Redact secrets&#xa;(token=, password=, bearer, etc.)" vertex="1">
                     <mxGeometry height="45" width="230" x="710" y="370" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_session_p1" edge="1" parent="1" source="session_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p1_list">
+                <mxCell id="e_session_extract_list" edge="1" parent="1" source="session_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_list">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_p1_list_render" edge="1" parent="1" source="p1_list" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p1_render">
+                <mxCell id="e_session_extract_list_render" edge="1" parent="1" source="session_extract_list" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_render">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_p1_render_llm" edge="1" parent="1" source="p1_render" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p1_llm">
+                <mxCell id="e_session_extract_render_llm" edge="1" parent="1" source="session_extract_render" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_llm">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_p1_llm_redact" edge="1" parent="1" source="p1_llm" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p1_redact">
+                <mxCell id="e_session_extract_llm_redact" edge="1" parent="1" source="session_extract_llm" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_redact">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="stage1_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_stage1&#xa;(source_hash + lease)" vertex="1">
                     <mxGeometry height="80" width="160" x="540" y="460" as="geometry"/>
                 </mxCell>
-                <mxCell id="e_redact_stage1" edge="1" parent="1" source="p1_redact" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="stage1_db">
+                <mxCell id="e_session_extract_redact_stage1" edge="1" parent="1" source="session_extract_redact" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="stage1_db">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="phase2_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#CCCCCC;dashed=1;opacity=40;" value="" vertex="1">
