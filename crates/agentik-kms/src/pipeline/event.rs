@@ -12,6 +12,7 @@ pub enum KnowledgeEvent {
     SessionEnded { agent_id: Uuid, session_id: Uuid },
     MemoryNoteCreated { note_id: Uuid },
     ConsolidationRequested { reason: String },
+    KnowledgeDiagnosisRequested { target_path: String, reason: String },
 }
 
 impl KnowledgeEvent {
@@ -22,6 +23,9 @@ impl KnowledgeEvent {
             Self::SessionEnded { session_id, .. } => Some(format!("session-ended:{session_id}")),
             Self::MemoryNoteCreated { note_id } => Some(format!("memory-note:{note_id}")),
             Self::ConsolidationRequested { .. } => None,
+            Self::KnowledgeDiagnosisRequested { target_path, .. } => {
+                Some(format!("diagnose-knowledge-node-requested:{target_path}"))
+            }
         }
     }
 
@@ -40,6 +44,16 @@ impl KnowledgeEvent {
             }
             Self::ConsolidationRequested { reason } => {
                 vec![super::job::KnowledgeJob::ConsolidateKnowledge {
+                    trigger: reason.clone(),
+                }]
+            }
+            Self::KnowledgeDiagnosisRequested {
+                target_path,
+                reason,
+            } => {
+                vec![super::job::KnowledgeJob::DiagnoseKnowledgeNode {
+                    target_path: target_path.clone(),
+                    family_hash: None,
                     trigger: reason.clone(),
                 }]
             }

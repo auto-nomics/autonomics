@@ -12,7 +12,9 @@ use uuid::Uuid;
 
 use super::error::{Error, Result};
 use crate::knowledge::{Knowledge, KnowledgePath};
-use crate::store::{MemoryNote, MemoryStage1Record, MemorySummary, SemanticObservation};
+use crate::store::{
+    KnowledgeDiagnosticFinding, MemoryNote, MemoryStage1Record, MemorySummary, SemanticObservation,
+};
 
 const MIGRATION_MARKER: &str = "legacy_agent_db_memory_migrated_v1";
 const KNOWLEDGE_TREE_MIGRATION_MARKER: &str = "memory_entries_to_knowledge_nodes_v1";
@@ -205,6 +207,23 @@ fn row_to_observation(row: &turso::Row) -> Result<SemanticObservation> {
     })
 }
 
+fn row_to_diagnostic_finding(row: &turso::Row) -> Result<KnowledgeDiagnosticFinding> {
+    Ok(KnowledgeDiagnosticFinding {
+        id: parse_uuid(text(row, 0)?, "diagnostic_finding_id")?,
+        target_path: text(row, 1)?,
+        action: text(row, 2)?,
+        severity: text(row, 3)?,
+        status: text(row, 4)?,
+        message: text(row, 5)?,
+        recommendation: text(row, 6)?,
+        proposed_paths: serde_json::from_str(&text(row, 7)?)
+            .map_err(|e| Error::Storage(format!("parse diagnostic proposed paths: {e}")))?,
+        confidence: real(row, 8)?,
+        family_hash: text(row, 9)?,
+        created_at: int(row, 10)?,
+    })
+}
+
 impl TursoKmsStorage {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
@@ -336,6 +355,21 @@ impl TursoKmsStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_semantic_status
                     ON memory_semantic_observations(status, created_at DESC);
+                CREATE TABLE IF NOT EXISTS knowledge_diagnostic_findings (
+                    id TEXT PRIMARY KEY,
+                    target_path TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    recommendation TEXT NOT NULL,
+                    proposed_paths_json TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    family_hash TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_diagnostic_findings_target
+                    ON knowledge_diagnostic_findings(target_path, created_at DESC);
                 CREATE TABLE IF NOT EXISTS memory_storage_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL

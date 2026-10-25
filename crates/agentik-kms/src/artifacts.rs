@@ -24,14 +24,59 @@ impl MemoryExtraction {
     }
 }
 
+/// One durable input item considered by the knowledge-routing step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeUpdateInput {
+    pub id: String,
+    pub kind: String,
+    pub content: String,
+}
+
+/// Structured result of the first Phase 2 LLM step: route each update.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct MemoryConsolidation {
+pub struct KnowledgeRoutingPlan {
+    #[serde(default)]
+    pub routes: Vec<KnowledgeRoutingDecision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnowledgeRoutingDecision {
+    pub update_id: String,
+    pub action: String,
+    #[serde(default)]
+    pub anchor_path: Option<String>,
+    #[serde(default)]
+    pub target_path: Option<String>,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+/// Structured result of the second Phase 2 LLM step: rewrite routed nodes.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct KnowledgeNodeConsolidation {
     #[serde(default)]
     pub nodes: Vec<KnowledgeDraft>,
     #[serde(default)]
-    pub summary: String,
-    #[serde(default)]
     pub semantic_updates: Vec<SemanticObservationDraft>,
+}
+
+/// Structured result of the third Phase 2 LLM step: summarize the tree.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct KnowledgeSummaryConsolidation {
+    pub summary: String,
+}
+
+/// Structured result of an incremental knowledge-node diagnosis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct KnowledgeNodeDiagnosisOutput {
+    pub action: String,
+    pub reason: String,
+    #[serde(default)]
+    pub proposed_paths: Vec<String>,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

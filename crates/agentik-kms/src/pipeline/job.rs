@@ -6,6 +6,7 @@ use uuid::Uuid;
 pub enum KnowledgeJobKind {
     SessionExtract,
     ConsolidateKnowledge,
+    DiagnoseKnowledgeNode,
 }
 
 impl KnowledgeJobKind {
@@ -14,6 +15,7 @@ impl KnowledgeJobKind {
         match self {
             Self::SessionExtract => "session_extract",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
+            Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
         }
     }
 
@@ -22,6 +24,7 @@ impl KnowledgeJobKind {
         match self {
             Self::SessionExtract => "extract_agent_sessions",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
+            Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
         }
     }
 }
@@ -30,8 +33,17 @@ impl KnowledgeJobKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KnowledgeJob {
-    ExtractAgentSessions { agent_id: Uuid },
-    ConsolidateKnowledge { trigger: String },
+    ExtractAgentSessions {
+        agent_id: Uuid,
+    },
+    ConsolidateKnowledge {
+        trigger: String,
+    },
+    DiagnoseKnowledgeNode {
+        target_path: String,
+        family_hash: Option<String>,
+        trigger: String,
+    },
 }
 
 impl KnowledgeJob {
@@ -42,6 +54,14 @@ impl KnowledgeJob {
                 format!("extract-agent-sessions:{agent_id}")
             }
             Self::ConsolidateKnowledge { .. } => "consolidate-knowledge".to_string(),
+            Self::DiagnoseKnowledgeNode {
+                target_path,
+                family_hash,
+                ..
+            } => format!(
+                "diagnose-knowledge-node:{target_path}:{}",
+                family_hash.as_deref().unwrap_or("current")
+            ),
         }
     }
 
@@ -50,6 +70,7 @@ impl KnowledgeJob {
         match self {
             Self::ExtractAgentSessions { .. } => KnowledgeJobKind::SessionExtract,
             Self::ConsolidateKnowledge { .. } => KnowledgeJobKind::ConsolidateKnowledge,
+            Self::DiagnoseKnowledgeNode { .. } => KnowledgeJobKind::DiagnoseKnowledgeNode,
         }
     }
 }

@@ -75,6 +75,8 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_dispatches_extraction_and_skips_unchanged_sources() {
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
         let mut mock = MockApiClient::new();
         mock.expect_request()
             .times(1)
@@ -93,11 +95,37 @@ mod tests {
             .withf(|messages, _, _| {
                 messages
                     .iter()
-                    .any(|message| message.log_summary().contains("Consolidate raw session"))
+                    .any(|message| message.log_summary().contains("Route each knowledge update"))
+            })
+            .returning(move |_, _, _| {
+                Ok(AgentMessageExt::assistant_text(format!(
+                    r#"{{"routes":[{{"update_id":"session:{session_id}","action":"create_new","anchor_path":null,"target_path":"/engineering/testing/verification","reason":"testing guidance","confidence":0.9}}]}}"#
+                )))
+            });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages
+                    .iter()
+                    .any(|message| message.log_summary().contains("Rewrite only the target nodes"))
             })
             .returning(|_, _, _| {
                 Ok(AgentMessageExt::assistant_text(
-                    r##"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun targeted tests.","semantic_updates":[]}"##,
+                    r#"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"semantic_updates":[]}"#,
+                ))
+            });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages.iter().any(|message| {
+                    message
+                        .log_summary()
+                        .contains("Summarize the active knowledge tree")
+                })
+            })
+            .returning(|_, _, _| {
+                Ok(AgentMessageExt::assistant_text(
+                    r#"{"summary":"v1\n\nRun targeted tests."}"#,
                 ))
             });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
@@ -113,8 +141,6 @@ mod tests {
         let memory = Arc::new(KmsAgentHandle::new(config, memory_store, source).await);
         memory.system().model_slot().store(model.load_full());
 
-        let agent_id = Uuid::new_v4();
-        let session_id = Uuid::new_v4();
         storage.start_session(agent_id, session_id).await.unwrap();
         storage
             .append_message(session_id, &AgentMessageExt::user("always run tests"))

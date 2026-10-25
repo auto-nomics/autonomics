@@ -25,6 +25,7 @@ pub struct KmsSystem {
     model: Arc<ArcSwapOption<Model>>,
     session_extract_worker: OnceLock<KnowledgeWorkerHandle>,
     consolidation_worker: OnceLock<KnowledgeWorkerHandle>,
+    diagnose_worker: OnceLock<KnowledgeWorkerHandle>,
 }
 
 impl KmsSystem {
@@ -59,6 +60,7 @@ impl KmsSystem {
                 model: Arc::clone(&model),
                 session_extract_worker: OnceLock::new(),
                 consolidation_worker: OnceLock::new(),
+                diagnose_worker: OnceLock::new(),
             }
         });
         let worker = start_knowledge_worker(
@@ -75,6 +77,13 @@ impl KmsSystem {
             KnowledgeWorkerConfig::default(),
         );
         let _ = system.consolidation_worker.set(consolidation_worker);
+        let diagnose_worker = start_knowledge_worker(
+            Arc::clone(&system.pipeline),
+            KnowledgeJobKind::DiagnoseKnowledgeNode,
+            "diagnose_knowledge_node",
+            KnowledgeWorkerConfig::default(),
+        );
+        let _ = system.diagnose_worker.set(diagnose_worker);
         system
     }
 
@@ -106,6 +115,11 @@ impl KmsSystem {
     #[must_use]
     pub fn consolidation_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.consolidation_worker.get().cloned()
+    }
+
+    #[must_use]
+    pub fn diagnose_worker(&self) -> Option<KnowledgeWorkerHandle> {
+        self.diagnose_worker.get().cloned()
     }
 
     #[must_use]
@@ -169,6 +183,11 @@ impl KmsSystem {
                     worker.wake();
                 }
             }
+            KnowledgeJobKind::DiagnoseKnowledgeNode => {
+                if let Some(worker) = self.diagnose_worker() {
+                    worker.wake();
+                }
+            }
         }
     }
 
@@ -177,6 +196,9 @@ impl KmsSystem {
             worker.request_shutdown();
         }
         if let Some(worker) = self.consolidation_worker() {
+            worker.request_shutdown();
+        }
+        if let Some(worker) = self.diagnose_worker() {
             worker.request_shutdown();
         }
     }
@@ -316,10 +338,14 @@ mod tests {
         .await;
         let worker = system.session_extract_worker().expect("worker mounted");
         let consolidation_worker = system.consolidation_worker().expect("worker mounted");
+        let diagnose_worker = system.diagnose_worker().expect("worker mounted");
         system.shutdown();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while worker.status().running || consolidation_worker.status().running {
+        while worker.status().running
+            || consolidation_worker.status().running
+            || diagnose_worker.status().running
+        {
             assert!(
                 std::time::Instant::now() < deadline,
                 "resident knowledge workers did not stop"

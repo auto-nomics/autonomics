@@ -64,6 +64,22 @@ pub struct SemanticObservation {
     pub last_error: Option<String>,
 }
 
+/// A persisted diagnosis for one knowledge node and its direct children.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeDiagnosticFinding {
+    pub id: Uuid,
+    pub target_path: String,
+    pub action: String,
+    pub severity: String,
+    pub status: String,
+    pub message: String,
+    pub recommendation: String,
+    pub proposed_paths: Vec<String>,
+    pub confidence: f64,
+    pub family_hash: String,
+    pub created_at: i64,
+}
+
 #[async_trait]
 pub trait MemoryStore: KnowledgeStore + Send + Sync {
     async fn get_stage1_output(&self, session_id: Uuid) -> Result<Option<MemoryStage1Record>>;

@@ -24,7 +24,7 @@ impl KnowledgeStage for Phase2Stage {
         }
         let _ = trigger;
         let config = context.system.effective_config();
-        phase2::run(&context.system.store(), &context.model, &config).await?;
-        Ok(StageOutcome::completed(Vec::new()))
+        let next_jobs = phase2::run(&context.system.store(), &context.model, &config).await?;
+        Ok(StageOutcome::completed(next_jobs))
     }
 }

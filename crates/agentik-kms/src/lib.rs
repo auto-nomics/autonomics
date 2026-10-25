@@ -15,8 +15,10 @@ mod store;
 mod system;
 
 pub use artifacts::{
-    KnowledgeDraft, MemoryConsolidation, MemoryExtraction, SemanticObservationDraft,
-    parse_json_object, redact_secrets,
+    KnowledgeDraft, KnowledgeNodeConsolidation, KnowledgeNodeDiagnosisOutput,
+    KnowledgeRoutingDecision, KnowledgeRoutingPlan, KnowledgeSummaryConsolidation,
+    KnowledgeUpdateInput, MemoryExtraction, SemanticObservationDraft, parse_json_object,
+    redact_secrets,
 };
 pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};
@@ -32,8 +34,8 @@ pub use source::{EmptyMemorySource, MemorySessionRecord, MemorySource};
 pub use store::error::Error as StoreError;
 pub use store::turso_store::TursoKmsStorage;
 pub use store::{
-    KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob,
-    SemanticObservation,
+    KnowledgeDiagnosticFinding, KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore,
+    MemorySummary, QueuedKnowledgeJob, SemanticObservation,
 };
 pub use system::{KmsAgentHandle, KmsSystem};
 

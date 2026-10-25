@@ -233,6 +233,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_extract_and_consolidation_workers_complete_the_pipeline() {
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
         let mut mock = MockApiClient::new();
         mock.expect_request()
             .times(1)
@@ -251,11 +253,37 @@ mod tests {
             .withf(|messages, _, _| {
                 messages
                     .iter()
-                    .any(|message| message.log_summary().contains("Consolidate raw session"))
+                    .any(|message| message.log_summary().contains("Route each knowledge update"))
+            })
+            .returning(move |_, _, _| {
+                Ok(AgentMessageExt::assistant_text(format!(
+                    r#"{{"routes":[{{"update_id":"session:{session_id}","action":"create_new","anchor_path":null,"target_path":"/engineering/testing/verification","reason":"new testing guidance","confidence":0.9}}]}}"#
+                )))
+            });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages
+                    .iter()
+                    .any(|message| message.log_summary().contains("Rewrite only the target nodes"))
             })
             .returning(|_, _, _| {
                 Ok(AgentMessageExt::assistant_text(
-                    r##"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun targeted tests.","semantic_updates":[]}"##,
+                    r#"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"semantic_updates":[]}"#,
+                ))
+            });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages.iter().any(|message| {
+                    message
+                        .log_summary()
+                        .contains("Summarize the active knowledge tree")
+                })
+            })
+            .returning(|_, _, _| {
+                Ok(AgentMessageExt::assistant_text(
+                    r#"{"summary":"v1\n\nRun targeted tests."}"#,
                 ))
             });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
@@ -266,10 +294,9 @@ mod tests {
         let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let mut config = crate::MemoryConfig::new();
         config.min_idle_hours = 0;
-        let agent_id = Uuid::new_v4();
         let source = Arc::new(OneSessionSource {
             agent_id,
-            session_id: Uuid::new_v4(),
+            session_id,
         });
         let system = KmsSystem::new(config, Arc::clone(&store), source).await;
         system.model_slot().store(model.load_full());
@@ -305,6 +332,15 @@ mod tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "consolidation worker never produced knowledge"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let diagnose = system.diagnose_worker().expect("worker mounted");
+        while diagnose.status().total_executed == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "consolidation did not spawn incremental diagnosis"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
