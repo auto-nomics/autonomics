@@ -114,6 +114,9 @@ pub struct Agent {
     pub(crate) cancel_token: CancellationToken,
 }
 
+const AUTO_SESSION_TITLE: &str = "New conversation";
+const RESTORED_SESSION_TITLE: &str = "Restored";
+
 impl Agent {
     pub fn builder() -> crate::agent_builder::AgentBuilder {
         crate::agent_builder::AgentBuilder::new()
@@ -409,8 +412,9 @@ impl Agent {
                     state,
                     self.cancel_token.clone(),
                 );
-                s.title = Some("Restored".into());
+                s.title = Some(RESTORED_SESSION_TITLE.into());
                 s.resume().await;
+                self.persist_session_title(id, RESTORED_SESSION_TITLE).await;
                 self.sessions.insert(id, s);
                 self.active_session_id = Some(id);
                 tracing::info!("created fallback session from builder initial messages");
@@ -439,14 +443,15 @@ impl Agent {
             {
                 let id = Uuid::new_v4();
                 let mut s = Session::new(id, self.shared.clone());
-                s.title = Some("New conversation".into());
+                s.title = Some(AUTO_SESSION_TITLE.into());
                 s.cancel_token = self.cancel_token.clone();
                 s.resume().await;
+                self.persist_session_title(id, AUTO_SESSION_TITLE).await;
                 self.sessions.insert(id, s);
                 self.active_session_id = Some(id);
                 self.shared.send_event(AgentEvent::SessionActivated {
                     id,
-                    title: Some("New conversation".into()),
+                    title: Some(AUTO_SESSION_TITLE.into()),
                 });
                 tracing::info!("auto-created session on first message");
             }
@@ -614,10 +619,10 @@ impl Agent {
         // table row via start_session(). We must persist the title *after*
         // that row exists, otherwise the UPDATE matches zero rows.
         self.handle_switch_session(id).await;
+        if let Some(ref t) = title {
+            self.persist_session_title(id, t).await;
+        }
         if let Some(storage) = &self.shared.storage {
-            if let Some(ref t) = title {
-                let _ = storage.update_session_title(id, t).await;
-            }
             if let Some(session) = self.sessions.get(&id) {
                 if session.parent_session_id.is_some() {
                     let _ = storage
@@ -740,6 +745,18 @@ impl Agent {
                 } else {
                     true
                 }
+            }
+        }
+    }
+
+    async fn persist_session_title(&self, id: Uuid, title: &str) {
+        if let Some(storage) = &self.shared.storage {
+            if let Err(e) = storage.as_ref().update_session_title(id, title).await {
+                tracing::warn!(
+                    session_id = %id,
+                    error = %e,
+                    "failed to persist session title"
+                );
             }
         }
     }
@@ -907,6 +924,7 @@ async fn persist_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TursoAgentStorage;
     use crate::testing::dummy_model_info;
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
@@ -939,6 +957,63 @@ mod tests {
             .unwrap();
 
         (agent, rx)
+    }
+
+    #[tokio::test]
+    async fn auto_created_session_title_is_persisted() {
+        let storage = std::sync::Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+
+        let mut agent = Agent::builder()
+            .with_storage(storage.clone())
+            .with_agent_event_tx(event_tx)
+            .with_cancel_token(cancel_token)
+            .build()
+            .await
+            .unwrap();
+        let agent_id = agent.id();
+        let internal_tx = agent.internal_event_tx();
+        let task = tokio::spawn(async move {
+            agent.run().await;
+        });
+
+        internal_tx
+            .send(InternalEvent::MessageInject {
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+                from_user: true,
+                delegation_id: None,
+            })
+            .unwrap();
+
+        let activated_title = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match event_rx.recv().await {
+                    Some(AgentEvent::SessionActivated { title, .. }) => break title,
+                    Some(_) => continue,
+                    None => panic!("agent event channel closed"),
+                }
+            }
+        })
+        .await
+        .expect("auto-created session activation timed out");
+        assert_eq!(activated_title.as_deref(), Some(AUTO_SESSION_TITLE));
+
+        internal_tx.send(InternalEvent::Shutdown).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("agent shutdown timed out")
+            .unwrap();
+
+        let records = storage.list_session_records(agent_id).await.unwrap();
+        let title = records
+            .iter()
+            .find(|record| record.title.is_some())
+            .and_then(|record| record.title.clone());
+        assert_eq!(title.as_deref(), Some(AUTO_SESSION_TITLE));
     }
 
     #[allow(dead_code)]
