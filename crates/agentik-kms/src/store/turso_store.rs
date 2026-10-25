@@ -736,13 +736,9 @@ impl TursoKmsStorage {
                 self.conn
                     .execute(
                         "UPDATE knowledge_nodes
-                         SET title = ?1, status = 'active', updated_at = ?2
-                         WHERE id = ?3",
-                        params_from_iter([
-                            Value::Text(node.title.clone()),
-                            Value::Integer(node.updated_at),
-                            uuid_value(id),
-                        ]),
+                     SET status = 'active', updated_at = ?1
+                     WHERE id = ?2 AND structural = 1",
+                        params_from_iter([Value::Integer(node.updated_at), uuid_value(id)]),
                     )
                     .await
                     .map_err(db_err)?;

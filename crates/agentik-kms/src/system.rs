@@ -26,6 +26,7 @@ pub struct KmsSystem {
     session_extract_worker: OnceLock<KnowledgeWorkerHandle>,
     consolidation_worker: OnceLock<KnowledgeWorkerHandle>,
     diagnose_worker: OnceLock<KnowledgeWorkerHandle>,
+    repair_worker: OnceLock<KnowledgeWorkerHandle>,
 }
 
 impl KmsSystem {
@@ -61,6 +62,7 @@ impl KmsSystem {
                 session_extract_worker: OnceLock::new(),
                 consolidation_worker: OnceLock::new(),
                 diagnose_worker: OnceLock::new(),
+                repair_worker: OnceLock::new(),
             }
         });
         let worker = start_knowledge_worker(
@@ -84,6 +86,13 @@ impl KmsSystem {
             KnowledgeWorkerConfig::default(),
         );
         let _ = system.diagnose_worker.set(diagnose_worker);
+        let repair_worker = start_knowledge_worker(
+            Arc::clone(&system.pipeline),
+            KnowledgeJobKind::RepairKnowledgeNode,
+            "repair_knowledge_node",
+            KnowledgeWorkerConfig::default(),
+        );
+        let _ = system.repair_worker.set(repair_worker);
         system
     }
 
@@ -120,6 +129,11 @@ impl KmsSystem {
     #[must_use]
     pub fn diagnose_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.diagnose_worker.get().cloned()
+    }
+
+    #[must_use]
+    pub fn repair_worker(&self) -> Option<KnowledgeWorkerHandle> {
+        self.repair_worker.get().cloned()
     }
 
     #[must_use]
@@ -188,6 +202,11 @@ impl KmsSystem {
                     worker.wake();
                 }
             }
+            KnowledgeJobKind::RepairKnowledgeNode => {
+                if let Some(worker) = self.repair_worker() {
+                    worker.wake();
+                }
+            }
         }
     }
 
@@ -199,6 +218,9 @@ impl KmsSystem {
             worker.request_shutdown();
         }
         if let Some(worker) = self.diagnose_worker() {
+            worker.request_shutdown();
+        }
+        if let Some(worker) = self.repair_worker() {
             worker.request_shutdown();
         }
     }
@@ -339,12 +361,14 @@ mod tests {
         let worker = system.session_extract_worker().expect("worker mounted");
         let consolidation_worker = system.consolidation_worker().expect("worker mounted");
         let diagnose_worker = system.diagnose_worker().expect("worker mounted");
+        let repair_worker = system.repair_worker().expect("worker mounted");
         system.shutdown();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while worker.status().running
             || consolidation_worker.status().running
             || diagnose_worker.status().running
+            || repair_worker.status().running
         {
             assert!(
                 std::time::Instant::now() < deadline,

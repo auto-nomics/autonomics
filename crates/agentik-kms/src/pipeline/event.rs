@@ -13,6 +13,7 @@ pub enum KnowledgeEvent {
     MemoryNoteCreated { note_id: Uuid },
     ConsolidationRequested { reason: String },
     KnowledgeDiagnosisRequested { target_path: String, reason: String },
+    KnowledgeRepairRequested { finding_id: Uuid },
 }
 
 impl KnowledgeEvent {
@@ -25,6 +26,9 @@ impl KnowledgeEvent {
             Self::ConsolidationRequested { .. } => None,
             Self::KnowledgeDiagnosisRequested { target_path, .. } => {
                 Some(format!("diagnose-knowledge-node-requested:{target_path}"))
+            }
+            Self::KnowledgeRepairRequested { finding_id } => {
+                Some(format!("repair-knowledge-node-requested:{finding_id}"))
             }
         }
     }
@@ -55,6 +59,11 @@ impl KnowledgeEvent {
                     target_path: target_path.clone(),
                     family_hash: None,
                     trigger: reason.clone(),
+                }]
+            }
+            Self::KnowledgeRepairRequested { finding_id } => {
+                vec![super::job::KnowledgeJob::RepairKnowledgeNode {
+                    finding_id: *finding_id,
                 }]
             }
         }

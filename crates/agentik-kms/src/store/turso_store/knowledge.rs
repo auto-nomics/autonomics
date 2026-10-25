@@ -78,7 +78,8 @@ impl KnowledgeStore for TursoKmsStorage {
             .query(
                 "SELECT id, parent_id, knowledge_path, title, body_md, status,
                         confidence, source_hash, structural, created_at, updated_at
-                 FROM knowledge_nodes WHERE knowledge_path = ?1",
+                 FROM knowledge_nodes
+                 WHERE knowledge_path = ?1 AND status = 'active'",
                 params_from_iter([Value::Text(path.to_string())]),
             )
             .await
@@ -155,5 +156,75 @@ impl KnowledgeStore for TursoKmsStorage {
             row_to_diagnostic_finding,
         )
         .await
+    }
+
+    async fn get_diagnostic_finding(
+        &self,
+        finding_id: Uuid,
+    ) -> Result<Option<KnowledgeDiagnosticFinding>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, target_path, action, severity, status, message, recommendation,
+                        proposed_paths_json, confidence, family_hash, created_at
+                 FROM knowledge_diagnostic_findings WHERE id = ?1",
+                params_from_iter([uuid_value(finding_id)]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(match rows.next().await.map_err(db_err)? {
+            Some(row) => Some(row_to_diagnostic_finding(&row)?),
+            None => None,
+        })
+    }
+
+    async fn set_diagnostic_finding_status(&self, finding_id: Uuid, status: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE knowledge_diagnostic_findings
+                 SET status = ?1
+                 WHERE id = ?2",
+                params_from_iter([Value::Text(status.to_string()), uuid_value(finding_id)]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn apply_knowledge_repair(
+        &self,
+        nodes: Vec<Knowledge>,
+        archive_paths: Vec<String>,
+    ) -> Result<()> {
+        let now = crate::now_ms();
+        self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
+        let result = async {
+            for node in nodes {
+                self.ensure_knowledge_node(&node).await?;
+            }
+            for path in archive_paths {
+                self.conn
+                    .execute(
+                        "UPDATE knowledge_nodes
+                         SET status = 'superseded', updated_at = ?1
+                         WHERE knowledge_path = ?2 AND status = 'active'",
+                        params_from_iter([Value::Integer(now), Value::Text(path)]),
+                    )
+                    .await
+                    .map_err(db_err)?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
     }
 }

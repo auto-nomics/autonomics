@@ -16,9 +16,9 @@ mod system;
 
 pub use artifacts::{
     KnowledgeDraft, KnowledgeNodeConsolidation, KnowledgeNodeDiagnosisOutput,
-    KnowledgeRoutingDecision, KnowledgeRoutingPlan, KnowledgeSummaryConsolidation,
-    KnowledgeUpdateInput, MemoryExtraction, SemanticObservationDraft, parse_json_object,
-    redact_secrets,
+    KnowledgeRepairOutput, KnowledgeRoutingDecision, KnowledgeRoutingPlan,
+    KnowledgeSummaryConsolidation, KnowledgeUpdateInput, MemoryExtraction,
+    SemanticObservationDraft, parse_json_object, redact_secrets,
 };
 pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};

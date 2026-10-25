@@ -81,7 +81,12 @@ impl KnowledgeStage for DiagnoseKnowledgeNodeStage {
             .map_err(|e| Error::model_output("knowledge diagnosis output", e))?;
         let finding = validate_diagnosis(&target, &children, output, &current_family_hash)?;
         if let Some(finding) = finding {
-            store.insert_diagnostic_finding(finding).await?;
+            let finding = store.insert_diagnostic_finding(finding).await?;
+            return Ok(StageOutcome::completed(vec![
+                KnowledgeJob::RepairKnowledgeNode {
+                    finding_id: finding.id,
+                },
+            ]));
         }
         Ok(StageOutcome::completed(Vec::new()))
     }
@@ -254,6 +259,18 @@ mod tests {
                     r#"{"action":"split","reason":"The node mixes unit and integration testing.","proposed_paths":["/engineering/testing/oversized/unit","/engineering/testing/oversized/integration"],"confidence":0.88}"#,
                 ))
             });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages
+                    .iter()
+                    .any(|message| message.log_summary().contains("Repair one knowledge-node"))
+            })
+            .returning(|_, _, _| {
+                Ok(Message::user(
+                    r#"{"nodes":[{"knowledge_path":"/engineering/testing/oversized","title":"Oversized testing","body_md":"Testing overview.","confidence":0.9},{"knowledge_path":"/engineering/testing/oversized/unit","title":"Unit testing","body_md":"Use unit tests for focused behavior.","confidence":0.9},{"knowledge_path":"/engineering/testing/oversized/integration","title":"Integration testing","body_md":"Use integration tests for component boundaries.","confidence":0.9}],"archive_paths":[]}"#,
+                ))
+            });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
             model_info("diagnose-knowledge"),
             mock,
@@ -305,8 +322,32 @@ mod tests {
         }
 
         assert_eq!(findings[0].action, "split");
-        assert_eq!(findings[0].status, "open");
         assert_eq!(findings[0].proposed_paths.len(), 2);
+        let finding_id = findings[0].id;
+        let mut finding = store
+            .get_diagnostic_finding(finding_id)
+            .await
+            .unwrap()
+            .unwrap();
+        while finding.status != "resolved" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "repair worker never resolved the finding"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            finding = store
+                .get_diagnostic_finding(finding_id)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert!(
+            store
+                .get_knowledge_by_path("/engineering/testing/oversized/unit")
+                .await
+                .unwrap()
+                .is_some()
+        );
         system.shutdown();
     }
 }

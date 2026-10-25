@@ -79,6 +79,15 @@ pub struct KnowledgeNodeDiagnosisOutput {
     pub confidence: f64,
 }
 
+/// Structured result of a deterministic knowledge-node repair.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct KnowledgeRepairOutput {
+    #[serde(default)]
+    pub nodes: Vec<KnowledgeDraft>,
+    #[serde(default)]
+    pub archive_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KnowledgeDraft {
     pub knowledge_path: String,

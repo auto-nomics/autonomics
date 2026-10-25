@@ -29,4 +29,17 @@ pub trait KnowledgeStore {
         target_path: &str,
         limit: usize,
     ) -> Result<Vec<KnowledgeDiagnosticFinding>>;
+
+    async fn get_diagnostic_finding(
+        &self,
+        finding_id: Uuid,
+    ) -> Result<Option<KnowledgeDiagnosticFinding>>;
+
+    async fn set_diagnostic_finding_status(&self, finding_id: Uuid, status: &str) -> Result<()>;
+
+    async fn apply_knowledge_repair(
+        &self,
+        nodes: Vec<Knowledge>,
+        archive_paths: Vec<String>,
+    ) -> Result<()>;
 }

@@ -7,6 +7,7 @@ pub enum KnowledgeJobKind {
     SessionExtract,
     ConsolidateKnowledge,
     DiagnoseKnowledgeNode,
+    RepairKnowledgeNode,
 }
 
 impl KnowledgeJobKind {
@@ -16,6 +17,7 @@ impl KnowledgeJobKind {
             Self::SessionExtract => "session_extract",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
             Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
+            Self::RepairKnowledgeNode => "repair_knowledge_node",
         }
     }
 
@@ -25,6 +27,7 @@ impl KnowledgeJobKind {
             Self::SessionExtract => "extract_agent_sessions",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
             Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
+            Self::RepairKnowledgeNode => "repair_knowledge_node",
         }
     }
 }
@@ -44,6 +47,9 @@ pub enum KnowledgeJob {
         family_hash: Option<String>,
         trigger: String,
     },
+    RepairKnowledgeNode {
+        finding_id: Uuid,
+    },
 }
 
 impl KnowledgeJob {
@@ -62,6 +68,9 @@ impl KnowledgeJob {
                 "diagnose-knowledge-node:{target_path}:{}",
                 family_hash.as_deref().unwrap_or("current")
             ),
+            Self::RepairKnowledgeNode { finding_id } => {
+                format!("repair-knowledge-node:{finding_id}")
+            }
         }
     }
 
@@ -71,6 +80,7 @@ impl KnowledgeJob {
             Self::ExtractAgentSessions { .. } => KnowledgeJobKind::SessionExtract,
             Self::ConsolidateKnowledge { .. } => KnowledgeJobKind::ConsolidateKnowledge,
             Self::DiagnoseKnowledgeNode { .. } => KnowledgeJobKind::DiagnoseKnowledgeNode,
+            Self::RepairKnowledgeNode { .. } => KnowledgeJobKind::RepairKnowledgeNode,
         }
     }
 }
