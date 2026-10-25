@@ -6,9 +6,8 @@ use arc_swap::ArcSwapOption;
 
 use super::{AgentRuntimeConfig, MemoryConfig, MemoryStore, TursoKmsStorage};
 use crate::pipeline::{
-    ConsolidationWorkerConfig, ConsolidationWorkerHandle, KnowledgeEvent, KnowledgeJob,
-    KnowledgeJobKind, KnowledgePipeline, SessionExtractWorkerConfig, SessionExtractWorkerHandle,
-    start_consolidation_worker, start_session_extract_worker,
+    KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, KnowledgeWorkerConfig,
+    KnowledgeWorkerHandle, start_knowledge_worker,
 };
 use crate::source::MemorySource;
 use crate::store::KnowledgeQueue;
@@ -24,8 +23,8 @@ pub struct KmsSystem {
     queue: Arc<dyn KnowledgeQueue>,
     pipeline: Arc<KnowledgePipeline>,
     model: Arc<ArcSwapOption<Model>>,
-    session_extract_worker: OnceLock<SessionExtractWorkerHandle>,
-    consolidation_worker: OnceLock<ConsolidationWorkerHandle>,
+    session_extract_worker: OnceLock<KnowledgeWorkerHandle>,
+    consolidation_worker: OnceLock<KnowledgeWorkerHandle>,
 }
 
 impl KmsSystem {
@@ -62,14 +61,18 @@ impl KmsSystem {
                 consolidation_worker: OnceLock::new(),
             }
         });
-        let worker = start_session_extract_worker(
+        let worker = start_knowledge_worker(
             Arc::clone(&system.pipeline),
-            SessionExtractWorkerConfig::default(),
+            KnowledgeJobKind::SessionExtract,
+            "session_extract",
+            KnowledgeWorkerConfig::default(),
         );
         let _ = system.session_extract_worker.set(worker);
-        let consolidation_worker = start_consolidation_worker(
+        let consolidation_worker = start_knowledge_worker(
             Arc::clone(&system.pipeline),
-            ConsolidationWorkerConfig::default(),
+            KnowledgeJobKind::ConsolidateKnowledge,
+            "consolidation",
+            KnowledgeWorkerConfig::default(),
         );
         let _ = system.consolidation_worker.set(consolidation_worker);
         system
@@ -96,12 +99,12 @@ impl KmsSystem {
     }
 
     #[must_use]
-    pub fn session_extract_worker(&self) -> Option<SessionExtractWorkerHandle> {
+    pub fn session_extract_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.session_extract_worker.get().cloned()
     }
 
     #[must_use]
-    pub fn consolidation_worker(&self) -> Option<ConsolidationWorkerHandle> {
+    pub fn consolidation_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.consolidation_worker.get().cloned()
     }
 
