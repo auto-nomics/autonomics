@@ -3,11 +3,14 @@ use std::sync::{Arc, OnceLock, Weak};
 use agentik_sdk::model::Model;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
+use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 use super::{AgentRuntimeConfig, MemoryConfig, MemoryStore, TursoKmsStorage};
 use crate::pipeline::{
     KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, KnowledgeWorkerConfig,
-    KnowledgeWorkerHandle, start_knowledge_worker,
+    KnowledgeWorkerEvent, KnowledgeWorkerHandle, KnowledgeWorkerState, KnowledgeWorkerStatus,
+    start_knowledge_worker,
 };
 use crate::source::MemorySource;
 use crate::store::KnowledgeQueue;
@@ -27,6 +30,7 @@ pub struct KmsSystem {
     consolidation_worker: OnceLock<KnowledgeWorkerHandle>,
     diagnose_worker: OnceLock<KnowledgeWorkerHandle>,
     repair_worker: OnceLock<KnowledgeWorkerHandle>,
+    worker_events: broadcast::Sender<KnowledgeWorkerEvent>,
 }
 
 impl KmsSystem {
@@ -43,6 +47,7 @@ impl KmsSystem {
         source: Arc<dyn MemorySource>,
     ) -> Arc<Self> {
         let model = Arc::new(ArcSwapOption::empty());
+        let (worker_events, _) = broadcast::channel(256);
         // The pipeline owns KMS weakly: KmsSystem is the process root and owns
         // the pipeline strongly, so a worker can outlive a shutdown without
         // leaking the entire system through a reference cycle.
@@ -63,6 +68,7 @@ impl KmsSystem {
                 consolidation_worker: OnceLock::new(),
                 diagnose_worker: OnceLock::new(),
                 repair_worker: OnceLock::new(),
+                worker_events: worker_events.clone(),
             }
         });
         let worker = start_knowledge_worker(
@@ -70,6 +76,7 @@ impl KmsSystem {
             KnowledgeJobKind::SessionExtract,
             "session_extract",
             KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
         );
         let _ = system.session_extract_worker.set(worker);
         let consolidation_worker = start_knowledge_worker(
@@ -77,6 +84,7 @@ impl KmsSystem {
             KnowledgeJobKind::ConsolidateKnowledge,
             "consolidation",
             KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
         );
         let _ = system.consolidation_worker.set(consolidation_worker);
         let diagnose_worker = start_knowledge_worker(
@@ -84,6 +92,7 @@ impl KmsSystem {
             KnowledgeJobKind::DiagnoseKnowledgeNode,
             "diagnose_knowledge_node",
             KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
         );
         let _ = system.diagnose_worker.set(diagnose_worker);
         let repair_worker = start_knowledge_worker(
@@ -91,6 +100,7 @@ impl KmsSystem {
             KnowledgeJobKind::RepairKnowledgeNode,
             "repair_knowledge_node",
             KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
         );
         let _ = system.repair_worker.set(repair_worker);
         system
@@ -134,6 +144,38 @@ impl KmsSystem {
     #[must_use]
     pub fn repair_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.repair_worker.get().cloned()
+    }
+
+    #[must_use]
+    pub fn subscribe_worker_events(&self) -> broadcast::Receiver<KnowledgeWorkerEvent> {
+        self.worker_events.subscribe()
+    }
+
+    #[must_use]
+    pub fn worker_statuses(&self) -> Vec<KmsWorkerStatusSnapshot> {
+        [
+            (
+                KnowledgeJobKind::SessionExtract,
+                self.session_extract_worker().map(|worker| worker.status()),
+            ),
+            (
+                KnowledgeJobKind::ConsolidateKnowledge,
+                self.consolidation_worker().map(|worker| worker.status()),
+            ),
+            (
+                KnowledgeJobKind::DiagnoseKnowledgeNode,
+                self.diagnose_worker().map(|worker| worker.status()),
+            ),
+            (
+                KnowledgeJobKind::RepairKnowledgeNode,
+                self.repair_worker().map(|worker| worker.status()),
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(worker, status)| {
+            status.map(|status| KmsWorkerStatusSnapshot { worker, status })
+        })
+        .collect()
     }
 
     #[must_use]
@@ -224,6 +266,12 @@ impl KmsSystem {
             worker.request_shutdown();
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KmsWorkerStatusSnapshot {
+    pub worker: KnowledgeJobKind,
+    pub status: KnowledgeWorkerStatus,
 }
 
 /// Agent-scoped view over the process-wide [`KmsSystem`].
@@ -324,6 +372,7 @@ impl KmsAgentHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn agent_handles_isolate_runtime_config_over_one_system() {
@@ -376,5 +425,38 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn worker_events_report_running_and_idle_states() {
+        let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let system = KmsSystem::new(
+            MemoryConfig::new(),
+            storage,
+            Arc::new(crate::EmptyMemorySource),
+        )
+        .await;
+        let mut events = system.subscribe_worker_events();
+        system
+            .submit_event(KnowledgeEvent::AgentStarted {
+                agent_id: Uuid::new_v4(),
+            })
+            .await
+            .unwrap();
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("worker event deadline")
+            .expect("worker event channel open");
+        assert_eq!(first.worker, KnowledgeJobKind::SessionExtract);
+        assert_eq!(first.state, KnowledgeWorkerState::Running);
+
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+            .await
+            .expect("worker idle event deadline")
+            .expect("worker event channel open");
+        assert_eq!(second.worker, KnowledgeJobKind::SessionExtract);
+        assert_eq!(second.state, KnowledgeWorkerState::Idle);
+        system.shutdown();
     }
 }

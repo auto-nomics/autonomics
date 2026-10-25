@@ -63,6 +63,9 @@ impl App {
                     reason,
                 });
             }
+            GatewayNotice::KmsWorkerChanged { status } => {
+                self.handle_app_event(crate::app_event::AppEvent::KmsWorkerStatusChanged(status));
+            }
             GatewayNotice::ChatgptLogin { result } => {
                 self.handle_app_event(crate::app_event::AppEvent::ChatgptLoginCompleted { result });
             }
@@ -284,6 +287,14 @@ impl App {
             crate::app_event::AppEvent::ActiveModelChanged { spec, reason } => {
                 tracing::info!(spec = ?spec, reason = %reason, "daemon active model changed");
                 self.spawn_catalog_reload();
+            }
+            crate::app_event::AppEvent::KmsWorkerStatusChanged(status) => {
+                tracing::debug!(
+                    worker = %status.worker,
+                    state = %status.state,
+                    "KMS worker state changed"
+                );
+                self.state.apply_kms_worker_status(status);
             }
             crate::app_event::AppEvent::RemoteCatalogFetched {
                 provider_name,

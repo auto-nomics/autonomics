@@ -32,6 +32,8 @@ pub struct StatusBar<'a> {
     pub reasoning_effort: Option<&'a str>,
     /// Live compaction state — consulted only while status is `Compacting`.
     pub compact: Option<&'a CompactState>,
+    /// Resident KMS worker activity, e.g. `2/4 running`.
+    pub kms_activity: Option<&'a str>,
     /// Render tick, drives the compacting spinner.
     pub frame: u64,
 }
@@ -105,6 +107,13 @@ impl Widget for StatusBar<'_> {
             format!("out: {}", out_tok),
             Style::default().fg(Color::Gray),
         ));
+
+        if let Some(kms_activity) = self.kms_activity {
+            spans.push(Span::raw("  │  "));
+            spans.push(Span::styled("kms:", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(kms_activity, Style::default().fg(Color::Cyan)));
+        }
 
         // Context window usage — shows percentage, bar, and absolute tokens.
         if self.context_used > 0 {

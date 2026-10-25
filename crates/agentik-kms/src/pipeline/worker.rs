@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Notify, watch};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{Notify, broadcast, watch};
 
 use crate::now_ms;
 use crate::pipeline::{KnowledgeJobKind, KnowledgePipeline};
@@ -29,6 +30,7 @@ pub struct KnowledgeWorker {
     wake: Arc<Notify>,
     shutdown_rx: watch::Receiver<bool>,
     status: Arc<std::sync::Mutex<KnowledgeWorkerStatus>>,
+    events: broadcast::Sender<KnowledgeWorkerEvent>,
 }
 
 impl KnowledgeWorker {
@@ -39,6 +41,7 @@ impl KnowledgeWorker {
             }
 
             self.set_running(true);
+            self.publish_state(KnowledgeWorkerState::Running);
             let result = self
                 .pipeline
                 .run_due_for_kind(self.kind, self.config.batch_limit)
@@ -62,6 +65,7 @@ impl KnowledgeWorker {
                     status.last_error = Some(error.to_string());
                 }
             }
+            self.publish_state(KnowledgeWorkerState::Idle);
 
             if continue_draining {
                 continue;
@@ -80,6 +84,7 @@ impl KnowledgeWorker {
         }
 
         self.set_running(false);
+        self.publish_state(KnowledgeWorkerState::Stopped);
         tracing::debug!(worker = self.label, "knowledge worker stopped");
     }
 
@@ -91,6 +96,16 @@ impl KnowledgeWorker {
 
     fn set_running(&self, running: bool) {
         self.lock_status().running = running;
+    }
+
+    fn publish_state(&self, state: KnowledgeWorkerState) {
+        let status = self.lock_status().clone();
+        let _ = self.events.send(KnowledgeWorkerEvent {
+            worker: self.kind,
+            state,
+            status,
+            at_ms: now_ms(),
+        });
     }
 }
 
@@ -120,7 +135,7 @@ impl KnowledgeWorkerHandle {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KnowledgeWorkerStatus {
     pub running: bool,
     pub last_run_at: Option<i64>,
@@ -130,11 +145,28 @@ pub struct KnowledgeWorkerStatus {
     pub total_released: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeWorkerState {
+    Idle,
+    Running,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeWorkerEvent {
+    pub worker: KnowledgeJobKind,
+    pub state: KnowledgeWorkerState,
+    pub status: KnowledgeWorkerStatus,
+    pub at_ms: i64,
+}
+
 pub fn start_knowledge_worker(
     pipeline: Arc<KnowledgePipeline>,
     kind: KnowledgeJobKind,
     label: &'static str,
     config: KnowledgeWorkerConfig,
+    events: broadcast::Sender<KnowledgeWorkerEvent>,
 ) -> KnowledgeWorkerHandle {
     let wake = Arc::new(Notify::new());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -147,6 +179,7 @@ pub fn start_knowledge_worker(
         wake: Arc::clone(&wake),
         shutdown_rx,
         status: Arc::clone(&status),
+        events,
     };
     tokio::spawn(worker.run());
     KnowledgeWorkerHandle {

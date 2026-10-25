@@ -133,10 +133,19 @@ impl App {
             .unwrap_or_default();
 
         let display = self.state.display_settings.clone();
+        let kms_running = self
+            .state
+            .kms_workers
+            .iter()
+            .filter(|worker| worker.running)
+            .count();
+        let kms_activity = (!self.state.kms_workers.is_empty())
+            .then(|| format!("{kms_running}/{} running", self.state.kms_workers.len()));
         let workspace = AgentWorkspace {
             active_model: model_name.as_deref(),
             context_window,
             reasoning_effort: reasoning_effort.as_deref(),
+            kms_activity: kms_activity.as_deref(),
             sessions: &session_summaries,
             display: &display,
         };

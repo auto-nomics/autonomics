@@ -7,6 +7,7 @@ mod docs;
 mod error;
 mod events;
 mod hydration;
+mod kms;
 mod lifecycle;
 mod model_config;
 mod observations;

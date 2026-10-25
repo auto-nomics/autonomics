@@ -14,4 +14,8 @@ pub use agentik_kms::{
     MemorySource, MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob, Result,
     SemanticObservation, TursoKmsStorage, now_ms, redact_secrets,
 };
+pub use agentik_kms::{
+    KmsWorkerStatusSnapshot, KnowledgeJobKind, KnowledgeWorkerEvent, KnowledgeWorkerState,
+    KnowledgeWorkerStatus,
+};
 pub use tools::memory_registrations;

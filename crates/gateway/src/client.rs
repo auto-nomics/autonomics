@@ -218,6 +218,10 @@ impl GatewayClient {
         self.get("/gateway/status").await
     }
 
+    pub async fn kms_worker_statuses(&self) -> Result<Vec<KmsWorkerStatusView>> {
+        self.get("/kms/workers").await
+    }
+
     /// Probe variant: `Ok(None)` when the daemon is unreachable (connection
     /// refused / timeout / non-gateway responder).
     pub async fn gateway_status_opt(&self) -> Result<Option<GatewayStatus>> {

@@ -18,6 +18,6 @@ pub use job::{KnowledgeJob, KnowledgeJobKind};
 pub use service::{KnowledgePipeline, KnowledgeRunSummary};
 pub use stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 pub use worker::{
-    KnowledgeWorker, KnowledgeWorkerConfig, KnowledgeWorkerHandle, KnowledgeWorkerStatus,
-    start_knowledge_worker,
+    KnowledgeWorker, KnowledgeWorkerConfig, KnowledgeWorkerEvent, KnowledgeWorkerHandle,
+    KnowledgeWorkerState, KnowledgeWorkerStatus, start_knowledge_worker,
 };

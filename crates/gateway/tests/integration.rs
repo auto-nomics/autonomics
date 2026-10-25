@@ -178,6 +178,26 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     gateway_daemon.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kms_worker_snapshot_exposes_resident_workers() {
+    let gateway_daemon = start_mock_gateway("ok").await;
+    let workers = gateway_daemon.client().kms_worker_statuses().await.unwrap();
+    let mut names = workers
+        .into_iter()
+        .map(|worker| worker.worker)
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "consolidate_knowledge".to_string(),
+            "diagnose_knowledge_node".to_string(),
+            "repair_knowledge_node".to_string(),
+            "session_extract".to_string(),
+        ]
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bearer_token_gates_the_api() {
     let gateway_daemon = start_mock_gateway("x").await;
