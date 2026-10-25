@@ -14,6 +14,8 @@ use crate::MemorySource;
 use crate::now_ms;
 use crate::store::KnowledgeQueue;
 
+const MAX_DRAIN_ROUNDS_PER_WAKE: usize = 4;
+
 pub struct KnowledgePipeline {
     queue: Arc<dyn KnowledgeQueue>,
     source: Arc<dyn MemorySource>,
@@ -73,7 +75,7 @@ impl KnowledgePipeline {
         limit: usize,
     ) -> Result<KnowledgeRunSummary, Error> {
         let mut summary = KnowledgeRunSummary::default();
-        for _ in 0..4 {
+        for _ in 0..MAX_DRAIN_ROUNDS_PER_WAKE {
             let claimed = self
                 .queue
                 .claim_due_for_kind(now_ms(), job_kind, limit)
