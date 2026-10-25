@@ -1402,7 +1402,7 @@ mod tests {
     /// summary silently lost its profile prompt.
     #[tokio::test]
     async fn memory_summary_appends_to_custom_system_section() {
-        use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore};
+        use crate::memory::{KmsAgentHandle, MemoryConfig, MemoryStore};
         use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
@@ -1424,14 +1424,13 @@ mod tests {
         let model = Model::with_client(dummy_model_info("mem-section"), mock);
 
         // Seed a memory summary the way phase 2 consolidation would.
-        let store: Arc<dyn MemoryStore> = Arc::new(
-            crate::memory::TursoMemoryStorage::open_in_memory()
+        let store = Arc::new(
+            crate::memory::TursoKmsStorage::open_in_memory()
                 .await
                 .unwrap(),
         );
         store
             .complete_phase2(
-                MEMORY_SCOPE_ID,
                 "test-source",
                 Vec::new(),
                 "v1\n\nPrefer targeted tests.",
@@ -1440,7 +1439,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let memory = Arc::new(MemoryBackend::new(MemoryConfig::new(), store, None));
+        let memory = Arc::new(
+            KmsAgentHandle::new(
+                MemoryConfig::new(),
+                store,
+                Arc::new(crate::memory::EmptyMemorySource),
+            )
+            .await,
+        );
+        let memory_system = memory.system();
 
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentShared {
@@ -1484,6 +1491,7 @@ mod tests {
             profile_at < memory_at,
             "profile section must render before the memory section"
         );
+        memory_system.shutdown();
     }
 
     /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system
@@ -1538,9 +1546,10 @@ mod tests {
 
         let system = captured.lock().unwrap().clone().expect("system captured");
         assert!(system.contains("## Skill library"), "{system}");
-        for tool in ["skill_search", "skill_get", "evo_observe", "skill_evolve"] {
+        for tool in ["skill_search", "skill_get", "memory_note", "skill_evolve"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
+        assert!(!system.contains("evo_observe"));
     }
 
     /// Skills are guidance and tool users, not tool gatekeepers. Every tool

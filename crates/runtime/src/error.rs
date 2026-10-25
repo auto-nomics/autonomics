@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use agentik_core::error::AgentError;
-use agentik_core::memory::MemoryError;
+use agentik_core::memory::Error as MemoryError;
 use agentik_core::storage::StorageError;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -30,9 +30,6 @@ pub enum Error {
 
     #[error("writing system init failed: {0}")]
     Writing(#[from] writing_base::Error),
-
-    #[error("knowledge store error: {0}")]
-    Kms(#[from] kms::Error),
 
     /// Another process already holds the single-writer lock for this
     /// state directory (`<state_dir>/runtime.lock`). The second instance

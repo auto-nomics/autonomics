@@ -8,7 +8,7 @@ pub enum EvolutionTrigger {
     /// Periodic sweep.
     Timer,
     /// A skill-eligible observation was just recorded. Fired
-    /// best-effort by the recording tools (agent `evo_observe`, eval
+    /// best-effort by the recording paths (host-owned observations, eval
     /// auto-capture); a full channel or a dead worker drops the event
     /// and counts it — the next timer sweep still picks the evidence
     /// up, so the trigger is an optimization, not a correctness

@@ -457,7 +457,7 @@ mod agent_persistence_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("knowledge.db");
+        config.knowledge_db_path = dir.path().join("knowledge.db");
         // The parent (/root/researcher) is a root-level agent; without this
         // it would run the startup memory pipeline (default on) against an
         // empty model slot in the first host and add noise to the event

@@ -958,7 +958,7 @@ mod literature_mount_tests {
             .agent_db(directory.path().join("agent.db"))
             .writing_db_path(directory.path().join("writing.db"))
             .app_db_path(directory.path().join("app.db"))
-            .kms_db_path(directory.path().join("knowledge.db"))
+            .knowledge_db_path(directory.path().join("knowledge.db"))
             .dag_history_db(directory.path().join("dag.db"))
             .build();
         let mut manifest = base_manifest();
@@ -999,7 +999,7 @@ mod literature_mount_tests {
             .agent_db(directory.path().join("agent.db"))
             .writing_db_path(directory.path().join("writing.db"))
             .app_db_path(directory.path().join("app.db"))
-            .kms_db_path(directory.path().join("knowledge.db"))
+            .knowledge_db_path(directory.path().join("knowledge.db"))
             .dag_history_db(directory.path().join("dag.db"))
             .build();
         let mut manifest = base_manifest();

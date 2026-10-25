@@ -37,7 +37,7 @@ pub(crate) async fn get_state(
         agents: live_agents,
         sessions: state.sessions.snapshot(),
         display_settings,
-        runtime_defaults: state.infra.memory.runtime_config(),
+        runtime_defaults: state.infra.kms.runtime_config(),
         model_catalog: catalog,
     };
     let last_seq = state.hub.last_seq();

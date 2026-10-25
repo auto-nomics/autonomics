@@ -8,10 +8,10 @@ mod adapter;
 mod tools;
 
 pub use adapter::{AgentStorageMemorySource, agent_storage_memory_source};
-pub use agentik_memory::{
-    AgentRuntimeConfig, MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry,
-    MemoryEntryDraft, MemoryError, MemoryNote, MemoryResult, MemorySource, MemoryStage1Record,
-    MemoryStore, MemorySummary, SemanticGrounding, SemanticGroundingOutcome, SemanticObservation,
-    TursoMemoryStorage, memory_prompt_section, now_ms, redact_secrets, run_memory_pipeline,
+pub use agentik_kms::{
+    AgentRuntimeConfig, EmptyMemorySource, Error, KmsAgentHandle, KmsSystem, Knowledge,
+    KnowledgeEvent, KnowledgePath, KnowledgeQueue, KnowledgeStore, MemoryConfig, MemoryNote,
+    MemorySource, MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob, Result,
+    SemanticObservation, TursoKmsStorage, now_ms, redact_secrets,
 };
 pub use tools::memory_registrations;

@@ -2,7 +2,7 @@
 members = [
   "crates/agentik-sdk",
   "crates/agentik-types",
-  "crates/agentik-memory",
+  "crates/agentik-kms",
   "crates/agentik-core",
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",
@@ -79,8 +79,6 @@ members = [
   "crates/europepmc",
   "crates/openalex",
   "crates/semantic-scholar",
-  "crates/kms",
-  "crates/kms-tools",
   "crates/agentik-network",
   "stat_crates/ml",
   "stat_crates/mice",

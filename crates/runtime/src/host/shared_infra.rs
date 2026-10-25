@@ -7,9 +7,7 @@ use std::sync::{Arc, Weak};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
-use agentik_core::memory::{
-    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, TursoMemoryStorage,
-};
+use agentik_core::memory::{Error as MemoryError, KmsSystem, MemoryConfig, TursoKmsStorage};
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
 use arc_swap::ArcSwapOption;
@@ -24,7 +22,6 @@ use vfs::OpendalFileStorage;
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::error::{Error, Result};
-use crate::memory_kms::KmsMemoryGrounding;
 
 use super::bundles::build_bundle_registry;
 use super::gc::{
@@ -142,9 +139,7 @@ pub struct SharedInfra {
     pub writing: Arc<writing_base::WritingShared>,
     /// Base persistent-memory backend. Each agent gets a clone with its own
     /// resolved runtime overrides while sharing the store and grounding sink.
-    pub memory: Arc<MemoryBackend>,
-    /// Optional Turso-backed KMS knowledge service.
-    pub kms: Option<Arc<kms::KmsService>>,
+    pub kms: Arc<KmsSystem>,
     /// The process-wide observation hub — the upstream evidence
     /// ledger shared by skills, plugins, and gateway handlers. Neither
     /// downstream owns it; both resolve the same instance.
@@ -264,8 +259,7 @@ impl SharedInfra {
         let turso_store = open_agent_storage(config).await?;
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        let kms = open_kms(config, &turso_store).await?;
-        let memory = open_memory(config, &kms).await?;
+        let kms = open_kms_system(config, &turso_store).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
 
@@ -304,7 +298,6 @@ impl SharedInfra {
             resource_downloader,
             bib,
             writing,
-            memory,
             kms,
             observations,
             evolution_handle,
@@ -345,7 +338,7 @@ impl SharedInfra {
 
         let config_json = config.to_json();
         let storage = self.storage.clone();
-        let defaults = self.memory.runtime_config();
+        let defaults = self.kms.runtime_config();
         let runtime_config = agentik_core::AgentRuntimeConfig::new(
             config.runtime.use_memory.unwrap_or(defaults.use_memory),
             config
@@ -353,8 +346,7 @@ impl SharedInfra {
                 .generate_memory
                 .unwrap_or(defaults.generate_memory),
         );
-        let memory = Arc::new(MemoryBackend::clone(&self.memory));
-        memory.set_runtime_config(runtime_config);
+        let memory = self.kms.agent_handle(runtime_config);
 
         let mut builder = Agent::builder()
             .with_model(model.clone())
@@ -482,10 +474,7 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.push(crate::evolution_tools::evo_observe_registration(
-            Arc::clone(&self.evolution_handle),
-            self.skill_evolution.clone(),
-        ));
+
         tools.extend(skills::skill_registrations(
             self.skills.clone(),
             self.skill_evolution.clone(),
@@ -567,10 +556,6 @@ impl SharedInfra {
                 ws.engine.clone(),
             );
             tools.extend(writing_tools);
-        }
-
-        if let Some(kms) = self.kms.clone() {
-            tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
@@ -859,63 +844,37 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
     Ok(Arc::new(store))
 }
 
-/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
-/// and build the service when the feature is enabled.
-async fn open_kms(
-    config: &RuntimeConfig,
-    _turso_store: &Arc<TursoAgentStorage>,
-) -> Result<Option<Arc<kms::KmsService>>> {
-    // Initialize the KMS schema in its own knowledge.db unconditionally;
-    // expose tools and semantic grounding only when the runtime feature
-    // is enabled.
-    let kms_db = config.kms_db_path.clone();
-    tracing::info!(
-        path = %kms_db.display(),
-        "SharedInfra::open: opening KMS knowledge db"
-    );
-    let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
-        Ok(storage) => storage,
-        Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
-    };
-    if !config.enable_kms {
-        return Ok(None);
-    }
-    match kms::KmsService::from_storage(kms_storage).await {
-        Ok(service) => Ok(Some(Arc::new(service))),
-        Err(error) => Err(Error::Other(format!("open KMS: {error}"))),
-    }
-}
-
 /// Open the dedicated memory knowledge database and build the process-wide
-/// backend, with KMS semantic grounding when the service is available.
-async fn open_memory(
+/// backend.
+async fn open_kms_system(
     config: &RuntimeConfig,
-    kms: &Option<Arc<kms::KmsService>>,
-) -> Result<Arc<MemoryBackend>> {
+    agent_storage: &Arc<TursoAgentStorage>,
+) -> Result<Arc<KmsSystem>> {
     let started = std::time::Instant::now();
     tracing::info!(
         path = %config.knowledge_db_path.display(),
         "SharedInfra::open: opening memory knowledge db"
     );
-    let store = TursoMemoryStorage::open(&config.knowledge_db_path).await?;
-    store.migrate_from_agent_db(&config.agent_db).await?;
+    let store = Arc::new(
+        TursoKmsStorage::open(&config.knowledge_db_path)
+            .await
+            .map_err(MemoryError::from)?,
+    );
+    store
+        .migrate_from_agent_db(&config.agent_db)
+        .await
+        .map_err(MemoryError::from)?;
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),
         "memory knowledge db opened and legacy migration checked"
     );
 
-    let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
-    let grounding: Option<Arc<dyn SemanticGrounding>> = kms
-        .as_ref()
-        .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    Ok(Arc::new(MemoryBackend::new(
-        memory_config,
-        memory_store,
-        grounding,
-    )))
+    let source =
+        agentik_core::memory::agent_storage_memory_source(Arc::clone(agent_storage) as Arc<_>);
+    Ok(KmsSystem::new(memory_config, store, source).await)
 }
 
 /// Open the bibliography store + literature gateway once and publish
@@ -1075,7 +1034,7 @@ mod remote_embedding_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("knowledge.db");
+        config.knowledge_db_path = dir.path().join("knowledge.db");
         config.use_memory = false;
         config.generate_memory = false;
         config.embedding = text_embedding::EmbeddingConfig {
@@ -1146,7 +1105,7 @@ mod plugin_profile_tools_tests {
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
-        config.kms_db_path = dir.path().join("knowledge.db");
+        config.knowledge_db_path = dir.path().join("knowledge.db");
         // Keep the embedding model (network install + ONNX session)
         // out of this test.
         config.embedding.enabled = false;
@@ -1185,7 +1144,7 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "plugin_environments_list")
         );
         assert!(
-            researcher_tools
+            !researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "evo_observe")
         );

@@ -1,0 +1,218 @@
+<mxfile host="65bd71144e">
+    <diagram id="agentik-kms" name="Knowledge Management Architecture">
+        <mxGraphModel dx="1655" dy="1133" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1250" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" parent="1" style="text;html=1;fontSize=20;fontStyle=1;fontColor=#1a1a2e;align=center;verticalAlign=middle;" value="Agentik KMS: Knowledge-Memory-Skill Architecture" vertex="1">
+                    <mxGeometry height="40" width="1000" x="200" y="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="trig1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="&lt;b&gt;Agent Startup&lt;/b&gt;&lt;br&gt;root agent + generate_memory=true" vertex="1">
+                    <mxGeometry height="55" width="220" x="100" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="trig2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11;" value="&lt;b&gt;API Hot Toggle&lt;/b&gt;&lt;br&gt;generate_memory false → true" vertex="1">
+                    <mxGeometry height="55" width="220" x="420" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="pipeline_queue" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1" value="KnowledgeEvent → knowledge_pipeline_jobs&#xa;(dedup + lease + retry)" vertex="1">
+                    <mxGeometry height="55" width="240" x="700" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="pipeline_entry" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;fontStyle=1" value="KmsSystem&#xa;KnowledgePipeline dispatch + run_due&#xa;KmsAgentHandle = agent runtime view" vertex="1">
+                    <mxGeometry height="40" width="220" x="260" y="165" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_trig1" edge="1" parent="1" source="trig1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="210" y="60"/>
+                            <mxPoint x="820" y="60"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_trig2" edge="1" parent="1" source="trig2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_queue">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_queue_pipeline" edge="1" parent="1" source="pipeline_queue" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="pipeline_entry">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="820" y="180"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="session_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" value="Session Storage&#xa;(rollouts / WAL)" vertex="1">
+                    <mxGeometry height="90" width="150" x="30" y="240" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#CCCCCC;dashed=1;opacity=40;" value="" vertex="1">
+                    <mxGeometry height="270" width="740" x="250" y="235" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#333333;align=left;" value="SessionExtract" vertex="1">
+                    <mxGeometry height="25" width="250" x="270" y="245" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="List idle sessions&#xa;(≥12h idle, ≤90d, max 20)" vertex="1">
+                    <mxGeometry height="50" width="160" x="280" y="285" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_stage1&#xa;(lease + source_hash dedup)" vertex="1">
+                    <mxGeometry height="50" width="160" x="280" y="365" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_render" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Render transcript&#xa;(context-window × 0.7)&#xa;single block ≤2KB" vertex="1">
+                    <mxGeometry height="60" width="170" x="490" y="285" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Extract&#xa;raw_memory + rollout_summary&#xa;+ rollout_slug (JSON)" vertex="1">
+                    <mxGeometry height="55" width="230" x="710" y="285" as="geometry"/>
+                </mxCell>
+                <mxCell id="session_extract_redact" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Redact secrets&#xa;(token=, password=, bearer, etc.)" vertex="1">
+                    <mxGeometry height="45" width="230" x="710" y="370" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_session_extract_list" edge="1" parent="1" source="session_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_list">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_session_extract_list_render" edge="1" parent="1" source="session_extract_list" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_render">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_session_extract_render_llm" edge="1" parent="1" source="session_extract_render" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_llm">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_session_extract_llm_redact" edge="1" parent="1" source="session_extract_llm" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="session_extract_redact">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="stage1_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_stage1&#xa;(source_hash + lease)" vertex="1">
+                    <mxGeometry height="80" width="160" x="540" y="460" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_session_extract_redact_stage1" edge="1" parent="1" source="session_extract_redact" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="stage1_db">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase2_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#CCCCCC;dashed=1;opacity=40;" value="" vertex="1">
+                    <mxGeometry height="300" width="960" x="250" y="580" as="geometry"/>
+                </mxCell>
+                <mxCell id="phase2_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#333333;align=left;" value="Phase 2: Consolidation" vertex="1">
+                    <mxGeometry height="25" width="250" x="270" y="590" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2_load" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Load stage1 (≤100)&#xa;+ pending memory_notes&#xa;+ existing knowledge tree&#xa;+ existing summary" vertex="1">
+                    <mxGeometry height="80" width="190" x="280" y="630" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2_claim" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="claim_phase2&#xa;(global singleton lease)" vertex="1">
+                    <mxGeometry height="50" width="190" x="280" y="740" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;fontStyle=1" value="LLM: Route knowledge tree&#xa;nodes[knowledge_path] + summary&#xa;+ semantic_updates[] (rewrite/create/branch)" vertex="1">
+                    <mxGeometry height="65" width="300" x="540" y="630" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2_normalize" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="Normalize: knowledge_path, clamp confidence,&#xa;predicate → snake_case, redact secrets" vertex="1">
+                    <mxGeometry height="55" width="300" x="540" y="730" as="geometry"/>
+                </mxCell>
+                <mxCell id="p2_write" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1" value="Transactional Write&#xa;(BEGIN → writes → COMMIT&#xa;ROLLBACK on error)" vertex="1">
+                    <mxGeometry height="65" width="180" x="900" y="630" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_stage1_p2" edge="1" parent="1" source="stage1_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_load">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_p2_load_llm" edge="1" parent="1" source="p2_load" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_llm">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_p2_llm_norm" edge="1" parent="1" source="p2_llm" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_normalize">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_p2_norm_write" edge="1" parent="1" source="p2_normalize" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_write">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="notes_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_notes&#xa;(pending user corrections)" vertex="1">
+                    <mxGeometry height="80" width="170" x="30" y="650" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_notes_p2" edge="1" parent="1" source="notes_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="p2_load">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="entries_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="knowledge_nodes&#xa;(tree: parent_id + knowledge_path&#xa;active / superseded)" vertex="1">
+                    <mxGeometry height="80" width="160" x="490" y="915" as="geometry"/>
+                </mxCell>
+                <mxCell id="summary_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_summaries&#xa;(v1, global singleton)" vertex="1">
+                    <mxGeometry height="80" width="160" x="210" y="915" as="geometry"/>
+                </mxCell>
+                <mxCell id="obs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_semantic_observations&#xa;(candidate relation triples for future graph layer)" vertex="1">
+                    <mxGeometry height="80" width="240" x="700" y="920" as="geometry"/>
+                </mxCell>
+                <mxCell id="jobs_db" parent="1" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" value="memory_jobs&#xa;(lease + status + hash)" vertex="1">
+                    <mxGeometry height="80" width="160" x="990" y="920" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_write_entries" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="entries_db">
+                    <mxGeometry relative="1" x="0.5938" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="990" y="800"/>
+                            <mxPoint x="570" y="800"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_write_summary" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="summary_db">
+                    <mxGeometry relative="1" x="0.0435" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="990" y="790"/>
+                            <mxPoint x="290" y="790"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_write_obs" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="obs_db">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_write_jobs" edge="1" parent="1" source="p2_write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="jobs_db">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="read_bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#66bb6a;dashed=1;opacity=40;" value="" vertex="1">
+                    <mxGeometry height="190" width="1340" x="30" y="1040" as="geometry"/>
+                </mxCell>
+                <mxCell id="read_label" parent="1" style="text;html=1;fontSize=14;fontStyle=5;fontColor=#2e7d32;align=left;" value="Read Path" vertex="1">
+                    <mxGeometry height="25" width="150" x="50" y="1050" as="geometry"/>
+                </mxCell>
+                <mxCell id="read_prompt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="prompt_section()&#xa;Inject compact summary&#xa;into system prompt (≤16KB)" vertex="1">
+                    <mxGeometry height="60" width="240" x="60" y="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="tool_search" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_search&#xa;(path/title/body substrings&#xa;across nodes + notes)" vertex="1">
+                    <mxGeometry height="60" width="220" x="350" y="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="tool_read" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_read&#xa;(summary or node by UUID&#xa;with offset + limit)" vertex="1">
+                    <mxGeometry height="60" width="220" x="620" y="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="tool_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_list&#xa;(active knowledge leaves,&#xa;most recent first)" vertex="1">
+                    <mxGeometry height="60" width="180" x="890" y="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="tool_note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" value="memory_note&#xa;(queue user correction&#xa;for next consolidation)" vertex="1">
+                    <mxGeometry height="60" width="220" x="1120" y="1090" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_summary_read" edge="1" parent="1" source="summary_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="read_prompt">
+                    <mxGeometry relative="1" x="0.3951" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="290" y="1020"/>
+                            <mxPoint x="180" y="1020"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e_entries_tools" edge="1" parent="1" source="entries_db" style="edgeStyle=orthogonalEdgeStyle;rounded=1;" target="tool_search">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_tool_note_db" edge="1" parent="1" source="tool_note" style="edgeStyle=orthogonalEdgeStyle;rounded=1;dashed=1;" target="notes_db">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1390" y="1120"/>
+                            <mxPoint x="1390" y="1180"/>
+                            <mxPoint x="20" y="1180"/>
+                            <mxPoint x="20" y="690"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="legend_title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;align=left;" value="Legend" vertex="1">
+                    <mxGeometry height="20" width="80" x="30" y="620" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_llm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=9;" value="LLM call" vertex="1">
+                    <mxGeometry height="25" width="80" x="30" y="770" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_proc" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" value="Process" vertex="1">
+                    <mxGeometry height="25" width="80" x="30" y="800" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_tx" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" value="Transaction" vertex="1">
+                    <mxGeometry height="25" width="80" x="30" y="830" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_kms" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" value="KMS" vertex="1">
+                    <mxGeometry height="25" width="80" x="30" y="860" as="geometry"/>
+                </mxCell>
+                <mxCell id="leg_read" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" value="Read tool" vertex="1">
+                    <mxGeometry height="25" width="80" x="30" y="890" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

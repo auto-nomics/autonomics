@@ -29,21 +29,11 @@
    和用户显式更新说明合并，并原子写入 active entries、`v1` 摘要以及候选
    semantic observations。
 
-所有智能体都可以通过专用工具搜索或读取记忆；自动注入提示的只有紧凑摘要。
+所有智能体都可以通过专用工具搜索或读取知识；自动注入提示的只有紧凑摘要。
 可使用 `AUTONOMICS_USE_MEMORY` 和 `AUTONOMICS_GENERATE_MEMORY` 覆盖运行时默认值。
-开启 `enable_kms` 后，候选 semantic observations 会被 grounding 到 KMS：
-subject/object 会成为实体，关系会成为 Knowledge，并挂载到
-`/Semantic Memory/<subject>` 下。只有当写入没有引入新的 KMS Error 诊断时才提交；
-否则会回滚生成的实体、知识和索引挂载，并把 observation 标记为 rejected
-且保留原因。KMS 表存放在独立的 `knowledge.db` Turso 数据库中（默认
-`~/.autonomics/knowledge.db`，可用 `AUTONOMICS_KMS_DB` 覆盖），以
-multiprocess-WAL 模式打开，daemon 与 `autonomics kms` TUI 可同时持有。
-启动时会把旧 `agent.db` 中的 KMS 数据一次性迁移到新库 —— 旧表原样保留，
-确认迁移无误后可手工 DROP。
-
-KMS 工具权限遵循同一边界：任务智能体只会获得
-`kms_readonly_registrations`；`kms_write_registrations` 保留给记忆 / KMS
-维护进程使用（初期是确定性 grounding，后续可以是专门的潜意识维护智能体）。
+统一 KMS 状态存放在独立的 `knowledge.db` Turso 数据库中（默认
+`~/.autonomics/knowledge.db`，可用 `AUTONOMICS_KNOWLEDGE_DB` 覆盖）。
+启动时会把旧 `agent.db` 中的记忆数据一次性迁移到新库；旧表暂时保留用于回滚。
 
 ## 过程宏 (`agentik-proc`)
 

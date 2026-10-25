@@ -9,7 +9,7 @@ use crate::agent::{Agent, AgentConfig};
 use crate::context::ContextProvider;
 use crate::error::AgentError;
 use crate::memory::{
-    MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
+    EmptyMemorySource, KmsAgentHandle, MemoryConfig, TursoKmsStorage, memory_registrations,
 };
 use crate::session::AgentShared;
 use crate::storage::AgentStorage;
@@ -25,7 +25,7 @@ pub struct AgentBuilder {
     tools: Vec<ToolRegistration>,
     system_prompt_section: Option<String>,
     system_prompt_identity: Option<String>,
-    memory: Option<Arc<MemoryBackend>>,
+    memory: Option<Arc<KmsAgentHandle>>,
     agent_event_tx: Option<tokio::sync::mpsc::UnboundedSender<agentik_sdk::types::AgentEvent>>,
     /// Stable agent UUID. If `None`, a fresh v4 UUID is generated at build time.
     id: Option<Uuid>,
@@ -121,19 +121,15 @@ impl AgentBuilder {
     ///
     /// Root-level agents generate and consolidate memory; all agents receive
     /// read/search tools and summary injection when `use_memory` is enabled.
-    pub fn with_memory(
-        mut self,
-        config: MemoryConfig,
-        store: Arc<dyn MemoryStore>,
-        grounding: Option<Arc<dyn SemanticGrounding>>,
-    ) -> Self {
-        self.memory = Some(Arc::new(MemoryBackend::new(config, store, grounding)));
+    pub async fn with_memory(mut self, config: MemoryConfig, store: Arc<TursoKmsStorage>) -> Self {
+        let memory = KmsAgentHandle::new(config, store, Arc::new(EmptyMemorySource)).await;
+        self.memory = Some(Arc::new(memory));
         self
     }
 
     /// Attach an existing backend so runtime config updates are shared with
     /// the host handle that requested them.
-    pub fn with_memory_backend(mut self, memory: Arc<MemoryBackend>) -> Self {
+    pub fn with_memory_backend(mut self, memory: Arc<KmsAgentHandle>) -> Self {
         self.memory = Some(memory);
         self
     }

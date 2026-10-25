@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use agentik_core::agent::InternalEvent;
-use agentik_core::memory::MemoryBackend;
+use agentik_core::memory::KmsAgentHandle;
 use agentik_core::profile::AgentKind;
 use agentik_sdk::model::Model;
 use agentik_sdk::types::{AgentEvent, ContentBlock};
@@ -27,7 +27,7 @@ pub struct AgentHandle {
         tokio::task::JoinHandle<std::result::Result<(), agentik_core::supervise::TaskPanic>>,
     pub(super) cancel_token: CancellationToken,
     pub(super) model: Arc<ArcSwapOption<Model>>,
-    pub(super) memory: Arc<MemoryBackend>,
+    pub(super) memory: Arc<KmsAgentHandle>,
 }
 
 impl AgentHandle {
