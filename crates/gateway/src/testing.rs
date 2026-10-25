@@ -250,6 +250,10 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let models =
         runtime::model_actor::start_with_model_slot(storage, model_events, model_slot.clone());
     crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
+    crate::hub::spawn_kms_worker_event_bridge(
+        host.infra().kms.subscribe_worker_events(),
+        hub.clone(),
+    );
     // Report the injected mock through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.

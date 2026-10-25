@@ -990,6 +990,8 @@ pub struct AppState {
     /// Active default model as `provider:model`. Resolved and built by the
     /// gateway daemon — the thin-client TUI never constructs `Model`s.
     pub active_model_spec: Option<String>,
+    /// Resident knowledge workers, keyed by their wire-level worker name.
+    pub kms_workers: Vec<gateway::proto::KmsWorkerStatusView>,
     /// Status-bar fallback when no agent is active: the active default
     /// model's display info.
     pub active_model_display: Option<ModelDisplay>,
@@ -1036,6 +1038,18 @@ impl AppState {
     /// Returns the status of the active session (or Idle if none).
     pub fn active_status(&self) -> AgentStatus {
         self.active_tab_state().status
+    }
+
+    pub fn apply_kms_worker_status(&mut self, status: gateway::proto::KmsWorkerStatusView) {
+        if let Some(existing) = self
+            .kms_workers
+            .iter_mut()
+            .find(|existing| existing.worker == status.worker)
+        {
+            *existing = status;
+        } else {
+            self.kms_workers.push(status);
+        }
     }
 }
 

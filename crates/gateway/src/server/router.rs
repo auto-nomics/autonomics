@@ -13,8 +13,8 @@ use super::auth::bearer_auth;
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
-    sessions, settings, skills, storage,
+    agents, events, hydration, kms, lifecycle, model_config, observations, plugin_environments,
+    plugins, sessions, settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -28,6 +28,7 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/state", get(hydration::get_state))
         .route("/profiles", get(hydration::get_profiles))
         .route("/events", get(events::get_events))
+        .route("/kms/workers", get(kms::get_worker_statuses))
         // ── agents (live) ──
         .route(
             "/agents",

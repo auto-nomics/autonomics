@@ -85,6 +85,62 @@ pub enum GatewayNotice {
         provider: String,
         result: Result<usize, String>,
     },
+    /// A resident KMS worker changed state or completed a drain pass.
+    KmsWorkerChanged { status: KmsWorkerStatusView },
+}
+
+impl From<agentik_core::memory::KnowledgeWorkerEvent> for KmsWorkerStatusView {
+    fn from(event: agentik_core::memory::KnowledgeWorkerEvent) -> Self {
+        Self {
+            worker: event.worker.as_str().to_string(),
+            state: match event.state {
+                agentik_core::memory::KnowledgeWorkerState::Idle => "idle".to_string(),
+                agentik_core::memory::KnowledgeWorkerState::Running => "running".to_string(),
+                agentik_core::memory::KnowledgeWorkerState::Stopped => "stopped".to_string(),
+            },
+            running: event.status.running,
+            last_run_at: event.status.last_run_at,
+            last_error: event.status.last_error,
+            total_claimed: event.status.total_claimed,
+            total_executed: event.status.total_executed,
+            total_released: event.status.total_released,
+            at_ms: event.at_ms,
+        }
+    }
+}
+
+impl From<agentik_core::memory::KmsWorkerStatusSnapshot> for KmsWorkerStatusView {
+    fn from(snapshot: agentik_core::memory::KmsWorkerStatusSnapshot) -> Self {
+        Self {
+            worker: snapshot.worker.as_str().to_string(),
+            state: if snapshot.status.running {
+                "running".to_string()
+            } else {
+                "idle".to_string()
+            },
+            running: snapshot.status.running,
+            last_run_at: snapshot.status.last_run_at,
+            last_error: snapshot.status.last_error,
+            total_claimed: snapshot.status.total_claimed,
+            total_executed: snapshot.status.total_executed,
+            total_released: snapshot.status.total_released,
+            at_ms: snapshot.status.last_run_at.unwrap_or_default(),
+        }
+    }
+}
+
+/// Wire view of one resident knowledge worker.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsWorkerStatusView {
+    pub worker: String,
+    pub state: String,
+    pub running: bool,
+    pub last_run_at: Option<i64>,
+    pub last_error: Option<String>,
+    pub total_claimed: u64,
+    pub total_executed: u64,
+    pub total_released: u64,
+    pub at_ms: i64,
 }
 
 /// User-visible outcome of a ChatGPT login.

@@ -24,7 +24,8 @@ pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{
     KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, KnowledgeQueue,
-    KnowledgeStage, PipelineError, StageContext, StageOutcome, StageStatus,
+    KnowledgeStage, KnowledgeWorkerEvent, KnowledgeWorkerState, PipelineError, StageContext,
+    StageOutcome, StageStatus,
 };
 pub use pipeline::{
     KnowledgeWorker, KnowledgeWorkerConfig, KnowledgeWorkerHandle, KnowledgeWorkerStatus,
@@ -37,7 +38,7 @@ pub use store::{
     KnowledgeDiagnosticFinding, KnowledgeStore, MemoryNote, MemoryStage1Record, MemoryStore,
     MemorySummary, QueuedKnowledgeJob, SemanticObservation,
 };
-pub use system::{KmsAgentHandle, KmsSystem};
+pub use system::{KmsAgentHandle, KmsSystem, KmsWorkerStatusSnapshot};
 
 /// Fully resolved runtime settings carried by the memory backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::driver::{self, SessionCache};
 use crate::hub::EventHub;
-use crate::hub::spawn_model_event_bridge;
+use crate::hub::{spawn_kms_worker_event_bridge, spawn_model_event_bridge};
 use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
 
@@ -136,6 +136,7 @@ pub async fn run_daemon(
         model_slot.clone(),
     );
     spawn_model_event_bridge(model_event_rx, hub.clone());
+    spawn_kms_worker_event_bridge(host.infra().kms.subscribe_worker_events(), hub.clone());
     host.set_model(model_slot.clone());
     // Install the startup default before restoring agents — the restore
     // loop skips preference-less agents while the slot is empty.

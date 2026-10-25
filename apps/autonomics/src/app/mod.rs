@@ -83,7 +83,7 @@ impl App {
         // `snapshot.last_seq` so frames published between the two calls
         // are neither missed nor double-applied (ring replay covers the
         // gap; a lag frame triggers re-hydration).
-        let (client, gateway_rx, snapshot) = runtime
+        let (client, gateway_rx, snapshot, kms_workers) = runtime
             .block_on(async {
                 match gateway::manager::probe().await {
                     Ok(Some(_)) => {}
@@ -108,14 +108,22 @@ impl App {
                     .state()
                     .await
                     .map_err(|e| color_eyre::eyre::eyre!("gateway hydration: {e}"))?;
+                let kms_workers = match client.kms_worker_statuses().await {
+                    Ok(workers) => workers,
+                    Err(error) => {
+                        tracing::warn!(%error, "KMS worker hydration failed");
+                        Vec::new()
+                    }
+                };
                 let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
                 gateway::client::EventPump::spawn(client.clone(), snapshot.last_seq, tx);
-                color_eyre::eyre::Ok((client, rx, snapshot))
+                color_eyre::eyre::Ok((client, rx, snapshot, kms_workers))
             })
             .map_err(|e| color_eyre::eyre::eyre!("failed to connect to the gateway daemon: {e}"))?;
 
         let mut state = AppState {
             profiles: snapshot.profiles.clone(),
+            kms_workers,
             ..Default::default()
         };
 

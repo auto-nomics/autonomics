@@ -54,6 +54,9 @@ pub(crate) enum AppEvent {
         spec: Option<String>,
         reason: String,
     },
+    /// A resident KMS worker changed state. The TUI keeps a lightweight
+    /// observability map without polling the daemon.
+    KmsWorkerStatusChanged(gateway::proto::KmsWorkerStatusView),
     /// A provider's remote catalogue fetch finished daemon-side (the
     /// `CatalogFetched` gateway notice). The payload carries the persisted
     /// model count.

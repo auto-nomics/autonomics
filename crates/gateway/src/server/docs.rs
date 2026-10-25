@@ -4,8 +4,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement
 use utoipa::{Modify, OpenApi};
 
 use super::{
-    agents, events, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
-    sessions, settings, skills, storage,
+    agents, events, hydration, kms, lifecycle, model_config, observations, plugin_environments,
+    plugins, sessions, settings, skills, storage,
 };
 use crate::proto::*;
 
@@ -22,6 +22,7 @@ use crate::proto::*;
         hydration::get_state,
         hydration::get_profiles,
         events::get_events,
+        kms::get_worker_statuses,
         agents::list_agents,
         agents::spawn_agent,
         agents::deliver_message,
@@ -98,6 +99,7 @@ use crate::proto::*;
         SkillEvolutionReport,
         SkippedCluster,
         ChatgptLoginStart,
+        KmsWorkerStatusView,
         ChatgptRefreshResponse,
         SettingsMap,
         PutSettingRequest,
