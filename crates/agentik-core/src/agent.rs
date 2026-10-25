@@ -293,14 +293,18 @@ impl Agent {
                 let memory_config = memory.effective_memory_config();
                 if memory_config.generate_memory && memory_config.is_root_agent(&self.shared.path) {
                     let agent_id = self.shared.id;
-                    let storage = Arc::clone(&storage);
-                    let storage = crate::memory::agent_storage_memory_source(storage);
-                    let memory = Arc::clone(memory);
-                    let model = Arc::clone(&self.shared.model);
-                    crate::supervise::spawn_safe_drop(
-                        "memory_startup_pipeline",
-                        crate::memory::run_memory_pipeline(agent_id, storage, memory, model),
-                    );
+                    if let Err(error) = memory
+                        .submit_knowledge_event(crate::memory::KnowledgeEvent::AgentStarted {
+                            agent_id,
+                        })
+                        .await
+                    {
+                        tracing::warn!(
+                            agent_id = %agent_id,
+                            error = %error,
+                            "failed to queue knowledge extraction"
+                        );
+                    }
                 }
             }
         }

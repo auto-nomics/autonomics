@@ -16,6 +16,14 @@ impl KnowledgeJobKind {
             Self::ConsolidateKnowledge => "consolidate_knowledge",
         }
     }
+
+    /// Tag used by the persisted JSON job payload.
+    pub const fn queue_tag(self) -> &'static str {
+        match self {
+            Self::SessionExtract => "extract_agent_sessions",
+            Self::ConsolidateKnowledge => "consolidate_knowledge",
+        }
+    }
 }
 
 /// A durable unit of knowledge-pipeline work.

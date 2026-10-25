@@ -6,8 +6,9 @@ use arc_swap::ArcSwapOption;
 
 use super::{AgentRuntimeConfig, MemoryConfig, MemoryStore, TursoKmsStorage};
 use crate::pipeline::{
-    KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, SessionExtractWorkerConfig,
-    SessionExtractWorkerHandle, start_session_extract_worker,
+    ConsolidationWorkerConfig, ConsolidationWorkerHandle, KnowledgeEvent, KnowledgeJob,
+    KnowledgeJobKind, KnowledgePipeline, SessionExtractWorkerConfig, SessionExtractWorkerHandle,
+    start_consolidation_worker, start_session_extract_worker,
 };
 use crate::source::MemorySource;
 use crate::store::KnowledgeQueue;
@@ -24,6 +25,7 @@ pub struct KmsSystem {
     pipeline: Arc<KnowledgePipeline>,
     model: Arc<ArcSwapOption<Model>>,
     session_extract_worker: OnceLock<SessionExtractWorkerHandle>,
+    consolidation_worker: OnceLock<ConsolidationWorkerHandle>,
 }
 
 impl KmsSystem {
@@ -57,6 +59,7 @@ impl KmsSystem {
                 pipeline,
                 model: Arc::clone(&model),
                 session_extract_worker: OnceLock::new(),
+                consolidation_worker: OnceLock::new(),
             }
         });
         let worker = start_session_extract_worker(
@@ -64,6 +67,11 @@ impl KmsSystem {
             SessionExtractWorkerConfig::default(),
         );
         let _ = system.session_extract_worker.set(worker);
+        let consolidation_worker = start_consolidation_worker(
+            Arc::clone(&system.pipeline),
+            ConsolidationWorkerConfig::default(),
+        );
+        let _ = system.consolidation_worker.set(consolidation_worker);
         system
     }
 
@@ -90,6 +98,11 @@ impl KmsSystem {
     #[must_use]
     pub fn session_extract_worker(&self) -> Option<SessionExtractWorkerHandle> {
         self.session_extract_worker.get().cloned()
+    }
+
+    #[must_use]
+    pub fn consolidation_worker(&self) -> Option<ConsolidationWorkerHandle> {
+        self.consolidation_worker.get().cloned()
     }
 
     #[must_use]
@@ -149,14 +162,18 @@ impl KmsSystem {
                 }
             }
             KnowledgeJobKind::ConsolidateKnowledge => {
-                // No resident consolidation worker yet. Register its future
-                // handle here without changing the submission contract.
+                if let Some(worker) = self.consolidation_worker() {
+                    worker.wake();
+                }
             }
         }
     }
 
     pub fn shutdown(&self) {
         if let Some(worker) = self.session_extract_worker() {
+            worker.request_shutdown();
+        }
+        if let Some(worker) = self.consolidation_worker() {
             worker.request_shutdown();
         }
     }
@@ -286,7 +303,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn system_starts_and_shuts_down_session_extract_worker() {
+    async fn system_starts_and_shuts_down_resident_workers() {
         let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let system = KmsSystem::new(
             MemoryConfig::new(),
@@ -295,13 +312,14 @@ mod tests {
         )
         .await;
         let worker = system.session_extract_worker().expect("worker mounted");
+        let consolidation_worker = system.consolidation_worker().expect("worker mounted");
         system.shutdown();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while worker.status().running {
+        while worker.status().running || consolidation_worker.status().running {
             assert!(
                 std::time::Instant::now() < deadline,
-                "session extract worker did not stop"
+                "resident knowledge workers did not stop"
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }

@@ -63,9 +63,7 @@ pub fn agent_storage_memory_source(storage: Arc<dyn AgentStorage>) -> Arc<dyn Me
 mod tests {
     use std::sync::Arc;
 
-    use agentik_kms::{
-        KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage, run_memory_pipeline,
-    };
+    use agentik_kms::{KmsAgentHandle, KnowledgeEvent, MemoryConfig, MemoryStore, TursoKmsStorage};
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
@@ -90,6 +88,18 @@ mod tests {
                     r#"{"raw_memory":"User prefers verified tests.","rollout_summary":"Implemented request.","rollout_slug":"test preference"}"#,
                 ))
             });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages
+                    .iter()
+                    .any(|message| message.log_summary().contains("Consolidate raw session"))
+            })
+            .returning(|_, _, _| {
+                Ok(AgentMessageExt::assistant_text(
+                    r##"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun targeted tests.","semantic_updates":[]}"##,
+                ))
+            });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
             dummy_model_info("memory-test"),
             mock,
@@ -100,7 +110,8 @@ mod tests {
         let memory_store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory = Arc::new(KmsAgentHandle::new(config, memory_store, source.clone()).await);
+        let memory = Arc::new(KmsAgentHandle::new(config, memory_store, source).await);
+        memory.system().model_slot().store(model.load_full());
 
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
@@ -111,8 +122,14 @@ mod tests {
             .unwrap();
         storage.end_session(session_id).await.unwrap();
 
-        run_memory_pipeline(agent_id, source.clone(), memory.clone(), model.clone()).await;
-        run_memory_pipeline(agent_id, source, memory.clone(), model).await;
+        memory
+            .submit_knowledge_event(KnowledgeEvent::AgentStarted { agent_id })
+            .await
+            .unwrap();
+        memory
+            .submit_knowledge_event(KnowledgeEvent::AgentStarted { agent_id })
+            .await
+            .unwrap();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut rows = memory.store().list_stage1_outputs(10).await.unwrap();
@@ -126,6 +143,20 @@ mod tests {
         }
         assert_eq!(rows.len(), 1);
         assert!(rows[0].raw_memory.contains("verified tests"));
+        while memory
+            .store()
+            .list_knowledge(10)
+            .await
+            .unwrap()
+            .iter()
+            .all(|node| node.structural)
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "consolidation worker never ran"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         memory.system().shutdown();
     }
 }

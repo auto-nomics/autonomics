@@ -8,8 +8,9 @@ use super::event::KnowledgeEvent;
 use super::job::KnowledgeJob;
 use super::stage::{KnowledgeStage, StageContext, StageOutcome, StageStatus};
 use super::stages::default_stages;
-use super::{KnowledgeJobKind, MemorySource, error::Error};
+use super::{KnowledgeJobKind, error::Error};
 use crate::KmsSystem;
+use crate::MemorySource;
 use crate::now_ms;
 use crate::store::KnowledgeQueue;
 
@@ -53,11 +54,7 @@ impl KnowledgePipeline {
             .map_err(Error::from)
     }
 
-    pub async fn run_due(&self, limit: usize) -> Result<usize, Error> {
-        Ok(self.run_due_internal(None, limit).await?.executed)
-    }
-
-    /// Claim due jobs, execute only `job_kind`, and release foreign jobs.
+    /// Claim and execute due jobs of one kind.
     ///
     /// This is the consumer primitive used by specialized workers. A Phase 1
     /// worker can therefore leave Phase 2 work pending instead of holding its
@@ -67,30 +64,26 @@ impl KnowledgePipeline {
         job_kind: KnowledgeJobKind,
         limit: usize,
     ) -> Result<KnowledgeRunSummary, Error> {
-        self.run_due_internal(Some(job_kind), limit).await
+        self.run_due_for_kind_internal(job_kind, limit).await
     }
 
-    async fn run_due_internal(
+    async fn run_due_for_kind_internal(
         &self,
-        job_kind: Option<KnowledgeJobKind>,
+        job_kind: KnowledgeJobKind,
         limit: usize,
     ) -> Result<KnowledgeRunSummary, Error> {
         let mut summary = KnowledgeRunSummary::default();
         for _ in 0..4 {
-            let claimed = self.queue.claim_due(now_ms(), limit).await?;
+            let claimed = self
+                .queue
+                .claim_due_for_kind(now_ms(), job_kind, limit)
+                .await?;
             if claimed.is_empty() {
                 break;
             }
             summary.claimed += claimed.len();
             let mut executed = 0;
             for queued in claimed {
-                if let Some(expected_kind) = job_kind
-                    && queued.job.kind() != expected_kind
-                {
-                    self.queue.release(queued.id).await?;
-                    summary.released += 1;
-                    continue;
-                }
                 executed += 1;
                 self.execute_queued(queued).await?;
             }

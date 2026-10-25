@@ -469,6 +469,7 @@ impl RuntimeHost {
                 reply_tx,
             } => {
                 let defaults = self.infra.kms.runtime_config();
+                let mut extraction_event = None;
                 let resolved = self.resolve_agent(&name).and_then(|key| {
                     self.agents.get(&key).map(|entry| {
                         let previous = entry.memory.runtime_config();
@@ -490,23 +491,27 @@ impl RuntimeHost {
                             })
                             && let Some(agent_id) = entry.info.agent_id
                         {
-                            let storage = agentik_core::memory::agent_storage_memory_source(
-                                self.infra.storage.clone(),
-                            );
-                            let memory = Arc::clone(&entry.memory);
-                            let model = Arc::clone(&entry.model);
-                            let task_name = format!("memory_runtime_update::{key}");
-                            agentik_core::supervise::spawn_safe_on_drop(
-                                &self.infra.runtime_handle,
-                                &task_name,
-                                agentik_core::memory::run_memory_pipeline(
-                                    agent_id, storage, memory, model,
-                                ),
-                            );
+                            extraction_event = Some((Arc::clone(&entry.memory), agent_id));
                         }
                         config
                     })
                 });
+                if let Some((memory, agent_id)) = extraction_event {
+                    self.infra.runtime_handle.spawn(async move {
+                        if let Err(error) = memory
+                            .submit_knowledge_event(
+                                agentik_core::memory::KnowledgeEvent::AgentStarted { agent_id },
+                            )
+                            .await
+                        {
+                            tracing::warn!(
+                                agent_id = %agent_id,
+                                error = %error,
+                                "failed to queue knowledge extraction"
+                            );
+                        }
+                    });
+                }
                 let reply = resolved.ok_or_else(|| format!("agent `{name}` not found"));
                 let _ = reply_tx.send(reply);
             }

@@ -21,8 +21,13 @@ pub use artifacts::{
 pub use error::{Error, Result};
 pub use knowledge::{Knowledge, KnowledgePath};
 pub use pipeline::{
+    ConsolidationWorker, ConsolidationWorkerConfig, ConsolidationWorkerHandle,
+    ConsolidationWorkerStatus, KnowledgeWorker, KnowledgeWorkerConfig, KnowledgeWorkerHandle,
+    KnowledgeWorkerStatus, start_consolidation_worker,
+};
+pub use pipeline::{
     KnowledgeEvent, KnowledgeJob, KnowledgeJobKind, KnowledgePipeline, KnowledgeQueue,
-    KnowledgeStage, PipelineError, StageContext, StageOutcome, StageStatus, run_memory_pipeline,
+    KnowledgeStage, PipelineError, StageContext, StageOutcome, StageStatus,
 };
 pub use pipeline::{
     SessionExtractWorker, SessionExtractWorkerConfig, SessionExtractWorkerHandle,

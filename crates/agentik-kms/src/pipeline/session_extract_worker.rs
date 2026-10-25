@@ -195,8 +195,8 @@ mod tests {
     use super::*;
     use crate::KmsSystem;
     use crate::source::{MemorySessionRecord, MemorySource};
-    use crate::store::{KnowledgeQueue, MemoryStore};
-    use crate::{Error, KnowledgeEvent, KnowledgeJob, TursoKmsStorage};
+    use crate::store::{KnowledgeStore, MemoryStore};
+    use crate::{Error, KnowledgeEvent, TursoKmsStorage};
 
     struct OneSessionSource {
         agent_id: Uuid,
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_extract_worker_extracts_and_leaves_consolidation_pending() {
+    async fn session_extract_and_consolidation_workers_complete_the_pipeline() {
         let mut mock = MockApiClient::new();
         mock.expect_request()
             .times(1)
@@ -266,6 +266,18 @@ mod tests {
             .returning(|_, _, _| {
                 Ok(AgentMessageExt::assistant_text(
                     r#"{"raw_memory":"Prefer targeted tests.","rollout_summary":"Implemented worker.","rollout_slug":"session-extract-worker"}"#,
+                ))
+            });
+        mock.expect_request()
+            .times(1)
+            .withf(|messages, _, _| {
+                messages
+                    .iter()
+                    .any(|message| message.log_summary().contains("Consolidate raw session"))
+            })
+            .returning(|_, _, _| {
+                Ok(AgentMessageExt::assistant_text(
+                    r##"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun targeted tests.","semantic_updates":[]}"##,
                 ))
             });
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
@@ -284,12 +296,6 @@ mod tests {
         let system = KmsSystem::new(config, Arc::clone(&store), source).await;
         system.model_slot().store(model.load_full());
 
-        store
-            .enqueue(KnowledgeJob::ConsolidateKnowledge {
-                trigger: "preexisting".to_string(),
-            })
-            .await
-            .unwrap();
         system
             .submit_event(KnowledgeEvent::AgentStarted { agent_id })
             .await
@@ -311,29 +317,29 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        while handle.status().total_released == 0 {
+        while system
+            .store()
+            .list_knowledge(10)
+            .await
+            .unwrap()
+            .iter()
+            .all(|node| node.structural)
+        {
             assert!(
                 std::time::Instant::now() < deadline,
-                "session extract worker never released consolidation: {:?}",
-                handle.status()
+                "consolidation worker never produced knowledge: {:?}",
+                system
+                    .consolidation_worker()
+                    .expect("worker mounted")
+                    .status()
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let claimed = store.claim_due(crate::now_ms(), 10).await.unwrap();
-        assert_eq!(claimed.len(), 1);
-        assert!(matches!(
-            claimed[0].job,
-            KnowledgeJob::ConsolidateKnowledge { .. }
-        ));
-        assert_eq!(claimed[0].attempts, 1);
-
-        handle.request_shutdown();
-        while handle.status().running {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "session extract worker did not stop"
-            );
+        let consolidation_handle = system.consolidation_worker().expect("worker mounted");
+        system.shutdown();
+        while handle.status().running || consolidation_handle.status().running {
+            assert!(std::time::Instant::now() < deadline, "workers did not stop");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }

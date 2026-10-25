@@ -1260,6 +1260,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claim_due_for_kind_returns_only_requested_jobs() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        let agent_id = Uuid::new_v4();
+        store
+            .enqueue(KnowledgeJob::ConsolidateKnowledge {
+                trigger: "test".to_string(),
+            })
+            .await
+            .unwrap();
+        store
+            .enqueue(KnowledgeJob::ExtractAgentSessions { agent_id })
+            .await
+            .unwrap();
+
+        let claimed = store
+            .claim_due_for_kind(
+                crate::now_ms(),
+                crate::pipeline::KnowledgeJobKind::ConsolidateKnowledge,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(matches!(
+            claimed[0].job,
+            KnowledgeJob::ConsolidateKnowledge { .. }
+        ));
+
+        let claimed = store
+            .claim_due_for_kind(
+                crate::now_ms(),
+                crate::pipeline::KnowledgeJobKind::SessionExtract,
+                10,
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert!(matches!(
+            claimed[0].job,
+            KnowledgeJob::ExtractAgentSessions { .. }
+        ));
+    }
+
+    #[tokio::test]
     async fn phase2_upserts_nodes_by_knowledge_path() {
         let store = TursoKmsStorage::open_in_memory().await.unwrap();
         let path = KnowledgePath::normalize("/engineering/testing/verification").unwrap();

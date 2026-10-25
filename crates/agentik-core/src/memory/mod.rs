@@ -12,6 +12,6 @@ pub use agentik_kms::{
     AgentRuntimeConfig, EmptyMemorySource, Error, KmsAgentHandle, KmsSystem, Knowledge,
     KnowledgeEvent, KnowledgePath, KnowledgeQueue, KnowledgeStore, MemoryConfig, MemoryNote,
     MemorySource, MemoryStage1Record, MemoryStore, MemorySummary, QueuedKnowledgeJob, Result,
-    SemanticObservation, TursoKmsStorage, now_ms, redact_secrets, run_memory_pipeline,
+    SemanticObservation, TursoKmsStorage, now_ms, redact_secrets,
 };
 pub use tools::memory_registrations;

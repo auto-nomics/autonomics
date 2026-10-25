@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::{Error, Result, TursoKmsStorage, db_err, int, text, uuid_value};
 use crate::now_ms;
-use crate::pipeline::{KnowledgeJob, StageOutcome, StageStatus};
+use crate::pipeline::{KnowledgeJob, KnowledgeJobKind, StageOutcome, StageStatus};
 use crate::store::{KnowledgeQueue, QueuedKnowledgeJob};
 
 const DEFAULT_MAX_ATTEMPTS: i64 = 5;
@@ -67,38 +67,17 @@ impl KnowledgeQueue for TursoKmsStorage {
     }
 
     async fn claim_due(&self, now: i64, limit: usize) -> Result<Vec<QueuedKnowledgeJob>> {
-        let rows = self
-            .collect(
-                "SELECT id, job_json, attempts, max_attempts
-                 FROM knowledge_pipeline_jobs
-                 WHERE (status = 'pending' AND run_after <= ?1)
-                    OR (status = 'running' AND lease_until <= ?1)
-                 ORDER BY run_after ASC, id ASC LIMIT ?2",
-                vec![Value::Integer(now), Value::Integer(limit as i64)],
-                row_to_queued_job,
-            )
-            .await?;
+        self.claim_due_where(now, None, limit).await
+    }
 
-        for row in &rows {
-            self.conn
-                .execute(
-                    "UPDATE knowledge_pipeline_jobs
-                     SET status = 'running', lease_until = ?1,
-                         attempts = attempts + 1, updated_at = ?1
-                     WHERE id = ?2",
-                    params_from_iter([Value::Integer(now + LEASE_MS), uuid_value(row.id)]),
-                )
-                .await
-                .map_err(db_err)?;
-        }
-
-        Ok(rows
-            .into_iter()
-            .map(|mut row| {
-                row.attempts += 1;
-                row
-            })
-            .collect())
+    async fn claim_due_for_kind(
+        &self,
+        now: i64,
+        kind: KnowledgeJobKind,
+        limit: usize,
+    ) -> Result<Vec<QueuedKnowledgeJob>> {
+        self.claim_due_where(now, Some(kind.queue_tag()), limit)
+            .await
     }
 
     async fn release(&self, job_id: Uuid) -> Result<()> {
@@ -154,6 +133,65 @@ impl KnowledgeQueue for TursoKmsStorage {
             .map_err(db_err)?;
 
         Ok(())
+    }
+}
+
+impl TursoKmsStorage {
+    async fn claim_due_where(
+        &self,
+        now: i64,
+        queue_tag: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<QueuedKnowledgeJob>> {
+        let rows = if let Some(tag) = queue_tag {
+            self.collect(
+                "SELECT id, job_json, attempts, max_attempts
+                 FROM knowledge_pipeline_jobs
+                 WHERE ((status = 'pending' AND run_after <= ?1)
+                    OR (status = 'running' AND lease_until <= ?1))
+                   AND json_extract(job_json, '$.type') = ?2
+                 ORDER BY run_after ASC, id ASC LIMIT ?3",
+                vec![
+                    Value::Integer(now),
+                    Value::Text(tag.to_string()),
+                    Value::Integer(limit as i64),
+                ],
+                row_to_queued_job,
+            )
+            .await?
+        } else {
+            self.collect(
+                "SELECT id, job_json, attempts, max_attempts
+                 FROM knowledge_pipeline_jobs
+                 WHERE (status = 'pending' AND run_after <= ?1)
+                    OR (status = 'running' AND lease_until <= ?1)
+                 ORDER BY run_after ASC, id ASC LIMIT ?2",
+                vec![Value::Integer(now), Value::Integer(limit as i64)],
+                row_to_queued_job,
+            )
+            .await?
+        };
+
+        for row in &rows {
+            self.conn
+                .execute(
+                    "UPDATE knowledge_pipeline_jobs
+                     SET status = 'running', lease_until = ?1,
+                         attempts = attempts + 1, updated_at = ?1
+                     WHERE id = ?2",
+                    params_from_iter([Value::Integer(now + LEASE_MS), uuid_value(row.id)]),
+                )
+                .await
+                .map_err(db_err)?;
+        }
+
+        Ok(rows
+            .into_iter()
+            .map(|mut row| {
+                row.attempts += 1;
+                row
+            })
+            .collect())
     }
 }
 

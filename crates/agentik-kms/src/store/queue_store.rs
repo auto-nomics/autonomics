@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use super::error::Result;
-use crate::pipeline::{KnowledgeJob, StageOutcome};
+use crate::pipeline::{KnowledgeJob, KnowledgeJobKind, StageOutcome};
 
 #[derive(Debug, Clone)]
 pub struct QueuedKnowledgeJob {
@@ -18,6 +18,15 @@ pub trait KnowledgeQueue: Send + Sync {
     async fn enqueue(&self, job: KnowledgeJob) -> Result<Uuid>;
 
     async fn claim_due(&self, now_ms: i64, limit: usize) -> Result<Vec<QueuedKnowledgeJob>>;
+
+    /// Claim only due jobs of one kind. Resident workers use this to avoid
+    /// competing for the same rows and then releasing foreign claims.
+    async fn claim_due_for_kind(
+        &self,
+        now_ms: i64,
+        kind: KnowledgeJobKind,
+        limit: usize,
+    ) -> Result<Vec<QueuedKnowledgeJob>>;
 
     /// Return an unwanted claim without consuming an attempt.
     ///
