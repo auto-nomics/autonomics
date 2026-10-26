@@ -282,6 +282,16 @@ impl BibCore {
             .await?;
         }
 
+        // Mirror existing legacy rows into Zotero-compatible item tables.
+        // This runs after legacy column backfills because it reads
+        // extraction provenance from `fulltexts`.
+        crate::zotero_model::migrate(&conn).await?;
+        // Turso prepares statements per connection. Applying the same
+        // idempotent DDL to the read side ensures freshly added extension
+        // columns are visible to queries made through `BibCore::conn()`.
+        let read_conn = self.conn();
+        crate::zotero_model::migrate(&read_conn).await?;
+
         let mut rows = conn
             .query(
                 "SELECT value FROM bib_meta WHERE key = 'search_index_version'",
@@ -341,7 +351,13 @@ impl BibCore {
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut result = Ok(());
         for article in articles {
-            if let Err(err) = Self::upsert_article_in_tx(&tx, article).await {
+            if let Err(err) = async {
+                Self::upsert_article_in_tx(&tx, article).await?;
+                crate::zotero_model::ensure_article_item(&tx, &article.id).await?;
+                crate::zotero_model::sync_article_item(&tx, &article.id).await
+            }
+            .await
+            {
                 result = Err(err);
                 break;
             }
@@ -597,6 +613,7 @@ impl BibCore {
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        crate::zotero_model::delete_article_item(&tx, id).await?;
         let n = tx
             .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
             .await?;
@@ -869,6 +886,119 @@ impl BibBase {
         })
         .await
     }
+
+    /// Return the Zotero-style preferred attachment for an article.
+    pub async fn zotero_attachment(
+        &self,
+        article_id: &str,
+    ) -> Result<Option<crate::zotero_model::StoredAttachment>> {
+        self.call(|reply| crate::actor::BibCommand::GetZoteroAttachment {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Return Zotero-style full-text index state for an attachment item.
+    pub async fn zotero_fulltext_state(
+        &self,
+        item_id: i64,
+    ) -> Result<Option<crate::zotero_model::FulltextItemState>> {
+        self.call(|reply| crate::actor::BibCommand::GetZoteroFulltextState { item_id, reply })
+            .await
+    }
+
+    /// List all Zotero-style attachment child items for an article.
+    pub async fn zotero_attachments(
+        &self,
+        article_id: &str,
+    ) -> Result<Vec<crate::zotero_model::StoredAttachment>> {
+        self.call(|reply| crate::actor::BibCommand::ListZoteroAttachments {
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Return one Zotero attachment by its item key.
+    pub async fn zotero_attachment_by_key(
+        &self,
+        article_id: &str,
+        key: &str,
+    ) -> Result<Option<crate::zotero_model::StoredAttachment>> {
+        self.call(|reply| crate::actor::BibCommand::GetZoteroAttachmentByKey {
+            article_id: article_id.to_owned(),
+            key: key.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Create a new Zotero attachment child item.
+    pub async fn create_zotero_attachment(
+        &self,
+        attachment: crate::zotero_model::NewAttachment,
+        make_preferred: bool,
+    ) -> Result<crate::zotero_model::StoredAttachment> {
+        self.call(|reply| crate::actor::BibCommand::CreateZoteroAttachment {
+            attachment,
+            make_preferred,
+            reply,
+        })
+        .await
+    }
+
+    /// Make an existing attachment the compatibility full text.
+    pub async fn set_preferred_zotero_attachment(
+        &self,
+        article_id: &str,
+        key: &str,
+    ) -> Result<bool> {
+        self.call(
+            |reply| crate::actor::BibCommand::SetPreferredZoteroAttachment {
+                article_id: article_id.to_owned(),
+                key: key.to_owned(),
+                reply,
+            },
+        )
+        .await
+    }
+
+    /// Attach VFS object metadata to an already-created Zotero attachment.
+    pub async fn set_zotero_attachment_storage(
+        &self,
+        article_id: &str,
+        key: &str,
+        vfs_path: &str,
+        storage_hash: &str,
+        file_size: i64,
+    ) -> Result<Option<crate::zotero_model::StoredAttachment>> {
+        self.call(
+            |reply| crate::actor::BibCommand::SetZoteroAttachmentStorage {
+                article_id: article_id.to_owned(),
+                key: key.to_owned(),
+                vfs_path: vfs_path.to_owned(),
+                storage_hash: storage_hash.to_owned(),
+                file_size,
+                reply,
+            },
+        )
+        .await
+    }
+
+    /// Delete an attachment child item.
+    pub async fn delete_zotero_attachment(
+        &self,
+        article_id: &str,
+        key: &str,
+    ) -> Result<Option<crate::zotero_model::DeletedAttachment>> {
+        self.call(|reply| crate::actor::BibCommand::DeleteZoteroAttachment {
+            article_id: article_id.to_owned(),
+            key: key.to_owned(),
+            reply,
+        })
+        .await
+    }
 }
 
 pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Result<()> {
@@ -990,7 +1120,7 @@ fn extract_snippet(
 // we convert to Option<String> / Option<i64>.
 // ---------------------------------------------------------------------------
 
-fn opt_string(v: Value) -> Option<String> {
+pub(crate) fn opt_string(v: Value) -> Option<String> {
     match v {
         Value::Text(s) => Some(s),
         Value::Null => None,
@@ -1002,7 +1132,7 @@ fn opt_value(value: Option<String>) -> Value {
     value.map_or(Value::Null, Value::Text)
 }
 
-fn opt_int(v: Value) -> Option<i64> {
+pub(crate) fn opt_int(v: Value) -> Option<i64> {
     match v {
         Value::Integer(i) => Some(i),
         Value::Null => None,
@@ -1010,7 +1140,7 @@ fn opt_int(v: Value) -> Option<i64> {
     }
 }
 
-fn parse_json_col(raw: &Option<String>) -> Vec<String> {
+pub(crate) fn parse_json_col(raw: &Option<String>) -> Vec<String> {
     raw.as_ref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or_default()

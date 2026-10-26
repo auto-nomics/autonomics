@@ -109,6 +109,10 @@ impl BibCore {
         if result.is_ok() {
             result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
         }
+        if result.is_ok() {
+            let legacy = crate::zotero_model::LegacyFulltext::from_fulltext(ft);
+            result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
+        }
 
         if result.is_err() {
             let _ = tx.rollback().await;
@@ -166,6 +170,15 @@ impl BibCore {
         if result.is_ok() {
             result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
         }
+        if result.is_ok() {
+            let mut legacy = crate::zotero_model::LegacyFulltext::from_fulltext(ft);
+            legacy.text_content = None;
+            legacy.extract_status = Some(ExtractStatus::Pending);
+            legacy.text_format = None;
+            legacy.extracted_by = None;
+            legacy.extract_error = None;
+            result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
+        }
 
         if result.is_err() {
             let _ = tx.rollback().await;
@@ -197,6 +210,9 @@ impl BibCore {
             return Ok(false);
         }
         crate::bib_base::sync_search_index(&tx, article_id).await?;
+        if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await? {
+            crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await?;
+        }
         tx.commit().await?;
         Ok(true)
     }
@@ -260,6 +276,12 @@ impl BibCore {
         if result.is_ok() {
             result = crate::bib_base::sync_search_index(&tx, article_id).await;
         }
+        if result.is_ok() {
+            if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await?
+            {
+                result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
+            }
+        }
 
         if result.is_err() {
             let _ = tx.rollback().await;
@@ -284,6 +306,9 @@ impl BibCore {
             turso::params![article_id, error],
         )
         .await?;
+        if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await? {
+            crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await?;
+        }
         tx.commit().await?;
         Ok(())
     }
@@ -458,6 +483,7 @@ impl BibCore {
     pub async fn delete_fulltext(&self, article_id: &str) -> Result<()> {
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        crate::zotero_model::delete_attachment(&tx, article_id).await?;
         tx.execute(
             "DELETE FROM fulltexts WHERE article_id = ?1",
             turso::params![article_id],

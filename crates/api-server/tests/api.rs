@@ -722,6 +722,154 @@ async fn wait_for_extraction(app: &axum::Router, uri: &str) -> serde_json::Value
     panic!("background extraction did not finish within 5 s ({uri})");
 }
 
+#[tokio::test]
+async fn bib_supports_multiple_zotero_attachments() {
+    let (app, _shared, _directory) = build_app_with_vfs().await;
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles",
+            Some(
+                r#"{ "title": "Multi attachment", "doi": "10.1000/multi-attachment" }"#.to_owned(),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let upload = |body: String| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments")
+            .header("content-type", "multipart/form-data; boundary=boundary")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let first = upload(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"first.txt\"\r\ncontent-type: text/plain\r\n\r\nfirst attachment\r\n--boundary--\r\n".to_owned(),
+    );
+    let response = app.clone().oneshot(first).await.unwrap();
+    let status = response.status();
+    let response_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response_bytes)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&response_bytes).unwrap();
+    let first_key = body["attachment"]["key"].as_str().unwrap().to_owned();
+    assert!(
+        body["attachment"]["vfs_path"]
+            .as_str()
+            .unwrap()
+            .contains("/attachments/")
+    );
+
+    let second = upload(
+        "--boundary\r\ncontent-disposition: form-data; name=\"file\"; filename=\"second.txt\"\r\ncontent-type: text/plain\r\n\r\nsecond attachment\r\n--boundary--\r\n".to_owned(),
+    );
+    let response = app.clone().oneshot(second).await.unwrap();
+    let status = response.status();
+    let response_bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "{}",
+        String::from_utf8_lossy(&response_bytes)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&response_bytes).unwrap();
+    let second_key = body["attachment"]["key"].as_str().unwrap().to_owned();
+    assert_ne!(first_key, second_key);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["attachments"].as_array().unwrap().len(), 2);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!(
+                "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}/raw"
+            ),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let raw = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&raw[..], b"second attachment");
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &format!(
+                "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}/preferred"
+            ),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    wait_for_extraction(
+        &app,
+        "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/fulltext",
+    )
+    .await;
+    let body = wait_for_extraction(
+        &app,
+        "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/fulltext",
+    )
+    .await;
+    assert_eq!(body["fulltext"]["text_content"], "second attachment");
+    assert!(
+        body["fulltext"]["file_path"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("/attachments/{second_key}/"))
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!(
+                "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}"
+            ),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments",
+            None,
+        ))
+        .await
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["attachments"].as_array().unwrap().len(), 1);
+    assert_eq!(body["attachments"][0]["key"], first_key);
+}
+
 async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let manifest = VfsManifest {

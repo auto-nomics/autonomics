@@ -301,7 +301,7 @@ async fn run_bib_list(db: &bib_base::BibBase, args: ListArgs) -> color_eyre::Res
 
     let limit = args.limit.unwrap_or(50).clamp(1, 500);
     let query = args.query.as_deref().unwrap_or("");
-    let hits = db.search_articles(query, limit).await?;
+    let hits = db.search_articles(query, limit, 0).await?;
 
     if hits.is_empty() {
         println!("No articles found.");
@@ -352,7 +352,7 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
             out
         }
         None => {
-            let hits = db.search_articles("", limit).await?;
+            let hits = db.search_articles("", limit, 0).await?;
             let mut out = Vec::new();
             for hit in hits {
                 if let Some(a) = db.get_article(&hit.article_id).await? {
@@ -469,7 +469,7 @@ async fn reload_bibliography(
 ) -> bib_base::Result<()> {
     let query = state.query.trim().to_string();
     let collections = db.list_collections(None).await?;
-    let hits = db.search_articles(&query, 500).await?;
+    let hits = db.search_articles(&query, 500, 0).await?;
     let mut articles = Vec::with_capacity(hits.len());
     for hit in hits {
         if let Some(article) = db.get_article(&hit.article_id).await? {

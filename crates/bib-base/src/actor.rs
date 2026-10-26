@@ -29,6 +29,7 @@ use crate::collections::{CollectionAddOutcome, CollectionAssignment, CollectionA
 use crate::error::Error;
 use crate::fulltext::{FullTextPage, PendingExtraction};
 use crate::types::{Annotation, AnnotationKind, AnnotationRect};
+use crate::zotero_model::{DeletedAttachment, FulltextItemState, NewAttachment, StoredAttachment};
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
     FullText, IdKind, SearchHit, TextFormat,
@@ -86,6 +87,46 @@ pub(crate) enum BibCommand {
         limit: usize,
         offset: usize,
         reply: oneshot::Sender<Result<Vec<SearchHit>>>,
+    },
+    GetZoteroAttachment {
+        article_id: String,
+        reply: oneshot::Sender<Result<Option<StoredAttachment>>>,
+    },
+    GetZoteroFulltextState {
+        item_id: i64,
+        reply: oneshot::Sender<Result<Option<FulltextItemState>>>,
+    },
+    ListZoteroAttachments {
+        article_id: String,
+        reply: oneshot::Sender<Result<Vec<StoredAttachment>>>,
+    },
+    GetZoteroAttachmentByKey {
+        article_id: String,
+        key: String,
+        reply: oneshot::Sender<Result<Option<StoredAttachment>>>,
+    },
+    CreateZoteroAttachment {
+        attachment: NewAttachment,
+        make_preferred: bool,
+        reply: oneshot::Sender<Result<StoredAttachment>>,
+    },
+    SetPreferredZoteroAttachment {
+        article_id: String,
+        key: String,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    SetZoteroAttachmentStorage {
+        article_id: String,
+        key: String,
+        vfs_path: String,
+        storage_hash: String,
+        file_size: i64,
+        reply: oneshot::Sender<Result<Option<StoredAttachment>>>,
+    },
+    DeleteZoteroAttachment {
+        article_id: String,
+        key: String,
+        reply: oneshot::Sender<Result<Option<DeletedAttachment>>>,
     },
 
     // Collections
@@ -270,6 +311,84 @@ impl BibCommand {
                 reply,
             } => {
                 let _ = reply.send(core.search_articles(&query, limit, offset).await);
+            }
+            Self::GetZoteroAttachment { article_id, reply } => {
+                let _ = reply.send(
+                    crate::zotero_model::attachment_for_article(&core.conn(), &article_id).await,
+                );
+            }
+            Self::GetZoteroFulltextState { item_id, reply } => {
+                let _ =
+                    reply.send(crate::zotero_model::fulltext_state(&core.conn(), item_id).await);
+            }
+            Self::ListZoteroAttachments { article_id, reply } => {
+                let _ = reply.send(
+                    crate::zotero_model::list_attachments_for_article(&core.conn(), &article_id)
+                        .await,
+                );
+            }
+            Self::GetZoteroAttachmentByKey {
+                article_id,
+                key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    crate::zotero_model::attachment_by_key(&core.conn(), &article_id, &key).await,
+                );
+            }
+            Self::CreateZoteroAttachment {
+                attachment,
+                make_preferred,
+                reply,
+            } => {
+                let _ = reply.send(
+                    crate::zotero_model::create_attachment(
+                        &core.conn(),
+                        &attachment,
+                        make_preferred,
+                    )
+                    .await,
+                );
+            }
+            Self::SetPreferredZoteroAttachment {
+                article_id,
+                key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    crate::zotero_model::set_preferred_attachment(&core.conn(), &article_id, &key)
+                        .await,
+                );
+            }
+            Self::SetZoteroAttachmentStorage {
+                article_id,
+                key,
+                vfs_path,
+                storage_hash,
+                file_size,
+                reply,
+            } => {
+                let _ = reply.send(
+                    crate::zotero_model::set_attachment_storage(
+                        &core.conn(),
+                        &article_id,
+                        &key,
+                        &vfs_path,
+                        &storage_hash,
+                        file_size,
+                    )
+                    .await,
+                );
+            }
+            Self::DeleteZoteroAttachment {
+                article_id,
+                key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    crate::zotero_model::delete_attachment_by_key(&core.conn(), &article_id, &key)
+                        .await,
+                );
             }
             Self::UpsertCollection { collection, reply } => {
                 let _ = reply.send(core.upsert_collection(&collection).await);

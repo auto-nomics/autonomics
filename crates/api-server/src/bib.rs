@@ -11,8 +11,9 @@ use axum::{
 };
 use bib_base::extraction::read_full;
 use bib_base::{
-    BibShared, extracted_object_path, figure_object_path, sanitize_figure_name, scan_image_refs,
-    spawn_extraction, stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
+    BibShared, NewAttachment, extracted_object_path, figure_object_path, sanitize_figure_name,
+    scan_image_refs, spawn_extraction, stored_attachment, stored_fulltext, try_fetch_fulltext_with,
+    vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource, Author,
@@ -60,6 +61,22 @@ pub fn router(shared: BibShared) -> Router {
         .route(
             "/articles/{id}",
             get(get_article).put(update_article).delete(delete_article),
+        )
+        .route(
+            "/articles/{id}/attachments",
+            get(list_attachments).post(upload_attachment),
+        )
+        .route(
+            "/articles/{id}/attachments/{key}",
+            get(get_attachment).delete(delete_attachment_by_key),
+        )
+        .route(
+            "/articles/{id}/attachments/{key}/preferred",
+            put(set_preferred_attachment),
+        )
+        .route(
+            "/articles/{id}/attachments/{key}/raw",
+            get(download_attachment),
         )
         .route(
             "/articles/{id}/fulltext",
@@ -566,6 +583,390 @@ async fn get_fulltext(
     Ok(Json(
         json!({ "fulltext": page.fulltext, "pagination": pagination }),
     ))
+}
+
+async fn list_attachments(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
+    Ok(Json(json!({ "attachments": attachments })))
+}
+
+#[derive(Default)]
+struct AttachmentUpload {
+    filename: Option<String>,
+    content_type: Option<String>,
+    title: Option<String>,
+    preferred: Option<bool>,
+    content: Option<axum::body::Bytes>,
+}
+
+async fn upload_attachment(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    let article = shared
+        .bib
+        .get_article(&id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
+    let mut upload = AttachmentUpload::default();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|multipart_error| error(StatusCode::BAD_REQUEST, multipart_error.to_string()))?
+    {
+        match field.name() {
+            Some("file") => {
+                upload.filename = field
+                    .file_name()
+                    .map(str::to_owned)
+                    .or_else(|| field.content_type().map(str::to_owned));
+                upload.content_type = field.content_type().map(str::to_owned);
+                let bytes = field.bytes().await.map_err(|multipart_error| {
+                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
+                })?;
+                if bytes.len() > MAX_UPLOAD_BYTES {
+                    return Err(error(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("upload exceeds {} byte limit", MAX_UPLOAD_BYTES),
+                    ));
+                }
+                upload.content = Some(bytes);
+            }
+            Some("title") => {
+                upload.title = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|multipart_error| {
+                            error(StatusCode::BAD_REQUEST, multipart_error.to_string())
+                        })?
+                        .trim()
+                        .to_owned(),
+                )
+                .filter(|title| !title.is_empty());
+            }
+            Some("preferred") => {
+                let value = field.text().await.map_err(|multipart_error| {
+                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
+                })?;
+                upload.preferred = Some(matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let Some(content) = upload.content else {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "multipart field 'file' is required",
+        ));
+    };
+    let filename = upload
+        .filename
+        .unwrap_or_else(|| "attachment.txt".to_owned());
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, extension)| extension)
+        .unwrap_or("txt");
+    let format = FileFormat::from_extension(extension);
+    let content_type = upload.content_type.or_else(|| {
+        Some(
+            match format {
+                FileFormat::Pdf => "application/pdf",
+                FileFormat::Html => "text/html",
+                FileFormat::Txt => "text/plain",
+            }
+            .to_owned(),
+        )
+    });
+    let make_preferred = upload.preferred.unwrap_or(true);
+    let previous_preferred = shared.bib.zotero_attachment(&id).await.map_err(internal)?;
+
+    let input = NewAttachment {
+        article_id: article.id.clone(),
+        title: upload.title,
+        filename: Some(filename.clone()),
+        content_type,
+        file_format: format,
+        link_mode: bib_base::LINK_MODE_IMPORTED_FILE,
+        path: None,
+        source_url: None,
+        vfs_path: None,
+        storage_hash: None,
+        file_size: Some(content.len() as i64),
+    };
+    let attachment = shared
+        .bib
+        .create_zotero_attachment(input, make_preferred)
+        .await
+        .map_err(internal)?;
+    let stored = stored_attachment(&article.id, &attachment.key, &filename, &content);
+    let virtual_path = vfs_virtual_path(&stored.path).expect("stored attachment uses a VFS path");
+    if let Err(write_error) = write_stored_file(&shared, &virtual_path, content.to_vec()).await {
+        let _ = shared
+            .bib
+            .delete_zotero_attachment(&id, &attachment.key)
+            .await;
+        return Err(write_error);
+    }
+    let attachment = match shared
+        .bib
+        .set_zotero_attachment_storage(
+            &id,
+            &attachment.key,
+            &stored.path,
+            &stored.file_hash,
+            content.len() as i64,
+        )
+        .await
+    {
+        Ok(Some(attachment)) => attachment,
+        Ok(None) => {
+            let _ = shared
+                .bib
+                .delete_zotero_attachment(&id, &attachment.key)
+                .await;
+            let _ = delete_stored_file(&shared, &virtual_path).await;
+            return Err(error(
+                StatusCode::NOT_FOUND,
+                "attachment disappeared while storing its object",
+            ));
+        }
+        Err(db_error) => {
+            let _ = shared
+                .bib
+                .delete_zotero_attachment(&id, &attachment.key)
+                .await;
+            let _ = delete_stored_file(&shared, &virtual_path).await;
+            return Err(internal(db_error));
+        }
+    };
+
+    if make_preferred {
+        let fulltext = FullText {
+            article_id: article.id.clone(),
+            file_path: stored.path.clone(),
+            file_format: format,
+            text_content: None,
+            source: FullTextSource::UserUpload,
+            file_hash: Some(stored.file_hash.clone()),
+            file_size: Some(content.len() as i64),
+            uploaded_at: Some(Utc::now()),
+            extract_status: Some(ExtractStatus::Pending),
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        };
+        if let Err(db_error) = shared.bib.upsert_fulltext_pending(&fulltext).await {
+            let _ = shared
+                .bib
+                .delete_zotero_attachment(&id, &attachment.key)
+                .await;
+            if let Some(previous) = previous_preferred {
+                let _ = shared
+                    .bib
+                    .set_preferred_zotero_attachment(&id, &previous.key)
+                    .await;
+            }
+            let _ = delete_stored_file(&shared, &virtual_path).await;
+            return Err(internal(db_error));
+        }
+        if let Some(previous) = shared.bib.get_fulltext(&id).await.map_err(internal)? {
+            delete_article_figures(&shared, &previous).await;
+        }
+        spawn_extraction(shared.as_ref().clone(), article.id.clone());
+    }
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "attachment": attachment })),
+    ))
+}
+
+async fn get_attachment(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    let attachment = shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    Ok(Json(json!({ "attachment": attachment })))
+}
+
+async fn download_attachment(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    let attachment = shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    let virtual_path = vfs_virtual_path(
+        attachment
+            .vfs_path
+            .as_deref()
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "attachment has no VFS object"))?,
+    )
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "invalid attachment VFS URI"))?;
+    let bytes = read_full(file_storage(&shared)?, &virtual_path)
+        .await
+        .map_err(storage_error)?;
+    let content_type = attachment.content_type.clone().unwrap_or_else(|| {
+        match attachment
+            .original_filename
+            .as_deref()
+            .and_then(|filename| filename.rsplit_once('.'))
+            .map(|(_, extension)| extension)
+            .unwrap_or("txt")
+        {
+            "pdf" => "application/pdf",
+            "html" | "htm" => "text/html",
+            _ => "text/plain",
+        }
+        .to_owned()
+    });
+    let filename = attachment.original_filename.clone().unwrap_or(key);
+    let mut response = Response::new(axum::body::Body::from(bytes.to_vec()));
+    let response_headers = response.headers_mut();
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        content_type.parse().expect("valid content type"),
+    );
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}")
+            .parse()
+            .expect("valid header"),
+    );
+    response_headers.insert(
+        header::CONTENT_LENGTH,
+        bytes.len().to_string().parse().expect("valid length"),
+    );
+    response_headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        "nosniff".parse().expect("valid header"),
+    );
+    response_headers.insert(
+        header::CACHE_CONTROL,
+        "private, no-store".parse().expect("valid header"),
+    );
+    Ok(response)
+}
+
+async fn set_preferred_attachment(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    let attachment = shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    let virtual_path = vfs_virtual_path(
+        attachment
+            .vfs_path
+            .as_deref()
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "attachment has no VFS object"))?,
+    )
+    .ok_or_else(|| error(StatusCode::BAD_REQUEST, "invalid attachment VFS URI"))?;
+    let _ = virtual_path;
+    let format = FileFormat::from_extension(
+        attachment
+            .original_filename
+            .as_deref()
+            .and_then(|filename| filename.rsplit_once('.'))
+            .map(|(_, extension)| extension)
+            .unwrap_or("txt"),
+    );
+    if !shared
+        .bib
+        .set_preferred_zotero_attachment(&id, &key)
+        .await
+        .map_err(internal)?
+    {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("attachment {key} not found"),
+        ));
+    }
+    let fulltext = FullText {
+        article_id: id.clone(),
+        file_path: attachment.vfs_path.clone().expect("checked above"),
+        file_format: format,
+        text_content: None,
+        source: FullTextSource::UserUpload,
+        file_hash: attachment.storage_hash.clone(),
+        file_size: attachment.file_size,
+        uploaded_at: Some(Utc::now()),
+        extract_status: Some(ExtractStatus::Pending),
+        text_format: None,
+        extracted_by: None,
+        extract_error: None,
+    };
+    shared
+        .bib
+        .upsert_fulltext_pending(&fulltext)
+        .await
+        .map_err(internal)?;
+    if let Some(previous) = shared.bib.get_fulltext(&id).await.map_err(internal)? {
+        delete_article_figures(&shared, &previous).await;
+    }
+    spawn_extraction(shared.as_ref().clone(), id.clone());
+    Ok(Json(json!({ "attachment": attachment })))
+}
+
+async fn delete_attachment_by_key(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    let deleted = shared
+        .bib
+        .delete_zotero_attachment(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+
+    if deleted.was_preferred {
+        let legacy = shared.bib.get_fulltext(&id).await.map_err(internal)?;
+        shared.bib.delete_fulltext(&id).await.map_err(internal)?;
+        if let Some(legacy) = legacy {
+            delete_article_figures(&shared, &legacy).await;
+        }
+    }
+    if let Some(path) = deleted
+        .attachment
+        .vfs_path
+        .as_deref()
+        .and_then(vfs_virtual_path)
+    {
+        if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
+            tracing::warn!(
+                path = %path,
+                error = %cleanup_error.1.error,
+                "attachment database row was removed but its object remains"
+            );
+        }
+    }
+    Ok(Json(json!({
+        "deleted": true,
+        "attachment": deleted.attachment,
+        "was_preferred": deleted.was_preferred,
+    })))
 }
 
 async fn upload_fulltext(
@@ -1077,21 +1478,16 @@ async fn list_collection_articles(
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("collection {id} not found")))?;
 
+    let articles = shared
+        .bib
+        .list_articles_by_collection(&id)
+        .await
+        .map_err(internal)?;
     let associations = shared
         .bib
         .list_collection_articles(&id, None, None)
         .await
         .map_err(internal)?;
-    let mut articles = Vec::with_capacity(associations.len());
-    for association in &associations {
-        articles.push(
-            shared
-                .bib
-                .get_article(&association.article_id)
-                .await
-                .map_err(internal)?,
-        );
-    }
     Ok(Json(json!({
         "associations": associations,
         "articles": articles,

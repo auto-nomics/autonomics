@@ -26,6 +26,27 @@ pub fn stored_fulltext(article_id: &str, filename: &str, content: &[u8]) -> Stor
     StoredFulltext { path, file_hash }
 }
 
+/// Build a content-addressed object for a specific attachment item.
+///
+/// Unlike [`stored_fulltext`], this keeps every binary owned by an attachment
+/// under that attachment's Zotero item key. The hash still protects against
+/// overwriting an object before its database transaction commits.
+pub fn stored_attachment(
+    article_id: &str,
+    attachment_key: &str,
+    filename: &str,
+    content: &[u8],
+) -> StoredFulltext {
+    let file_hash = hex(&Sha256::digest(content));
+    let filename = encode_component(filename);
+    let path = format!(
+        "{VFS_PREFIX}/literature/{}/attachments/{}/{file_hash}-{filename}",
+        encode_component(article_id),
+        encode_component(attachment_key),
+    );
+    StoredFulltext { path, file_hash }
+}
+
 /// Convert a bibliography VFS URI back to the virtual path expected by
 /// [`vfs::OpendalFileStorage`].
 pub fn vfs_virtual_path(uri: &str) -> Option<String> {

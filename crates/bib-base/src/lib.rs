@@ -32,6 +32,7 @@ pub mod oa_fetch;
 pub mod query;
 pub mod shared;
 pub mod stored_files;
+pub mod zotero_model;
 
 pub use bib_base::BibBase;
 pub use error::{Error, Result};
@@ -58,8 +59,10 @@ pub use query::{
 pub use shared::BibShared;
 pub use stored_files::{
     StoredFulltext, VFS_PREFIX, extracted_object_path, figure_object_path, sanitize_figure_name,
-    scan_image_refs, stored_extracted_text, stored_fulltext, vfs_virtual_path,
+    scan_image_refs, stored_attachment, stored_extracted_text, stored_fulltext, vfs_virtual_path,
 };
+pub use zotero_model::LINK_MODE_IMPORTED_FILE;
+pub use zotero_model::{DeletedAttachment, NewAttachment, StoredAttachment};
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
 ///
