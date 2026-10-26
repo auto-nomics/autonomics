@@ -1673,7 +1673,17 @@ async function decideKmsProposal(approved: boolean) {
   }
 }
 
-function renderBibliography(container: HTMLDivElement) {
+type BibListScrollState = {
+  collectionTop: number;
+  articleTop: number;
+  collectionId: string | null;
+  query: string;
+};
+
+function renderBibliography(
+  container: HTMLDivElement,
+  previousScroll: BibListScrollState,
+) {
   container.className = "transcript bib";
   container.replaceChildren();
 
@@ -1900,6 +1910,17 @@ function renderBibliography(container: HTMLDivElement) {
     container.append(error);
   }
   container.append(toolbar, collections, articles, details);
+  collections.scrollTop = previousScroll.collectionTop;
+  if (
+    previousScroll.collectionId === state.bibSelectedCollection
+    && previousScroll.query === state.bibQuery
+  ) {
+    articles.scrollTop = previousScroll.articleTop;
+  } else {
+    articles.scrollTop = 0;
+    articles.querySelector(".bib-row.article.active")
+      ?.scrollIntoView({ block: "nearest" });
+  }
 }
 
 function statusLabel(agent: string): string {
@@ -3579,6 +3600,12 @@ function renderKms(container: HTMLDivElement) {
 
 function render(): void {
   if (!state.connected) return;
+  const bibScroll: BibListScrollState = {
+    collectionTop: document.querySelector<HTMLElement>(".bib-collections")?.scrollTop ?? 0,
+    articleTop: document.querySelector<HTMLElement>(".bib-articles")?.scrollTop ?? 0,
+    collectionId: state.bibSelectedCollection,
+    query: state.bibQuery,
+  };
   app.innerHTML = "";
   const shell = document.createElement("main");
   shell.className = "shell";
@@ -3972,7 +3999,7 @@ function render(): void {
     renderConfig(view);
   } else if (state.view === "bib") {
     void loadBibliography();
-    renderBibliography(view);
+    renderBibliography(view, bibScroll);
   } else if (state.view === "dag") {
     void loadDag(state.activeAgent);
     renderDag(view);
