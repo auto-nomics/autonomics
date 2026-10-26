@@ -741,7 +741,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(associations[0].fetch_status, FetchStatus::FulltextAvailable);
-        let hits = base.search_articles("quantum", 10).await.unwrap();
+        let hits = base.search_articles("quantum", 10, 0).await.unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].article_id, article_id);
 

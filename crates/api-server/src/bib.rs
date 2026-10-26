@@ -143,15 +143,25 @@ fn parse_limit(raw: Option<&str>, default: usize) -> Result<usize, (StatusCode, 
     Ok(value.clamp(1, 500))
 }
 
+fn parse_offset(raw: Option<&str>) -> Result<usize, (StatusCode, Json<ApiError>)> {
+    raw.as_deref().unwrap_or("0").parse::<usize>().map_err(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            "offset must be a non-negative integer",
+        )
+    })
+}
+
 async fn list_articles(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
     let query = params.get("query").map(String::as_str).unwrap_or("");
     let limit = parse_limit(params.get("limit").map(String::as_str), 100)?;
+    let offset = parse_offset(params.get("offset").map(String::as_str))?;
     let hits = shared
         .bib
-        .search_articles(query, limit)
+        .search_articles(query, limit, offset)
         .await
         .map_err(internal)?;
     let total = shared.bib.article_count().await.map_err(internal)?;

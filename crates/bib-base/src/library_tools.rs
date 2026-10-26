@@ -483,7 +483,7 @@ impl BibSearchLibraryTool {
     /// Run a single LIKE query. Never errors — failures land in
     /// `SearchQueryResult::error`.
     async fn search_one(&self, query: &str, limit: usize) -> SearchQueryResult {
-        let hits = match self.bib.search_articles(query, limit).await {
+        let hits = match self.bib.search_articles(query, limit, 0).await {
             Ok(h) => h,
             Err(e) => {
                 return SearchQueryResult {
@@ -1247,7 +1247,7 @@ impl ToolFunction for BibExportTool {
             None => {
                 let hits = self
                     .bib
-                    .search_articles("", limit)
+                    .search_articles("", limit, 0)
                     .await
                     .map_err(box_error)?;
                 let mut out = Vec::new();

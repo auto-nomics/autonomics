@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -275,6 +275,7 @@ export function BibliographyView() {
   const [articles, setArticles] = useState<BibArticle[]>([]);
   const [total, setTotal] = useState(0);
   const [queryDraft, setQueryDraft] = useState("");
+  const [query, setQuery] = useState("");
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [selectedArticle, setSelectedArticle] = useState<string | null>(null);
   const [detail, setDetail] = useState<BibDetail | null>(null);
@@ -284,28 +285,58 @@ export function BibliographyView() {
   const [busy, setBusy] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [articleOffset, setArticleOffset] = useState(0);
+  const [hasMoreArticles, setHasMoreArticles] = useState(false);
+  const requestSequence = useRef(0);
+  const articleLoaderRef = useRef<HTMLDivElement | null>(null);
 
-  const loadLibrary = useCallback(async (nextQuery = "") => {
+  const loadLibrary = useCallback(async (
+    nextQuery = "",
+    options: { append?: boolean; offset?: number } = {},
+  ) => {
+    const append = options.append ?? false;
+    const offset = options.offset ?? 0;
+    const requestId = ++requestSequence.current;
     setLoading(true);
     setError(null);
     try {
       const [collectionResponse, articleResponse] = await Promise.all([
         gatewayRequest("GET", "/bib/collections"),
-        gatewayRequest("GET", `/bib/articles?query=${encodeURIComponent(nextQuery)}&limit=500`),
+        gatewayRequest("GET", `/bib/articles?query=${encodeURIComponent(nextQuery)}&limit=500&offset=${offset}`),
       ]);
+      const nextArticles: BibArticle[] = articleResponse.articles ?? [];
+      if (requestId !== requestSequence.current) return;
       setCollections(collectionResponse.collections ?? []);
-      setArticles(articleResponse.articles ?? []);
+      setArticles((current) => append ? [...current, ...nextArticles] : nextArticles);
       setTotal(articleResponse.total ?? (articleResponse.articles ?? []).length);
+      setArticleOffset(offset + nextArticles.length);
+      setHasMoreArticles(nextArticles.length === 500);
     } catch (cause) {
+      if (requestId !== requestSequence.current) return;
       setError(String(cause));
     } finally {
-      setLoading(false);
+      if (requestId === requestSequence.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     void loadLibrary("");
   }, [loadLibrary]);
+
+  const loadMoreArticles = useCallback(() => {
+    if (loading || !hasMoreArticles) return;
+    void loadLibrary(query, { append: true, offset: articleOffset });
+  }, [articleOffset, hasMoreArticles, loadLibrary, loading, query]);
+
+  useEffect(() => {
+    const node = articleLoaderRef.current;
+    if (!node || !hasMoreArticles || loading) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMoreArticles();
+    }, { rootMargin: "400px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMoreArticles, loadMoreArticles, loading]);
 
   const visibleArticles = useMemo(() => {
     if (!selectedCollection) return articles;
@@ -357,7 +388,9 @@ export function BibliographyView() {
         source: null,
         fetch_fulltext: true,
       });
-      await loadLibrary();
+      setQueryDraft("");
+      setQuery("");
+      await loadLibrary("");
       if (response.article?.id) selectArticle(response.article.id);
     } catch (cause) {
       setError(String(cause));
@@ -469,7 +502,8 @@ export function BibliographyView() {
             className="relative min-w-0 flex-1"
             onSubmit={(event) => {
               event.preventDefault();
-              void loadLibrary(queryDraft);
+                setQuery(queryDraft);
+                void loadLibrary(queryDraft);
             }}
           >
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
@@ -481,6 +515,7 @@ export function BibliographyView() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
+                  setQuery(queryDraft);
                   void loadLibrary(queryDraft);
                 }
               }}
@@ -573,6 +608,13 @@ export function BibliographyView() {
 
           {!loading && !visibleArticles.length && (
             <div className="grid h-full place-items-center text-sm text-muted-foreground">No matching articles</div>
+          )}
+          {!loading && hasMoreArticles && (
+            <div ref={articleLoaderRef} className="p-3 text-center">
+              <Button size="sm" variant="secondary" onClick={loadMoreArticles}>
+                Load more ({articleOffset.toLocaleString()} / {total.toLocaleString()})
+              </Button>
+            </div>
           )}
         </ScrollArea>
       </section>

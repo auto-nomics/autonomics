@@ -747,7 +747,7 @@ async fn search_basic() {
     db.upsert_article(&a3).await.unwrap();
 
     // Search for "CRISPR".
-    let hits = db.search_articles("CRISPR", 10).await.unwrap();
+    let hits = db.search_articles("CRISPR", 10, 0).await.unwrap();
     assert!(
         hits.len() >= 2,
         "should find at least 2 CRISPR articles, got {}",
@@ -779,18 +779,24 @@ async fn search_does_not_treat_sql_wildcards_as_matches() {
         .unwrap();
 
     assert!(
-        db.search_articles("%gamma", 10).await.unwrap().is_empty(),
+        db.search_articles("%gamma", 10, 0)
+            .await
+            .unwrap()
+            .is_empty(),
         "SQL wildcard characters must not broaden a lexical query"
     );
-    assert!(db.search_articles("_", 10).await.unwrap().is_empty());
+    assert!(db.search_articles("_", 10, 0).await.unwrap().is_empty());
     assert!(
-        db.search_articles("alpha missing-term", 10)
+        db.search_articles("alpha missing-term", 10, 0)
             .await
             .unwrap()
             .is_empty(),
         "multi-word queries require every term"
     );
-    assert_eq!(db.search_articles("alpha beta", 10).await.unwrap().len(), 1);
+    assert_eq!(
+        db.search_articles("alpha beta", 10, 0).await.unwrap().len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -803,7 +809,7 @@ async fn search_with_fulltext() {
 
     // Initially, searching for content only in full text should miss.
     let hits = db
-        .search_articles("deep neural network architecture", 10)
+        .search_articles("deep neural network architecture", 10, 0)
         .await
         .unwrap();
     assert!(hits.is_empty());
@@ -831,7 +837,7 @@ async fn search_with_fulltext() {
 
     // Now the full text content is searchable.
     let hits = db
-        .search_articles("deep neural network architecture", 10)
+        .search_articles("deep neural network architecture", 10, 0)
         .await
         .unwrap();
     assert_eq!(hits.len(), 1);
@@ -859,7 +865,7 @@ async fn search_title_ranks_first() {
     db.upsert_article(&a1).await.unwrap();
     db.upsert_article(&a2).await.unwrap();
 
-    let hits = db.search_articles("proteomics", 10).await.unwrap();
+    let hits = db.search_articles("proteomics", 10, 0).await.unwrap();
     assert_eq!(hits.len(), 2);
     // Title match (rank 0) should come first.
     assert_eq!(hits[0].article_id, "a2");
@@ -882,7 +888,7 @@ async fn search_finds_annotation_content() {
 
     // Before annotation: searching for "polygenic risk score" misses.
     let hits = db
-        .search_articles("polygenic risk score", 10)
+        .search_articles("polygenic risk score", 10, 0)
         .await
         .unwrap();
     assert!(hits.is_empty());
@@ -901,7 +907,7 @@ async fn search_finds_annotation_content() {
 
     // Now the annotation content is searchable.
     let hits = db
-        .search_articles("polygenic risk score", 10)
+        .search_articles("polygenic risk score", 10, 0)
         .await
         .unwrap();
     assert_eq!(hits.len(), 1);
@@ -914,4 +920,24 @@ async fn search_finds_annotation_content() {
         "snippet should come from annotation: {}",
         hits[0].snippet
     );
+}
+
+#[tokio::test]
+async fn search_pagination_returns_disjoint_pages() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Alpha cardiovascular study"))
+        .await
+        .unwrap();
+    db.upsert_article(&sample_article("a2", "Beta cardiovascular study"))
+        .await
+        .unwrap();
+
+    let first = db.search_articles("cardiovascular", 1, 0).await.unwrap();
+    let second = db.search_articles("cardiovascular", 1, 1).await.unwrap();
+    let empty = db.search_articles("cardiovascular", 1, 2).await.unwrap();
+
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert!(empty.is_empty());
+    assert_ne!(first[0].article_id, second[0].article_id);
 }

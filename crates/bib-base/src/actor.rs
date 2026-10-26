@@ -84,6 +84,7 @@ pub(crate) enum BibCommand {
     SearchArticles {
         query: String,
         limit: usize,
+        offset: usize,
         reply: oneshot::Sender<Result<Vec<SearchHit>>>,
     },
 
@@ -265,9 +266,10 @@ impl BibCommand {
             Self::SearchArticles {
                 query,
                 limit,
+                offset,
                 reply,
             } => {
-                let _ = reply.send(core.search_articles(&query, limit).await);
+                let _ = reply.send(core.search_articles(&query, limit, offset).await);
             }
             Self::UpsertCollection { collection, reply } => {
                 let _ = reply.send(core.upsert_collection(&collection).await);

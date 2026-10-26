@@ -667,9 +667,14 @@ impl BibCore {
     /// Uses an inverted index maintained in the same transaction as article,
     /// full-text, and annotation writes. A query matches when all of its
     /// lexical terms occur somewhere in the indexed fields.
-    pub async fn search_articles(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    pub async fn search_articles(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SearchHit>> {
         if query.trim().is_empty() {
-            return self.list_search_hits(limit).await;
+            return self.list_search_hits(limit, offset).await;
         }
 
         let terms = tokenize(query);
@@ -700,13 +705,15 @@ impl BibCore {
                  WHEN SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END) > 0 THEN 2 \
                  ELSE 3 \
              END, COUNT(*) DESC \
-             LIMIT ?{}",
+             LIMIT ?{} OFFSET ?{}",
             terms.len() + 1,
-            terms.len() + 2
+            terms.len() + 2,
+            terms.len() + 3
         );
         let mut params: Vec<Value> = terms.iter().map(|term| Value::Text(term.clone())).collect();
         params.push(Value::Integer(terms.len() as i64));
         params.push(Value::Integer(limit as i64));
+        params.push(Value::Integer(offset as i64));
 
         let conn = self.conn();
         let mut rows = conn.query(sql, turso::params_from_iter(params)).await?;
@@ -750,12 +757,12 @@ impl BibCore {
         Ok(hits)
     }
 
-    async fn list_search_hits(&self, limit: usize) -> Result<Vec<SearchHit>> {
+    async fn list_search_hits(&self, limit: usize, offset: usize) -> Result<Vec<SearchHit>> {
         let conn = self.conn();
         let mut rows = conn
             .query(
-                "SELECT id, title FROM articles ORDER BY title LIMIT ?1",
-                turso::params![limit as i64],
+                "SELECT id, title FROM articles ORDER BY title LIMIT ?1 OFFSET ?2",
+                turso::params![limit as i64, offset as i64],
             )
             .await?;
         let mut hits = Vec::new();
@@ -848,10 +855,16 @@ impl BibBase {
     }
 
     /// Search across titles, abstracts, stored full text, and annotations.
-    pub async fn search_articles(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    pub async fn search_articles(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<SearchHit>> {
         self.call(|reply| BibCommand::SearchArticles {
             query: query.to_owned(),
             limit,
+            offset,
             reply,
         })
         .await
@@ -1052,7 +1065,7 @@ mod tests {
             tasks.push(tokio::spawn(async move {
                 for round in 0..10u64 {
                     bib.article_count().await.unwrap();
-                    bib.search_articles("article", 5).await.unwrap();
+                    bib.search_articles("article", 5, 0).await.unwrap();
                     bib.list_article_ids().await.unwrap();
                     bib.get_collection("col-1").await.unwrap();
                     bib.upsert_article(&Article::new(

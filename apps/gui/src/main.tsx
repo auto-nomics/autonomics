@@ -471,9 +471,9 @@ export default function App() {
   const activeSessionId = activeSessions[activeAgent] ?? latestSession(sessions[activeAgent] ?? []);
 
   return (
-    <main className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="flex h-13 items-center justify-between border-b bg-muted px-4">
-        <nav className="flex items-center gap-1">
+    <main className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
+      <header className="flex h-13 items-center justify-between gap-2 border-b bg-muted px-3">
+        <nav className="flex min-w-0 items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {(["agent", "config", "bib", "kms", "dag"] as View[]).map((item) => (
             <Button
               key={item}
@@ -485,7 +485,7 @@ export default function App() {
             </Button>
           ))}
         </nav>
-        <Badge variant={connected ? "default" : "destructive"}>
+        <Badge variant={connected ? "default" : "destructive"} className="shrink-0">
           {connected ? "Gateway 已连接" : "已断开"}
         </Badge>
       </header>
