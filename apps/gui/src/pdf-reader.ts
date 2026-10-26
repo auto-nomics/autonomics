@@ -4,6 +4,7 @@ import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
 import { escapeHtml } from "./markdown";
+import type { BibArticle } from "./types";
 import "./pdf-reader.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -57,6 +58,20 @@ const READER_RAIL_LABELS: Record<ReaderPane, string> = {
   search: "Search",
 };
 
+type ContextTab = "info" | "notes" | "tags";
+
+const CONTEXT_RAIL_ICONS: Record<ContextTab, string> = {
+  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 10v7"/><path d="M12 7h.01"/></svg>`,
+  notes: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l5-5V5a2 2 0 0 0-2-2Z"/><path d="M8 8h7"/><path d="M8 12h5"/><path d="M15 21v-5h5"/></svg>`,
+  tags: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1"/></svg>`,
+};
+
+const CONTEXT_RAIL_LABELS: Record<ContextTab, string> = {
+  info: "Info",
+  notes: "Notes",
+  tags: "Tags",
+};
+
 export type PdfReaderHandle = {
   close: () => void;
 };
@@ -66,9 +81,14 @@ let activeReader: PdfReaderHandle | null = null;
 export async function openPdfReader(options: {
   articleId: string;
   title: string;
+  article?: BibArticle | null;
 }): Promise<PdfReaderHandle> {
   activeReader?.close();
-  const reader = await ZoteroStylePdfReader.open(options.articleId, options.title);
+  const reader = await ZoteroStylePdfReader.open(
+    options.articleId,
+    options.title,
+    options.article ?? null,
+  );
   const handle: PdfReaderHandle = {
     close: () => reader.destroy(),
   };
@@ -110,10 +130,13 @@ class ZoteroStylePdfReader {
   private searchResults: Array<{ page: number; count: number }> = [];
   private activePane: ReaderPane = "thumbnails";
   private sidebarOpen = true;
+  private contextOpen = true;
+  private contextTab: ContextTab = "info";
 
   private constructor(
     private readonly articleId: string,
     private readonly title: string,
+    private readonly article: BibArticle | null,
   ) {
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
@@ -165,9 +188,16 @@ class ZoteroStylePdfReader {
             <button type="button" data-action="fit-width">Fit width</button>
             <button type="button" data-action="fit-page">Fit page</button>
           </div>
-          <button type="button" data-action="rotate">Rotate</button>
-          <input class="reader-search-field" data-input="toolbar-search" placeholder="Search" />
-          <div class="reader-title">${escapeHtml(this.title)}</div>
+          <div class="reader-tool-center">
+            <button type="button" data-action="tool-highlight" title="Highlight selection">A</button>
+            <button type="button" data-action="tool-note" title="Add note">T</button>
+            <button type="button" data-action="copy-selection-toolbar" title="Copy selection">⧉</button>
+            <button type="button" data-action="tool-clear" title="Clear selection">⌫</button>
+          </div>
+          <div class="reader-tool-right">
+            <button type="button" data-action="text-options" title="Text options">Aa</button>
+            <button type="button" data-action="open-search" title="Search PDF">🔍</button>
+          </div>
           <button type="button" data-action="close" title="Close">✕</button>
         </header>
         <div class="reader-page-area">
@@ -184,6 +214,47 @@ class ZoteroStylePdfReader {
           </div>
         </div>
       </main>
+      <aside class="reader-context" data-tab="${this.contextTab}" data-open="${this.contextOpen}">
+        <div class="reader-context-header">
+          <strong>${escapeHtml(this.article?.title || this.title)}</strong>
+          <button type="button" data-action="close-context" title="Close context panel">✕</button>
+        </div>
+        <div class="reader-context-body">
+          <section class="reader-context-section" data-context="info">
+            <div class="reader-metadata">
+              ${this.metadataRow("Item Type", this.article?.source === "crossref" ? "Journal Article" : "Article")}
+              ${this.metadataRow("Title", this.article?.title || this.title)}
+              ${this.metadataRow("Authors", this.authorsText())}
+              ${this.metadataRow("Publication", this.article?.journal)}
+              ${this.metadataRow("Date", this.article?.year)}
+              ${this.metadataRow("DOI", this.identifier("doi"))}
+              ${this.metadataRow("PMID", this.identifier("pmid"))}
+              ${this.metadataRow("Source", this.article?.source)}
+              ${this.metadataRow("Record", this.article?.id)}
+            </div>
+          </section>
+          <section class="reader-context-section" data-context="notes" hidden>
+            <div data-output="context-notes"></div>
+          </section>
+          <section class="reader-context-section" data-context="tags" hidden>
+            <div class="reader-tags" data-output="context-tags"></div>
+          </section>
+        </div>
+      </aside>
+      <nav class="reader-context-rail" aria-label="PDF context">
+        ${(["info", "notes", "tags"] as ContextTab[]).map((tab) => `
+          <button
+            type="button"
+            class="reader-context-button${tab === this.contextTab ? " active" : ""}"
+            data-tab="${tab}"
+            title="${CONTEXT_RAIL_LABELS[tab]}"
+            aria-label="${CONTEXT_RAIL_LABELS[tab]}"
+          >
+            ${CONTEXT_RAIL_ICONS[tab]}
+          </button>
+        `).join("")}
+        ${this.externalHref() ? `<button type="button" class="reader-context-button" data-action="open-external" title="Open source">${CONTEXT_RAIL_ICONS.info}</button>` : ""}
+      </nav>
     `;
     document.body.append(this.root);
 
@@ -215,8 +286,9 @@ class ZoteroStylePdfReader {
   static async open(
     articleId: string,
     title: string,
+    article: BibArticle | null = null,
   ): Promise<ZoteroStylePdfReader> {
-    const reader = new ZoteroStylePdfReader(articleId, title);
+    const reader = new ZoteroStylePdfReader(articleId, title, article);
     try {
       const raw = await fetchBibFulltextRaw(articleId);
       if (reader.destroyed) return reader;
@@ -256,7 +328,38 @@ class ZoteroStylePdfReader {
       this.rotation = (this.rotation + 90) % 360;
       void this.refit();
     });
-    action("sidebar", () => this.root.classList.toggle("sidebar-collapsed"));
+    action("sidebar", () => this.setSidebarOpen(!this.sidebarOpen));
+    this.root.addEventListener("click", (event) => {
+      const target = event.target as HTMLElement;
+      const button = target.closest<HTMLButtonElement>(".reader-context-button[data-tab]");
+      if (!button) return;
+      this.setContextTab((button.dataset.tab ?? "info") as ContextTab);
+      this.setContextOpen(true);
+    });
+    action("close-sidebar", () => this.setSidebarOpen(false));
+    action("close-context", () => this.setContextOpen(false));
+    action("tool-highlight", () => {
+      if (this.anchor) void this.addHighlight("yellow");
+      else this.setStatus("Select text first");
+    });
+    action("tool-note", () => this.addNote());
+    action("copy-selection-toolbar", () => {
+      if (this.anchor) void navigator.clipboard.writeText(this.anchor.text);
+      else this.setStatus("Select text first");
+    });
+    action("tool-clear", () => {
+      window.getSelection()?.removeAllRanges();
+      this.hideSelectionPopup();
+    });
+    action("open-search", () => {
+      this.selectPane("search");
+      this.setSidebarOpen(true);
+      this.searchInput.focus();
+    });
+    action("open-external", () => {
+      const href = this.externalHref();
+      if (href) window.open(href, "_blank", "noopener");
+    });
     action("close-sidebar", () => this.setSidebarOpen(false));
     action("add-note", () => void this.addNote());
     action("copy-selection", () => {
@@ -337,6 +440,84 @@ class ZoteroStylePdfReader {
         void this.gotoPage(this.currentPage + 1);
       }
     });
+
+  }
+
+  private metadataRow(label: string, value?: string | number | null) {
+    if (value === undefined || value === null || value === "") return "";
+    return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+  }
+
+  private authorsText() {
+    return (this.article?.authors ?? [])
+      .map((author) => author.name || [author.last_name, author.fore_name].filter(Boolean).join(", "))
+      .filter(Boolean)
+      .join("; ");
+  }
+
+  private identifier(kind: string) {
+    return this.article?.identifiers?.find((item) => item.kind.toLowerCase() === kind)?.value ?? null;
+  }
+
+  private externalHref() {
+    const doi = this.identifier("doi");
+    if (doi) return `https://doi.org/${encodeURIComponent(doi.replace(/^doi:/i, ""))}`;
+    return this.identifier("url") ?? null;
+  }
+
+  private renderContext() {
+    this.root.dataset.tab = this.contextTab;
+    this.root.dataset.open = String(this.contextOpen);
+    this.root.querySelectorAll<HTMLButtonElement>(".reader-context-button[data-tab]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.tab === this.contextTab);
+    });
+    this.root.querySelectorAll<HTMLElement>(".reader-context-section").forEach((section) => {
+      section.hidden = section.dataset.context !== this.contextTab;
+    });
+
+    const notes = this.root.querySelector("[data-output=context-notes]");
+    if (notes) {
+      notes.replaceChildren();
+      if (!this.annotations.length) {
+        notes.innerHTML = `<div class="reader-empty">No annotations</div>`;
+      } else {
+        for (const annotation of [...this.annotations].reverse()) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.innerHTML = `
+            <strong>${escapeHtml(annotation.kind ?? "note")} · page ${Number(annotation.page ?? 1)}</strong>
+            <small>${escapeHtml(annotation.content.slice(0, 240))}</small>`;
+          button.addEventListener("click", () => void this.gotoPage(Number(annotation.page ?? 1)));
+          notes.append(button);
+        }
+      }
+    }
+
+    const tags = this.root.querySelector("[data-output=context-tags]");
+    if (tags) {
+      const keywords = this.article?.keywords ?? [];
+      tags.replaceChildren();
+      if (!keywords.length) {
+        tags.innerHTML = `<div class="reader-empty">No tags</div>`;
+      } else {
+        for (const keyword of keywords) {
+          const badge = document.createElement("span");
+          badge.className = "reader-tag";
+          badge.textContent = keyword;
+          tags.append(badge);
+        }
+      }
+    }
+  }
+
+  private setContextTab(tab: ContextTab) {
+    this.contextTab = tab;
+    this.renderContext();
+  }
+
+  private setContextOpen(open: boolean) {
+    this.contextOpen = open;
+    this.root.dataset.contextOpen = String(open);
   }
 
   private setStatus(text: string) {
@@ -592,6 +773,7 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     await this.loadAnnotations();
+    this.renderContext();
   }
 
   private async addNote() {
@@ -611,12 +793,14 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     await this.loadAnnotations();
+    this.renderContext();
   }
 
   private async deleteAnnotation(id: string) {
     if (!window.confirm("Delete this annotation?")) return;
     await gatewayRequest("DELETE", `/bib/annotations/${encodeURIComponent(id)}`);
     await this.loadAnnotations();
+    this.renderContext();
   }
 
   private async pageText(page: number) {

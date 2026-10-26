@@ -278,6 +278,7 @@ export function BibliographyView() {
   const [query, setQuery] = useState("");
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
   const [selectedArticle, setSelectedArticle] = useState<string | null>(null);
+  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
   const [detail, setDetail] = useState<BibDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -348,6 +349,7 @@ export function BibliographyView() {
 
   const selectArticle = useCallback((articleId: string | null) => {
     setSelectedArticle(articleId);
+    setAttachmentsOpen(true);
     setDetail(null);
     if (!articleId) return;
     if (!window.matchMedia("(min-width: 1280px)").matches) setDetailsOpen(true);
@@ -430,7 +432,11 @@ export function BibliographyView() {
 
   const readPdf = () => {
     if (!selected) return;
-    void openPdfReader({ articleId: selected.id, title: selected.title }).catch((cause) => setError(String(cause)));
+    void openPdfReader({
+      articleId: selected.id,
+      title: selected.title,
+      article: selected,
+    }).catch((cause) => setError(String(cause)));
   };
 
   return (
@@ -565,14 +571,15 @@ export function BibliographyView() {
               <div key={article.id} className="border-b border-border/60">
                 <button
                   type="button"
-                  onClick={() => selectArticle(article.id)}
+	                  aria-expanded={isSelected && attachmentsOpen}
+	                  onClick={() => isSelected ? setAttachmentsOpen(!attachmentsOpen) : selectArticle(article.id)}
                   className={cn(
                     "grid h-9 w-full grid-cols-[24px_minmax(0,1fr)_30px] items-center px-2 text-left transition-colors hover:bg-accent/70 md:grid-cols-[28px_minmax(0,1fr)_168px_34px]",
                     isSelected && "bg-accent",
                   )}
                 >
                   <span className="flex items-center justify-center">
-                    {isSelected ? (
+	                    {isSelected && attachmentsOpen ? (
                       <ChevronDown className="size-3.5 text-muted-foreground" />
                     ) : (
                       <ChevronRight className="size-3.5 text-muted-foreground/60" />
@@ -587,7 +594,7 @@ export function BibliographyView() {
                   </span>
                 </button>
 
-                {isSelected && (
+                {isSelected && attachmentsOpen && (
                   <div className="bg-muted/25">
                     {detailLoading && (
                       <div className="px-7 py-2 text-xs text-muted-foreground">Loading attachments…</div>
