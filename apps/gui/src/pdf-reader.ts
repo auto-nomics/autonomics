@@ -38,6 +38,25 @@ type SelectionAnchor = {
   y: number;
 };
 
+type ReaderPane = "thumbnails" | "outline" | "annotations" | "search";
+
+const READER_SIDEBAR_WIDTH_KEY = "autonomics.pdf.sidebarWidth";
+const READER_SIDEBAR_OPEN_KEY = "autonomics.pdf.sidebarOpen";
+
+const READER_RAIL_ICONS: Record<ReaderPane, string> = {
+  thumbnails: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 9v12"/></svg>`,
+  outline: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>`,
+  annotations: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l5-5V5a2 2 0 0 0-2-2Z"/><path d="M8 8h7"/><path d="M8 12h5"/><path d="M15 21v-5h5"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`,
+};
+
+const READER_RAIL_LABELS: Record<ReaderPane, string> = {
+  thumbnails: "Pages",
+  outline: "Outline",
+  annotations: "Notes",
+  search: "Search",
+};
+
 export type PdfReaderHandle = {
   close: () => void;
 };
@@ -79,16 +98,18 @@ class ZoteroStylePdfReader {
   private pageCountElement: HTMLSpanElement;
   private zoomLabel: HTMLSpanElement;
   private statusElement: HTMLSpanElement;
-  private outlinePane: HTMLDivElement;
-  private thumbnailsPane: HTMLDivElement;
-  private annotationPane: HTMLDivElement;
-  private searchPane: HTMLDivElement;
+  private outlinePane: HTMLElement;
+  private thumbnailsPane: HTMLElement;
+  private annotationPane: HTMLElement;
+  private searchPane: HTMLElement;
   private searchInput: HTMLInputElement;
   private selectionPopup: HTMLDivElement;
   private annotations: any[] = [];
   private anchor: SelectionAnchor | null = null;
   private textCache = new Map<number, string>();
   private searchResults: Array<{ page: number; count: number }> = [];
+  private activePane: ReaderPane = "thumbnails";
+  private sidebarOpen = true;
 
   private constructor(
     private readonly articleId: string,
@@ -97,24 +118,40 @@ class ZoteroStylePdfReader {
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
     this.root.innerHTML = `
-      <aside class="reader-sidebar">
-        <div class="reader-sidebar-tabs">
-          <button type="button" data-pane="thumbnails" class="active">Pages</button>
-          <button type="button" data-pane="outline">Outline</button>
-          <button type="button" data-pane="annotations">Notes</button>
-          <button type="button" data-pane="search">Search</button>
+      <aside class="reader-sidebar-shell">
+        <nav class="reader-rail" aria-label="PDF sidebar">
+          ${(["thumbnails", "outline", "annotations", "search"] as ReaderPane[]).map((pane) => `
+            <button
+              type="button"
+              class="reader-rail-button${pane === this.activePane ? " active" : ""}"
+              data-pane="${pane}"
+              title="${READER_RAIL_LABELS[pane]}"
+              aria-label="${READER_RAIL_LABELS[pane]}"
+            >
+              ${READER_RAIL_ICONS[pane]}
+            </button>
+          `).join("")}
+        </nav>
+        <div class="reader-sidebar">
+          <div class="reader-sidebar-header">
+            <span data-output="sidebar-title">Pages</span>
+            <button type="button" data-action="close-sidebar" title="Close sidebar">✕</button>
+          </div>
+          <div class="reader-sidebar-body">
+            <div class="reader-sidebar-pane" data-pane="thumbnails"></div>
+            <div class="reader-sidebar-pane" data-pane="outline" hidden></div>
+            <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
+            <div class="reader-sidebar-pane" data-pane="search" hidden>
+              <input class="reader-search-input" data-input="search" placeholder="Search PDF" />
+              <div data-output="search-results"></div>
+            </div>
+          </div>
         </div>
-        <div class="reader-sidebar-pane" data-pane="thumbnails"></div>
-        <div class="reader-sidebar-pane" data-pane="outline" hidden></div>
-        <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
-        <div class="reader-sidebar-pane" data-pane="search" hidden>
-          <input class="reader-search-input" data-input="search" placeholder="Search PDF" />
-          <div data-output="search-results"></div>
-        </div>
+        <div class="reader-sidebar-resizer" data-action="resize-sidebar" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
       </aside>
       <main class="reader-main">
         <header class="reader-toolbar">
-          <button type="button" data-action="sidebar" title="Toggle sidebar">☰</button>
+          <button type="button" data-action="sidebar" title="Toggle sidebar" aria-label="Toggle sidebar">☰</button>
           <div class="reader-tool-group">
             <button type="button" data-action="previous" title="Previous page">‹</button>
             <input data-input="page" type="number" min="1" value="1" aria-label="Page" />
@@ -156,12 +193,21 @@ class ZoteroStylePdfReader {
     this.pageCountElement = this.select('[data-output="page-count"]');
     this.zoomLabel = this.select('[data-output="zoom"]');
     this.statusElement = this.select('[data-output="status"]');
-    this.outlinePane = this.select('[data-pane="outline"]');
-    this.thumbnailsPane = this.select('[data-pane="thumbnails"]');
-  this.annotationPane = this.select('[data-pane="annotations"]');
-  this.searchPane = this.select('[data-pane="search"]');
-  this.searchInput = this.select<HTMLInputElement>('[data-input="search"]');
-  this.selectionPopup = this.select('[data-output="selection-popup"]');
+    this.outlinePane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="outline"]');
+    this.thumbnailsPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="thumbnails"]');
+    this.annotationPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="annotations"]');
+    this.searchPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="search"]');
+    this.searchInput = this.select<HTMLInputElement>('.reader-sidebar-pane[data-pane="search"] [data-input="search"]');
+    this.selectionPopup = this.select('[data-output="selection-popup"]');
+
+    const savedWidth = Number(window.localStorage.getItem(READER_SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(savedWidth) && savedWidth >= 230) {
+      this.root.style.setProperty("--reader-sidebar-width", `${Math.min(savedWidth, 560)}px`);
+    }
+    if (window.localStorage.getItem(READER_SIDEBAR_OPEN_KEY) === "0") {
+      this.sidebarOpen = false;
+      this.root.classList.add("sidebar-closed");
+    }
 
     this.bindEvents();
   }
@@ -211,6 +257,7 @@ class ZoteroStylePdfReader {
       void this.refit();
     });
     action("sidebar", () => this.root.classList.toggle("sidebar-collapsed"));
+    action("close-sidebar", () => this.setSidebarOpen(false));
     action("add-note", () => void this.addNote());
     action("copy-selection", () => {
       if (this.anchor) void navigator.clipboard.writeText(this.anchor.text);
@@ -236,19 +283,42 @@ class ZoteroStylePdfReader {
     });
 
     this.root
-      .querySelectorAll<HTMLButtonElement>(".reader-sidebar-tabs button")
+      .querySelectorAll<HTMLButtonElement>(".reader-rail-button")
       .forEach((button) => {
         button.addEventListener("click", () => {
-          this.root
-            .querySelectorAll<HTMLButtonElement>(".reader-sidebar-tabs button")
-            .forEach((item) => item.classList.toggle("active", item === button));
-          const pane = button.dataset.pane ?? "thumbnails";
-          this.outlinePane.hidden = pane !== "outline";
-          this.thumbnailsPane.hidden = pane !== "thumbnails";
-          this.annotationPane.hidden = pane !== "annotations";
-          this.searchPane.hidden = pane !== "search";
+          const pane = (button.dataset.pane ?? "thumbnails") as ReaderPane;
+          if (this.activePane === pane && this.sidebarOpen) {
+            this.setSidebarOpen(false);
+            return;
+          }
+          this.selectPane(pane);
+          this.setSidebarOpen(true);
         });
       });
+
+    this.root.querySelector<HTMLDivElement>('[data-action="resize-sidebar"]')?.addEventListener("pointerdown", (event: PointerEvent) => {
+      if (!this.sidebarOpen) return;
+      event.preventDefault();
+      const resizer = event.currentTarget as HTMLElement;
+      resizer.setPointerCapture(event.pointerId);
+      resizer.classList.add("dragging");
+      const move = (pointerEvent: PointerEvent) => {
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
+      };
+      const finish = (pointerEvent: PointerEvent) => {
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
+        window.localStorage.setItem(READER_SIDEBAR_WIDTH_KEY, String(width));
+        resizer.classList.remove("dragging");
+        resizer.removeEventListener("pointermove", move);
+        resizer.removeEventListener("pointerup", finish);
+        resizer.removeEventListener("pointercancel", finish);
+      };
+      resizer.addEventListener("pointermove", move);
+      resizer.addEventListener("pointerup", finish);
+      resizer.addEventListener("pointercancel", finish);
+    });
 
     this.pageArea.addEventListener("scroll", () => this.updateCurrentFromScroll());
     this.pageArea.addEventListener("mouseup", () => window.setTimeout(() => this.captureSelection(), 0));
@@ -357,7 +427,7 @@ class ZoteroStylePdfReader {
     try {
       const proxy = await this.document.getPage(page);
       const base = proxy.getViewport({ scale: 1, rotation: 0 });
-      const viewport = proxy.getViewport({ scale: 132 / base.width });
+      const viewport = proxy.getViewport({ scale: 226 / base.width });
       const canvas = document.createElement("canvas");
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
@@ -597,13 +667,24 @@ class ZoteroStylePdfReader {
   }
 
   private selectPane(name: string) {
-    this.root.querySelectorAll<HTMLButtonElement>(".reader-sidebar-tabs button").forEach((button) => {
+    const pane = name as ReaderPane;
+    this.activePane = pane;
+    this.root.querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.pane === name);
     });
+    const title = this.root.querySelector("[data-output=sidebar-title]");
+    if (title) title.textContent = READER_RAIL_LABELS[pane];
     this.outlinePane.hidden = name !== "outline";
     this.thumbnailsPane.hidden = name !== "thumbnails";
     this.annotationPane.hidden = name !== "annotations";
     this.searchPane.hidden = name !== "search";
+  }
+
+  private setSidebarOpen(open: boolean) {
+    this.sidebarOpen = open;
+    this.root.classList.toggle("sidebar-closed", !open);
+    window.localStorage.setItem(READER_SIDEBAR_OPEN_KEY, open ? "1" : "0");
+    window.setTimeout(() => void this.refit(), 170);
   }
 
   private async destinationPage(destination: any): Promise<number> {
@@ -637,6 +718,9 @@ class ZoteroStylePdfReader {
       .querySelectorAll<HTMLButtonElement>(".reader-thumbnail")
       .forEach((button) => {
         button.classList.toggle("active", Number(button.dataset.page) === page);
+        if (Number(button.dataset.page) === page) {
+          button.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
       });
   }
 
