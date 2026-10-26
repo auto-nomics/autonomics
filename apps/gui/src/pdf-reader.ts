@@ -709,8 +709,8 @@ class ZoteroStylePdfReader {
     const [pageX0, , pageX1, pageY1] = viewport.viewBox;
     const pageWidth = Math.abs(pageX1 - pageX0);
     const pageHeight = Math.abs(pageY1 - viewport.viewBox[1]);
-    const rects = Array.from(range.getClientRects())
-      .filter((rect) => rect.width > 1 && rect.height > 1)
+    const { rects: clientRects, text: visibleText } = this.visibleSelectionGeometry(range, layer);
+    const rects = clientRects
       .map((rect) => {
         const localLeft = rect.left - layerRect.left;
         const localTop = rect.top - layerRect.top;
@@ -731,14 +731,14 @@ class ZoteroStylePdfReader {
         };
       })
       .filter((rect) => rect.width > 0 && rect.height > 0);
-    if (!rects.length || !selection.toString().trim()) {
+    if (!rects.length || !visibleText) {
       this.hideSelectionPopup();
       return;
     }
-    const last = range.getClientRects()[range.getClientRects().length - 1];
+    const last = clientRects[clientRects.length - 1];
     this.anchor = {
       page: Number(wrapper.dataset.page),
-      text: selection.toString(),
+      text: visibleText,
       rects,
       x: last.left,
       y: last.bottom + 8,
@@ -751,6 +751,57 @@ class ZoteroStylePdfReader {
   private hideSelectionPopup() {
     this.selectionPopup.hidden = true;
     this.anchor = null;
+  }
+
+  private visibleSelectionGeometry(range: Range, layer: HTMLElement): {
+    rects: DOMRect[];
+    text: string;
+  } {
+    const rects: DOMRect[] = [];
+    const textParts: string[] = [];
+    const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+
+    let node = walker.nextNode() as Text | null;
+    while (node) {
+      if (!range.intersectsNode(node)) {
+        node = walker.nextNode() as Text | null;
+        continue;
+      }
+
+      const length = node.data.length;
+      let start = 0;
+      let end = length;
+      if (node === range.startContainer) start = range.startOffset;
+      if (node === range.endContainer) end = range.endOffset;
+
+      start = Math.max(0, Math.min(start, length));
+      end = Math.max(start, Math.min(end, length));
+
+      let index = start;
+      while (index < end) {
+        while (index < end && /\s/.test(node.data[index])) index += 1;
+        if (index >= end) break;
+
+        const visibleStart = index;
+        while (index < end && !/\s/.test(node.data[index])) index += 1;
+        const visibleEnd = index;
+
+        const segment = document.createRange();
+        segment.setStart(node, visibleStart);
+        segment.setEnd(node, visibleEnd);
+        for (const rect of segment.getClientRects()) {
+          if (rect.width > 0.5 && rect.height > 0.5) rects.push(rect);
+        }
+        textParts.push(node.data.slice(visibleStart, visibleEnd));
+      }
+
+      node = walker.nextNode() as Text | null;
+    }
+
+    return {
+      rects,
+      text: textParts.join(" ").replace(/\s+/g, " ").trim(),
+    };
   }
 
   private async addHighlight(color: string) {
