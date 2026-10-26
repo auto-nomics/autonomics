@@ -302,6 +302,7 @@ async fn article_refresh_preserves_related_records() {
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -327,7 +328,7 @@ async fn article_refresh_preserves_related_records() {
     refreshed.identifiers.clear();
     db.upsert_article(&refreshed).await.unwrap();
 
-    let annotations = db.list_annotations("a1").await.unwrap();
+    let annotations = db.list_annotations("a1", None).await.unwrap();
     assert_eq!(
         annotations.len(),
         1,
@@ -898,6 +899,7 @@ async fn search_finds_annotation_content() {
         "a1",
         AnnotationKind::Note,
         "This paper is relevant to polygenic risk score (PRS) benchmarking.",
+        None,
         None,
         None,
         None,

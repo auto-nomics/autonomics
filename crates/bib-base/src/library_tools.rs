@@ -760,7 +760,7 @@ impl BibGetArticleTool {
         // Annotations (notes/highlights/comments) — without this the write
         // path (bib_add_note) is a data black hole: annotations are persisted
         // but never reachable through any read tool.
-        let annotations = match self.bib.list_annotations(article_id).await {
+        let annotations = match self.bib.list_annotations(article_id, None).await {
             Ok(a) => a,
             Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
         };
@@ -891,6 +891,8 @@ pub struct BibAddNoteInput {
     pub color: Option<String>,
     #[desc = "Normalized PDF selection rectangles encoded as JSON"]
     pub rects: Option<String>,
+    #[desc = "Optional Zotero attachment item key; defaults to the preferred attachment"]
+    pub attachment_key: Option<String>,
 }
 
 pub struct BibAddNoteTool {
@@ -919,6 +921,7 @@ impl ToolFunction for BibAddNoteTool {
                 input
                     .rects
                     .and_then(|value| serde_json::from_str(&value).ok()),
+                input.attachment_key.as_deref(),
             )
             .await
             .map_err(box_error)?;
@@ -1818,6 +1821,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1834,7 +1838,7 @@ mod tests {
         .unwrap();
 
         // Sanity: annotation + membership present.
-        assert_eq!(bib.list_annotations(&art.id).await.unwrap().len(), 1);
+        assert_eq!(bib.list_annotations(&art.id, None).await.unwrap().len(), 1);
 
         let tool = BibDeleteTool { bib: bib.clone() };
         let input = BibDeleteInput {
@@ -1846,7 +1850,7 @@ mod tests {
 
         // FK CASCADE should have wiped everything.
         assert_eq!(bib.article_count().await.unwrap(), 0);
-        assert_eq!(bib.list_annotations(&art.id).await.unwrap().len(), 0);
+        assert_eq!(bib.list_annotations(&art.id, None).await.unwrap().len(), 0);
         assert_eq!(
             bib.list_collection_articles(&col.id, None, None)
                 .await

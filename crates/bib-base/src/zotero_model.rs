@@ -13,11 +13,13 @@ use turso::Connection;
 use turso::transaction::{Transaction, TransactionBehavior};
 
 use crate::error::Result;
-use bib_types::{ExtractStatus, FileFormat, FullText, TextFormat};
+use bib_types::{AnnotationKind, AnnotationRect, ExtractStatus, FileFormat, FullText, TextFormat};
 
 pub const DEFAULT_LIBRARY_ID: i64 = 1;
 pub const ITEM_TYPE_JOURNAL_ARTICLE: i64 = 1;
 pub const ITEM_TYPE_ATTACHMENT: i64 = 2;
+pub const ITEM_TYPE_ANNOTATION: i64 = 3;
+pub const ITEM_TYPE_NOTE: i64 = 4;
 
 pub const LINK_MODE_IMPORTED_FILE: i64 = 0;
 pub const LINK_MODE_IMPORTED_URL: i64 = 1;
@@ -63,7 +65,9 @@ CREATE TABLE IF NOT EXISTS itemTypes (
 
 INSERT OR IGNORE INTO itemTypes (itemTypeID, typeName) VALUES
     (1, 'journalArticle'),
-    (2, 'attachment');
+    (2, 'attachment'),
+    (3, 'annotation'),
+    (4, 'note');
 
 CREATE TABLE IF NOT EXISTS fields (
     fieldID INTEGER PRIMARY KEY,
@@ -177,6 +181,36 @@ CREATE INDEX IF NOT EXISTS itemAttachments_contentType ON itemAttachments(conten
 CREATE INDEX IF NOT EXISTS itemAttachments_syncState ON itemAttachments(syncState);
 CREATE INDEX IF NOT EXISTS itemAttachments_vfsPath ON itemAttachments(vfsPath);
 
+CREATE TABLE IF NOT EXISTS itemAnnotations (
+    itemID INTEGER PRIMARY KEY REFERENCES items(itemID) ON DELETE CASCADE,
+    parentItemID INTEGER NOT NULL REFERENCES itemAttachments(itemID) ON DELETE CASCADE,
+    type INTEGER NOT NULL,
+    authorName TEXT,
+    text TEXT,
+    textNormalized TEXT,
+    comment TEXT,
+    commentNormalized TEXT,
+    color TEXT,
+    pageLabel TEXT,
+    sortIndex TEXT NOT NULL,
+    position TEXT NOT NULL,
+    isExternal INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS itemAnnotations_parentItemID ON itemAnnotations(parentItemID);
+
+CREATE TABLE IF NOT EXISTS itemNotes (
+    itemID INTEGER PRIMARY KEY REFERENCES items(itemID) ON DELETE CASCADE,
+    parentItemID INTEGER REFERENCES items(itemID) ON DELETE CASCADE,
+    note TEXT,
+    title TEXT
+);
+CREATE INDEX IF NOT EXISTS itemNotes_parentItemID ON itemNotes(parentItemID);
+
+CREATE TABLE IF NOT EXISTS annotationItems (
+    annotation_id TEXT PRIMARY KEY REFERENCES annotations(id) ON DELETE CASCADE,
+    itemID INTEGER NOT NULL UNIQUE REFERENCES items(itemID) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS fulltextItems (
     itemID INTEGER PRIMARY KEY REFERENCES items(itemID) ON DELETE CASCADE,
     indexedPages INTEGER,
@@ -266,6 +300,19 @@ pub(crate) struct LegacyFulltext {
     pub(crate) text_format: Option<TextFormat>,
     pub(crate) extracted_by: Option<String>,
     pub(crate) extract_error: Option<String>,
+}
+
+/// A legacy annotation row to mirror into the Zotero item model.
+#[derive(Debug, Clone)]
+pub(crate) struct AnnotationSync {
+    pub(crate) id: String,
+    pub(crate) article_id: String,
+    pub(crate) kind: AnnotationKind,
+    pub(crate) content: String,
+    pub(crate) page: Option<u32>,
+    pub(crate) color: Option<String>,
+    pub(crate) rects: Option<Vec<AnnotationRect>>,
+    pub(crate) created_at: String,
 }
 
 impl LegacyFulltext {
@@ -382,6 +429,33 @@ pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
     }
     for fulltext in fulltexts {
         sync_fulltext_attachment(&tx, &fulltext).await?;
+    }
+
+    let mut annotations: Vec<AnnotationSync> = Vec::new();
+    {
+        let mut rows = tx
+            .query(
+                "SELECT id, article_id, kind, content, page, color, rects, created_at \
+                 FROM annotations",
+                turso::params![],
+            )
+            .await?;
+        while let Some(row) = rows.next().await? {
+            annotations.push(AnnotationSync {
+                id: row.get::<String>(0)?,
+                article_id: row.get::<String>(1)?,
+                kind: AnnotationKind::from_str(&row.get::<String>(2)?),
+                content: row.get::<String>(3)?,
+                page: opt_int(row.get_value(4)?).map(|page| page as u32),
+                color: opt_string(row.get_value(5)?),
+                rects: opt_string(row.get_value(6)?)
+                    .and_then(|value| serde_json::from_str(&value).ok()),
+                created_at: opt_string(row.get_value(7)?).unwrap_or_default(),
+            });
+        }
+    }
+    for annotation in annotations {
+        sync_annotation_item(&tx, &annotation, None).await?;
     }
 
     tx.commit().await?;
@@ -669,6 +743,143 @@ pub(crate) async fn delete_attachment_by_key(
         attachment,
         was_preferred,
     }))
+}
+
+/// Mirror one legacy annotation into a Zotero annotation or note item.
+///
+/// PDF annotations are child items of an attachment. A legacy note with no
+/// attachment available becomes a Zotero child note of the article item.
+pub(crate) async fn sync_annotation_item(
+    conn: &Connection,
+    annotation: &AnnotationSync,
+    attachment_key: Option<&str>,
+) -> Result<i64> {
+    if let Some(item_id) = mapped_annotation_item(conn, &annotation.id).await? {
+        return Ok(item_id);
+    }
+
+    let parent_article_item = ensure_article_item(conn, &annotation.article_id).await?;
+    let attachment = match attachment_key {
+        Some(key) => attachment_by_key(conn, &annotation.article_id, key).await?,
+        None => attachment_for_article(conn, &annotation.article_id).await?,
+    };
+
+    let item_id = if let Some(attachment) = attachment {
+        let annotation_type = match annotation.kind {
+            AnnotationKind::Highlight => 1,
+            AnnotationKind::Note | AnnotationKind::Comment => 2,
+        };
+        let annotation_item = insert_item(conn, ITEM_TYPE_ANNOTATION).await?;
+        let (text, comment) = match annotation.kind {
+            AnnotationKind::Comment => (None, Some(annotation.content.clone())),
+            AnnotationKind::Highlight | AnnotationKind::Note => {
+                (Some(annotation.content.clone()), None)
+            }
+        };
+        let normalized_text = text.as_deref().map(str::to_lowercase);
+        let normalized_comment = comment.as_deref().map(str::to_lowercase);
+        let position = annotation
+            .rects
+            .as_ref()
+            .and_then(|rects| serde_json::to_string(rects).ok())
+            .unwrap_or_else(|| "{}".to_owned());
+        let sort_index = format!(
+            "{:06}|{}",
+            annotation.page.unwrap_or(0),
+            annotation.created_at
+        );
+
+        conn.execute(
+            "INSERT INTO itemAnnotations \
+                (itemID, parentItemID, type, text, textNormalized, comment, commentNormalized, \
+                 color, pageLabel, sortIndex, position, isExternal) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
+            turso::params![
+                annotation_item,
+                attachment.item_id,
+                annotation_type,
+                text,
+                normalized_text,
+                comment,
+                normalized_comment,
+                annotation.color.clone(),
+                annotation.page.map(|page| page.to_string()),
+                sort_index,
+                position,
+            ],
+        )
+        .await?;
+        annotation_item
+    } else {
+        let note_item = insert_item(conn, ITEM_TYPE_NOTE).await?;
+        conn.execute(
+            "INSERT INTO itemNotes (itemID, parentItemID, note, title) \
+             VALUES (?1, ?2, ?3, ?4)",
+            turso::params![
+                note_item,
+                parent_article_item,
+                annotation.content.clone(),
+                annotation.page.map(|page| page.to_string()),
+            ],
+        )
+        .await?;
+        note_item
+    };
+
+    conn.execute(
+        "INSERT INTO annotationItems (annotation_id, itemID) VALUES (?1, ?2)",
+        turso::params![annotation.id.clone(), item_id],
+    )
+    .await?;
+    Ok(item_id)
+}
+
+pub(crate) async fn delete_annotation_item(conn: &Connection, annotation_id: &str) -> Result<()> {
+    let item_id = mapped_annotation_item(conn, annotation_id).await?;
+    if let Some(item_id) = item_id {
+        conn.execute(
+            "DELETE FROM items WHERE itemID = ?1",
+            turso::params![item_id],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn annotation_attachment_key(
+    conn: &Connection,
+    annotation_id: &str,
+) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT I.key \
+             FROM annotationItems MAP \
+             JOIN itemAnnotations A ON A.itemID = MAP.itemID \
+             JOIN itemAttachments AT ON AT.itemID = A.parentItemID \
+             JOIN items I ON I.itemID = AT.itemID \
+             WHERE MAP.annotation_id = ?1",
+            turso::params![annotation_id],
+        )
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .map(|row| row.get::<String>(0))
+        .transpose()?)
+}
+
+async fn mapped_annotation_item(conn: &Connection, annotation_id: &str) -> Result<Option<i64>> {
+    let mut rows = conn
+        .query(
+            "SELECT itemID FROM annotationItems WHERE annotation_id = ?1",
+            turso::params![annotation_id],
+        )
+        .await?;
+    let item_id = match rows.next().await? {
+        Some(row) => Some(row.get::<i64>(0)?),
+        None => None,
+    };
+    Ok(item_id)
 }
 
 /// Return Zotero full-text index state for an attachment item.
@@ -1192,7 +1403,7 @@ async fn last_insert_id(conn: &Connection) -> Result<i64> {
     Ok(row.get::<i64>(0)?)
 }
 
-async fn item_key(conn: &Connection, item_id: i64) -> Result<String> {
+pub(crate) async fn item_key(conn: &Connection, item_id: i64) -> Result<String> {
     let mut rows = conn
         .query(
             "SELECT key FROM items WHERE itemID = ?1",
@@ -1322,6 +1533,51 @@ mod tests {
         assert_eq!(state.indexed_chars, Some(9));
         assert!(state.synced);
         assert_eq!(state.extraction_status, Some(ExtractStatus::Done));
+
+        let annotation = base
+            .add_annotation(
+                "doi:10.1/a",
+                bib_types::AnnotationKind::Highlight,
+                "highlighted text",
+                Some(2),
+                Some("#ffd400".into()),
+                Some(vec![bib_types::AnnotationRect {
+                    left: 0.1,
+                    top: 0.2,
+                    width: 0.3,
+                    height: 0.4,
+                }]),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(annotation.item_key.is_some());
+        assert_eq!(
+            annotation.attachment_key.as_deref(),
+            Some(attachment.key.as_str())
+        );
+
+        base.delete_annotation(&annotation.id).await.unwrap();
+        let annotations = base.list_annotations("doi:10.1/a", None).await.unwrap();
+        assert!(annotations.is_empty());
+
+        base.upsert_article(&Article::new("doi:10.1/note", "No attachment"))
+            .await
+            .unwrap();
+        let note = base
+            .add_annotation(
+                "doi:10.1/note",
+                bib_types::AnnotationKind::Note,
+                "child note",
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(note.item_key.is_some());
+        assert!(note.attachment_key.is_none());
     }
 
     #[tokio::test]

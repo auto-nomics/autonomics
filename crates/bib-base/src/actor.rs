@@ -262,10 +262,12 @@ pub(crate) enum BibCommand {
         page: Option<u32>,
         color: Option<String>,
         rects: Option<Vec<AnnotationRect>>,
+        attachment_key: Option<String>,
         reply: oneshot::Sender<Result<Annotation>>,
     },
     ListAnnotations {
         article_id: String,
+        attachment_key: Option<String>,
         reply: oneshot::Sender<Result<Vec<Annotation>>>,
     },
     DeleteAnnotation {
@@ -558,15 +560,31 @@ impl BibCommand {
                 page,
                 color,
                 rects,
+                attachment_key,
                 reply,
             } => {
                 let _ = reply.send(
-                    core.add_annotation(&article_id, kind, &content, page, color, rects)
-                        .await,
+                    core.add_annotation(
+                        &article_id,
+                        kind,
+                        &content,
+                        page,
+                        color,
+                        rects,
+                        attachment_key.as_deref(),
+                    )
+                    .await,
                 );
             }
-            Self::ListAnnotations { article_id, reply } => {
-                let _ = reply.send(core.list_annotations(&article_id).await);
+            Self::ListAnnotations {
+                article_id,
+                attachment_key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.list_annotations(&article_id, attachment_key.as_deref())
+                        .await,
+                );
             }
             Self::DeleteAnnotation { id, reply } => {
                 let _ = reply.send(core.delete_annotation(&id).await);

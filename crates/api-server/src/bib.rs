@@ -75,6 +75,10 @@ pub fn router(shared: BibShared) -> Router {
             put(set_preferred_attachment),
         )
         .route(
+            "/articles/{id}/attachments/{key}/annotations",
+            get(list_attachment_annotations).post(add_attachment_annotation),
+        )
+        .route(
             "/articles/{id}/attachments/{key}/raw",
             get(download_attachment),
         )
@@ -488,7 +492,11 @@ async fn get_article(
         .get_fulltext_page(&id, offset, limit)
         .await
         .map_err(internal)?;
-    let annotations = shared.bib.list_annotations(&id).await.map_err(internal)?;
+    let annotations = shared
+        .bib
+        .list_annotations(&id, None)
+        .await
+        .map_err(internal)?;
     let pagination = fulltext_page.as_ref().map(|page| {
         json!({
             "offset": page.offset,
@@ -1362,7 +1370,11 @@ async fn list_annotations(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let annotations = shared.bib.list_annotations(&id).await.map_err(internal)?;
+    let annotations = shared
+        .bib
+        .list_annotations(&id, None)
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({ "annotations": annotations })))
 }
 
@@ -1373,6 +1385,7 @@ struct AddAnnotationRequest {
     page: Option<u32>,
     color: Option<String>,
     rects: Option<Vec<AnnotationRect>>,
+    attachment_key: Option<String>,
 }
 
 async fn add_annotation(
@@ -1397,6 +1410,7 @@ async fn add_annotation(
             input.page,
             input.color,
             input.rects,
+            input.attachment_key.as_deref(),
         )
         .await
         .map_err(internal)?;
@@ -1412,6 +1426,62 @@ async fn delete_annotation(
 ) -> ApiResult {
     shared.bib.delete_annotation(&id).await.map_err(internal)?;
     Ok(Json(json!({ "deleted": true, "id": id })))
+}
+
+async fn list_attachment_annotations(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    let annotations = shared
+        .bib
+        .list_annotations(&id, Some(&key))
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "annotations": annotations })))
+}
+
+async fn add_attachment_annotation(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+    Json(input): Json<AddAnnotationRequest>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    if input.content.trim().is_empty() {
+        return Err(error(StatusCode::BAD_REQUEST, "content is required"));
+    }
+    let kind = match input.kind.as_deref().map(str::to_ascii_lowercase) {
+        Some(ref kind) if kind == "highlight" => AnnotationKind::Highlight,
+        Some(ref kind) if kind == "comment" => AnnotationKind::Comment,
+        _ => AnnotationKind::Note,
+    };
+    let annotation = shared
+        .bib
+        .add_annotation(
+            &id,
+            kind,
+            input.content.trim(),
+            input.page,
+            input.color,
+            input.rects,
+            Some(&key),
+        )
+        .await
+        .map_err(internal)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "annotation": annotation })),
+    ))
 }
 
 async fn list_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {

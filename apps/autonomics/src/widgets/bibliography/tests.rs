@@ -129,6 +129,10 @@ fn renders_all_child_panes_without_overlap() {
             kind: AnnotationKind::Note,
             content: "Check methods".into(),
             page: Some(2),
+            color: None,
+            rects: None,
+            item_key: None,
+            attachment_key: None,
             created_at: None,
         }],
     );

@@ -493,7 +493,7 @@ async fn load_selected_details(db: &bib_base::BibBase, state: &mut BibliographyS
             None
         }
     };
-    let annotations = match db.list_annotations(&article_id).await {
+    let annotations = match db.list_annotations(&article_id, None).await {
         Ok(annotations) => annotations,
         Err(error) => {
             state.error = Some(format!("notes load failed: {error}"));

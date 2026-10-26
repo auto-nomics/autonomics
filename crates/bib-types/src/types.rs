@@ -390,6 +390,14 @@ pub struct Annotation {
     #[serde(default)]
     pub rects: Option<Vec<AnnotationRect>>,
 
+    /// Zotero item key of this note/annotation item.
+    #[serde(default)]
+    pub item_key: Option<String>,
+
+    /// Zotero attachment item key when this is a PDF annotation.
+    #[serde(default)]
+    pub attachment_key: Option<String>,
+
     /// Creation timestamp. Skipped during serialization — see [`Article`]
     /// for the rationale; the same hazard applies to anything serialized
     /// into a DAG artifact.
@@ -415,6 +423,8 @@ impl Annotation {
             page: None,
             color: None,
             rects: None,
+            item_key: None,
+            attachment_key: None,
             created_at: Some(Utc::now()),
         }
     }

@@ -16,6 +16,9 @@ Opening `bib.db` creates and populates these Zotero-compatible tables:
   modes and path metadata.
 - `fulltextItems` records index coverage, index version, sync state, and
   extraction provenance.
+- `itemAnnotations` represents PDF highlights/comments as child items of an
+  attachment. `itemNotes` represents article-level child notes when no
+  attachment is available.
 
 The existing `articles` and `fulltexts` tables are a compatibility layer for
 the current API and DAG nodes. Article and full-text writes now mirror into the
@@ -61,5 +64,5 @@ Migration runs idempotently on every open:
 
 Deletes remove the mapped item tree as well as the legacy rows. The next phase
 is to move per-attachment extraction and search state fully behind the
-attachment key, then migrate saved searches, annotations, and trash to the
-Zotero object model.
+attachment key, then migrate saved searches and trash to the Zotero object
+model.

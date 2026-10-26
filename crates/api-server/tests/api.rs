@@ -813,6 +813,50 @@ async fn bib_supports_multiple_zotero_attachments() {
     let raw = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&raw[..], b"second attachment");
 
+    let annotation_uri = format!(
+        "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}/annotations"
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            &annotation_uri,
+            Some(
+                r##"{ "kind": "highlight", "content": "nested highlight", "page": 2, "color": "#ffd400" }"##
+                    .to_owned(),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let annotation_id = body["annotation"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(body["annotation"]["attachment_key"], second_key);
+    assert!(body["annotation"]["item_key"].as_str().is_some());
+
+    let response = app
+        .clone()
+        .oneshot(request("GET", &annotation_uri, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["annotations"].as_array().unwrap().len(), 1);
+    assert_eq!(body["annotations"][0]["attachment_key"], second_key);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/api/v1/bib/annotations/{annotation_id}"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
     let response = app
         .clone()
         .oneshot(request(

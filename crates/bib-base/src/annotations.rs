@@ -24,6 +24,7 @@ impl BibCore {
         page: Option<u32>,
         color: Option<String>,
         rects: Option<Vec<crate::types::AnnotationRect>>,
+        attachment_key: Option<&str>,
     ) -> Result<Annotation> {
         let id = format!("ann-{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let now = Utc::now().to_rfc3339();
@@ -44,11 +45,29 @@ impl BibCore {
                 page.map(|p| p as i64),
                 color.clone(),
                 rect_json,
-                now,
+                now.clone(),
             ],
         )
         .await?;
-        crate::bib_base::sync_search_index(&tx, article_id).await?;
+        let annotation_model = crate::zotero_model::AnnotationSync {
+            id: id.clone(),
+            article_id: article_id.to_owned(),
+            kind,
+            content: content.to_owned(),
+            page,
+            color: color.clone(),
+            rects: rects.clone(),
+            created_at: now,
+        };
+        let item_id =
+            crate::zotero_model::sync_annotation_item(&tx, &annotation_model, attachment_key)
+                .await?;
+        let item_key = crate::zotero_model::item_key(&tx, item_id).await?;
+        let attachment_key = match attachment_key {
+            Some(key) => Some(key.to_owned()),
+            None => crate::zotero_model::annotation_attachment_key(&tx, &id).await?,
+        };
+        crate::bib_base::sync_search_index(&tx, &annotation_model.article_id).await?;
         tx.commit().await?;
 
         Ok(Annotation {
@@ -58,19 +77,47 @@ impl BibCore {
             page,
             color,
             rects,
+            item_key: Some(item_key),
+            attachment_key,
             created_at: Some(Utc::now()),
         })
     }
 
     /// List all annotations for an article, ordered by creation time.
-    pub async fn list_annotations(&self, article_id: &str) -> Result<Vec<Annotation>> {
+    pub async fn list_annotations(
+        &self,
+        article_id: &str,
+        attachment_key: Option<&str>,
+    ) -> Result<Vec<Annotation>> {
         let conn = self.conn();
+        let sql = format!(
+            "SELECT A.id, A.kind, A.content, A.page, A.color, A.rects, A.created_at, \
+                    MI.key, PI.key \
+             FROM annotations A \
+             LEFT JOIN annotationItems MAP ON MAP.annotation_id = A.id \
+             LEFT JOIN items MI ON MI.itemID = MAP.itemID \
+             LEFT JOIN itemAnnotations IA ON IA.itemID = MAP.itemID \
+             LEFT JOIN itemAttachments PA ON PA.itemID = IA.parentItemID \
+             LEFT JOIN items PI ON PI.itemID = PA.itemID \
+             WHERE A.article_id = ?1 {} \
+             ORDER BY A.created_at",
+            if attachment_key.is_some() {
+                "AND PI.key = ?2"
+            } else {
+                ""
+            }
+        );
         let mut rows = conn
             .query(
-                "SELECT id, kind, content, page, color, rects, created_at \
-                 FROM annotations WHERE article_id = ?1 \
-                 ORDER BY created_at",
-                turso::params![article_id],
+                &sql,
+                turso::params_from_iter(
+                    [
+                        Some(Value::Text(article_id.to_owned())),
+                        attachment_key.map(|key| Value::Text(key.to_owned())),
+                    ]
+                    .into_iter()
+                    .flatten(),
+                ),
             )
             .await?;
 
@@ -84,6 +131,8 @@ impl BibCore {
                 color: opt_string(row.get_value(4)?),
                 rects: opt_string(row.get_value(5)?)
                     .and_then(|value| serde_json::from_str(&value).ok()),
+                item_key: opt_string(row.get_value(7)?),
+                attachment_key: opt_string(row.get_value(8)?),
                 created_at: opt_string(row.get_value(6)?).as_deref().and_then(parse_dt),
             });
         }
@@ -107,6 +156,7 @@ impl BibCore {
             .transpose()?;
         drop(rows);
         if let Some(article_id) = article_id {
+            crate::zotero_model::delete_annotation_item(&tx, id).await?;
             tx.execute("DELETE FROM annotations WHERE id = ?1", turso::params![id])
                 .await?;
             crate::bib_base::sync_search_index(&tx, &article_id).await?;
@@ -130,6 +180,7 @@ impl BibBase {
         page: Option<u32>,
         color: Option<String>,
         rects: Option<Vec<crate::types::AnnotationRect>>,
+        attachment_key: Option<&str>,
     ) -> Result<Annotation> {
         self.call(|reply| BibCommand::AddAnnotation {
             article_id: article_id.to_owned(),
@@ -138,15 +189,21 @@ impl BibBase {
             page,
             color,
             rects,
+            attachment_key: attachment_key.map(str::to_owned),
             reply,
         })
         .await
     }
 
     /// List all annotations for an article, ordered by creation time.
-    pub async fn list_annotations(&self, article_id: &str) -> Result<Vec<Annotation>> {
+    pub async fn list_annotations(
+        &self,
+        article_id: &str,
+        attachment_key: Option<&str>,
+    ) -> Result<Vec<Annotation>> {
         self.call(|reply| BibCommand::ListAnnotations {
             article_id: article_id.to_owned(),
+            attachment_key: attachment_key.map(str::to_owned),
             reply,
         })
         .await
