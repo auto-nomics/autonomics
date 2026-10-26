@@ -12,6 +12,7 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -312,7 +313,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
   };
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto">
+    <ScrollArea className="min-h-0 flex-1">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 pb-6">
         {loading && <Card className="p-4 text-sm text-muted-foreground">Loading configuration…</Card>}
         {error && <Card className="border-destructive/40 p-4 text-sm text-destructive">{error}</Card>}
@@ -547,6 +548,6 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
           </TabsContent>
         </Tabs>
       </div>
-    </div>
+    </ScrollArea>
   );
 }

@@ -47,21 +47,21 @@ function Button({
   type = "button",
   ...props
 }: {
-  className?: string
+  "aria-label"?: string
   children?: ReactNode
+  className?: string
   disabled?: boolean
   form?: string
   onClick?: MouseEventHandler<HTMLButtonElement>
   title?: string
   type?: "button" | "submit" | "reset"
 } & VariantProps<typeof buttonVariants>) {
-  const classes = cn(buttonVariants({ variant, size, className }))
   if (type === "submit") {
     return (
       <button
         data-slot="button"
         type="submit"
-        className={classes}
+        className={cn(buttonVariants({ variant, size, className }))}
         {...props}
       />
     )

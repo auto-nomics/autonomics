@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -252,7 +253,8 @@ export function BibliographyView() {
           <h2 className="text-sm font-medium">Collections</h2>
           <Badge variant="secondary">{collections.length}</Badge>
         </div>
-        <Card className="min-h-0 flex-1 overflow-auto p-1.5">
+        <Card className="min-h-0 flex-1 p-0!">
+          <ScrollArea className="h-full p-1.5">
           <button
             type="button"
             onClick={() => setSelectedCollection(null)}
@@ -281,6 +283,7 @@ export function BibliographyView() {
               </span>
             </button>
           ))}
+          </ScrollArea>
         </Card>
       </div>
 
@@ -305,7 +308,8 @@ export function BibliographyView() {
             Search
           </Button>
         </form>
-        <Card className="min-h-0 flex-1 overflow-auto p-1.5">
+        <Card className="min-h-0 flex-1 p-0!">
+          <ScrollArea className="h-full p-1.5">
           {visibleArticles.map((article) => (
             <button
               key={article.id}
@@ -325,6 +329,7 @@ export function BibliographyView() {
           {!visibleArticles.length && !loading && (
             <div className="grid h-full place-items-center text-sm text-muted-foreground">No matching articles</div>
           )}
+          </ScrollArea>
         </Card>
       </div>
 
@@ -366,7 +371,8 @@ export function BibliographyView() {
               {error}
             </div>
           )}
-          <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-4">
+          <TabsContent value="metadata" className="min-h-0 flex-1 p-0">
+            <ScrollArea className="h-full p-4">
             {!selected ? (
               <div className="grid h-full place-items-center text-sm text-muted-foreground">
                 Select an article
@@ -410,8 +416,10 @@ export function BibliographyView() {
                 <MetadataRow label="Record" value={selected.id} />
               </MetadataTable>
             )}
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="fulltext" className="min-h-0 flex-1 overflow-auto p-4">
+          <TabsContent value="fulltext" className="min-h-0 flex-1 p-0">
+            <ScrollArea className="h-full p-4">
             {detailLoading ? "Loading…" : activeDetail?.fulltext?.text_content ? (
               <article className="text-[13px] leading-6 break-words whitespace-pre-wrap">
                 {activeDetail.fulltext.text_content}
@@ -423,8 +431,10 @@ export function BibliographyView() {
                   : "No full text"}
               </div>
             )}
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="notes" className="min-h-0 flex-1 overflow-auto p-4">
+          <TabsContent value="notes" className="min-h-0 flex-1 p-0">
+            <ScrollArea className="h-full p-4">
             {detailLoading ? "Loading…" : activeDetail?.annotations.length ? (
               <div className="space-y-3">
                 {activeDetail.annotations.map((note) => (
@@ -439,6 +449,7 @@ export function BibliographyView() {
                 No notes yet
               </div>
             )}
+            </ScrollArea>
           </TabsContent>
         </Tabs>
       </Card>

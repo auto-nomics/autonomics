@@ -3,6 +3,7 @@ import { gatewayRequest } from "@/gateway";
 import type { DagSnapshot } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 
 function dagStatus(status: unknown) {
@@ -101,7 +102,8 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
       {loading && <Card className="p-3 text-sm text-muted-foreground">Loading DAG snapshot…</Card>}
       {error && <Card className="border-destructive/40 p-3 text-sm text-destructive">{error}</Card>}
       {snapshot && layout && (
-        <Card className="min-h-0 overflow-auto p-0">
+        <Card className="min-h-0 p-0!">
+          <ScrollArea className="h-full">
           <div className="relative" style={{ width: layout.width, height: layout.height }}>
             <svg width={layout.width} height={layout.height} className="absolute inset-0 pointer-events-none">
               {snapshot.edges.map((edge) => {
@@ -148,6 +150,7 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
               );
             })}
           </div>
+          </ScrollArea>
         </Card>
       )}
       <Card className="p-4">

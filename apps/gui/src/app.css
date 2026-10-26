@@ -138,6 +138,28 @@ body {
   * {
     @apply border-border outline-ring/50;
   }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 25%, transparent) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    border: none;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--foreground) 25%, transparent);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklch, var(--foreground) 35%, transparent);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
   body {
     @apply bg-background text-foreground;
   }

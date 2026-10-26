@@ -12,6 +12,7 @@ import type {
 } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
@@ -182,7 +183,8 @@ export function KmsView() {
           <Button size="sm" variant="secondary" onClick={() => void load()}>Refresh</Button>
         </div>
         <TabsContent value="skills" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
-          <Card className="min-h-0 overflow-auto p-1.5">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-1.5">
             {rows.map((item) => (
               <button
                 key={item.key}
@@ -196,8 +198,10 @@ export function KmsView() {
                 </span>
               </button>
             ))}
+            </ScrollArea>
           </Card>
-          <Card className="min-h-0 overflow-auto p-4">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-4">
             <h3 className="text-base font-medium">{row?.name ?? "No skill selected"}</h3>
             {row && (
               <pre className="mt-2 text-xs whitespace-pre-wrap text-muted-foreground">
@@ -219,11 +223,13 @@ export function KmsView() {
                 <Button size="sm" variant="destructive" disabled={actionBusy} onClick={() => void decide(false)}>Reject</Button>
               </div>
             )}
+            </ScrollArea>
           </Card>
         </TabsContent>
 
         <TabsContent value="wiki" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
-          <Card className="min-h-0 overflow-auto p-1.5">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-1.5">
             {knowledge.map((node) => {
               const depth = node.path.split("/").filter(Boolean).length - 1;
               return (
@@ -239,8 +245,10 @@ export function KmsView() {
                 </button>
               );
             })}
+            </ScrollArea>
           </Card>
-          <Card className="min-h-0 overflow-auto p-4">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-4">
             {knowledgeNode ? (
               <>
                 <h3 className="text-base font-medium">{knowledgeNode.title}</h3>
@@ -251,11 +259,13 @@ export function KmsView() {
                 <div className="text-sm" dangerouslySetInnerHTML={{ __html: renderMarkdown(knowledgeNode.body_md || "_empty body_") }} />
               </>
             ) : <div className="text-sm text-muted-foreground">No node selected</div>}
+            </ScrollArea>
           </Card>
         </TabsContent>
 
         <TabsContent value="evidence" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
-          <Card className="min-h-0 overflow-auto p-1.5">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-1.5">
             {evidence.map((item) => (
               <button
                 key={item.id}
@@ -269,8 +279,10 @@ export function KmsView() {
                 </span>
               </button>
             ))}
+            </ScrollArea>
           </Card>
-          <Card className="min-h-0 overflow-auto p-4">
+          <Card className="min-h-0 p-0!">
+            <ScrollArea className="h-full p-4">
             {evidenceItem ? (
               <>
                 <h3 className="text-base font-medium">{evidenceItem.summary}</h3>
@@ -288,6 +300,7 @@ export function KmsView() {
                 <pre className="text-sm whitespace-pre-wrap">{evidenceItem.body || "(empty body)"}</pre>
               </>
             ) : <div className="text-sm text-muted-foreground">No evidence selected</div>}
+            </ScrollArea>
           </Card>
         </TabsContent>
       </Tabs>

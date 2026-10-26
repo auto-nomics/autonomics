@@ -6,7 +6,19 @@ import {
   probeGateway,
   startGatewayEvents,
 } from "@/gateway";
-import type { AgentInfo, ChatItem, GatewayFrame, SessionInfo, StateSnapshot } from "@/types";
+import type {
+  AgentInfo,
+  BackendMessage,
+  ChatItem,
+  GatewayFrame,
+  SessionInfo,
+  StateSnapshot,
+  StoredAgent,
+} from "@/types";
+import {
+  AgentView,
+  type DisplaySettings,
+} from "@/features/agent";
 import { BibliographyView } from "@/features/bibliography";
 import { ConfigView } from "@/features/config";
 import { KmsView } from "@/features/kms";
@@ -14,12 +26,13 @@ import { DagView } from "@/features/dag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
 
 type View = "agent" | "config" | "bib" | "kms" | "dag";
 type MessageMap = Record<string, ChatItem[]>;
+type RawMessageMap = Record<string, BackendMessage[]>;
+type PromptHistoryMap = Record<string, string[]>;
+type PlanMap = Record<string, { revision: number; update: any }>;
+type UsageMap = Record<string, { input: number; output: number; cache: number }>;
 
 let itemSequence = 0;
 function makeItem(role: ChatItem["role"], text: string, kind?: ChatItem["kind"]): ChatItem {
@@ -72,11 +85,20 @@ export default function App() {
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
   const [streaming, setStreaming] = useState<Record<string, ChatItem | null>>({});
+  const [rawMessages, setRawMessages] = useState<RawMessageMap>({});
+  const [promptHistories, setPromptHistories] = useState<PromptHistoryMap>({});
+  const [plans, setPlans] = useState<PlanMap>({});
+  const [usage, setUsage] = useState<UsageMap>({});
+  const [display, setDisplay] = useState<DisplaySettings>({
+    collapse_thinking: false,
+    collapse_tool_calls: false,
+    collapse_tool_results: false,
+  });
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
-  const stateRef = useRef({ agents, sessions, activeAgent });
-  stateRef.current = { agents, sessions, activeAgent };
+  const stateRef = useRef({ agents, sessions, activeAgent, activeSessions });
+  stateRef.current = { agents, sessions, activeAgent, activeSessions };
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
 
   const appendMessage = useCallback((agent: string, item: ChatItem) => {
@@ -85,10 +107,8 @@ export default function App() {
 
   const loadHistory = useCallback(async (agentPath: string) => {
     const info = stateRef.current.agents.find((agent) => agent.path === agentPath);
-    const sessionId = latestSession(
-      stateRef.current.sessions[agentPath] ?? [],
-      stateRef.current.sessions[agentPath]?.length ? undefined : undefined,
-    );
+    const sessionId = stateRef.current.activeSessions[agentPath]
+      ?? latestSession(stateRef.current.sessions[agentPath] ?? []);
     if (!info?.agent_id || !sessionId) return;
     try {
       const response = await gatewayRequest(
@@ -98,6 +118,10 @@ export default function App() {
       const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
         .flatMap(convertMessage);
       setMessages((current) => ({ ...current, [agentPath]: history }));
+      setRawMessages((current) => ({
+        ...current,
+        [`${agentPath}:${sessionId}`]: Array.isArray(response) ? response : response.messages ?? [],
+      }));
     } catch (cause) {
       appendMessage(agentPath, makeItem("error", `加载历史失败: ${String(cause)}`));
     }
@@ -140,8 +164,18 @@ export default function App() {
         appendMessage(agent, makeItem("tool", `${event.ToolCall.name}: ${JSON.stringify(event.ToolCall.input)}`, "tool_call"));
       } else if (event.ToolResult !== undefined) {
         appendMessage(agent, makeItem("tool", `${event.ToolResult.ok ? "OK" : "ERR"} ${event.ToolResult.content}`, "tool_result"));
+      } else if (event.ToolCallBackground !== undefined) {
+        appendMessage(agent, makeItem("tool", `background #${event.ToolCallBackground.seq}: ${event.ToolCallBackground.name}`));
+      } else if (event.ToolBackgroundComplete !== undefined) {
+        appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
+        setPromptHistories((current) => {
+          const history = current[agent] ?? [];
+          return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };
+        });
+      } else if (event.PlanUpdate !== undefined) {
+        setPlans((current) => ({ ...current, [agent]: event.PlanUpdate }));
       } else if (event.Error !== undefined) {
         appendMessage(agent, makeItem("error", event.Error));
       } else if (event.SessionList !== undefined) {
@@ -151,11 +185,33 @@ export default function App() {
       } else if (event.SessionActivated !== undefined) {
         setActiveSessions((current) => ({ ...current, [agent]: event.SessionActivated.id }));
         setMessages((current) => ({ ...current, [agent]: [] }));
+        streamingRef.current[agent] = null;
+        setStreaming((current) => ({ ...current, [agent]: null }));
+        setPlans((current) => ({ ...current, [agent]: event.PlanUpdate ?? current[agent] }));
+      } else if (event.SessionClosed !== undefined) {
+        setSessions((current) => {
+          const next = (current[agent] ?? []).filter((session) => session.id !== event.SessionClosed.id);
+          setActiveSessions((currentActive) => {
+            if (currentActive[agent] !== event.SessionClosed.id) return currentActive;
+            const fallback = latestSession(next);
+            if (fallback) void loadHistoryRef.current(agent);
+            return { ...currentActive, [agent]: fallback };
+          });
+          return { ...current, [agent]: next };
+        });
       } else if (event.UsageUpdate !== undefined) {
         setStreaming((current) => {
           const item = current[agent];
           if (!item) return current;
           item.usage = `输入 ${event.UsageUpdate.input_tokens ?? 0} · 输出 ${event.UsageUpdate.output_tokens ?? 0}`;
+        setUsage((currentUsage) => ({
+          ...currentUsage,
+          [agent]: {
+            input: event.UsageUpdate.input_tokens ?? 0,
+            output: event.UsageUpdate.output_tokens ?? 0,
+            cache: event.UsageUpdate.cache_read_input_tokens ?? 0,
+          },
+        }));
           return { ...current, [agent]: { ...item } };
         });
       } else if (event.LifecycleChanged !== undefined) {
@@ -197,10 +253,16 @@ export default function App() {
       }
       const nextAgents = snapshot.agents;
       const nextAgent = nextAgents[0]?.path ?? "";
-      stateRef.current = { agents: nextAgents, sessions: snapshot.sessions, activeAgent: nextAgent };
+      stateRef.current = {
+        agents: nextAgents,
+        sessions: snapshot.sessions,
+        activeAgent: nextAgent,
+        activeSessions: nextActiveSessions,
+      };
       setAgents(nextAgents);
       setSessions(snapshot.sessions);
       setActiveSessions(nextActiveSessions);
+      setDisplay(snapshot.display_settings);
       setActiveAgent(nextAgent);
       setStatuses(Object.fromEntries(nextAgents.map((agent) => [agent.path, statusLabel(agent.status)])));
       setConnected(true);
@@ -223,6 +285,8 @@ export default function App() {
 
   const hydrateRef = useRef(hydrate);
   hydrateRef.current = hydrate;
+  const loadHistoryRef = useRef(loadHistory);
+  loadHistoryRef.current = loadHistory;
 
   useEffect(() => {
     void hydrate();
@@ -234,6 +298,10 @@ export default function App() {
     setBusy("send");
     setDraft("");
     appendMessage(activeAgent, makeItem("user", text));
+    setPromptHistories((current) => ({
+      ...current,
+      [activeAgent]: [...(current[activeAgent] ?? []), text].slice(-200),
+    }));
     try {
       await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text });
     } catch (cause) {
@@ -243,12 +311,22 @@ export default function App() {
     }
   };
 
-  const spawnAgent = async () => {
-    const name = window.prompt("New agent name");
-    if (!name) return;
+  const spawnAgent = async (input: { name: string; parentPath: string; profile: string }) => {
     setBusy("spawn");
     try {
-      await gatewayRequest("POST", "/agents", { name, parent_path: "/root", profile: "researcher", model_spec: null });
+      const result = await gatewayRequest("POST", "/agents", {
+        name: input.name,
+        parent_path: input.parentPath,
+        profile: input.profile,
+        model_spec: null,
+      });
+      if (result?.path) {
+        setAgents((current) => current.some((agent) => agent.path === result.path) ? current : [
+          ...current,
+          { path: result.path, agent_id: null, status: "Idle" },
+        ]);
+        setActiveAgent(result.path);
+      }
     } catch (cause) {
       window.alert(String(cause));
     } finally {
@@ -260,10 +338,107 @@ export default function App() {
     setBusy(`shutdown:${path}`);
     try {
       await gatewayRequest("POST", `/agents/${path}/shutdown`);
+      setAgents((current) => {
+        const next = current.filter((agent) => agent.path !== path);
+        if (path === activeAgent) setActiveAgent(next[0]?.path ?? "");
+        return next;
+      });
     } catch (cause) {
       window.alert(String(cause));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const deleteAgent = async (path: string, agentId: string | null) => {
+    if (!agentId || !window.confirm(`Permanently delete ${path}? Stored sessions cannot be recovered.`)) return;
+    setBusy(`delete:${path}`);
+    try {
+      await gatewayRequest("DELETE", `/storage/agents/${encodeURIComponent(agentId)}`);
+      await gatewayRequest("POST", `/agents/${path}/shutdown`);
+      setAgents((current) => {
+        const next = current.filter((agent) => agent.path !== path);
+        if (path === activeAgent) setActiveAgent(next[0]?.path ?? "");
+        return next;
+      });
+    } catch (cause) {
+      window.alert(String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const createSession = async (title: string) => {
+    if (!activeAgent) return;
+    await gatewayRequest("POST", `/agents/${activeAgent}/sessions`, {
+      title: title.trim() || "New session",
+      fork_from: null,
+      fork_message_id: null,
+    });
+  };
+
+  const renameSession = async (sessionId: string, title: string) => {
+    await gatewayRequest("PATCH", `/agents/${activeAgent}/sessions/${sessionId}/title`, {
+      title: title.trim() || "Untitled",
+    });
+    setSessions((current) => ({
+      ...current,
+      [activeAgent]: (current[activeAgent] ?? []).map((session) => session.id === sessionId ? { ...session, title } : session),
+    }));
+  };
+
+  const closeSession = async (sessionId: string) => {
+    await gatewayRequest("POST", `/agents/${activeAgent}/sessions/${sessionId}/close`);
+    setSessions((current) => ({
+      ...current,
+      [activeAgent]: (current[activeAgent] ?? []).filter((session) => session.id !== sessionId),
+    }));
+  };
+
+  const resumeAgent = async (stored: StoredAgent) => {
+    const running = agents.find((agent) => agent.agent_id === stored.id);
+    if (running) {
+      setActiveAgent(running.path);
+      void loadHistory(running.path);
+      return;
+    }
+    const name = stored.name.split("/").filter(Boolean).pop() ?? "";
+    if (!name) throw new Error("Cannot resume the root placeholder");
+    const segments = stored.name.split("/").filter(Boolean);
+    const result = await gatewayRequest("POST", "/agents", {
+      name,
+      parent_path: segments.length <= 1 ? "/root" : `/${segments.slice(0, -1).join("/")}`,
+      profile: stored.config_json.kind ?? "researcher",
+      runtime: stored.config_json.runtime ?? {},
+      model_spec: stored.config_json.preferred_model ?? null,
+    });
+    setAgents((current) => current.some((agent) => agent.path === result.path) ? current : [
+      ...current,
+      { path: result.path, agent_id: stored.id, status: "Idle" },
+    ]);
+    setActiveAgent(result.path);
+    void loadHistory(result.path);
+  };
+
+  const forkMessage = async (message: { id: string; text: string }) => {
+    const sessionId = activeSessions[activeAgent];
+    if (!sessionId) throw new Error("Fork requires an active session");
+    await gatewayRequest("POST", `/agents/${activeAgent}/sessions`, {
+      title: `Fork at ${message.text.split(/\r?\n/)[0].slice(0, 80)}`,
+      fork_from: sessionId,
+      fork_message_id: message.id,
+    });
+    await gatewayRequest("GET", `/agents/${activeAgent}/sessions`);
+  };
+
+  const toggleDisplay = async (key: keyof DisplaySettings) => {
+    const next = !display[key];
+    setDisplay((current) => ({ ...current, [key]: next }));
+    try {
+      await gatewayRequest("PUT", "/settings", { key, value: next ? "1" : "0" });
+    } catch (cause) {
+      setDisplay((current) => ({ ...current, [key]: !next }));
+      window.alert(String(cause));
     }
   };
 
@@ -293,10 +468,7 @@ export default function App() {
     );
   }
 
-  const activeInfo = agents.find((agent) => agent.path === activeAgent);
-  const activeMessages = messages[activeAgent] ?? [];
-  const streamingItem = streaming[activeAgent];
-  const activeSessionList = sessions[activeAgent] ?? [];
+  const activeSessionId = activeSessions[activeAgent] ?? latestSession(sessions[activeAgent] ?? []);
 
   return (
     <main className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
@@ -319,98 +491,42 @@ export default function App() {
       </header>
 
       {view === "agent" ? (
-        <section className="grid min-h-0 grid-cols-[300px_minmax(0,1fr)]">
-          <aside className="min-h-0 overflow-auto border-r bg-muted p-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Agents</h2>
-              <Button size="xs" onClick={() => void spawnAgent()} disabled={busy === "spawn"}>New</Button>
-            </div>
-            <div className="mt-3 space-y-1.5">
-              {agents.map((agent) => (
-                <div key={agent.path} className="rounded-lg border bg-card p-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveAgent(agent.path);
-                      void loadHistory(agent.path);
-                    }}
-                    className={cn("w-full rounded-md px-2 py-1.5 text-left", activeAgent === agent.path && "bg-accent")}
-                  >
-                    <span className="block truncate text-sm">{agent.path}</span>
-                    <span className="text-xs text-muted-foreground">{statuses[agent.path] ?? statusLabel(agent.status)}</span>
-                  </button>
-                  <Button size="xs" variant="ghost" className="mt-1 w-full" onClick={() => void shutdownAgent(agent.path)}>
-                    Shutdown
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <Separator className="my-4" />
-            <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Sessions</h2>
-            <div className="mt-3 space-y-1.5">
-              {activeSessionList.map((session) => (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => void activateSession(activeAgent, session.id)}
-                  className={cn(
-                    "w-full rounded-lg border p-2 text-left",
-                    activeSessions[activeAgent] === session.id && "border-primary bg-accent",
-                  )}
-                >
-                  <span className="line-clamp-2 block text-sm">{session.title || session.id}</span>
-                  <span className="text-xs text-muted-foreground">{new Date(session.last_active).toLocaleString()}</span>
-                </button>
-              ))}
-            </div>
-          </aside>
-
-          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto]">
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium">{activeAgent || "No agent"}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {activeInfo?.model ?? "no model"} · {statuses[activeAgent] ?? "idle"}
-                </div>
-              </div>
-              <Button size="sm" variant="secondary" onClick={() => void gatewayRequest("POST", `/agents/${activeAgent}/compact`)}>
-                Compact
-              </Button>
-            </div>
-            <div className="min-h-0 space-y-2 overflow-auto p-4">
-              {activeMessages.map((message) => (
-                <article
-                  key={message.id}
-                  className={cn(
-                    "rounded-lg border p-3 text-sm",
-                    message.role === "user" && "border-primary/40 bg-card",
-                    message.role === "assistant" && "bg-card",
-                    message.role === "thinking" && "opacity-80",
-                    message.role === "tool" && "font-mono text-xs",
-                    message.role === "error" && "border-destructive/40 bg-destructive/10 text-destructive",
-                  )}
-                >
-                  <div className="mb-1 text-xs text-muted-foreground uppercase">{message.role}</div>
-                  <pre className="font-sans whitespace-pre-wrap">{message.text}</pre>
-                  {message.usage && <div className="mt-1 text-xs text-muted-foreground">{message.usage}</div>}
-                </article>
-              ))}
-              {streamingItem && !activeMessages.some((message) => message.id === streamingItem.id) && (
-                <pre className="rounded-lg border bg-card p-3 text-sm whitespace-pre-wrap">{streamingItem.text}</pre>
-              )}
-            </div>
-            <form
-              className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t bg-muted p-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void sendMessage();
-              }}
-            >
-              <Textarea value={draft} rows={3} onChange={(event) => setDraft(event.target.value)} placeholder="输入消息" />
-              <Button type="submit" disabled={!draft.trim() || busy === "send"}>发送</Button>
-            </form>
-          </div>
-        </section>
+        <AgentView
+          activeAgent={activeAgent}
+          activeSessionId={activeSessionId}
+          agents={agents}
+          sessions={sessions[activeAgent] ?? []}
+          statuses={statuses}
+          messages={messages[activeAgent] ?? []}
+          streaming={streaming[activeAgent] ?? null}
+          plan={plans[activeAgent] ?? null}
+          usage={usage[activeAgent] ?? null}
+          display={display}
+          promptHistory={promptHistories[activeAgent] ?? []}
+          rawMessages={rawMessages[`${activeAgent}:${activeSessionId}`] ?? []}
+          draft={draft}
+          busy={busy}
+          onDraftChange={setDraft}
+          onSelectAgent={(path) => {
+            setActiveAgent(path);
+            void loadHistory(path);
+          }}
+          onSendMessage={() => void sendMessage()}
+          onCancel={() => void gatewayRequest("POST", `/agents/${activeAgent}/cancel`).catch((cause) => window.alert(String(cause)))}
+          onCompact={() => void gatewayRequest("POST", `/agents/${activeAgent}/compact`).catch((cause) => window.alert(String(cause)))}
+          onShutdown={(path) => void shutdownAgent(path)}
+          onDelete={(path, agentId) => void deleteAgent(path, agentId)}
+          onSpawnAgent={spawnAgent}
+          onResumeAgent={resumeAgent}
+          onCreateSession={createSession}
+          onRenameSession={renameSession}
+          onCloseSession={closeSession}
+          onActivateSession={(sessionId) => activateSession(activeAgent, sessionId)}
+          onForkMessage={forkMessage}
+          onToggleDisplay={(key) => void toggleDisplay(key)}
+          onView={setView}
+          onRefreshHistory={() => void loadHistory(activeAgent)}
+        />
       ) : view === "bib" ? (
         <section className="flex min-h-0 flex-col p-3"><BibliographyView /></section>
       ) : (
