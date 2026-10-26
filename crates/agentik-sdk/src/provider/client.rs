@@ -226,7 +226,7 @@ impl ApiClient for AnthropicApiClient {
 ///
 /// Three cases:
 /// 1. `supports_thinking && thinking_enabled` → inject `thinking: { enabled,
-///    budget }` + `reasoning_effort: max`.
+///    budget }` + `reasoning_effort: medium`.
 /// 2. `supports_thinking && !thinking_enabled && !thinking_required` → inject
 ///    `thinking: { disabled }`.
 ///    Some providers (MiMo, DeepSeek, GLM) **default to thinking ON** when the
@@ -250,15 +250,14 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
     // Set both forms: Anthropic wires read `thinking`, OpenAI wires read
     // `reasoning`. Each wire picks the one it understands and ignores the
     // other. An explicit per-requester override (`reasoning_effort`, set
-    // by the per-agent setting at call time) wins; otherwise use the
-    // strongest effort level available, unless a required-thinking model
-    // was explicitly configured as disabled, in which case low is the
-    // closest supported lightweight mode.
+    // by the per-agent setting at call time) wins; otherwise use the standard
+    // medium default. Required-thinking models configured as disabled use low,
+    // the closest supported lightweight mode.
     let effort = model_info.reasoning_effort.unwrap_or_else(|| {
         if model_info.thinking_required && !model_info.thinking_enabled {
             agentik_types::ReasoningEffort::Low
         } else {
-            model_info.max_reasoning_effort.unwrap_or_default()
+            agentik_types::ReasoningEffort::default()
         }
     });
     // GLM-5.3 accepts the enabled thinking type but does not document a token
@@ -296,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_presets_enable_strongest_supported_reasoning() {
+    fn openai_presets_default_to_medium_reasoning() {
         for model in OpenaiProvider::preset_models() {
             assert!(model.supports_thinking, "{}", model.model_name);
             assert!(model.thinking_enabled, "{}", model.model_name);
@@ -306,19 +305,21 @@ mod tests {
                 &model,
             )
             .build();
-            let expected = model
-                .max_reasoning_effort
-                .unwrap_or(agentik_types::ReasoningEffort::Max);
             assert!(
-                matches!(params.reasoning, Some(ReasoningConfig::Effort(effort)) if effort == expected),
-                "{} should default to its strongest reasoning effort",
+                matches!(
+                    params.reasoning,
+                    Some(ReasoningConfig::Effort(
+                        agentik_types::ReasoningEffort::Medium
+                    ))
+                ),
+                "{} should default to medium reasoning effort",
                 model.model_name
             );
         }
     }
 
     #[test]
-    fn glm_5_3_defaults_to_max_reasoning_effort() {
+    fn glm_5_3_defaults_to_medium_reasoning_effort() {
         let model = glm_5_3_model();
         let params = inject_thinking(
             MessageCreateBuilder::new(model.model_name.clone(), 1024),
@@ -340,14 +341,16 @@ mod tests {
         );
         assert!(matches!(
             params.reasoning,
-            Some(ReasoningConfig::Effort(agentik_types::ReasoningEffort::Max))
+            Some(ReasoningConfig::Effort(
+                agentik_types::ReasoningEffort::Medium
+            ))
         ));
     }
 
     #[test]
     fn explicit_reasoning_effort_override_wins_over_model_derived_effort() {
         let mut model = glm_5_3_model();
-        // GLM's own derivation would send `max`; the per-agent override
+        // GLM's own derivation would send `medium`; the per-agent override
         // (stamped onto a cloned ModelInfo at request time) must win.
         model.reasoning_effort = Some(agentik_types::ReasoningEffort::Low);
         let params = inject_thinking(

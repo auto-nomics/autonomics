@@ -831,7 +831,7 @@ impl RuntimeHost {
 
 /// The effort a request from this agent would actually send — mirrors the
 /// request layer's `inject_thinking` derivation: per-agent override first
-/// (when the model supports thinking at all), else the model-derived
+/// (when the model supports thinking at all), else the standard medium
 /// default. `None` when the model has no thinking support.
 fn effective_reasoning_effort(
     entry: &super::relay::AgentEntry,
@@ -850,7 +850,7 @@ fn effective_reasoning_effort(
                 if info.thinking_required && !info.thinking_enabled {
                     agentik_types::ReasoningEffort::Low
                 } else {
-                    info.max_reasoning_effort.unwrap_or_default()
+                    agentik_types::ReasoningEffort::default()
                 }
             }),
     )

@@ -204,8 +204,9 @@ pub struct AgentRuntimeOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generate_memory: Option<bool>,
     /// Per-agent reasoning-effort override. `None` inherits the model's
-    /// own default (derived from its `max_reasoning_effort` / required-
-    /// thinking shape). Applied at request time, so changes hot-reload.
+    /// standard `medium` default, except where a required-thinking model's
+    /// lightweight fallback applies. Applied at request time, so changes
+    /// hot-reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
