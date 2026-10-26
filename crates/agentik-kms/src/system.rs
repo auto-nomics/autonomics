@@ -28,6 +28,8 @@ pub struct KmsSystem {
     model: Arc<ArcSwapOption<Model>>,
     session_extract_worker: OnceLock<KnowledgeWorkerHandle>,
     consolidation_worker: OnceLock<KnowledgeWorkerHandle>,
+    observation_worker: OnceLock<KnowledgeWorkerHandle>,
+    skill_proposal_worker: OnceLock<KnowledgeWorkerHandle>,
     diagnose_worker: OnceLock<KnowledgeWorkerHandle>,
     repair_worker: OnceLock<KnowledgeWorkerHandle>,
     worker_events: broadcast::Sender<KnowledgeWorkerEvent>,
@@ -66,6 +68,8 @@ impl KmsSystem {
                 model: Arc::clone(&model),
                 session_extract_worker: OnceLock::new(),
                 consolidation_worker: OnceLock::new(),
+                observation_worker: OnceLock::new(),
+                skill_proposal_worker: OnceLock::new(),
                 diagnose_worker: OnceLock::new(),
                 repair_worker: OnceLock::new(),
                 worker_events: worker_events.clone(),
@@ -87,6 +91,22 @@ impl KmsSystem {
             worker_events.clone(),
         );
         let _ = system.consolidation_worker.set(consolidation_worker);
+        let observation_worker = start_knowledge_worker(
+            Arc::clone(&system.pipeline),
+            KnowledgeJobKind::IngestObservation,
+            "ingest_observation",
+            KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
+        );
+        let _ = system.observation_worker.set(observation_worker);
+        let skill_proposal_worker = start_knowledge_worker(
+            Arc::clone(&system.pipeline),
+            KnowledgeJobKind::ProposeSkillRevision,
+            "skill_proposal",
+            KnowledgeWorkerConfig::default(),
+            worker_events.clone(),
+        );
+        let _ = system.skill_proposal_worker.set(skill_proposal_worker);
         let diagnose_worker = start_knowledge_worker(
             Arc::clone(&system.pipeline),
             KnowledgeJobKind::DiagnoseKnowledgeNode,
@@ -137,6 +157,16 @@ impl KmsSystem {
     }
 
     #[must_use]
+    pub fn observation_worker(&self) -> Option<KnowledgeWorkerHandle> {
+        self.observation_worker.get().cloned()
+    }
+
+    #[must_use]
+    pub fn skill_proposal_worker(&self) -> Option<KnowledgeWorkerHandle> {
+        self.skill_proposal_worker.get().cloned()
+    }
+
+    #[must_use]
     pub fn diagnose_worker(&self) -> Option<KnowledgeWorkerHandle> {
         self.diagnose_worker.get().cloned()
     }
@@ -161,6 +191,14 @@ impl KmsSystem {
             (
                 KnowledgeJobKind::ConsolidateKnowledge,
                 self.consolidation_worker().map(|worker| worker.status()),
+            ),
+            (
+                KnowledgeJobKind::IngestObservation,
+                self.observation_worker().map(|worker| worker.status()),
+            ),
+            (
+                KnowledgeJobKind::ProposeSkillRevision,
+                self.skill_proposal_worker().map(|worker| worker.status()),
             ),
             (
                 KnowledgeJobKind::DiagnoseKnowledgeNode,
@@ -239,6 +277,16 @@ impl KmsSystem {
                     worker.wake();
                 }
             }
+            KnowledgeJobKind::IngestObservation => {
+                if let Some(worker) = self.observation_worker() {
+                    worker.wake();
+                }
+            }
+            KnowledgeJobKind::ProposeSkillRevision => {
+                if let Some(worker) = self.skill_proposal_worker() {
+                    worker.wake();
+                }
+            }
             KnowledgeJobKind::DiagnoseKnowledgeNode => {
                 if let Some(worker) = self.diagnose_worker() {
                     worker.wake();
@@ -257,6 +305,12 @@ impl KmsSystem {
             worker.request_shutdown();
         }
         if let Some(worker) = self.consolidation_worker() {
+            worker.request_shutdown();
+        }
+        if let Some(worker) = self.observation_worker() {
+            worker.request_shutdown();
+        }
+        if let Some(worker) = self.skill_proposal_worker() {
             worker.request_shutdown();
         }
         if let Some(worker) = self.diagnose_worker() {

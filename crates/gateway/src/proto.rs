@@ -143,6 +143,103 @@ pub struct KmsWorkerStatusView {
     pub at_ms: i64,
 }
 
+/// One durable KMS evidence row, including consolidation status.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsEvidenceView {
+    pub id: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub evidence_kind: String,
+    pub summary: String,
+    pub body: String,
+    pub anchor_path: Option<String>,
+    pub error: Option<String>,
+    pub status: String,
+    pub occurrence_count: u64,
+    pub created_at: i64,
+    pub last_seen_at: i64,
+}
+
+/// One durable KMS skill-revision proposal, including the material a
+/// reviewer needs to inspect before approving it.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillProposalView {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub node_path: String,
+    pub status: String,
+    pub title: String,
+    pub body_md: String,
+    pub rationale: String,
+    pub source_evidence_ids: Vec<String>,
+    pub artifacts: Vec<KmsSkillArtifactView>,
+    pub content_hash: String,
+    pub approved_skill_version_id: Option<Uuid>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// One text artifact attached to a proposed skill revision.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillArtifactView {
+    pub relative_path: String,
+    pub content: String,
+}
+
+/// Active KMS skill projection used by management UI listings.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillLibraryView {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub node_path: String,
+    pub version: u32,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub tier: String,
+    pub source_tier: String,
+    pub created_at: i64,
+    pub artifact_paths: Vec<String>,
+}
+
+/// One version in a KMS skill's immutable history.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillVersionSummaryView {
+    pub id: Uuid,
+    pub version: u32,
+    pub status: String,
+    pub title: String,
+    pub content_hash: String,
+    pub created_at: i64,
+}
+
+/// KMS skill detail: active document plus version history and artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillDetailView {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub node_path: String,
+    pub version: u32,
+    pub title: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub tier: String,
+    pub source_tier: String,
+    pub body_md: String,
+    pub created_at: i64,
+    pub artifacts: Vec<KmsSkillArtifactView>,
+    pub history: Vec<KmsSkillVersionSummaryView>,
+}
+
+/// Terminal result of approving or rejecting a KMS skill proposal.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsSkillProposalDecision {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub status: String,
+    pub skill_version_id: Option<Uuid>,
+}
+
 /// User-visible outcome of a ChatGPT login.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChatgptLoginInfo {
@@ -495,102 +592,9 @@ mod tests {
     }
 }
 
-// ── Skill evolution ───────────────────────────────────────────────────
-
-/// `GET /api/v1/evolution/observations` — recorded evidence,
-/// newest first. Includes the full reusable body for the TUI browser.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ObservationView {
-    pub id: String,
-    pub created_at: i64,
-    pub kind: String,
-    pub source: String,
-    pub summary: String,
-    pub body: String,
-    pub node_kind: Option<String>,
-    pub error: Option<String>,
-}
-
-/// One member row of a [`ClusterView`] — enough for list rendering;
-/// the full observation hydrates through the observations endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ClusterMemberView {
-    pub id: String,
-    pub created_at: i64,
-    pub summary: String,
-}
-
-/// `GET /api/v1/evolution/clusters` — one surfaced recurring
-/// pattern: which partition it recruits from and the observations
-/// that formed it, oldest member first for a stable display order.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct ClusterView {
-    pub id: String,
-    /// Observation kind half of the partition key.
-    pub kind: String,
-    /// Node-kind anchor half of the partition key.
-    pub node_kind: String,
-    /// Identity of the embedding model the cluster vectors use.
-    pub model_signature: String,
-    pub members: Vec<ClusterMemberView>,
-}
-
-/// `GET /api/v1/skills/evolution` — the dashboard's data snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillEvolutionStatus {
-    /// Whether the background service (event + timer triggers) runs.
-    pub service_enabled: bool,
-    /// Library generation; advances on every mutation.
-    pub generation: u64,
-    /// Install cap per cycle; overflow applies on the next cycle.
-    pub max_installs_per_cycle: usize,
-    /// Periodic sweep cadence in seconds, when armed.
-    pub sweep_interval_secs: Option<u64>,
-    /// Recorded observations feeding distillation.
-    pub observations: usize,
-    /// Installed skills per tier (workspace > global > builtin).
-    pub skills_workspace: usize,
-    pub skills_global: usize,
-    pub skills_builtin: usize,
-    /// Skills carrying the loop's `auto` tag.
-    pub skills_auto: usize,
-    /// Change records by status: `pending` means written but past
-    /// the per-cycle install cap (transient), `applied` means live.
-    pub proposals_pending: usize,
-    pub proposals_applied: usize,
-    /// ── Live cycle monitor (flat mirror of skills::CycleStatus) ──
-    /// Current worker phase: `idle` | `coalescing` | `distilling`.
-    pub phase: String,
-    /// Triggers accumulated in the quiet window (coalescing only).
-    pub phase_queued: usize,
-    /// Trigger labels the running cycle was caused by (distilling
-    /// only).
-    pub phase_triggers: Vec<String>,
-    /// How long the current phase has held, in milliseconds.
-    pub phase_elapsed_ms: u64,
-    /// Cycles executed since service start.
-    pub cycles_completed: u64,
-    /// Unix time of the most recent cycle.
-    pub last_cycle_at: Option<i64>,
-    /// Wall time of the most recent cycle, in milliseconds.
-    pub last_cycle_duration_ms: Option<u64>,
-    /// Trigger labels of the most recent cycle.
-    pub last_triggers: Vec<String>,
-    /// Error text when the most recent cycle failed.
-    pub last_error: Option<String>,
-    /// Commands dropped because the channel was full — an
-    /// observability signal, not an error.
-    pub dropped_commands: u64,
-    /// Cycles short-circuited because the observation pool was
-    /// empty. Distinct from `cycles_completed`: the worker never
-    /// ran a cycle body.
-    pub cycle_skipped_empty: u64,
-    /// Stable label for why the most recent cycle (or short-circuit)
-    /// was skipped; `None` when the last cycle body actually ran.
-    pub last_skipped_reason: Option<String>,
-}
-
-/// One proposal row for listings.
+/// Legacy filesystem proposal metadata embedded in compatibility
+/// library responses. Durable governance proposals use
+/// [`KmsSkillProposalView`].
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SkillProposalView {
     pub name: String,
@@ -604,30 +608,6 @@ pub struct SkillProposalView {
     pub cluster_hash: String,
     pub observation_count: usize,
     pub created_at: i64,
-}
-
-/// `POST /api/v1/skills/evolution/trigger` response — the cycle's
-/// report (serializable form of the skills crate's
-/// `EvolutionReport`).
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillEvolutionReport {
-    pub triggers: Vec<String>,
-    pub clusters_considered: usize,
-    pub proposals_written: Vec<String>,
-    pub updated_existing: Vec<String>,
-    /// Names installed into the live library this cycle.
-    pub installed: Vec<String>,
-    /// Changes deferred past the install cap; the next cycle applies
-    /// them.
-    pub deferred: usize,
-    pub skipped: Vec<SkippedCluster>,
-}
-
-/// One skipped cluster with its reason.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkippedCluster {
-    pub cluster_hash: String,
-    pub reason: String,
 }
 
 /// `GET /api/v1/skills/library` row — one skill from the unified

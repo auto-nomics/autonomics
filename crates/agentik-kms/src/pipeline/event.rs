@@ -1,19 +1,41 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::artifacts::KnowledgeEvidenceInput;
+
 /// An external fact that can trigger knowledge production.
 ///
 /// Events describe what happened; they do not prescribe how a stage processes
 /// it. The pipeline dispatcher owns the event-to-job mapping.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KnowledgeEvent {
-    AgentStarted { agent_id: Uuid },
-    SessionEnded { agent_id: Uuid, session_id: Uuid },
-    MemoryNoteCreated { note_id: Uuid },
-    ConsolidationRequested { reason: String },
-    KnowledgeDiagnosisRequested { target_path: String, reason: String },
-    KnowledgeRepairRequested { finding_id: Uuid },
+    AgentStarted {
+        agent_id: Uuid,
+    },
+    SessionEnded {
+        agent_id: Uuid,
+        session_id: Uuid,
+    },
+    MemoryNoteCreated {
+        note_id: Uuid,
+    },
+    ConsolidationRequested {
+        reason: String,
+    },
+    ObservationRecorded {
+        input: KnowledgeEvidenceInput,
+    },
+    SkillRevisionProposed {
+        input: crate::artifacts::KnowledgeSkillProposalInput,
+    },
+    KnowledgeDiagnosisRequested {
+        target_path: String,
+        reason: String,
+    },
+    KnowledgeRepairRequested {
+        finding_id: Uuid,
+    },
 }
 
 impl KnowledgeEvent {
@@ -24,6 +46,14 @@ impl KnowledgeEvent {
             Self::SessionEnded { session_id, .. } => Some(format!("session-ended:{session_id}")),
             Self::MemoryNoteCreated { note_id } => Some(format!("memory-note:{note_id}")),
             Self::ConsolidationRequested { .. } => None,
+            Self::ObservationRecorded { input } => {
+                Some(format!("observation-recorded:{}", input.content_hash()))
+            }
+            Self::SkillRevisionProposed { input } => Some(format!(
+                "skill-revision-proposed:{}:{}",
+                input.skill_name,
+                input.content_hash()
+            )),
             Self::KnowledgeDiagnosisRequested { target_path, .. } => {
                 Some(format!("diagnose-knowledge-node-requested:{target_path}"))
             }
@@ -49,6 +79,16 @@ impl KnowledgeEvent {
             Self::ConsolidationRequested { reason } => {
                 vec![super::job::KnowledgeJob::ConsolidateKnowledge {
                     trigger: reason.clone(),
+                }]
+            }
+            Self::ObservationRecorded { input } => {
+                vec![super::job::KnowledgeJob::IngestObservation {
+                    input: input.clone(),
+                }]
+            }
+            Self::SkillRevisionProposed { input } => {
+                vec![super::job::KnowledgeJob::ProposeSkillRevision {
+                    input: input.clone(),
                 }]
             }
             Self::KnowledgeDiagnosisRequested {

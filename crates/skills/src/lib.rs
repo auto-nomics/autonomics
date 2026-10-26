@@ -65,11 +65,11 @@ pub use evolution::{
 };
 pub use evolution_core::cluster::Cluster;
 pub use format::SkillMeta;
-pub use inject::prompt_section;
+pub use inject::{SkillIndexEntry, prompt_section, prompt_section_from_indices};
 pub use manager::{SkillManager, UsageKind, UsageRecord};
 pub use proposals::{ApplyOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
-pub use tools::skill_registrations;
+pub use tools::{skill_registrations, skill_registrations_with_kms};
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};
 
 /// Resolve the default skills state directory: `$AUTONOMICS_STATE_DIR`

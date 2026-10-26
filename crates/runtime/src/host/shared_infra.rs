@@ -156,13 +156,6 @@ pub struct SharedInfra {
     /// configuration. `None` when disabled — the observation hub then
     /// serves corpus-fitted BM25 vectors.
     pub embedding: Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>,
-    /// The unified skill control handle, when the service is
-    /// enabled. `None` means the loop is disabled at the daemon
-    /// level — every gateway mutation request then returns HTTP
-    /// 503 (the dashboard and the agent skill tools all funnel
-    /// through this handle; the on-demand paths still run cycles
-    /// directly).
-    pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -254,15 +247,19 @@ impl SharedInfra {
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
         let kms = open_kms_system(config, &turso_store).await?;
+        super::kms_bridge::spawn_legacy_observation_sync(
+            Arc::clone(&observations),
+            Arc::clone(&kms),
+        );
+        super::kms_bridge::spawn_kms_skill_sync(Arc::clone(&skills), Arc::clone(&kms));
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
 
-        // One clustering worker over the shared hub. Triggers land on
-        // a buffered channel, so callers never block on a slow pass.
+        // One clustering worker over the shared legacy hub. It remains
+        // available for plugin evidence, while durable skill evolution is
+        // governed by the resident KMS workers.
         let evolution_handle = Arc::new(evolution_core::worker::start(Arc::clone(&observations)));
         tracing::info!("SharedInfra::open: clustering worker started");
-
-        let skill_evolution = start_skill_evolution(config, &skills);
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
@@ -289,7 +286,6 @@ impl SharedInfra {
             evolution_handle,
             skills,
             embedding,
-            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
             browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
@@ -346,7 +342,10 @@ impl SharedInfra {
         builder = builder.with_system_prompt_section(crate::config::build_system_prompt(&kind));
         // Skill index: one line per visible skill; bodies load on
         // demand via skill_get. Empty library → no section at all.
-        let skill_section = skills::prompt_section(&self.skills.registry().list());
+        let skill_section = match super::kms_bridge::kms_skill_prompt_section(&self.kms).await {
+            Some(section) => section,
+            None => skills::prompt_section(&self.skills.registry().list()),
+        };
         if !skill_section.is_empty() {
             builder = builder.with_system_prompt_section(skill_section);
         }
@@ -455,9 +454,9 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.extend(skills::skill_registrations(
+        tools.extend(skills::skill_registrations_with_kms(
             self.skills.clone(),
-            self.skill_evolution.clone(),
+            Some(self.kms.clone()),
         ));
         if kind.enable_plugin_rsi() {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
@@ -511,7 +510,7 @@ impl SharedInfra {
         tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
             self.skills.clone(),
             engine_client,
-            self.skill_evolution.clone(),
+            Some(self.kms.clone()),
         ));
 
         if kind.enable_bibliography() {
@@ -900,34 +899,6 @@ async fn open_writing(
     Ok(writing)
 }
 
-/// Start the unified skill evolution loop when enabled. `None` means
-/// the loop is disabled at the daemon level — every gateway mutation
-/// request then returns HTTP 503.
-fn start_skill_evolution(
-    config: &RuntimeConfig,
-    skills: &Arc<skills::SkillManager>,
-) -> Option<skills::SkillControlHandle> {
-    if !config.enable_skill_evolution {
-        tracing::info!("SharedInfra::open: skill evolution disabled");
-        return None;
-    }
-    let handle = skills::evolution::start(
-        skills.clone(),
-        skills::evolution::EvolutionOptions {
-            policy: skills::evolution::EvolutionPolicy::default(),
-            quiet_window: std::time::Duration::from_millis(500),
-            timer: Some(std::time::Duration::from_secs(
-                config.skill_evolution_interval_secs.max(60),
-            )),
-        },
-    );
-    tracing::info!(
-        interval_secs = config.skill_evolution_interval_secs,
-        "SharedInfra::open: skill evolution service started"
-    );
-    Some(handle)
-}
-
 /// Swap the service's provider into the observation hub. The swap
 /// backfills vectors recorded under the previous embedder.
 async fn swap_embedder(
@@ -1087,6 +1058,7 @@ mod plugin_profile_tools_tests {
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");
+        config.bib_db_path = dir.path().join("bib.db");
         // Keep the embedding model (network install + ONNX session)
         // out of this test.
         config.embedding.enabled = false;

@@ -2,6 +2,7 @@
 mod knowledge;
 mod memory_store;
 mod queue;
+mod skills;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,7 +14,8 @@ use uuid::Uuid;
 use super::error::{Error, Result};
 use crate::knowledge::{Knowledge, KnowledgePath};
 use crate::store::{
-    KnowledgeDiagnosticFinding, MemoryNote, MemoryStage1Record, MemorySummary, SemanticObservation,
+    KnowledgeDiagnosticFinding, KnowledgeEvidence, MemoryNote, MemoryStage1Record, MemorySummary,
+    SemanticObservation, SkillArtifact, SkillProposal, SkillVersion,
 };
 
 const MIGRATION_MARKER: &str = "legacy_agent_db_memory_migrated_v1";
@@ -192,6 +194,25 @@ fn row_to_note(row: &turso::Row) -> Result<MemoryNote> {
     })
 }
 
+fn row_to_evidence(row: &turso::Row) -> Result<KnowledgeEvidence> {
+    Ok(KnowledgeEvidence {
+        id: text(row, 0)?,
+        source_kind: text(row, 1)?,
+        source_id: text(row, 2)?,
+        evidence_kind: text(row, 3)?,
+        summary: text(row, 4)?,
+        body: text(row, 5)?,
+        anchor_path: opt_text(row, 6)?.filter(|value| !value.is_empty()),
+        error: opt_text(row, 7)?.filter(|value| !value.is_empty()),
+        content_hash: text(row, 8)?,
+        status: text(row, 9)?,
+        occurrence_count: u64::try_from(int(row, 10)?.max(1))
+            .map_err(|e| Error::Storage(format!("parse evidence occurrence count: {e}")))?,
+        created_at: int(row, 11)?,
+        last_seen_at: int(row, 12)?,
+    })
+}
+
 fn row_to_observation(row: &turso::Row) -> Result<SemanticObservation> {
     Ok(SemanticObservation {
         id: parse_uuid(text(row, 0)?, "observation_id")?,
@@ -221,6 +242,59 @@ fn row_to_diagnostic_finding(row: &turso::Row) -> Result<KnowledgeDiagnosticFind
         confidence: real(row, 8)?,
         family_hash: text(row, 9)?,
         created_at: int(row, 10)?,
+    })
+}
+
+fn row_to_skill_version(row: &turso::Row) -> Result<SkillVersion> {
+    Ok(SkillVersion {
+        id: parse_uuid(text(row, 0)?, "skill_version_id")?,
+        skill_name: text(row, 1)?,
+        node_path: text(row, 2)?,
+        version: u32::try_from(int(row, 3)?.max(1))
+            .map_err(|e| Error::Storage(format!("parse skill version number: {e}")))?,
+        status: text(row, 4)?,
+        title: text(row, 5)?,
+        body_md: text(row, 6)?,
+        metadata_json: text(row, 7)?,
+        content_hash: text(row, 8)?,
+        source_tier: text(row, 9)?,
+        source_path: opt_text(row, 10)?.filter(|value| !value.is_empty()),
+        created_at: int(row, 11)?,
+    })
+}
+
+fn row_to_skill_artifact(row: &turso::Row) -> Result<SkillArtifact> {
+    Ok(SkillArtifact {
+        id: parse_uuid(text(row, 0)?, "skill_artifact_id")?,
+        skill_version_id: parse_uuid(text(row, 1)?, "skill_version_id")?,
+        relative_path: text(row, 2)?,
+        content: text(row, 3)?,
+        content_hash: text(row, 4)?,
+        created_at: int(row, 5)?,
+    })
+}
+
+fn row_to_skill_proposal(row: &turso::Row) -> Result<SkillProposal> {
+    Ok(SkillProposal {
+        id: parse_uuid(text(row, 0)?, "skill_proposal_id")?,
+        skill_name: text(row, 1)?,
+        node_path: text(row, 2)?,
+        status: text(row, 3)?,
+        title: text(row, 4)?,
+        body_md: text(row, 5)?,
+        metadata_json: text(row, 6)?,
+        rationale: text(row, 7)?,
+        source_evidence_ids: serde_json::from_str(&text(row, 8)?)
+            .map_err(|e| Error::Storage(format!("parse skill proposal evidence ids: {e}")))?,
+        artifacts: serde_json::from_str(&text(row, 9)?)
+            .map_err(|e| Error::Storage(format!("parse skill proposal artifacts: {e}")))?,
+        content_hash: text(row, 10)?,
+        approved_skill_version_id: opt_text(row, 11)?
+            .filter(|value| !value.is_empty())
+            .map(|value| parse_uuid(value, "approved_skill_version_id"))
+            .transpose()?,
+        created_at: int(row, 12)?,
+        updated_at: int(row, 13)?,
     })
 }
 
@@ -341,6 +415,70 @@ impl TursoKmsStorage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_memory_notes_status
                     ON memory_notes(status, created_at);
+                CREATE TABLE IF NOT EXISTS knowledge_evidence (
+                    id TEXT PRIMARY KEY,
+                    source_kind TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    evidence_kind TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    anchor_path TEXT,
+                    error TEXT,
+                    content_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    occurrence_count INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL,
+                    last_seen_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_status
+                    ON knowledge_evidence(status, created_at);
+                CREATE TABLE IF NOT EXISTS skill_versions (
+                    id TEXT PRIMARY KEY,
+                    skill_name TEXT NOT NULL,
+                    node_path TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body_md TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    source_tier TEXT NOT NULL,
+                    source_path TEXT,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(skill_name, version),
+                    UNIQUE(skill_name, content_hash)
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_versions_active
+                    ON skill_versions(skill_name, status, version DESC);
+                CREATE TABLE IF NOT EXISTS skill_artifacts (
+                    id TEXT PRIMARY KEY,
+                    skill_version_id TEXT NOT NULL
+                        REFERENCES skill_versions(id) ON DELETE CASCADE,
+                    relative_path TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(skill_version_id, relative_path)
+                );
+                CREATE TABLE IF NOT EXISTS skill_proposals (
+                    id TEXT PRIMARY KEY,
+                    skill_name TEXT NOT NULL,
+                    node_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body_md TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    rationale TEXT NOT NULL,
+                    source_evidence_ids_json TEXT NOT NULL,
+                    artifacts_json TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    approved_skill_version_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(skill_name, content_hash)
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_proposals_status
+                    ON skill_proposals(status, created_at DESC);
                 CREATE TABLE IF NOT EXISTS memory_semantic_observations (
                     id TEXT PRIMARY KEY,
                     subject TEXT NOT NULL,
@@ -1200,6 +1338,177 @@ mod tests {
         let note = store.insert_note("test", "hello").await.unwrap();
         assert_eq!(note.content, "hello");
         assert_eq!(store.list_pending_notes().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn evidence_upsert_counts_and_consumes_repeated_observations() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        let input = crate::artifacts::KnowledgeEvidenceInput {
+            source_kind: "legacy_observation".to_string(),
+            source_id: "O-test".to_string(),
+            evidence_kind: "failure".to_string(),
+            summary: "DAG schema mismatch".to_string(),
+            body: "Validate column types before casting.".to_string(),
+            anchor_path: Some("file_to_dataframe".to_string()),
+            error: Some("schema mismatch".to_string()),
+        };
+
+        let first = store.upsert_evidence(input.clone()).await.unwrap();
+        let second = store.upsert_evidence(input.clone()).await.unwrap();
+        let third = store.upsert_evidence(input).await.unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(second.id, third.id);
+        assert_eq!(third.occurrence_count, 3);
+
+        let pending = store.list_pending_evidence(10).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        store
+            .mark_evidence_consumed(vec![third.id.clone()])
+            .await
+            .unwrap();
+        let all = store.list_knowledge_evidence(10).await.unwrap();
+        assert!(store.list_pending_evidence(10).await.unwrap().is_empty());
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, "consumed");
+    }
+
+    #[tokio::test]
+    async fn skill_versions_are_idempotent_and_versioned() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        let input = |body: &str| crate::artifacts::KnowledgeSkillVersionInput {
+            skill_name: "targeted-testing".to_string(),
+            title: "Targeted testing".to_string(),
+            body_md: body.to_string(),
+            metadata_json: serde_json::json!({
+                "description": "Run focused tests first.",
+                "tags": ["testing"]
+            }),
+            node_path: "/procedures/targeted-testing".to_string(),
+            source_tier: "builtin".to_string(),
+            source_path: None,
+            artifacts: vec![crate::artifacts::KnowledgeSkillArtifactInput {
+                relative_path: "workflow/run.toml".to_string(),
+                content: "name = 'run'\n".to_string(),
+            }],
+        };
+
+        let first = store
+            .import_skill_version(input("Run tests."))
+            .await
+            .unwrap();
+        let Some(first) = first else {
+            panic!("first skill version must import");
+        };
+        assert_eq!(first.version, 1);
+        assert_eq!(first.status, "active");
+        assert!(
+            store
+                .import_skill_version(input("Run tests."))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let second = store
+            .import_skill_version(input("Run tests before checking."))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.version, 2);
+        assert_eq!(second.status, "active");
+        let versions = store.list_skill_versions(10).await.unwrap();
+        assert_eq!(versions.len(), 2);
+        assert!(
+            versions
+                .iter()
+                .any(|version| version.version == 1 && version.status == "superseded")
+        );
+        let artifacts = store.list_skill_artifacts(second.id).await.unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].relative_path, "workflow/run.toml");
+    }
+
+    #[tokio::test]
+    async fn skill_proposals_are_idempotent_and_governed() {
+        let store = TursoKmsStorage::open_in_memory().await.unwrap();
+        let input = |body: &str, evidence_id: &str| crate::artifacts::KnowledgeSkillProposalInput {
+            skill_name: "targeted-testing".to_string(),
+            title: "Targeted testing".to_string(),
+            body_md: body.to_string(),
+            metadata_json: serde_json::json!({
+                "description": "Run focused tests first.",
+                "tags": ["testing"]
+            }),
+            node_path: "/procedures/targeted-testing".to_string(),
+            rationale: "Three eval failures exposed the same test-order mistake.".to_string(),
+            source_evidence_ids: vec![evidence_id.to_string()],
+            artifacts: vec![crate::artifacts::KnowledgeSkillArtifactInput {
+                relative_path: "workflow/run.toml".to_string(),
+                content: "name = 'run'\n".to_string(),
+            }],
+        };
+
+        let proposal = store
+            .create_skill_proposal(input("Run tests.", "evidence-1"))
+            .await
+            .unwrap()
+            .expect("first proposal must insert");
+        assert_eq!(proposal.status, "pending");
+        assert!(
+            store
+                .create_skill_proposal(input("Run tests.", "evidence-1"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let approved = store
+            .approve_skill_proposal(proposal.id)
+            .await
+            .unwrap()
+            .expect("pending proposal must approve");
+        assert_eq!(approved.skill_name, "targeted-testing");
+        assert_eq!(approved.version, 1);
+        assert_eq!(approved.source_tier, "kms");
+        let artifacts = store.list_skill_artifacts(approved.id).await.unwrap();
+        assert_eq!(artifacts.len(), 1);
+        assert!(
+            store
+                .get_knowledge_by_path("/procedures/targeted-testing")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .approve_skill_proposal(proposal.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let proposals = store.list_skill_proposals(10).await.unwrap();
+        let stored = proposals
+            .iter()
+            .find(|item| item.id == proposal.id)
+            .unwrap();
+        assert_eq!(stored.status, "approved");
+        assert_eq!(stored.approved_skill_version_id, Some(approved.id));
+
+        let rejected = store
+            .create_skill_proposal(input("Run tests before checking.", "evidence-2"))
+            .await
+            .unwrap()
+            .expect("changed proposal must insert");
+        assert!(store.reject_skill_proposal(rejected.id).await.unwrap());
+        assert!(!store.reject_skill_proposal(rejected.id).await.unwrap());
+        assert!(
+            store
+                .approve_skill_proposal(rejected.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(store.list_skill_versions(10).await.unwrap().len(), 1);
     }
 
     #[tokio::test]

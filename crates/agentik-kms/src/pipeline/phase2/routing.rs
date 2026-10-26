@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::KnowledgeRoutingDecision;
 use crate::knowledge::{Knowledge, KnowledgePath};
-use crate::store::{MemoryNote, MemoryStage1Record};
+use crate::store::{KnowledgeEvidence, MemoryNote, MemoryStage1Record};
 
 use super::KnowledgeUpdateInput;
 
@@ -41,6 +41,7 @@ pub(crate) struct RoutedUpdate {
 pub(super) fn updates_from_inputs(
     rows: &[MemoryStage1Record],
     notes: &[MemoryNote],
+    evidence: &[KnowledgeEvidence],
 ) -> Vec<KnowledgeUpdateInput> {
     let mut updates = Vec::new();
     for row in rows {
@@ -59,6 +60,23 @@ pub(super) fn updates_from_inputs(
             id: format!("note:{}", note.id),
             kind: "memory_note".to_string(),
             content: note.content.clone(),
+        });
+    }
+    for item in evidence {
+        let mut content = format!(
+            "### Evidence kind\n{}\n### Summary\n{}\n### Body\n{}\n### Occurrences\n{}\n",
+            item.evidence_kind, item.summary, item.body, item.occurrence_count
+        );
+        if let Some(anchor) = item.anchor_path.as_deref() {
+            content.push_str(&format!("### Anchor\n{anchor}\n"));
+        }
+        if let Some(error) = item.error.as_deref() {
+            content.push_str(&format!("### Error\n{error}\n"));
+        }
+        updates.push(KnowledgeUpdateInput {
+            id: format!("evidence:{}", item.id),
+            kind: format!("evidence:{}", item.evidence_kind),
+            content,
         });
     }
     updates

@@ -45,6 +45,7 @@ mod bundles;
 mod commands;
 mod delegation;
 mod gc;
+mod kms_bridge;
 mod persistence;
 mod relay;
 mod shared_infra;

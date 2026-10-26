@@ -74,13 +74,13 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
-    /// Skill-evolution dashboard data arrived: service status, unified
-    /// skill library, recorded observations, and surfaced clusters.
+    /// KMS skill-evolution dashboard data arrived: resident workers,
+    /// active skills, durable proposals, and evidence.
     SkillEvolutionLoaded {
-        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
-        library: std::result::Result<Vec<gateway::proto::SkillLibraryView>, String>,
-        observations: std::result::Result<Vec<gateway::proto::ObservationView>, String>,
-        clusters: std::result::Result<Vec<gateway::proto::ClusterView>, String>,
+        workers: std::result::Result<Vec<gateway::proto::KmsWorkerStatusView>, String>,
+        skills: std::result::Result<Vec<gateway::proto::KmsSkillLibraryView>, String>,
+        proposals: std::result::Result<Vec<gateway::proto::KmsSkillProposalView>, String>,
+        evidence: std::result::Result<Vec<gateway::proto::KmsEvidenceView>, String>,
     },
     /// One skill's detail document arrived (fetched on selection
     /// move; rendered only while it matches the selected row).
@@ -88,15 +88,15 @@ pub(crate) enum AppEvent {
         name: String,
         result: std::result::Result<gateway::proto::SkillLibraryDetail, String>,
     },
-    /// A manually triggered evolution cycle finished.
-    SkillEvolutionTriggered(std::result::Result<gateway::proto::SkillEvolutionReport, String>),
-    /// Polled status snapshot from the periodic dashboard poll —
-    /// lighter than a full `SkillEvolutionLoaded` because it carries
-    /// only the status fields. The handler promotes the snapshot
-    /// fields and re-triggers the full refresh when generation /
-    /// cycle counts have advanced since the last full load.
-    SkillEvolutionStatusPolled {
-        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
+    /// A human KMS proposal decision finished.
+    SkillProposalDecision {
+        approved: bool,
+        result: std::result::Result<gateway::proto::KmsSkillProposalDecision, String>,
+    },
+    /// Polled KMS worker/proposal snapshot from the periodic dashboard poll.
+    KmsDashboardStatusPolled {
+        workers: std::result::Result<Vec<gateway::proto::KmsWorkerStatusView>, String>,
+        proposals: std::result::Result<Vec<gateway::proto::KmsSkillProposalView>, String>,
     },
     /// Per-agent model info arrived (render-path cache fill; render itself
     /// must never issue HTTP). The string is the `provider:model` spec.
