@@ -437,6 +437,130 @@ aside {
 .embedding-field span { color: #c8cacd; }
 .embedding-field input { min-width: 0; padding: 7px 8px; border: 1px solid #2c2f35; border-radius: 6px; background: #101113; color: inherit; }
 .collapse-summary { color: #767a80; font-size: 12px; text-align: center; padding: 8px 0 16px; }
+.pdf-reader-entry { margin: 10px 0; }
+.pdf-reader-entry button.primary {
+  background: #6c7bff;
+  color: #171923;
+  font-weight: 650;
+}
+.pdf-reader-entry button.primary:hover { background: #8592ff; }
+.zotero-pdf-reader {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  display: grid;
+  grid-template-columns: minmax(180px, 250px) minmax(0, 1fr);
+  background: #0f1113;
+  color: #eceded;
+}
+.zotero-pdf-reader.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
+.reader-sidebar {
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  border-right: 1px solid #2a2d32;
+  background: #141518;
+}
+.zotero-pdf-reader.sidebar-collapsed .reader-sidebar { overflow: hidden; }
+.reader-sidebar-tabs { display: flex; border-bottom: 1px solid #2a2d32; }
+.reader-sidebar-tabs button {
+  flex: 1;
+  padding: 9px 10px;
+  background: transparent;
+  color: #a5a9af;
+}
+.reader-sidebar-tabs button.active { background: #222536; color: white; }
+.reader-sidebar-pane { min-height: 0; overflow: auto; padding: 8px; }
+.reader-thumbnail {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 6px;
+  background: #181a1e;
+  color: inherit;
+  border: 1px solid #24272b;
+}
+.reader-thumbnail.active { border-color: #6c7bff; background: #222536; }
+.reader-thumbnail-canvas {
+  min-height: 80px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #767a80;
+  font-size: 12px;
+}
+.reader-thumbnail canvas { display: block; max-width: 100%; height: auto; }
+.reader-sidebar-pane button {
+  width: 100%;
+  padding: 7px 8px;
+  margin-bottom: 4px;
+  text-align: left;
+  background: transparent;
+  color: #c8cacd;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.reader-sidebar-pane button:hover { background: #202328; }
+.reader-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.reader-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2a2d32;
+  background: #15171a;
+}
+.reader-toolbar button {
+  min-width: 28px;
+  padding: 6px 9px;
+  background: #202328;
+  color: #dcdddf;
+}
+.reader-tool-group { display: flex; align-items: center; gap: 5px; }
+.reader-tool-group input {
+  width: 64px;
+  padding: 5px 6px;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  background: #101113;
+  color: inherit;
+}
+.reader-title {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #9ea1a6;
+}
+.reader-page-area { flex: 1; min-height: 0; overflow: auto; background: #24272c; }
+.reader-pages { display: flex; flex-direction: column; align-items: center; gap: 22px; padding: 24px; }
+.reader-page-wrapper {
+  position: relative;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, .42);
+  background: white;
+}
+.reader-page-wrapper canvas { display: block; }
+.reader-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+}
+.reader-text-layer span {
+  position: absolute;
+  white-space: pre;
+  color: transparent;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.reader-text-layer ::selection { background: rgba(108, 123, 255, .42); }
+.reader-status { padding: 8px 16px 16px; color: #8d9197; font-size: 12px; }
 .provider-header { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px; background: transparent; color: inherit; }
 .provider-header span:last-child { margin-left: auto; font-size: 12px; color: #8d9197; }
 .model-row { width: calc(100% - 16px); margin: 0 8px 4px; display: flex; align-items: center; gap: 8px; padding: 8px 9px; background: #1a1c20; color: inherit; border: 1px solid #26292e; }

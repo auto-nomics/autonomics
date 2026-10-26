@@ -14,7 +14,8 @@
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.3",
     "dompurify": "^3.4.17",
-    "marked": "^18.1.1"
+    "marked": "^18.1.1",
+    "pdfjs-dist": "4.10.38"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.1",

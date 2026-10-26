@@ -11,6 +11,7 @@ import {
 } from "./gateway";
 import { escapeHtml, renderMarkdown } from "./markdown";
 import { createAppState, type View } from "./state";
+import { openPdfReader } from "./pdf-reader";
 import type {
   BibAnnotation,
   BibArticle,
@@ -1802,6 +1803,24 @@ function renderBibliography(container: HTMLDivElement) {
       render();
     };
     tabs.append(tab);
+  }
+  if (selected && state.bibDetail?.fulltext?.file_format?.toLowerCase() === "pdf") {
+    const read = document.createElement("div");
+    read.className = "pdf-reader-entry";
+    const button = document.createElement("button");
+    button.className = "ghost full primary";
+    button.textContent = "Read PDF";
+    button.onclick = () => {
+      void openPdfReader({
+        articleId: selected.id,
+        title: selected.title,
+      }).catch((error) => {
+        state.bibError = String(error);
+        render();
+      });
+    };
+    read.append(button);
+    details.append(read);
   }
   const detailBody = document.createElement("pre");
   if (!selected) {

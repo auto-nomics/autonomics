@@ -14,6 +14,7 @@ export type GatewayStatusHandler = (
 
 const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const WEB_API_PREFIX = "/api/v1";
 let webEventsStarted = false;
 
 declare global {
@@ -35,6 +36,10 @@ function normalizeApiPath(path: string): string {
   const agents = pathname.match(/^\/agents\/([^/]+)(\/.*)?$/);
   if (!agents) return trimmed;
   return `/agents/${encodeURIComponent(agents[1])}${agents[2] ?? ""}${query}`;
+}
+
+function webApiPath(path: string): string {
+  return `${WEB_API_PREFIX}${normalizeApiPath(path)}`;
 }
 
 async function tauriInvoke<T>(command: string, args?: unknown): Promise<T> {
@@ -61,7 +66,7 @@ export async function gatewayRequest(
     return result.data;
   }
 
-  const response = await fetch(normalizeApiPath(path), {
+  const response = await fetch(webApiPath(path), {
     method,
     headers: {
       ...authHeaders(),
@@ -135,7 +140,7 @@ async function connectEvents(
   let disconnected = false;
   for (;;) {
     try {
-      const response = await fetch(normalizeApiPath("/events"), {
+      const response = await fetch(webApiPath("/events"), {
         headers: {
           ...authHeaders(),
           "Last-Event-ID": String(sequence),
@@ -244,7 +249,7 @@ export async function uploadBibFulltext(
   if (!(file instanceof File)) throw new Error("A browser file is required");
   const form = new FormData();
   form.append("file", file, file.name);
-  const response = await fetch(normalizeApiPath(path), {
+  const response = await fetch(webApiPath(path), {
     method: "POST",
     headers: authHeaders(),
     body: form,
@@ -253,6 +258,36 @@ export async function uploadBibFulltext(
   const payload = text ? JSON.parse(text) : null;
   if (!response.ok) throw new Error(payload?.error ?? `Upload ${response.status}`);
   return payload;
+}
+
+export async function fetchBibFulltextRaw(
+  articleId: string,
+): Promise<{ bytes: Uint8Array; contentType: string }> {
+  if (isTauri) {
+    const result = await tauriInvoke<{
+      data_base64: string;
+      content_type: string;
+    }>("bib_fulltext_raw", { articleId });
+    const binary = atob(result.data_base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return { bytes, contentType: result.content_type };
+  }
+
+  const response = await fetch(
+    webApiPath(`/bib/articles/${encodeURIComponent(articleId)}/fulltext/raw`),
+    { headers: authHeaders() },
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error ?? `Unable to load PDF (${response.status})`);
+  }
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") ?? "application/pdf",
+  };
 }
 
 export async function saveTextFile(

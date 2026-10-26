@@ -23,6 +23,7 @@ fn main() {
             gateway::start_events,
             gateway::frontend_ready,
             gateway::upload_bib_fulltext,
+            gateway::bib_fulltext_raw,
             gateway::save_bib_export
         ])
         .setup(|app| {

@@ -168,6 +168,9 @@ export type BibCollection = {
 };
 
 export type BibFullText = {
+  file_format?: string | null;
+  file_size?: number | null;
+  source?: string | null;
   text_content?: string | null;
   file_path?: string;
   extracted_by?: string | null;

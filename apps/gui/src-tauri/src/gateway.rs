@@ -4,6 +4,7 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde::Serialize;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
@@ -324,6 +325,57 @@ pub async fn upload_bib_fulltext(
             .to_string());
     }
     Ok(payload)
+}
+
+#[derive(Debug, Serialize)]
+pub struct BibBinaryView {
+    pub data_base64: String,
+    pub content_type: String,
+}
+
+#[tauri::command]
+pub async fn bib_fulltext_raw(
+    state: State<'_, GatewayState>,
+    article_id: String,
+) -> Result<BibBinaryView, String> {
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let url = endpoint(
+        &base,
+        &format!(
+            "bib/articles/{}/fulltext/raw",
+            encoded_segment(&article_id)
+        ),
+    );
+    let response = state
+        .http
+        .get(url)
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    let bytes = if status.is_success() {
+        response.bytes().await.map_err(|error| error.to_string())?
+    } else {
+        let payload = response.json::<Value>().await.unwrap_or(Value::Null);
+        let fallback = status.to_string();
+        return Err(payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(fallback.as_str())
+            .to_string());
+    };
+    Ok(BibBinaryView {
+        data_base64: BASE64.encode(bytes),
+        content_type,
+    })
 }
 
 #[derive(Debug, Deserialize)]
