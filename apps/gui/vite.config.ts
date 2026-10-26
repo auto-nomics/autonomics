@@ -7,5 +7,13 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    rollupOptions: {
+      output: {
+        inlineDynamicImports: true,
+        entryFileNames: "assets/gui.js",
+        chunkFileNames: "assets/gui.js",
+        assetFileNames: "assets/gui.[ext]",
+      },
+    },
   },
 });

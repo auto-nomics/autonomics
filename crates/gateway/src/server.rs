@@ -6,6 +6,7 @@ mod auth;
 mod docs;
 mod error;
 mod events;
+mod gui;
 mod hydration;
 mod kms;
 mod lifecycle;

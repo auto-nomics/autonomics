@@ -13,7 +13,7 @@ use super::auth::bearer_auth;
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, hydration, kms, lifecycle, model_config, plugin_environments, plugins,
+    agents, events, gui, hydration, kms, lifecycle, model_config, plugin_environments, plugins,
     sessions, settings, skills, storage,
 };
 
@@ -175,7 +175,7 @@ pub fn router_with_bib(
     env_token: Option<String>,
 ) -> Router {
     let api = api_router(state).layer(axum::middleware::from_fn_with_state(
-        Arc::new(gateway_token),
+        Arc::new(gateway_token.clone()),
         bearer_auth,
     ));
     let docs =
@@ -192,7 +192,7 @@ pub fn router_with_bib(
         .merge(docs)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1", api)
-        .merge(api_server::frontend_router())
+        .merge(gui::router(gateway_token.clone()))
         .route("/api/health", get(health))
         .route("/api/v1", get(lifecycle::api_index))
 }

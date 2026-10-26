@@ -5,12 +5,11 @@ import {
   probeGateway,
   startGatewayEvents,
   reportFrontendReady,
+  pickUploadFile,
   uploadBibFulltext,
-  saveBibExport,
+  saveTextFile,
 } from "./gateway";
 import { escapeHtml, renderMarkdown } from "./markdown";
-import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
 import { createAppState, type View } from "./state";
 import type {
   BibAnnotation,
@@ -113,16 +112,8 @@ async function loadBibliographyDetail(articleId: string | null) {
 
 async function uploadBibliographyFulltext(articleId: string) {
   if (state.bibUploadBusy) return;
-  const selected = await open({
-    multiple: false,
-    directory: false,
-    title: "Select full text",
-    filters: [
-      { name: "Documents", extensions: ["pdf", "html", "htm", "txt"] },
-      { name: "All files", extensions: ["*"] },
-    ],
-  });
-  if (typeof selected !== "string" || !selected) return;
+  const selected = await pickUploadFile();
+  if (!selected) return;
   state.bibUploadBusy = true;
   state.bibError = null;
   render();
@@ -159,18 +150,12 @@ async function exportBibliography() {
       "GET",
       `/bib/export?${query.toString()}`,
     );
-    const path = await save({
-      title: "Export bibliography",
-      defaultPath: `autonomics-${slug}.${extension}`,
-      filters: [
-        { name: "BibTeX", extensions: ["bib"] },
-        { name: "RIS", extensions: ["ris"] },
-        { name: "Markdown", extensions: ["md"] },
-        { name: "CSL JSON", extensions: ["json"] },
-      ],
-    });
+    const path = await saveTextFile(
+      `autonomics-${slug}.${extension}`,
+      result.export ?? "",
+    );
     if (!path) return;
-    const size = await saveBibExport(path, result.export ?? "");
+    const size = (result.export ?? "").length;
     showCopyStatus(`Exported ${result.count ?? 0} articles (${size.toLocaleString()} bytes)`);
   } catch (error) {
     state.bibError = String(error);
@@ -286,7 +271,14 @@ async function hydrate() {
       state.activeAgent = state.agents[0]?.path ?? "";
     }
     render();
-    await startGatewayEvents(state.lastSeq);
+    await startGatewayEvents(state.lastSeq, {
+      onFrame: handleFrame,
+      onStatus: (status) => {
+        state.connected = status !== "disconnected";
+        if (status === "reconnected") void hydrate();
+        render();
+      },
+    });
     await Promise.all(state.agents.filter((agent) => !state.sessions[agent.path]?.length).map(async (agent) => {
       try {
         await request("GET", `/agents/${agent.path}/sessions`);
@@ -4037,13 +4029,6 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     openCommandPalette();
   }
-});
-
-void listen<GatewayFrame>("gateway-frame", (event) => handleFrame(event.payload));
-void listen<"disconnected" | "reconnected">("gateway-status", (event) => {
-  state.connected = event.payload !== "disconnected";
-  if (event.payload === "reconnected") void hydrate();
-  render();
 });
 
 void hydrate();

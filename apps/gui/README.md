@@ -1,8 +1,8 @@
 # Autonomics GUI
 
-Tauri 2 desktop frontend for the resident Autonomics gateway. Like the TUI, it is a
-thin client: it never opens a second `RuntimeHost`, and agents continue running when
-the window is closed.
+Gateway-hosted web frontend and Tauri 2 desktop shell for the resident Autonomics
+gateway. Like the TUI, it is a thin client: it never opens a second `RuntimeHost`,
+and agents continue running when the window is closed.
 
 ## Run
 
@@ -34,6 +34,21 @@ npm run tauri build --no-bundle
 
 The executable is written to the workspace's `target/release/autonomics-gui`. Add
 `--bundles app` or omit `--no-bundle` when creating an installable package.
+
+## Gateway-hosted web client
+
+`npm run build:gateway` builds the browser-compatible bundle and syncs it to
+`crates/gateway/gui-dist`. The gateway embeds those files with `include_str!`
+and serves them automatically when the daemon starts:
+
+```text
+http://127.0.0.1:8765/
+```
+
+The GUI index handler injects the loopback gateway bearer token into the page.
+Static JS/CSS are metadata-only and unauthenticated; all API requests remain
+bearer-guarded. Tauri uses the same frontend and switches to its native bridge
+and dialogs when `__TAURI_INTERNALS__` is present.
 
 ## Implemented alignment
 
