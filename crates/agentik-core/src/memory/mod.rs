@@ -15,7 +15,9 @@ pub use agentik_kms::{
     SemanticObservation, TursoKmsStorage, now_ms, redact_secrets,
 };
 pub use agentik_kms::{
-    KmsWorkerStatusSnapshot, KnowledgeJobKind, KnowledgeWorkerEvent, KnowledgeWorkerState,
-    KnowledgeWorkerStatus,
+    KmsWorkerStatusSnapshot, KnowledgeEvidenceInput, KnowledgeJobKind, KnowledgeSkillArtifactInput,
+    KnowledgeSkillProposalInput, KnowledgeSkillVersionInput, KnowledgeWorkerEvent,
+    KnowledgeWorkerState, KnowledgeWorkerStatus,
 };
+pub use agentik_kms::{SkillArtifact, SkillProposal, SkillVersion};
 pub use tools::memory_registrations;

@@ -22,7 +22,7 @@ pub enum StageStatus {
     Failed { reason: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageOutcome {
     pub status: StageStatus,
     pub next_jobs: Vec<KnowledgeJob>,

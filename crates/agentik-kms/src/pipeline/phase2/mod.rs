@@ -48,6 +48,10 @@ pub(super) async fn run(
         .list_pending_notes()
         .await
         .map_err(|e| Error::store("list memory notes", e))?;
+    let evidence = memory
+        .list_pending_evidence(config.phase2_inputs)
+        .await
+        .map_err(|e| Error::store("list knowledge evidence", e))?;
     let existing_nodes = memory
         .list_knowledge(config.phase2_inputs)
         .await
@@ -56,7 +60,7 @@ pub(super) async fn run(
         .get_summary()
         .await
         .map_err(|e| Error::store("load memory summary", e))?;
-    let source_hash = phase2_source_hash(&rows, &notes);
+    let source_hash = phase2_source_hash(&rows, &notes, &evidence);
     let lease_until = now_ms() + config.lease_seconds * 1000;
     if !memory
         .claim_phase2(&source_hash, lease_until)
@@ -70,7 +74,7 @@ pub(super) async fn run(
         tracing::debug!("memory phase 2 skipped: no active model");
         return Ok(Vec::new());
     };
-    let updates = updates_from_inputs(&rows, &notes);
+    let updates = updates_from_inputs(&rows, &notes, &evidence);
     let workflow = run_workflow(
         &model,
         &updates,
@@ -96,7 +100,17 @@ pub(super) async fn run(
                 )
                 .await
                 .map_err(|e| Error::store("complete memory phase 2", e))?;
-            diagnostic_jobs(memory, &diagnosis_targets).await
+            let consumed_evidence_ids = evidence
+                .iter()
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>();
+            memory
+                .mark_evidence_consumed(consumed_evidence_ids)
+                .await
+                .map_err(|e| Error::store("consume knowledge evidence", e))?;
+            let mut next_jobs = skill_revision_jobs(memory, &evidence).await?;
+            next_jobs.extend(diagnostic_jobs(memory, &diagnosis_targets).await?);
+            Ok(next_jobs)
         }
         Err(error) => memory
             .fail_phase2(&source_hash, &error.to_string())
@@ -186,6 +200,106 @@ async fn run_workflow(
         normalize_summary(&summary_output.summary)
     };
     Ok((nodes, summary, observations, diagnosis_targets))
+}
+
+async fn skill_revision_jobs(
+    memory: &Arc<dyn MemoryStore>,
+    evidence: &[crate::store::KnowledgeEvidence],
+) -> Result<Vec<super::job::KnowledgeJob>> {
+    const REVISION_EVIDENCE_OCCURRENCES: u64 = 3;
+    let mut groups: BTreeMap<String, Vec<&crate::store::KnowledgeEvidence>> = BTreeMap::new();
+    for item in evidence {
+        if item.source_kind == "skill_failure"
+            && item
+                .anchor_path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("/procedures/"))
+        {
+            let skill = item
+                .anchor_path
+                .as_deref()
+                .and_then(|path| path.rsplit('/').next())
+                .unwrap_or_default()
+                .to_string();
+            if !skill.is_empty() {
+                groups.entry(skill).or_default().push(item);
+            }
+        }
+    }
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let versions = memory
+        .list_skill_versions(10_000)
+        .await
+        .map_err(|e| Error::store("list skill versions for revision proposals", e))?;
+    let mut jobs = Vec::new();
+    for (skill, failures) in groups {
+        let occurrences = failures
+            .iter()
+            .map(|item| item.occurrence_count)
+            .sum::<u64>();
+        if occurrences < REVISION_EVIDENCE_OCCURRENCES {
+            continue;
+        }
+        let Some(version) = versions
+            .iter()
+            .find(|version| version.status == "active" && version.skill_name == skill)
+        else {
+            tracing::debug!(skill = %skill, "skill failure has no active KMS version");
+            continue;
+        };
+        let artifacts = memory
+            .list_skill_artifacts(version.id)
+            .await
+            .map_err(|e| Error::store("list skill artifacts for revision proposal", e))?;
+        let metadata_json = serde_json::from_str::<serde_json::Value>(&version.metadata_json)
+            .map_err(Error::serialization)?;
+
+        let mut body_md = format!(
+            "{}\n\n## Proposed revision evidence\n\nThis pending revision is based on \
+             {} recorded failure occurrence(s). A human must review and approve it before \
+             it becomes active.\n\n",
+            version.body_md.trim_end(),
+            occurrences
+        );
+        for failure in &failures {
+            body_md.push_str(&format!(
+                "### {} ({} occurrence(s))\n{}\n",
+                failure.summary, failure.occurrence_count, failure.body
+            ));
+            if let Some(error) = failure.error.as_deref() {
+                body_md.push_str(&format!("Error: {error}\n"));
+            }
+            body_md.push('\n');
+        }
+
+        jobs.push(super::job::KnowledgeJob::ProposeSkillRevision {
+            input: crate::artifacts::KnowledgeSkillProposalInput {
+                skill_name: version.skill_name.clone(),
+                title: version.title.clone(),
+                body_md,
+                metadata_json,
+                node_path: version.node_path.clone(),
+                rationale: format!(
+                    "{occurrences} recorded skill failure occurrence(s) require revision review"
+                ),
+                source_evidence_ids: failures
+                    .iter()
+                    .map(|item| item.id.clone())
+                    .collect::<Vec<_>>(),
+                artifacts: artifacts
+                    .into_iter()
+                    .map(|artifact| crate::artifacts::KnowledgeSkillArtifactInput {
+                        relative_path: artifact.relative_path,
+                        content: artifact.content,
+                    })
+                    .collect(),
+            },
+        });
+    }
+    Ok(jobs)
 }
 
 async fn diagnostic_jobs(
@@ -307,19 +421,29 @@ fn normalize_predicate(raw: &str) -> String {
     result.trim_matches('_').to_string()
 }
 
-fn phase2_source_hash(rows: &[MemoryStage1Record], notes: &[MemoryNote]) -> String {
+fn phase2_source_hash(
+    rows: &[MemoryStage1Record],
+    notes: &[MemoryNote],
+    evidence: &[crate::store::KnowledgeEvidence],
+) -> String {
     #[derive(serde::Serialize)]
     struct Input<'a> {
         rows: &'a [MemoryStage1Record],
         notes: &'a [MemoryNote],
+        evidence: &'a [crate::store::KnowledgeEvidence],
     }
-    let input = Input { rows, notes };
+    let input = Input {
+        rows,
+        notes,
+        evidence,
+    };
     hash_source(&serde_json::to_string(&input).unwrap_or_default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{KnowledgeJob, TursoKmsStorage};
     use agentik_sdk::provider::client::MockApiClient;
 
     fn model_info(name: &str) -> agentik_sdk::model::ModelInfo {
@@ -425,5 +549,56 @@ mod tests {
         );
         assert!(summary.starts_with("v1\n"));
         assert!(observations.is_empty());
+    }
+
+    #[tokio::test]
+    async fn repeated_skill_failures_draft_a_pending_revision_job() {
+        let storage = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let memory: Arc<dyn MemoryStore> = storage;
+        memory
+            .import_skill_version(crate::artifacts::KnowledgeSkillVersionInput {
+                skill_name: "echo-flow".to_string(),
+                title: "Echo flow".to_string(),
+                body_md: "Run the echo workflow.".to_string(),
+                metadata_json: serde_json::json!({
+                    "description": "Run an echo workflow.",
+                    "tags": ["test"]
+                }),
+                node_path: "/procedures/echo-flow".to_string(),
+                source_tier: "workspace".to_string(),
+                source_path: None,
+                artifacts: vec![crate::artifacts::KnowledgeSkillArtifactInput {
+                    relative_path: "workflow/main.toml".to_string(),
+                    content: "description = 'Echo'\n".to_string(),
+                }],
+            })
+            .await
+            .unwrap();
+        let evidence = [crate::store::KnowledgeEvidence {
+            id: "evidence-1".to_string(),
+            source_kind: "skill_failure".to_string(),
+            source_id: "failure-1".to_string(),
+            evidence_kind: "eval_failure".to_string(),
+            summary: "eval case smoke fails".to_string(),
+            body: "The smoke eval failed after workflow execution.".to_string(),
+            anchor_path: Some("/procedures/echo-flow".to_string()),
+            error: Some("output rows did not match".to_string()),
+            content_hash: "failure-hash".to_string(),
+            status: "pending".to_string(),
+            occurrence_count: 3,
+            created_at: 1,
+            last_seen_at: 3,
+        }];
+
+        let jobs = skill_revision_jobs(&memory, &evidence).await.unwrap();
+        assert_eq!(jobs.len(), 1);
+        let KnowledgeJob::ProposeSkillRevision { input } = &jobs[0] else {
+            panic!("expected a skill revision proposal job");
+        };
+        assert_eq!(input.skill_name, "echo-flow");
+        assert!(input.body_md.contains("Run the echo workflow."));
+        assert!(input.body_md.contains("3 recorded failure occurrence(s)"));
+        assert_eq!(input.source_evidence_ids, vec!["evidence-1".to_string()]);
+        assert_eq!(input.artifacts.len(), 1);
     }
 }

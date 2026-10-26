@@ -32,6 +32,100 @@ pub struct KnowledgeUpdateInput {
     pub content: String,
 }
 
+/// Source-normalized evidence consumed by the unified KMS pipeline.
+///
+/// Legacy evolution observations, explicit memory notes, skill usage, and
+/// eval failures are all projected onto this contract before consolidation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeEvidenceInput {
+    pub source_kind: String,
+    pub source_id: String,
+    pub evidence_kind: String,
+    pub summary: String,
+    pub body: String,
+    #[serde(default)]
+    pub anchor_path: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One text artifact bundled with a skill version.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnowledgeSkillArtifactInput {
+    pub relative_path: String,
+    pub content: String,
+}
+
+/// A skill version imported into KMS from any filesystem tier.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnowledgeSkillVersionInput {
+    pub skill_name: String,
+    pub title: String,
+    pub body_md: String,
+    pub metadata_json: serde_json::Value,
+    pub node_path: String,
+    pub source_tier: String,
+    pub source_path: Option<String>,
+    pub artifacts: Vec<KnowledgeSkillArtifactInput>,
+}
+
+/// A candidate revision awaiting explicit human governance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnowledgeSkillProposalInput {
+    pub skill_name: String,
+    pub title: String,
+    pub body_md: String,
+    pub metadata_json: serde_json::Value,
+    pub node_path: String,
+    pub rationale: String,
+    pub source_evidence_ids: Vec<String>,
+    pub artifacts: Vec<KnowledgeSkillArtifactInput>,
+}
+
+impl KnowledgeSkillProposalInput {
+    #[must_use]
+    pub fn content_hash(&self) -> String {
+        let source = serde_json::to_string(self).unwrap_or_default();
+        format!("P-{}", hash_source(&source))
+    }
+}
+
+impl KnowledgeSkillVersionInput {
+    #[must_use]
+    pub fn content_hash(&self) -> String {
+        let source = serde_json::to_string(self).unwrap_or_default();
+        format!("S-{}", hash_source(&source))
+    }
+}
+
+impl KnowledgeEvidenceInput {
+    /// Stable content identity; source identity is stored separately.
+    #[must_use]
+    pub fn content_hash(&self) -> String {
+        let normalized = Self {
+            source_kind: String::new(),
+            source_id: String::new(),
+            evidence_kind: self.evidence_kind.trim().to_string(),
+            summary: self.summary.trim().to_string(),
+            body: self.body.trim().to_string(),
+            anchor_path: self
+                .anchor_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            error: self
+                .error
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        };
+        let source = serde_json::to_string(&normalized).unwrap_or_default();
+        format!("E-{}", hash_source(&source))
+    }
+}
+
 /// Structured result of the first Phase 2 LLM step: route each update.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct KnowledgeRoutingPlan {

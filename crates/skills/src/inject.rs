@@ -7,6 +7,14 @@
 
 use crate::registry::SkillEntry;
 
+/// Minimal prompt-index record independent of the registry's private origin.
+#[derive(Debug, Clone)]
+pub struct SkillIndexEntry {
+    pub name: String,
+    pub description: String,
+    pub has_workflows: bool,
+}
+
 /// Header of the injected section. Rendered only when at least one
 /// skill is visible.
 pub const SECTION_HEADER: &str = "## Skills\n";
@@ -16,6 +24,22 @@ pub const SECTION_HEADER: &str = "## Skills\n";
 /// Returns an empty string when `entries` is empty — an agent with no
 /// skills installed gets no section at all, not an empty heading.
 pub fn prompt_section(entries: &[SkillEntry]) -> String {
+    prompt_section_from_indices(
+        entries
+            .iter()
+            .map(|entry| SkillIndexEntry {
+                name: entry.meta.name.clone(),
+                description: entry.meta.description.clone(),
+                has_workflows: entry.has_workflows,
+            })
+            .collect::<Vec<_>>()
+            .as_slice(),
+    )
+}
+
+/// Render a prompt index from KMS or another non-filesystem projection.
+#[must_use]
+pub fn prompt_section_from_indices(entries: &[SkillIndexEntry]) -> String {
     if entries.is_empty() {
         return String::new();
     }
@@ -37,9 +61,9 @@ pub fn prompt_section(entries: &[SkillEntry]) -> String {
         };
         out.push_str(&format!(
             "- {}{} — {}\n",
-            entry.meta.name,
+            entry.name,
             marker,
-            crate::format::prompt_safe_description(&entry.meta.description, 240)
+            crate::format::prompt_safe_description(&entry.description, 240)
         ));
     }
     out

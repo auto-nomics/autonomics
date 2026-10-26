@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::artifacts::KnowledgeEvidenceInput;
+
 /// Routing key shared by durable queue rows and resident workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KnowledgeJobKind {
     SessionExtract,
     ConsolidateKnowledge,
+    IngestObservation,
+    ProposeSkillRevision,
     DiagnoseKnowledgeNode,
     RepairKnowledgeNode,
 }
@@ -16,6 +20,8 @@ impl KnowledgeJobKind {
         match self {
             Self::SessionExtract => "session_extract",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
+            Self::IngestObservation => "ingest_observation",
+            Self::ProposeSkillRevision => "propose_skill_revision",
             Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
             Self::RepairKnowledgeNode => "repair_knowledge_node",
         }
@@ -26,6 +32,8 @@ impl KnowledgeJobKind {
         match self {
             Self::SessionExtract => "extract_agent_sessions",
             Self::ConsolidateKnowledge => "consolidate_knowledge",
+            Self::IngestObservation => "ingest_observation",
+            Self::ProposeSkillRevision => "propose_skill_revision",
             Self::DiagnoseKnowledgeNode => "diagnose_knowledge_node",
             Self::RepairKnowledgeNode => "repair_knowledge_node",
         }
@@ -33,7 +41,7 @@ impl KnowledgeJobKind {
 }
 
 /// A durable unit of knowledge-pipeline work.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KnowledgeJob {
     ExtractAgentSessions {
@@ -41,6 +49,12 @@ pub enum KnowledgeJob {
     },
     ConsolidateKnowledge {
         trigger: String,
+    },
+    IngestObservation {
+        input: KnowledgeEvidenceInput,
+    },
+    ProposeSkillRevision {
+        input: crate::artifacts::KnowledgeSkillProposalInput,
     },
     DiagnoseKnowledgeNode {
         target_path: String,
@@ -60,6 +74,16 @@ impl KnowledgeJob {
                 format!("extract-agent-sessions:{agent_id}")
             }
             Self::ConsolidateKnowledge { .. } => "consolidate-knowledge".to_string(),
+            Self::IngestObservation { input } => {
+                format!("ingest-observation:{}", input.content_hash())
+            }
+            Self::ProposeSkillRevision { input } => {
+                format!(
+                    "propose-skill-revision:{}:{}",
+                    input.skill_name,
+                    input.content_hash()
+                )
+            }
             Self::DiagnoseKnowledgeNode {
                 target_path,
                 family_hash,
@@ -79,6 +103,8 @@ impl KnowledgeJob {
         match self {
             Self::ExtractAgentSessions { .. } => KnowledgeJobKind::SessionExtract,
             Self::ConsolidateKnowledge { .. } => KnowledgeJobKind::ConsolidateKnowledge,
+            Self::IngestObservation { .. } => KnowledgeJobKind::IngestObservation,
+            Self::ProposeSkillRevision { .. } => KnowledgeJobKind::ProposeSkillRevision,
             Self::DiagnoseKnowledgeNode { .. } => KnowledgeJobKind::DiagnoseKnowledgeNode,
             Self::RepairKnowledgeNode { .. } => KnowledgeJobKind::RepairKnowledgeNode,
         }

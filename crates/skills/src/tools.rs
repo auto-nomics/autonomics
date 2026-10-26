@@ -11,10 +11,12 @@ use std::sync::Arc;
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
+use serde::Deserialize;
 
 use crate::evolution::SkillCommandOutcome;
 use crate::format::MAX_BODY_BYTES;
 use crate::manager::SkillManager;
+use agentik_core::memory::{KmsSystem, KnowledgeEvent, KnowledgeEvidenceInput, SkillVersion};
 
 // ────────────────────────── inputs ──────────────────────────
 
@@ -61,6 +63,96 @@ pub struct SkillSearchInput {
 
 pub struct SkillListTool {
     pub manager: Arc<SkillManager>,
+    pub kms: Option<Arc<KmsSystem>>,
+}
+
+#[derive(Debug, Clone)]
+struct SkillProjection {
+    name: String,
+    description: String,
+    tags: Vec<String>,
+    tier: String,
+    body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SkillVersionMetadata {
+    description: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    tier: String,
+}
+
+fn kms_projection(version: &SkillVersion) -> Option<SkillProjection> {
+    let metadata = serde_json::from_str::<SkillVersionMetadata>(&version.metadata_json).ok()?;
+    Some(SkillProjection {
+        name: version.skill_name.clone(),
+        description: metadata.description,
+        tags: metadata.tags,
+        tier: metadata.tier,
+        body: version.body_md.clone(),
+    })
+}
+
+async fn kms_projections(kms: Option<&Arc<KmsSystem>>, limit: usize) -> Vec<SkillProjection> {
+    let Some(kms) = kms else {
+        return Vec::new();
+    };
+    let store = kms.store();
+    match store.list_skill_versions(limit).await {
+        Ok(versions) => versions
+            .iter()
+            .filter(|version| version.status == "active")
+            .filter_map(kms_projection)
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "cannot read KMS skill projection");
+            Vec::new()
+        }
+    }
+}
+
+async fn record_kms_usage(kms: &KmsSystem, name: &str, kind: crate::UsageKind) {
+    let input = KnowledgeEvidenceInput {
+        source_kind: "skill_usage".to_string(),
+        source_id: format!(
+            "{name}:{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or_default()
+        ),
+        evidence_kind: kind.as_str().to_string(),
+        summary: format!("skill {name} recorded {} usage", kind.as_str()),
+        body: format!(
+            "Skill {name:?} was read through the skill tools ({}). This is fitness \
+             evidence for procedure consolidation and diagnosis.",
+            kind.as_str()
+        ),
+        anchor_path: Some(format!("/procedures/{name}")),
+        error: None,
+    };
+    if let Err(error) = kms
+        .submit_event(KnowledgeEvent::ObservationRecorded { input })
+        .await
+    {
+        tracing::warn!(skill = name, kind = kind.as_str(), %error, "cannot queue skill usage evidence");
+    }
+}
+
+fn projection_line(projection: &SkillProjection) -> String {
+    let tags = if projection.tags.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", projection.tags.join(", "))
+    };
+    format!(
+        "- {} ({}){} — {}\n",
+        projection.name,
+        projection.tier,
+        tags,
+        crate::format::prompt_safe_description(&projection.description, 240)
+    )
 }
 
 #[async_trait::async_trait]
@@ -68,15 +160,33 @@ impl ToolFunction for SkillListTool {
     type Input = SkillListInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let mut entries = self.manager.registry().list();
+        let projections = kms_projections(self.kms.as_ref(), 10_000).await;
         if let Some(tier) = input
             .tier
             .as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty())
         {
-            entries.retain(|e| e.tier.as_str() == tier);
+            let filtered = projections
+                .iter()
+                .filter(|projection| projection.tier == tier)
+                .collect::<Vec<_>>();
+            if !filtered.is_empty() {
+                let mut out = format!("{} skill(s):\n", filtered.len());
+                for projection in filtered {
+                    out.push_str(&projection_line(projection));
+                }
+                return Ok(ToolResult::success(out));
+            }
+        } else if !projections.is_empty() {
+            let mut out = format!("{} skill(s):\n", projections.len());
+            for projection in &projections {
+                out.push_str(&projection_line(projection));
+            }
+            return Ok(ToolResult::success(out));
         }
+
+        let entries = self.manager.registry().list();
         if entries.is_empty() {
             return Ok(ToolResult::success(
                 "No skills installed. Ask the user to install one with \
@@ -104,6 +214,7 @@ impl ToolFunction for SkillListTool {
 
 pub struct SkillGetTool {
     pub manager: Arc<SkillManager>,
+    pub kms: Option<Arc<KmsSystem>>,
 }
 
 #[async_trait::async_trait]
@@ -115,26 +226,37 @@ impl ToolFunction for SkillGetTool {
         if name.is_empty() {
             return Ok(ToolResult::error("skill_get: 'name' must be non-empty"));
         }
-        let Some(doc) = self.manager.registry().get(name).unwrap_or_else(|e| {
-            tracing::warn!(skill = name, error = %e, "skill_get: unreadable skill");
-            None
-        }) else {
-            let names: Vec<String> = self
-                .manager
-                .registry()
-                .list()
-                .into_iter()
-                .map(|e| e.meta.name)
-                .collect();
-            return Ok(ToolResult::error(format!(
-                "skill_get: no skill named {name:?}. Installed: {}",
-                names.join(", ")
-            )));
+        let projection = kms_projections(self.kms.as_ref(), 10_000)
+            .await
+            .into_iter()
+            .find(|projection| projection.name == name);
+        let (name, tier, body) = if let Some(projection) = projection {
+            (projection.name, projection.tier, projection.body)
+        } else {
+            let Some(doc) = self.manager.registry().get(name).unwrap_or_else(|e| {
+                tracing::warn!(skill = name, error = %e, "skill_get: unreadable skill");
+                None
+            }) else {
+                let names: Vec<String> = self
+                    .manager
+                    .registry()
+                    .list()
+                    .into_iter()
+                    .map(|e| e.meta.name)
+                    .collect();
+                return Ok(ToolResult::error(format!(
+                    "skill_get: no skill named {name:?}. Installed: {}",
+                    names.join(", ")
+                )));
+            };
+            (doc.meta.name, doc.tier.as_str().to_string(), doc.body)
         };
 
-        self.manager
-            .record_usage(&doc.meta.name, crate::UsageKind::Get);
-        let lines: Vec<&str> = doc.body.lines().collect();
+        self.manager.record_usage(&name, crate::UsageKind::Get);
+        if let Some(kms) = &self.kms {
+            record_kms_usage(kms, &name, crate::UsageKind::Get).await;
+        }
+        let lines: Vec<&str> = body.lines().collect();
         let offset = input.offset.unwrap_or(1).max(1);
         let limit = input.limit.unwrap_or(400).min(2000);
         let start = (offset - 1).min(lines.len());
@@ -148,7 +270,7 @@ impl ToolFunction for SkillGetTool {
             truncated_flag = true;
         }
 
-        let mut out = format!("# {} ({})\n\n", doc.meta.name, doc.tier.as_str());
+        let mut out = format!("# {name} ({tier})\n\n");
         for line in &page {
             out.push_str(line);
             out.push('\n');
@@ -168,6 +290,7 @@ impl ToolFunction for SkillGetTool {
 
 pub struct SkillSearchTool {
     pub manager: Arc<SkillManager>,
+    pub kms: Option<Arc<KmsSystem>>,
 }
 
 #[async_trait::async_trait]
@@ -175,6 +298,40 @@ impl ToolFunction for SkillSearchTool {
     type Input = SkillSearchInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
+        let terms: Vec<String> = input
+            .query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .collect();
+        let projections = kms_projections(self.kms.as_ref(), 10_000)
+            .await
+            .into_iter()
+            .filter(|projection| {
+                terms.iter().all(|term| {
+                    projection.name.to_lowercase().contains(term)
+                        || projection.description.to_lowercase().contains(term)
+                        || projection
+                            .tags
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(term))
+                })
+            })
+            .collect::<Vec<_>>();
+        if !projections.is_empty() {
+            for projection in &projections {
+                self.manager
+                    .record_usage(&projection.name, crate::UsageKind::SearchHit);
+                if let Some(kms) = &self.kms {
+                    record_kms_usage(kms, &projection.name, crate::UsageKind::SearchHit).await;
+                }
+            }
+            let mut out = format!("{} match(s) for {:?}:\n", projections.len(), input.query);
+            for projection in &projections {
+                out.push_str(&projection_line(projection));
+            }
+            return Ok(ToolResult::success(out));
+        }
+
         let entries = self.manager.registry().search(&input.query);
         for entry in &entries {
             self.manager
@@ -217,6 +374,7 @@ pub struct SkillWorkflowsInput {
 
 pub struct SkillWorkflowsTool {
     pub manager: Arc<SkillManager>,
+    pub kms: Option<Arc<KmsSystem>>,
 }
 
 #[async_trait::async_trait]
@@ -225,6 +383,55 @@ impl ToolFunction for SkillWorkflowsTool {
 
     async fn run(&self, input: SkillWorkflowsInput) -> Result<ToolResult, ToolError> {
         let name = input.name.trim();
+        if let Some(system) = &self.kms
+            && let Some(version) = system
+                .store()
+                .list_skill_versions(10_000)
+                .await
+                .ok()
+                .and_then(|versions| {
+                    versions
+                        .into_iter()
+                        .find(|version| version.status == "active" && version.skill_name == name)
+                })
+        {
+            let artifacts = match system.store().list_skill_artifacts(version.id).await {
+                Ok(artifacts) => artifacts,
+                Err(error) => {
+                    return Ok(ToolResult::error(format!(
+                        "skill_workflows: cannot read KMS artifacts: {error}"
+                    )));
+                }
+            };
+            let workflows = artifacts
+                .iter()
+                .filter(|artifact| {
+                    artifact
+                        .relative_path
+                        .strip_prefix("workflow/")
+                        .is_some_and(|path| path.ends_with(".toml"))
+                })
+                .collect::<Vec<_>>();
+            let mut out = format!("Skill {name:?} bundles {} workflow(s):\n", workflows.len());
+            for artifact in &workflows {
+                let stem = artifact
+                    .relative_path
+                    .trim_start_matches("workflow/")
+                    .trim_end_matches(".toml");
+                append_workflow(
+                    &mut out,
+                    stem,
+                    crate::workflow::WorkflowTemplate::from_toml(&artifact.content),
+                );
+            }
+            if workflows.is_empty() {
+                out.push_str(&format!("\nSkill {name:?} bundles no workflow templates."));
+            } else {
+                out.push_str("\nInstantiate with skill_run_workflow (skill, workflow, params).");
+            }
+            return Ok(ToolResult::success(out));
+        }
+
         let Some(doc) = self.manager.registry().get(name).unwrap_or_else(|e| {
             tracing::warn!(skill = name, error = %e, "skill_workflows: unreadable skill");
             None
@@ -248,131 +455,64 @@ impl ToolFunction for SkillWorkflowsTool {
             doc.workflows.len()
         );
         for stem in &doc.workflows {
-            match crate::workflow::WorkflowTemplate::load(dir, stem) {
-                Ok(template) => {
-                    out.push_str(&format!("\nworkflow {stem:?} — {}\n", template.description));
-                    if template.params.is_empty() {
-                        out.push_str("  params: none\n");
-                    } else {
-                        out.push_str("  params:\n");
-                        for (pname, spec) in &template.params {
-                            let required = if spec.required {
-                                "required"
-                            } else {
-                                "optional"
-                            };
-                            let default = spec
-                                .default
-                                .as_ref()
-                                .map(|d| format!(", default {d}"))
-                                .unwrap_or_default();
-                            let desc = if spec.description.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" — {}", spec.description)
-                            };
-                            out.push_str(&format!(
-                                "  - {pname}: {} ({required}{default}){desc}\n",
-                                spec.kind
-                            ));
-                        }
-                    }
-                    out.push_str(&format!(
-                        "  nodes: {} ({})\n",
-                        template.nodes.len(),
-                        template
-                            .nodes
-                            .iter()
-                            .map(|n| n.id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
-                Err(e) => {
-                    out.push_str(&format!("\nworkflow {stem:?}: INVALID — {e}\n"));
-                }
-            }
+            append_workflow(
+                &mut out,
+                stem,
+                crate::workflow::WorkflowTemplate::load(dir, stem),
+            );
         }
         out.push_str("\nInstantiate with skill_run_workflow (skill, workflow, params).");
         Ok(ToolResult::success(out))
     }
 }
 
-// ────────────────────────── evolution ──────────────────────────
-
-#[tool(
-    name = "skill_evolve",
-    description = "Run one skill-evolution cycle now: cluster anchored \
-        observations, and install or revise skills for repeated patterns \
-        with the new evidence. Changes apply automatically and are \
-        reversible (each revision archives the previous version). Use \
-        after recording several observations, or to check whether \
-        accumulated failures have distilled into something reusable."
-)]
-pub struct SkillEvolveInput {
-    #[desc = "Unused placeholder — the cycle takes no parameters. Kept as a \
-        named field because tool inputs are field-carrying structs."]
-    pub _unused: Option<String>,
-}
-
-pub struct SkillEvolveTool {
-    /// Unified control handle. `None` when the daemon started with
-    /// `enable_skill_evolution = false`; in that state every call
-    /// returns a "service disabled" error and the agent should
-    /// surface that to the user rather than retry.
-    pub control: Option<crate::evolution::SkillControlHandle>,
-}
-
-#[async_trait::async_trait]
-impl ToolFunction for SkillEvolveTool {
-    type Input = SkillEvolveInput;
-
-    async fn run(&self, _input: SkillEvolveInput) -> Result<ToolResult, ToolError> {
-        // Route through the unified channel so the tool cannot
-        // bypass the worker's coalescing/ordering; the cycle installs
-        // what it writes, bounded by the per-cycle install cap.
-        let Some(handle) = self.control.as_ref() else {
-            return Ok(ToolResult::error(
-                "skill evolution service is disabled in this daemon; control \
-                 through the TUI dashboard, or ask the operator to enable \
-                 `enable_skill_evolution`.",
-            ));
-        };
-        let policy = crate::evolution::EvolutionPolicy::default();
-        match handle.call_run_cycle(policy).await {
-            SkillCommandOutcome::Ok(report) => {
-                let mut out = format!(
-                    "Evolution cycle: {} cluster(s) considered.\n",
-                    report.clusters_considered
-                );
-                for name in &report.installed {
-                    if report.updated_existing.contains(name) {
-                        out.push_str(&format!("- updated skill {name}\n"));
+fn append_workflow(
+    out: &mut String,
+    stem: &str,
+    template: Result<crate::workflow::WorkflowTemplate, crate::error::SkillError>,
+) {
+    match template {
+        Ok(template) => {
+            out.push_str(&format!("\nworkflow {stem:?} — {}\n", template.description));
+            if template.params.is_empty() {
+                out.push_str("  params: none\n");
+            } else {
+                out.push_str("  params:\n");
+                for (pname, spec) in &template.params {
+                    let required = if spec.required {
+                        "required"
                     } else {
-                        out.push_str(&format!("- installed skill {name}\n"));
-                    }
-                }
-                for (hash, reason) in &report.skipped {
-                    out.push_str(&format!("- skipped {hash}: {reason}\n"));
-                }
-                if report.installed.is_empty() {
-                    out.push_str(
-                        "No new patterns. Anchored failure patterns distill at >= 3 \
-                         occurrences; provide more evaluation or internal evidence.",
-                    );
-                } else if report.deferred > 0 {
+                        "optional"
+                    };
+                    let default = spec
+                        .default
+                        .as_ref()
+                        .map(|d| format!(", default {d}"))
+                        .unwrap_or_default();
+                    let desc = if spec.description.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", spec.description)
+                    };
                     out.push_str(&format!(
-                        "\n{} additional change(s) deferred past the per-cycle \
-                         install cap; the next cycle applies them.",
-                        report.deferred
+                        "  - {pname}: {} ({required}{default}){desc}\n",
+                        spec.kind
                     ));
                 }
-                Ok(ToolResult::success(out))
             }
-            SkillCommandOutcome::Err(e) => Ok(ToolResult::error(format!("skill_evolve: {e}"))),
-            SkillCommandOutcome::WorkerGone => Ok(ToolResult::error(
-                "skill evolution worker exited; the daemon must be restarted",
-            )),
+            out.push_str(&format!(
+                "  nodes: {} ({})\n",
+                template.nodes.len(),
+                template
+                    .nodes
+                    .iter()
+                    .map(|n| n.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Err(e) => {
+            out.push_str(&format!("\nworkflow {stem:?}: INVALID — {e}\n"));
         }
     }
 }
@@ -385,34 +525,39 @@ impl ToolFunction for SkillEvolveTool {
 /// index in the system prompt, the tools, and the usage telemetry
 /// always agree.
 ///
-/// `control` is the unified skill-control handle. Pass `None` when
-/// the daemon started with `enable_skill_evolution = false`; the
-/// `skill_evolve` tool then reports the service as disabled to any
-/// agent that tries to invoke it, instead of bypassing the channel.
-pub fn skill_registrations(
+pub fn skill_registrations(manager: Arc<SkillManager>) -> Vec<ToolRegistration> {
+    skill_registrations_with_kms(manager, None)
+}
+
+/// Build skill tools with a KMS projection as the preferred read path.
+///
+/// The filesystem registry remains the fallback while the asynchronous KMS
+/// importer catches up or for embedded hosts that do not open a KMS store.
+pub fn skill_registrations_with_kms(
     manager: Arc<SkillManager>,
-    control: Option<crate::evolution::SkillControlHandle>,
+    kms: Option<Arc<KmsSystem>>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillListTool {
             manager: manager.clone(),
+            kms: kms.clone(),
         }),
         ToolRegistration::from(SkillGetTool {
             manager: manager.clone(),
+            kms: kms.clone(),
         }),
         ToolRegistration::from(SkillWorkflowsTool {
             manager: manager.clone(),
+            kms: kms.clone(),
         }),
-        ToolRegistration::from(SkillSearchTool {
-            manager: manager.clone(),
-        }),
-        ToolRegistration::from(SkillEvolveTool { control }),
+        ToolRegistration::from(SkillSearchTool { manager, kms }),
     ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agentik_core::memory::MemoryStore;
     use agentik_core::tools::ToolFunction as _;
 
     fn manager_with_two() -> Arc<SkillManager> {
@@ -438,10 +583,24 @@ mod tests {
         Arc::new(SkillManager::new(state_dir))
     }
 
+    #[test]
+    fn legacy_evolution_tool_is_not_registered_by_default() {
+        let registrations = skill_registrations(manager_with_two());
+        let names = registrations
+            .iter()
+            .map(|registration| registration.definition.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["skill_list", "skill_get", "skill_workflows", "skill_search"]
+        );
+    }
+
     #[tokio::test]
     async fn list_reports_builtin_and_installed() {
         let tool = SkillListTool {
             manager: manager_with_two(),
+            kms: None,
         };
         let out = tool.run(SkillListInput { tier: None }).await.unwrap();
         let text = out.text_content();
@@ -453,6 +612,7 @@ mod tests {
     async fn get_paginates_and_reports_continuation() {
         let tool = SkillGetTool {
             manager: manager_with_two(),
+            kms: None,
         };
         let out = tool
             .run(SkillGetInput {
@@ -478,9 +638,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn kms_projection_is_preferred_over_filesystem_registry() {
+        let manager = manager_with_two();
+        let store = Arc::new(
+            agentik_core::memory::TursoKmsStorage::open_in_memory()
+                .await
+                .unwrap(),
+        );
+        store
+            .import_skill_version(agentik_core::memory::KnowledgeSkillVersionInput {
+                skill_name: "kms-only".to_string(),
+                title: "KMS-only procedure".to_string(),
+                body_md: "Prefer the KMS projection.".to_string(),
+                metadata_json: serde_json::json!({
+                    "description": "Procedure stored in KMS.",
+                    "tags": ["kms"],
+                    "tier": "workspace",
+                }),
+                node_path: "/procedures/kms-only".to_string(),
+                source_tier: "workspace".to_string(),
+                source_path: None,
+                artifacts: vec![agentik_core::memory::KnowledgeSkillArtifactInput {
+                    relative_path: "workflow/check.toml".to_string(),
+                    content: r#"
+description = "Run the KMS-backed check."
+
+[[node]]
+id = "check"
+kind = "file_to_dataframe"
+spec = { path = "/input.csv" }
+"#
+                    .to_string(),
+                }],
+            })
+            .await
+            .unwrap();
+        let kms = KmsSystem::new(
+            agentik_core::memory::MemoryConfig::new(),
+            store,
+            Arc::new(agentik_core::memory::EmptyMemorySource),
+        )
+        .await;
+
+        let listed = SkillListTool {
+            manager: Arc::clone(&manager),
+            kms: Some(Arc::clone(&kms)),
+        }
+        .run(SkillListInput { tier: None })
+        .await
+        .unwrap();
+        let listed_text = listed.text_content();
+        assert!(listed_text.contains("kms-only (workspace)"));
+        assert!(!listed_text.contains("gwas-qc"));
+        assert!(!listed_text.contains("skill-system"));
+
+        let workflows = SkillWorkflowsTool {
+            manager: Arc::clone(&manager),
+            kms: Some(Arc::clone(&kms)),
+        }
+        .run(SkillWorkflowsInput {
+            name: "kms-only".into(),
+        })
+        .await
+        .unwrap();
+        assert!(workflows.text_content().contains("KMS-backed check"));
+
+        let searched = SkillSearchTool {
+            manager: Arc::clone(&manager),
+            kms: Some(Arc::clone(&kms)),
+        }
+        .run(SkillSearchInput {
+            query: "procedure kms".into(),
+        })
+        .await
+        .unwrap();
+        assert!(searched.text_content().contains("kms-only"));
+
+        let fetched = SkillGetTool {
+            manager: Arc::clone(&manager),
+            kms: Some(Arc::clone(&kms)),
+        }
+        .run(SkillGetInput {
+            name: "kms-only".into(),
+            offset: None,
+            limit: None,
+        })
+        .await
+        .unwrap();
+        assert!(
+            fetched
+                .text_content()
+                .contains("Prefer the KMS projection.")
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let evidence = kms.store().list_pending_evidence(100).await.unwrap();
+            if evidence
+                .iter()
+                .any(|item| item.evidence_kind == "search_hit")
+                && evidence.iter().any(|item| item.evidence_kind == "get")
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "KMS worker never produced skill read evidence"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        kms.shutdown();
+    }
+
+    #[tokio::test]
     async fn search_andrs_terms_case_insensitively() {
         let tool = SkillSearchTool {
             manager: manager_with_two(),
+            kms: None,
         };
         let out = tool
             .run(SkillSearchInput {

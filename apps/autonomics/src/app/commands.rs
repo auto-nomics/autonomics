@@ -127,8 +127,7 @@ impl App {
                 self.open_skill_evolution();
             }
             CommandAction::SkillEvolve => {
-                // The cycle installs what it writes; no gate to pick.
-                self.trigger_skill_evolution();
+                self.open_skill_evolution();
             }
             CommandAction::OpenSessions => {
                 self.open_session_picker();

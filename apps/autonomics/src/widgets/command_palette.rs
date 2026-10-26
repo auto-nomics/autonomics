@@ -363,8 +363,8 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::SkillEvolutionPanel,
         },
         Command {
-            title: "Run skill evolution cycle".into(),
-            keywords: "skills evolve distill trigger proposals cycle now".into(),
+            title: "Review KMS skill proposals".into(),
+            keywords: "kms skills evolve proposals approve reject review governance".into(),
             category: "skills".into(),
             action: CommandAction::SkillEvolve,
         },

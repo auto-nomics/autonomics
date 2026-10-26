@@ -47,6 +47,71 @@ pub struct MemoryNote {
     pub created_at: i64,
 }
 
+/// Source-normalized evidence retained for deterministic consolidation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KnowledgeEvidence {
+    pub id: String,
+    pub source_kind: String,
+    pub source_id: String,
+    pub evidence_kind: String,
+    pub summary: String,
+    pub body: String,
+    pub anchor_path: Option<String>,
+    pub error: Option<String>,
+    pub content_hash: String,
+    pub status: String,
+    pub occurrence_count: u64,
+    pub created_at: i64,
+    pub last_seen_at: i64,
+}
+
+/// One immutable imported skill version.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillVersion {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub node_path: String,
+    pub version: u32,
+    pub status: String,
+    pub title: String,
+    pub body_md: String,
+    pub metadata_json: String,
+    pub content_hash: String,
+    pub source_tier: String,
+    pub source_path: Option<String>,
+    pub created_at: i64,
+}
+
+/// A text artifact attached to a skill version.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillArtifact {
+    pub id: Uuid,
+    pub skill_version_id: Uuid,
+    pub relative_path: String,
+    pub content: String,
+    pub content_hash: String,
+    pub created_at: i64,
+}
+
+/// A durable skill revision awaiting human approval.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillProposal {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub node_path: String,
+    pub status: String,
+    pub title: String,
+    pub body_md: String,
+    pub metadata_json: String,
+    pub rationale: String,
+    pub source_evidence_ids: Vec<String>,
+    pub artifacts: Vec<crate::artifacts::KnowledgeSkillArtifactInput>,
+    pub content_hash: String,
+    pub approved_skill_version_id: Option<Uuid>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// Candidate subject-predicate-object observation. Observations are retained
 /// independently from KMS so consolidation can validate and ground them before
 /// promoting semantic facts into the knowledge graph.
@@ -115,6 +180,39 @@ pub trait MemoryStore: KnowledgeStore + Send + Sync {
     async fn list_pending_notes(&self) -> Result<Vec<MemoryNote>>;
 
     async fn insert_note(&self, slug: &str, content: &str) -> Result<MemoryNote>;
+
+    async fn upsert_evidence(
+        &self,
+        input: crate::artifacts::KnowledgeEvidenceInput,
+    ) -> Result<KnowledgeEvidence>;
+
+    async fn list_pending_evidence(&self, limit: usize) -> Result<Vec<KnowledgeEvidence>>;
+
+    async fn list_knowledge_evidence(&self, limit: usize) -> Result<Vec<KnowledgeEvidence>>;
+
+    async fn mark_evidence_consumed(&self, evidence_ids: Vec<String>) -> Result<()>;
+
+    async fn has_evidence_source(&self, source_kind: &str, source_id: &str) -> Result<bool>;
+
+    async fn import_skill_version(
+        &self,
+        input: crate::artifacts::KnowledgeSkillVersionInput,
+    ) -> Result<Option<SkillVersion>>;
+
+    async fn list_skill_versions(&self, limit: usize) -> Result<Vec<SkillVersion>>;
+
+    async fn list_skill_artifacts(&self, skill_version_id: Uuid) -> Result<Vec<SkillArtifact>>;
+
+    async fn create_skill_proposal(
+        &self,
+        input: crate::artifacts::KnowledgeSkillProposalInput,
+    ) -> Result<Option<SkillProposal>>;
+
+    async fn list_skill_proposals(&self, limit: usize) -> Result<Vec<SkillProposal>>;
+
+    async fn approve_skill_proposal(&self, proposal_id: Uuid) -> Result<Option<SkillVersion>>;
+
+    async fn reject_skill_proposal(&self, proposal_id: Uuid) -> Result<bool>;
 
     async fn list_observations(
         &self,

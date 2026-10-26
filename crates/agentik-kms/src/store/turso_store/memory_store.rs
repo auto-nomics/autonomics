@@ -5,12 +5,14 @@ use turso::{Value, params_from_iter};
 use uuid::Uuid;
 
 use super::{
-    Error, Result, TursoKmsStorage, db_err, parse_uuid, row_to_note, row_to_observation,
-    row_to_stage1, row_to_summary, text, uuid_value,
+    Error, Result, TursoKmsStorage, db_err, parse_uuid, row_to_evidence, row_to_note,
+    row_to_observation, row_to_stage1, row_to_summary, text, uuid_value,
 };
+use crate::artifacts::KnowledgeEvidenceInput;
 use crate::knowledge::Knowledge;
 use crate::store::{
-    MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary, SemanticObservation,
+    KnowledgeEvidence, MemoryNote, MemoryStage1Record, MemoryStore, MemorySummary,
+    SemanticObservation,
 };
 
 #[async_trait]
@@ -383,6 +385,216 @@ impl MemoryStore for TursoKmsStorage {
             .await
             .map_err(db_err)?;
         Ok(note)
+    }
+
+    async fn upsert_evidence(&self, input: KnowledgeEvidenceInput) -> Result<KnowledgeEvidence> {
+        let now = crate::now_ms();
+        let content_hash = input.content_hash();
+        let id = content_hash.clone();
+        let summary = input.summary.trim().to_string();
+        let body = input.body.trim().to_string();
+        if summary.is_empty() || body.is_empty() {
+            return Err(Error::Storage(
+                "evidence summary and body must not be empty".into(),
+            ));
+        }
+        let evidence = crate::store::KnowledgeEvidence {
+            id: id.clone(),
+            source_kind: input.source_kind.trim().to_string(),
+            source_id: input.source_id.trim().to_string(),
+            evidence_kind: input.evidence_kind.trim().to_lowercase(),
+            summary,
+            body,
+            anchor_path: input
+                .anchor_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            error: input
+                .error
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            content_hash,
+            status: "pending".to_string(),
+            occurrence_count: 1,
+            created_at: now,
+            last_seen_at: now,
+        };
+        self.conn
+            .execute(
+                "INSERT INTO knowledge_evidence
+                    (id, source_kind, source_id, evidence_kind, summary, body,
+                     anchor_path, error, content_hash, status, occurrence_count,
+                     created_at, last_seen_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', 1, ?10, ?10)
+                 ON CONFLICT(id) DO UPDATE SET
+                    source_kind = excluded.source_kind,
+                    source_id = excluded.source_id,
+                    evidence_kind = excluded.evidence_kind,
+                    summary = excluded.summary,
+                    body = excluded.body,
+                    anchor_path = excluded.anchor_path,
+                    error = excluded.error,
+                    status = 'pending',
+                    occurrence_count = knowledge_evidence.occurrence_count + 1,
+                    last_seen_at = excluded.last_seen_at",
+                params_from_iter([
+                    Value::Text(evidence.id.clone()),
+                    Value::Text(evidence.source_kind.clone()),
+                    Value::Text(evidence.source_id.clone()),
+                    Value::Text(evidence.evidence_kind.clone()),
+                    Value::Text(evidence.summary.clone()),
+                    Value::Text(evidence.body.clone()),
+                    evidence
+                        .anchor_path
+                        .clone()
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                    evidence
+                        .error
+                        .clone()
+                        .map(Value::Text)
+                        .unwrap_or(Value::Null),
+                    Value::Text(evidence.content_hash.clone()),
+                    Value::Integer(now),
+                ]),
+            )
+            .await
+            .map_err(db_err)?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, source_kind, source_id, evidence_kind, summary, body,
+                        anchor_path, error, content_hash, status, occurrence_count,
+                        created_at, last_seen_at
+                 FROM knowledge_evidence WHERE id = ?1",
+                params_from_iter([Value::Text(id)]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(match rows.next().await.map_err(db_err)? {
+            Some(row) => row_to_evidence(&row)?,
+            None => evidence,
+        })
+    }
+
+    async fn list_pending_evidence(&self, limit: usize) -> Result<Vec<KnowledgeEvidence>> {
+        self.collect(
+            "SELECT id, source_kind, source_id, evidence_kind, summary, body,
+                    anchor_path, error, content_hash, status, occurrence_count,
+                    created_at, last_seen_at
+             FROM knowledge_evidence
+             WHERE status = 'pending'
+             ORDER BY last_seen_at DESC, id ASC LIMIT ?1",
+            vec![Value::Integer(limit as i64)],
+            row_to_evidence,
+        )
+        .await
+    }
+
+    async fn list_knowledge_evidence(&self, limit: usize) -> Result<Vec<KnowledgeEvidence>> {
+        self.collect(
+            "SELECT id, source_kind, source_id, evidence_kind, summary, body,
+                    anchor_path, error, content_hash, status, occurrence_count,
+                    created_at, last_seen_at
+             FROM knowledge_evidence
+             ORDER BY last_seen_at DESC, id ASC LIMIT ?1",
+            vec![Value::Integer(limit as i64)],
+            row_to_evidence,
+        )
+        .await
+    }
+
+    async fn mark_evidence_consumed(&self, evidence_ids: Vec<String>) -> Result<()> {
+        if evidence_ids.is_empty() {
+            return Ok(());
+        }
+        let now = crate::now_ms();
+        self.conn.execute("BEGIN", ()).await.map_err(db_err)?;
+        let result = async {
+            for id in evidence_ids {
+                self.conn
+                    .execute(
+                        "UPDATE knowledge_evidence
+                         SET status = 'consumed', last_seen_at = ?1
+                         WHERE id = ?2 AND status = 'pending'",
+                        params_from_iter([Value::Integer(now), Value::Text(id)]),
+                    )
+                    .await
+                    .map_err(db_err)?;
+            }
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.conn.execute("COMMIT", ()).await.map_err(db_err)?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn has_evidence_source(&self, source_kind: &str, source_id: &str) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM knowledge_evidence
+                 WHERE source_kind = ?1 AND source_id = ?2 LIMIT 1",
+                params_from_iter([
+                    Value::Text(source_kind.to_string()),
+                    Value::Text(source_id.to_string()),
+                ]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    async fn import_skill_version(
+        &self,
+        input: crate::artifacts::KnowledgeSkillVersionInput,
+    ) -> Result<Option<crate::store::SkillVersion>> {
+        self.import_skill_version_inner(input).await
+    }
+
+    async fn list_skill_versions(&self, limit: usize) -> Result<Vec<crate::store::SkillVersion>> {
+        self.list_skill_versions_inner(limit).await
+    }
+
+    async fn list_skill_artifacts(
+        &self,
+        skill_version_id: Uuid,
+    ) -> Result<Vec<crate::store::SkillArtifact>> {
+        self.list_skill_artifacts_inner(skill_version_id).await
+    }
+
+    async fn create_skill_proposal(
+        &self,
+        input: crate::artifacts::KnowledgeSkillProposalInput,
+    ) -> Result<Option<crate::store::SkillProposal>> {
+        self.create_skill_proposal_inner(input).await
+    }
+
+    async fn list_skill_proposals(&self, limit: usize) -> Result<Vec<crate::store::SkillProposal>> {
+        self.list_skill_proposals_inner(limit).await
+    }
+
+    async fn approve_skill_proposal(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<Option<crate::store::SkillVersion>> {
+        self.approve_skill_proposal_inner(proposal_id).await
+    }
+
+    async fn reject_skill_proposal(&self, proposal_id: Uuid) -> Result<bool> {
+        self.reject_skill_proposal_inner(proposal_id).await
     }
 
     async fn list_observations(
