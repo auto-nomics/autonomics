@@ -15,9 +15,9 @@ use bib_base::{
     spawn_extraction, stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
-    AddedBy, AnnotationKind, Article, ArticleRole, ArticleSource, Author, Collection,
-    CollectionStatus, ExportFormat, ExtractStatus, FileFormat, FullText, FullTextSource, IdKind,
-    Identifier, StructuredSearch, TextFormat,
+    AddedBy, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource, Author,
+    Collection, CollectionStatus, ExportFormat, ExtractStatus, FileFormat, FullText,
+    FullTextSource, IdKind, Identifier, StructuredSearch, TextFormat,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -960,6 +960,8 @@ struct AddAnnotationRequest {
     content: String,
     kind: Option<String>,
     page: Option<u32>,
+    color: Option<String>,
+    rects: Option<Vec<AnnotationRect>>,
 }
 
 async fn add_annotation(
@@ -977,7 +979,14 @@ async fn add_annotation(
     };
     let annotation = shared
         .bib
-        .add_annotation(&id, kind, input.content.trim(), input.page)
+        .add_annotation(
+            &id,
+            kind,
+            input.content.trim(),
+            input.page,
+            input.color,
+            input.rects,
+        )
         .await
         .map_err(internal)?;
     Ok((

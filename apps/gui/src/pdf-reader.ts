@@ -2,7 +2,7 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { fetchBibFulltextRaw } from "./gateway";
+import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
 import { escapeHtml } from "./markdown";
 import "./pdf-reader.css";
 
@@ -28,6 +28,14 @@ type PageView = {
   task: RenderTask | null;
   rendering: boolean;
   generation: number;
+};
+
+type SelectionAnchor = {
+  page: number;
+  text: string;
+  rects: Array<{ left: number; top: number; width: number; height: number }>;
+  x: number;
+  y: number;
 };
 
 export type PdfReaderHandle = {
@@ -73,8 +81,19 @@ class ZoteroStylePdfReader {
   private statusElement: HTMLSpanElement;
   private outlinePane: HTMLDivElement;
   private thumbnailsPane: HTMLDivElement;
+  private annotationPane: HTMLDivElement;
+  private searchPane: HTMLDivElement;
+  private searchInput: HTMLInputElement;
+  private selectionPopup: HTMLDivElement;
+  private annotations: any[] = [];
+  private anchor: SelectionAnchor | null = null;
+  private textCache = new Map<number, string>();
+  private searchResults: Array<{ page: number; count: number }> = [];
 
-  private constructor(private readonly title: string) {
+  private constructor(
+    private readonly articleId: string,
+    private readonly title: string,
+  ) {
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
     this.root.innerHTML = `
@@ -82,9 +101,16 @@ class ZoteroStylePdfReader {
         <div class="reader-sidebar-tabs">
           <button type="button" data-pane="thumbnails" class="active">Pages</button>
           <button type="button" data-pane="outline">Outline</button>
+          <button type="button" data-pane="annotations">Notes</button>
+          <button type="button" data-pane="search">Search</button>
         </div>
         <div class="reader-sidebar-pane" data-pane="thumbnails"></div>
         <div class="reader-sidebar-pane" data-pane="outline" hidden></div>
+        <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
+        <div class="reader-sidebar-pane" data-pane="search" hidden>
+          <input class="reader-search-input" data-input="search" placeholder="Search PDF" />
+          <div data-output="search-results"></div>
+        </div>
       </aside>
       <main class="reader-main">
         <header class="reader-toolbar">
@@ -103,11 +129,19 @@ class ZoteroStylePdfReader {
             <button type="button" data-action="fit-page">Fit page</button>
           </div>
           <button type="button" data-action="rotate">Rotate</button>
+          <input class="reader-search-field" data-input="toolbar-search" placeholder="Search" />
           <div class="reader-title">${escapeHtml(this.title)}</div>
           <button type="button" data-action="close" title="Close">✕</button>
         </header>
         <div class="reader-page-area">
           <div class="reader-pages"></div>
+        <div class="reader-selection-popup" data-output="selection-popup" hidden>
+          <button type="button" data-color="yellow">Highlight</button>
+          <button type="button" data-color="green">Green</button>
+          <button type="button" data-color="red">Red</button>
+          <button type="button" data-action="add-note">Note</button>
+          <button type="button" data-action="copy-selection">Copy</button>
+        </div>
           <div class="reader-status">
             <span data-output="status">Opening PDF…</span>
           </div>
@@ -124,6 +158,10 @@ class ZoteroStylePdfReader {
     this.statusElement = this.select('[data-output="status"]');
     this.outlinePane = this.select('[data-pane="outline"]');
     this.thumbnailsPane = this.select('[data-pane="thumbnails"]');
+  this.annotationPane = this.select('[data-pane="annotations"]');
+  this.searchPane = this.select('[data-pane="search"]');
+  this.searchInput = this.select<HTMLInputElement>('[data-input="search"]');
+  this.selectionPopup = this.select('[data-output="selection-popup"]');
 
     this.bindEvents();
   }
@@ -132,7 +170,7 @@ class ZoteroStylePdfReader {
     articleId: string,
     title: string,
   ): Promise<ZoteroStylePdfReader> {
-    const reader = new ZoteroStylePdfReader(title);
+    const reader = new ZoteroStylePdfReader(articleId, title);
     try {
       const raw = await fetchBibFulltextRaw(articleId);
       if (reader.destroyed) return reader;
@@ -173,6 +211,25 @@ class ZoteroStylePdfReader {
       void this.refit();
     });
     action("sidebar", () => this.root.classList.toggle("sidebar-collapsed"));
+    action("add-note", () => void this.addNote());
+    action("copy-selection", () => {
+      if (this.anchor) void navigator.clipboard.writeText(this.anchor.text);
+      this.hideSelectionPopup();
+    });
+
+    this.selectionPopup.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((button) => {
+      button.addEventListener("click", () => void this.addHighlight(button.dataset.color ?? "yellow"));
+    });
+
+    this.root.querySelector<HTMLInputElement>('[data-input="toolbar-search"]')?.addEventListener("keydown", (event: KeyboardEvent) => {
+      if (event.key === "Enter") {
+        const value = (event.target as HTMLInputElement).value.trim();
+        void this.searchPdf(value);
+      }
+    });
+    this.searchInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") void this.searchPdf(this.searchInput.value.trim());
+    });
 
     this.pageNumberInput.addEventListener("change", () => {
       void this.gotoPage(Number(this.pageNumberInput.value));
@@ -188,10 +245,19 @@ class ZoteroStylePdfReader {
           const pane = button.dataset.pane ?? "thumbnails";
           this.outlinePane.hidden = pane !== "outline";
           this.thumbnailsPane.hidden = pane !== "thumbnails";
+          this.annotationPane.hidden = pane !== "annotations";
+          this.searchPane.hidden = pane !== "search";
         });
       });
 
     this.pageArea.addEventListener("scroll", () => this.updateCurrentFromScroll());
+    this.pageArea.addEventListener("mouseup", () => window.setTimeout(() => this.captureSelection(), 0));
+    this.pageArea.addEventListener("mousedown", (event) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".reader-selection-popup") && !target.closest(".reader-annotation")) {
+        this.hideSelectionPopup();
+      }
+    });
     this.pageArea.addEventListener("keydown", (event) => {
       if (event.key === "ArrowLeft" || event.key === "PageUp") {
         event.preventDefault();
@@ -238,7 +304,7 @@ class ZoteroStylePdfReader {
     this.resizeObserver.observe(this.pageArea);
 
     this.createPageViews();
-    await Promise.all([this.loadThumbnails(), this.loadOutline()]);
+    await Promise.all([this.loadThumbnails(), this.loadOutline(), this.loadAnnotations()]);
     await this.refit();
   }
 
@@ -337,6 +403,207 @@ class ZoteroStylePdfReader {
       button.addEventListener("click", () => void this.gotoPage(entry.page));
       this.outlinePane.append(button);
     }
+  }
+
+  private async loadAnnotations() {
+    try {
+      const response = await gatewayRequest(
+        "GET",
+        `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+      );
+      this.annotations = response.annotations ?? [];
+      this.renderAnnotations();
+      this.renderAnnotationList();
+    } catch (error) {
+      this.setStatus(`Annotations unavailable: ${String(error)}`);
+    }
+  }
+
+  private renderAnnotations() {
+    for (const view of this.pageViews.values()) {
+      view.wrapper.querySelectorAll(".reader-annotation").forEach((node) => node.remove());
+    }
+    for (const annotation of this.annotations) {
+      const view = this.pageViews.get(Number(annotation.page));
+      if (!view || annotation.kind !== "highlight" || !Array.isArray(annotation.rects)) continue;
+      for (const rect of annotation.rects) {
+        const node = document.createElement("div");
+        node.className = "reader-annotation";
+        node.dataset.annotationId = annotation.id;
+        node.style.left = `${rect.left * 100}%`;
+        node.style.top = `${rect.top * 100}%`;
+        node.style.width = `${rect.width * 100}%`;
+        node.style.height = `${rect.height * 100}%`;
+        node.style.background = annotation.color ?? "rgba(255, 214, 0, .38)";
+        node.title = "Click to delete annotation";
+        node.addEventListener("click", () => void this.deleteAnnotation(annotation.id));
+        view.wrapper.append(node);
+      }
+    }
+  }
+
+  private renderAnnotationList() {
+    this.annotationPane.replaceChildren();
+    if (!this.annotations.length) {
+      this.annotationPane.innerHTML = `<div class="reader-empty">No annotations</div>`;
+      return;
+    }
+    for (const annotation of [...this.annotations].reverse()) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = `
+        <strong>Page ${Number(annotation.page ?? 1).toLocaleString()}</strong>
+        <small>${escapeHtml(annotation.content.slice(0, 180))}</small>`;
+      button.addEventListener("click", () => void this.gotoPage(Number(annotation.page ?? 1)));
+      this.annotationPane.append(button);
+    }
+  }
+
+  private captureSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+      this.hideSelectionPopup();
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const element = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? range.commonAncestorContainer.parentElement
+      : range.commonAncestorContainer as HTMLElement;
+    const wrapper = element?.closest<HTMLElement>(".reader-page-wrapper");
+    if (!wrapper || !this.pageArea.contains(wrapper)) {
+      this.hideSelectionPopup();
+      return;
+    }
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const rects = Array.from(range.getClientRects())
+      .filter((rect) => rect.width > 1 && rect.height > 1)
+      .map((rect) => ({
+        left: Math.max(0, (rect.left - wrapperRect.left) / wrapperRect.width),
+        top: Math.max(0, (rect.top - wrapperRect.top) / wrapperRect.height),
+        width: Math.min(1, rect.width / wrapperRect.width),
+        height: rect.height / wrapperRect.height,
+      }))
+      .filter((rect) => rect.width > 0 && rect.height > 0);
+    if (!rects.length || !selection.toString().trim()) {
+      this.hideSelectionPopup();
+      return;
+    }
+    const last = range.getClientRects()[range.getClientRects().length - 1];
+    this.anchor = {
+      page: Number(wrapper.dataset.page),
+      text: selection.toString(),
+      rects,
+      x: last.left,
+      y: last.bottom + 8,
+    };
+    this.selectionPopup.style.left = `${Math.min(this.anchor.x, window.innerWidth - 270)}px`;
+    this.selectionPopup.style.top = `${Math.min(this.anchor.y, window.innerHeight - 60)}px`;
+    this.selectionPopup.hidden = false;
+  }
+
+  private hideSelectionPopup() {
+    this.selectionPopup.hidden = true;
+    this.anchor = null;
+  }
+
+  private async addHighlight(color: string) {
+    if (!this.anchor) return;
+    await gatewayRequest(
+      "POST",
+      `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+      {
+        content: this.anchor.text,
+        kind: "highlight",
+        page: this.anchor.page,
+        color,
+        rects: this.anchor.rects,
+      },
+    );
+    this.hideSelectionPopup();
+    window.getSelection()?.removeAllRanges();
+    await this.loadAnnotations();
+  }
+
+  private async addNote() {
+    if (!this.anchor) return;
+    const comment = window.prompt("Add note");
+    if (!comment?.trim()) return;
+    await gatewayRequest(
+      "POST",
+      `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+      {
+        content: comment.trim(),
+        kind: "comment",
+        page: this.anchor.page,
+        rects: this.anchor.rects,
+      },
+    );
+    this.hideSelectionPopup();
+    window.getSelection()?.removeAllRanges();
+    await this.loadAnnotations();
+  }
+
+  private async deleteAnnotation(id: string) {
+    if (!window.confirm("Delete this annotation?")) return;
+    await gatewayRequest("DELETE", `/bib/annotations/${encodeURIComponent(id)}`);
+    await this.loadAnnotations();
+  }
+
+  private async pageText(page: number) {
+    const cached = this.textCache.get(page);
+    if (cached !== undefined) return cached;
+    const proxy = await this.document?.getPage(page);
+    if (!proxy) return "";
+    const content = await proxy.getTextContent();
+    const text = content.items.map((item: any) => item.str ?? "").join(" ").toLowerCase();
+    this.textCache.set(page, text);
+    return text;
+  }
+
+  private async searchPdf(term: string) {
+    if (!this.document || !term) {
+      this.searchResults = [];
+      this.renderSearchResults();
+      return;
+    }
+    this.setStatus(`Searching “${term}”…`);
+    const needle = term.toLowerCase();
+    const results: Array<{ page: number; count: number }> = [];
+    for (let page = 1; page <= this.pageCount; page += 1) {
+      const text = await this.pageText(page);
+      const count = text.split(needle).length - 1;
+      if (count > 0) results.push({ page, count });
+    }
+    this.searchResults = results;
+    this.setStatus(`${results.length.toLocaleString()} pages match`);
+    this.renderSearchResults();
+    this.selectPane("search");
+  }
+
+  private renderSearchResults() {
+    const output = this.searchPane.querySelector("[data-output=search-results]")!;
+    output.replaceChildren();
+    if (!this.searchResults.length) {
+      output.innerHTML = `<div class="reader-empty">No matches</div>`;
+      return;
+    }
+    for (const result of this.searchResults) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = `<strong>Page ${result.page.toLocaleString()}</strong><small>${result.count.toLocaleString()} matches</small>`;
+      button.addEventListener("click", () => void this.gotoPage(result.page));
+      output.append(button);
+    }
+  }
+
+  private selectPane(name: string) {
+    this.root.querySelectorAll<HTMLButtonElement>(".reader-sidebar-tabs button").forEach((button) => {
+      button.classList.toggle("active", button.dataset.pane === name);
+    });
+    this.outlinePane.hidden = name !== "outline";
+    this.thumbnailsPane.hidden = name !== "thumbnails";
+    this.annotationPane.hidden = name !== "annotations";
+    this.searchPane.hidden = name !== "search";
   }
 
   private async destinationPage(destination: any): Promise<number> {

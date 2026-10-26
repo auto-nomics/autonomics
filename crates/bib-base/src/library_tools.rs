@@ -887,6 +887,10 @@ pub struct BibAddNoteInput {
     pub content: String,
     #[desc = "PDF page number (1-based) if the annotation is anchored to a page"]
     pub page: Option<u32>,
+    #[desc = "Highlight color (used by the PDF reader)"]
+    pub color: Option<String>,
+    #[desc = "Normalized PDF selection rectangles encoded as JSON"]
+    pub rects: Option<String>,
 }
 
 pub struct BibAddNoteTool {
@@ -906,7 +910,16 @@ impl ToolFunction for BibAddNoteTool {
 
         let ann = self
             .bib
-            .add_annotation(&input.article_id, kind, &input.content, input.page)
+            .add_annotation(
+                &input.article_id,
+                kind,
+                &input.content,
+                input.page,
+                input.color,
+                input
+                    .rects
+                    .and_then(|value| serde_json::from_str(&value).ok()),
+            )
             .await
             .map_err(box_error)?;
 
@@ -916,6 +929,8 @@ impl ToolFunction for BibAddNoteTool {
             "kind": ann.kind.as_str(),
             "content": ann.content,
             "page": ann.page,
+            "color": ann.color,
+            "rects": ann.rects,
         })))
     }
 }
@@ -1796,9 +1811,16 @@ mod tests {
         art.identifiers
             .push(bib_types::Identifier::doi("10.1/cascade"));
         bib.upsert_article(&art).await.unwrap();
-        bib.add_annotation(&art.id, bib_types::AnnotationKind::Note, "stale note", None)
-            .await
-            .unwrap();
+        bib.add_annotation(
+            &art.id,
+            bib_types::AnnotationKind::Note,
+            "stale note",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let col = bib_types::Collection::new("col-junk", "junk-collection");
         bib.upsert_collection(&col).await.unwrap();
         bib.add_to_collection(

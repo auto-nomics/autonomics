@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS annotations (
     kind        TEXT NOT NULL,
     content     TEXT NOT NULL,
     page        INTEGER,
+    color       TEXT,
+    rects       TEXT,
     created_at  TEXT
 );
 
@@ -254,6 +256,28 @@ impl BibCore {
                   THEN 'done' ELSE 'failed' END;
                  UPDATE fulltexts SET text_format = 'plain' \
                   WHERE extract_status = 'done';",
+            )
+            .await?;
+        }
+
+        // --- annotation PDF anchors --------------------------------------
+        // Databases created before PDF-reader highlights lack normalized
+        // geometry and color. Existing notes remain valid with both null.
+        let mut has_annotation_rects = false;
+        {
+            let mut rows = conn
+                .query("PRAGMA table_info(annotations)", turso::params![])
+                .await?;
+            while let Some(row) = rows.next().await? {
+                if row.get::<String>(1)? == "rects" {
+                    has_annotation_rects = true;
+                }
+            }
+        }
+        if !has_annotation_rects {
+            conn.execute_batch(
+                "ALTER TABLE annotations ADD COLUMN color TEXT;
+                 ALTER TABLE annotations ADD COLUMN rects TEXT;",
             )
             .await?;
         }

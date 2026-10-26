@@ -57,6 +57,49 @@
 }
 .reader-sidebar-pane button:hover { background: #202328; }
 .reader-sidebar-pane .reader-empty { color: #767a80; padding: 8px; font-size: 12px; }
+.reader-sidebar-pane button strong { display: block; font-size: 12px; }
+.reader-sidebar-pane button small { display: block; overflow-wrap: anywhere; white-space: normal; }
+.reader-search-input {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 7px 8px;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  background: #101113;
+  color: inherit;
+}
+.reader-annotation {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  cursor: pointer;
+}
+.reader-selection-popup {
+  position: fixed;
+  z-index: 180;
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid #33363b;
+  border-radius: 6px;
+  background: #15171a;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+.reader-selection-popup[hidden] { display: none; }
+.reader-selection-popup button {
+  padding: 4px 6px;
+  background: #26292e;
+  color: #dcdddf;
+  font-size: 11px;
+}
+.reader-search-field {
+  width: 120px;
+  padding: 5px 6px;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  background: #101113;
+  color: inherit;
+}
 .reader-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .reader-toolbar {
   display: flex;

@@ -28,7 +28,7 @@ use crate::bib_base::{BibBase, BibCore};
 use crate::collections::{CollectionAddOutcome, CollectionAssignment, CollectionAssignmentOutcome};
 use crate::error::Error;
 use crate::fulltext::{FullTextPage, PendingExtraction};
-use crate::types::{Annotation, AnnotationKind};
+use crate::types::{Annotation, AnnotationKind, AnnotationRect};
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
     FullText, IdKind, SearchHit, TextFormat,
@@ -214,6 +214,8 @@ pub(crate) enum BibCommand {
         kind: AnnotationKind,
         content: String,
         page: Option<u32>,
+        color: Option<String>,
+        rects: Option<Vec<AnnotationRect>>,
         reply: oneshot::Sender<Result<Annotation>>,
     },
     ListAnnotations {
@@ -423,9 +425,14 @@ impl BibCommand {
                 kind,
                 content,
                 page,
+                color,
+                rects,
                 reply,
             } => {
-                let _ = reply.send(core.add_annotation(&article_id, kind, &content, page).await);
+                let _ = reply.send(
+                    core.add_annotation(&article_id, kind, &content, page, color, rects)
+                        .await,
+                );
             }
             Self::ListAnnotations { article_id, reply } => {
                 let _ = reply.send(core.list_annotations(&article_id).await);

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde::Serialize;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
@@ -342,10 +342,7 @@ pub async fn bib_fulltext_raw(
     let token = lock(&state.token).clone();
     let url = endpoint(
         &base,
-        &format!(
-            "bib/articles/{}/fulltext/raw",
-            encoded_segment(&article_id)
-        ),
+        &format!("bib/articles/{}/fulltext/raw", encoded_segment(&article_id)),
     );
     let response = state
         .http

@@ -367,7 +367,7 @@ impl AnnotationKind {
 }
 
 /// A user-created note, highlight, or comment on an article.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     /// Internal annotation ID.
     pub id: String,
@@ -382,11 +382,28 @@ pub struct Annotation {
     #[serde(default)]
     pub page: Option<u32>,
 
+    /// Highlight color. Present for PDF selection anchors.
+    #[serde(default)]
+    pub color: Option<String>,
+
+    /// Normalized page-space rectangles used to restore PDF highlights.
+    #[serde(default)]
+    pub rects: Option<Vec<AnnotationRect>>,
+
     /// Creation timestamp. Skipped during serialization — see [`Article`]
     /// for the rationale; the same hazard applies to anything serialized
     /// into a DAG artifact.
     #[serde(default, skip_serializing)]
     pub created_at: Option<DateTime<Utc>>,
+}
+
+/// A rectangle in normalized page space (0..1 relative to the rendered page).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnnotationRect {
+    pub left: f64,
+    pub top: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 impl Annotation {
@@ -396,6 +413,8 @@ impl Annotation {
             kind,
             content: content.into(),
             page: None,
+            color: None,
+            rects: None,
             created_at: Some(Utc::now()),
         }
     }
@@ -850,7 +869,7 @@ impl ExportFormat {
 
 /// A fully hydrated library record: the article plus user-managed data
 /// that is stored alongside it but not part of the bibliographic metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibraryEntry {
     /// The bibliographic record.
     pub article: Article,

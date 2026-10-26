@@ -181,6 +181,9 @@ export type BibAnnotation = {
   id: string;
   kind?: string;
   content: string;
+  page?: number | null;
+  color?: string | null;
+  rects?: Array<{ left: number; top: number; width: number; height: number }> | null;
 };
 
 export type BibRequest = {

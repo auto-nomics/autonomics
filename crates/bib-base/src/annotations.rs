@@ -22,21 +22,28 @@ impl BibCore {
         kind: AnnotationKind,
         content: &str,
         page: Option<u32>,
+        color: Option<String>,
+        rects: Option<Vec<crate::types::AnnotationRect>>,
     ) -> Result<Annotation> {
         let id = format!("ann-{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let now = Utc::now().to_rfc3339();
+        let rect_json = rects
+            .as_ref()
+            .and_then(|rects| serde_json::to_string(rects).ok());
 
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         tx.execute(
-            "INSERT INTO annotations (id, article_id, kind, content, page, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO annotations (id, article_id, kind, content, page, color, rects, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             turso::params![
                 id.clone(),
                 article_id,
                 kind.as_str(),
                 content,
                 page.map(|p| p as i64),
+                color.clone(),
+                rect_json,
                 now,
             ],
         )
@@ -49,6 +56,8 @@ impl BibCore {
             kind,
             content: content.to_owned(),
             page,
+            color,
+            rects,
             created_at: Some(Utc::now()),
         })
     }
@@ -58,7 +67,7 @@ impl BibCore {
         let conn = self.conn();
         let mut rows = conn
             .query(
-                "SELECT id, kind, content, page, created_at \
+                "SELECT id, kind, content, page, color, rects, created_at \
                  FROM annotations WHERE article_id = ?1 \
                  ORDER BY created_at",
                 turso::params![article_id],
@@ -72,7 +81,10 @@ impl BibCore {
                 kind: AnnotationKind::from_str(&row.get::<String>(1)?),
                 content: row.get::<String>(2)?,
                 page: opt_int(row.get_value(3)?).map(|p| p as u32),
-                created_at: opt_string(row.get_value(4)?).as_deref().and_then(parse_dt),
+                color: opt_string(row.get_value(4)?),
+                rects: opt_string(row.get_value(5)?)
+                    .and_then(|value| serde_json::from_str(&value).ok()),
+                created_at: opt_string(row.get_value(6)?).as_deref().and_then(parse_dt),
             });
         }
         Ok(out)
@@ -116,12 +128,16 @@ impl BibBase {
         kind: AnnotationKind,
         content: &str,
         page: Option<u32>,
+        color: Option<String>,
+        rects: Option<Vec<crate::types::AnnotationRect>>,
     ) -> Result<Annotation> {
         self.call(|reply| BibCommand::AddAnnotation {
             article_id: article_id.to_owned(),
             kind,
             content: content.to_owned(),
             page,
+            color,
+            rects,
             reply,
         })
         .await

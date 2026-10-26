@@ -4,6 +4,7 @@ import { cn } from "cn"
 
 type ScrollAreaProps = ScrollAreaPrimitive.Root.Props & {
   contentClassName?: string
+  scrollOrientation?: "vertical" | "both"
   viewportRef?: React.Ref<HTMLDivElement>
   viewportClassName?: string
 }
@@ -12,10 +13,13 @@ function ScrollArea({
   children,
   className,
   contentClassName,
+  scrollOrientation = "vertical",
   viewportRef,
   viewportClassName,
   ...props
 }: ScrollAreaProps) {
+  const supportsHorizontal = scrollOrientation === "both"
+
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -26,13 +30,15 @@ function ScrollArea({
         ref={viewportRef}
         className={cn("size-full overscroll-contain rounded-[inherit] outline-none", viewportClassName)}
       >
-        <ScrollAreaPrimitive.Content className={contentClassName}>
+        <ScrollAreaPrimitive.Content
+          className={cn(!supportsHorizontal && "min-w-0!", contentClassName)}
+        >
           {children}
         </ScrollAreaPrimitive.Content>
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar orientation="vertical" />
-      <ScrollBar orientation="horizontal" />
-      <ScrollAreaPrimitive.Corner />
+      {supportsHorizontal && <ScrollBar orientation="horizontal" />}
+      {supportsHorizontal && <ScrollAreaPrimitive.Corner />}
     </ScrollAreaPrimitive.Root>
   )
 }

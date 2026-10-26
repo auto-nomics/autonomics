@@ -103,7 +103,7 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
       {error && <Card className="border-destructive/40 p-3 text-sm text-destructive">{error}</Card>}
       {snapshot && layout && (
         <Card className="min-h-0 p-0!">
-          <ScrollArea className="h-full">
+          <ScrollArea className="h-full" scrollOrientation="both">
           <div className="relative" style={{ width: layout.width, height: layout.height }}>
             <svg width={layout.width} height={layout.height} className="absolute inset-0 pointer-events-none">
               {snapshot.edges.map((edge) => {
