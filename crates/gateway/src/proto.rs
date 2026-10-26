@@ -160,6 +160,22 @@ pub struct KmsEvidenceView {
     pub last_seen_at: i64,
 }
 
+/// One active wiki node in the durable KMS knowledge tree.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct KmsKnowledgeNodeView {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub path: String,
+    pub title: String,
+    pub body_md: String,
+    pub status: String,
+    pub confidence: f64,
+    pub source_hash: String,
+    pub structural: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// One durable KMS skill-revision proposal, including the material a
 /// reviewer needs to inspect before approving it.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

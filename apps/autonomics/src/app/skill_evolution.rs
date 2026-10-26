@@ -11,6 +11,12 @@ impl App {
         self.refresh_skill_evolution();
     }
 
+    pub(super) fn open_knowledge_wiki(&mut self) {
+        self.open_skill_evolution();
+        self.state.skill_evolution.active_tab =
+            crate::widgets::evolution_widget::EvolutionTab::Wiki;
+    }
+
     pub(super) fn close_skill_evolution(&mut self) {
         self.state.skill_evolution.close();
     }
@@ -21,14 +27,16 @@ impl App {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_refresh", move || async move {
-            let (workers, skills, proposals, evidence) = tokio::join!(
+            let (workers, knowledge, skills, proposals, evidence) = tokio::join!(
                 client.kms_worker_statuses(),
+                client.kms_knowledge(),
                 client.kms_skills(),
                 client.kms_skill_proposals(),
                 client.kms_evidence(),
             );
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
                 workers: workers.map_err(|e| e.to_string()),
+                knowledge: knowledge.map_err(|e| e.to_string()),
                 skills: skills.map_err(|e| e.to_string()),
                 proposals: proposals.map_err(|e| e.to_string()),
                 evidence: evidence.map_err(|e| e.to_string()),
@@ -123,11 +131,16 @@ impl App {
             KeyCode::Char('g') | KeyCode::Char('G') => self.refresh_skill_evolution(),
             KeyCode::Tab | KeyCode::BackTab => dashboard.switch_tab(),
             KeyCode::Char('1') => dashboard.active_tab = EvolutionTab::Skills,
-            KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Observations,
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Wiki,
+            KeyCode::Char('3') => dashboard.active_tab = EvolutionTab::Observations,
+            KeyCode::Char('a') | KeyCode::Char('A')
+                if dashboard.active_tab == EvolutionTab::Skills =>
+            {
                 self.decide_selected_skill_proposal(true);
             }
-            KeyCode::Char('x') | KeyCode::Char('X') => {
+            KeyCode::Char('x') | KeyCode::Char('X')
+                if dashboard.active_tab == EvolutionTab::Skills =>
+            {
                 self.decide_selected_skill_proposal(false);
             }
             // ←/→ (h/l) switch the pane that owns the vertical keys.

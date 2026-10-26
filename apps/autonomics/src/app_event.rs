@@ -78,6 +78,7 @@ pub(crate) enum AppEvent {
     /// active skills, durable proposals, and evidence.
     SkillEvolutionLoaded {
         workers: std::result::Result<Vec<gateway::proto::KmsWorkerStatusView>, String>,
+        knowledge: std::result::Result<Vec<gateway::proto::KmsKnowledgeNodeView>, String>,
         skills: std::result::Result<Vec<gateway::proto::KmsSkillLibraryView>, String>,
         proposals: std::result::Result<Vec<gateway::proto::KmsSkillProposalView>, String>,
         evidence: std::result::Result<Vec<gateway::proto::KmsEvidenceView>, String>,

@@ -5,7 +5,9 @@
 
 use std::time::Duration;
 
-use agentik_core::memory::{KnowledgeEvidenceInput, KnowledgeSkillProposalInput, MemoryStore};
+use agentik_core::memory::{
+    Knowledge, KnowledgeEvidenceInput, KnowledgePath, KnowledgeSkillProposalInput, MemoryStore,
+};
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use gateway::client::{EventPump, GatewayClient, GatewayFrame};
@@ -230,7 +232,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 45);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 46);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -268,6 +270,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/plugins/environments/{id}",
         "/api/v1/events",
         "/api/v1/kms/evidence",
+        "/api/v1/kms/knowledge",
         "/api/v1/kms/skills",
         "/api/v1/kms/skills/{name}",
         "/api/v1/kms/skill-proposals",
@@ -481,6 +484,48 @@ async fn kms_skill_proposals_support_human_approval_and_rejection() {
     assert_eq!(detail.artifacts[0].content, "description = 'reviewed'");
     assert_eq!(detail.history.len(), 1);
     assert!(client.kms_skill_detail("no-such-kms-skill").await.is_err());
+
+    gw.stop().await;
+}
+
+#[tokio::test]
+async fn kms_knowledge_lists_the_durable_wiki_tree() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let store = gw.infra.kms.store();
+    let path =
+        KnowledgePath::normalize("/engineering/testing/release-checks").expect("valid wiki path");
+    let created = store
+        .create_knowledge(Knowledge::leaf(
+            path,
+            "Release checks".to_string(),
+            "Run smoke tests before release.".to_string(),
+            0.92,
+            "source-hash",
+            1_700_000_000,
+        ))
+        .await
+        .unwrap();
+
+    let rows = client.kms_knowledge().await.unwrap();
+    let article = rows
+        .iter()
+        .find(|row| row.id == created.id)
+        .expect("article is listed");
+    assert_eq!(article.path, "/engineering/testing/release-checks");
+    assert_eq!(article.title, "Release checks");
+    assert_eq!(article.status, "active");
+    assert!(!article.structural);
+    assert!(article.body_md.contains("smoke tests"));
+    assert!(article.parent_id.is_some());
+    assert!(
+        rows.iter()
+            .any(|row| row.path == "/engineering" && row.structural)
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.path == "/engineering/testing" && row.structural)
+    );
 
     gw.stop().await;
 }

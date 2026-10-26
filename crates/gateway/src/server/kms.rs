@@ -8,9 +8,9 @@ use uuid::Uuid;
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
 use crate::proto::{
-    KmsEvidenceView, KmsSkillArtifactView, KmsSkillDetailView, KmsSkillLibraryView,
-    KmsSkillProposalDecision, KmsSkillProposalView, KmsSkillVersionSummaryView,
-    KmsWorkerStatusView,
+    KmsEvidenceView, KmsKnowledgeNodeView, KmsSkillArtifactView, KmsSkillDetailView,
+    KmsSkillLibraryView, KmsSkillProposalDecision, KmsSkillProposalView,
+    KmsSkillVersionSummaryView, KmsWorkerStatusView,
 };
 
 #[utoipa::path(
@@ -68,6 +68,27 @@ pub(crate) async fn list_evidence(
             })
             .collect(),
     ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/v1/kms/knowledge",
+    tag = "kms",
+    responses((status = 200, body = [KmsKnowledgeNodeView]))
+)]
+pub(crate) async fn list_knowledge(
+    State(state): State<GatewayState>,
+) -> GatewayResult<Json<Vec<KmsKnowledgeNodeView>>> {
+    use agentik_core::memory::KnowledgeStore;
+
+    let nodes = state
+        .infra
+        .kms
+        .store()
+        .list_knowledge(10_000)
+        .await
+        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(nodes.into_iter().map(knowledge_view).collect()))
 }
 
 #[derive(serde::Deserialize)]
@@ -325,6 +346,22 @@ fn skill_metadata(raw: &str) -> GatewayResult<KmsSkillMetadata> {
             format!("parse KMS skill metadata: {e}"),
         )
     })
+}
+
+fn knowledge_view(node: agentik_core::memory::Knowledge) -> KmsKnowledgeNodeView {
+    KmsKnowledgeNodeView {
+        id: node.id,
+        parent_id: node.parent_id,
+        path: node.knowledge_path.as_str(),
+        title: node.title,
+        body_md: node.body_md,
+        status: node.status,
+        confidence: node.confidence,
+        source_hash: node.source_hash,
+        structural: node.structural,
+        created_at: node.created_at,
+        updated_at: node.updated_at,
+    }
 }
 
 fn proposal_view(proposal: agentik_core::memory::SkillProposal) -> KmsSkillProposalView {

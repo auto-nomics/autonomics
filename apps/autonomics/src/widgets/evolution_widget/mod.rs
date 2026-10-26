@@ -1,9 +1,12 @@
-//! Skill evolution dashboard: service status plus Skills and Observations tabs.
+//! KMS dashboard: skills, the knowledge wiki, and durable evidence.
 
 pub mod observation_browser;
 
+pub mod knowledge_wiki;
+
 pub mod skill_browser;
 
+use self::knowledge_wiki::{KnowledgeWikiState, KnowledgeWikiWidget};
 use self::observation_browser::{ObservationBrowserState, ObservationBrowserWidget};
 
 pub use self::skill_browser::PanelFocus;
@@ -24,6 +27,7 @@ use ratatui::{
 pub enum EvolutionTab {
     #[default]
     Skills,
+    Wiki,
     Observations,
 }
 
@@ -58,6 +62,7 @@ pub struct SkillEvolutionState {
     pub visible: bool,
     pub status: Option<KmsDashboardStatus>,
     pub skills: SkillBrowserState,
+    pub wiki: KnowledgeWikiState,
     pub observations: ObservationBrowserState,
     pub active_tab: EvolutionTab,
     pub last_report: Option<String>,
@@ -81,7 +86,8 @@ impl SkillEvolutionState {
 
     pub fn switch_tab(&mut self) {
         self.active_tab = match self.active_tab {
-            EvolutionTab::Skills => EvolutionTab::Observations,
+            EvolutionTab::Skills => EvolutionTab::Wiki,
+            EvolutionTab::Wiki => EvolutionTab::Observations,
             EvolutionTab::Observations => EvolutionTab::Skills,
         };
     }
@@ -89,6 +95,7 @@ impl SkillEvolutionState {
     pub fn focus_list(&mut self) {
         match self.active_tab {
             EvolutionTab::Skills => self.skills.focus_list(),
+            EvolutionTab::Wiki => self.wiki.focus = PanelFocus::List,
             EvolutionTab::Observations => self.observations.focus = PanelFocus::List,
         }
     }
@@ -96,6 +103,7 @@ impl SkillEvolutionState {
     pub fn focus_detail(&mut self) {
         match self.active_tab {
             EvolutionTab::Skills => self.skills.focus_detail(),
+            EvolutionTab::Wiki => self.wiki.focus = PanelFocus::Detail,
             EvolutionTab::Observations => self.observations.focus = PanelFocus::Detail,
         }
     }
@@ -120,6 +128,12 @@ impl SkillEvolutionState {
 
                     previous != self.skills.selected
                 }
+            }
+
+            EvolutionTab::Wiki => {
+                self.wiki.navigate(down);
+
+                false
             }
 
             EvolutionTab::Observations => {
@@ -184,7 +198,7 @@ impl StatefulWidget for SkillEvolutionWidget {
             return;
         }
 
-        let popup = Popup::new(" KMS Skill Evolution ", PopupControls::default())
+        let popup = Popup::new(" KMS Knowledge System ", PopupControls::default())
             .width(self.popup_width)
             .height(self.popup_height)
             .accent(self.accent);
@@ -247,9 +261,14 @@ impl StatefulWidget for SkillEvolutionWidget {
 
         let tabs = Tabs::new(vec![
             format!("1 Skills ({})", state.skills.library.len()),
-            format!("2 Evidence ({})", state.observations.observations.len()),
+            format!("2 Wiki ({})", state.wiki.nodes.len()),
+            format!("3 Evidence ({})", state.observations.observations.len()),
         ])
-        .select(usize::from(state.active_tab == EvolutionTab::Observations))
+        .select(match state.active_tab {
+            EvolutionTab::Skills => 0,
+            EvolutionTab::Wiki => 1,
+            EvolutionTab::Observations => 2,
+        })
         .highlight_style(Style::new().fg(self.accent).add_modifier(Modifier::BOLD))
         .style(Style::new().fg(Color::DarkGray));
 
@@ -264,6 +283,14 @@ impl StatefulWidget for SkillEvolutionWidget {
                 buf,
                 &mut state.skills,
             ),
+            EvolutionTab::Wiki => StatefulWidget::render(
+                KnowledgeWikiWidget {
+                    accent: self.accent,
+                },
+                regions[2],
+                buf,
+                &mut state.wiki,
+            ),
             EvolutionTab::Observations => StatefulWidget::render(
                 ObservationBrowserWidget {
                     accent: self.accent,
@@ -276,10 +303,10 @@ impl StatefulWidget for SkillEvolutionWidget {
 
         Widget::render(
             Paragraph::new(vec![
-                Line::raw("Tab/1/2 tabs · ←→ panel · ↑↓ move/scroll · Esc close"),
+                Line::raw("Tab/1/2/3 tabs · ←→ panel · ↑↓ move/scroll · Esc close"),
                 Line::raw(match state.active_tab {
                     EvolutionTab::Skills => "a approve · x reject · g refresh",
-                    EvolutionTab::Observations => "g refresh",
+                    EvolutionTab::Wiki | EvolutionTab::Observations => "g refresh",
                 }),
             ])
             .style(Style::new().fg(Color::DarkGray)),
@@ -498,8 +525,8 @@ mod tests {
     use super::*;
 
     use gateway::proto::{
-        KmsSkillArtifactView, KmsSkillLibraryView, KmsSkillProposalView, SkillLibraryDetail,
-        SkillLibraryView,
+        KmsKnowledgeNodeView, KmsSkillArtifactView, KmsSkillLibraryView, KmsSkillProposalView,
+        SkillLibraryDetail, SkillLibraryView,
     };
 
     use uuid::Uuid;
@@ -575,6 +602,26 @@ mod tests {
             approved_skill_version_id: None,
             created_at: 2,
             updated_at: 2,
+        }
+    }
+
+    fn wiki_node(path: &str, title: &str, structural: bool) -> KmsKnowledgeNodeView {
+        KmsKnowledgeNodeView {
+            id: Uuid::new_v4(),
+            parent_id: None,
+            path: path.into(),
+            title: title.into(),
+            body_md: if structural {
+                String::new()
+            } else {
+                "Store release check findings here.".into()
+            },
+            status: "active".into(),
+            confidence: 0.9,
+            source_hash: "hash".into(),
+            structural,
+            created_at: 1,
+            updated_at: 1,
         }
     }
 
@@ -775,6 +822,33 @@ mod tests {
         assert!(text.contains("Body — SKILL.md"));
 
         assert!(text.contains("Step one."));
+    }
+
+    #[test]
+    fn wiki_tab_renders_inside_the_kms_dashboard() {
+        let mut state = SkillEvolutionState {
+            visible: true,
+            status: Some(dummy_status()),
+            active_tab: EvolutionTab::Wiki,
+            ..Default::default()
+        };
+        state.wiki.set_nodes(vec![
+            wiki_node("/engineering", "Engineering", true),
+            wiki_node("/engineering/testing", "Testing", true),
+            wiki_node("/engineering/testing/release", "Release", false),
+        ]);
+        state.wiki.selected = 2;
+
+        let text = draw(&mut state, 110, 28);
+
+        assert!(text.contains("KMS Knowledge System"), "{text}");
+        assert!(text.contains("2 Wiki (3)"), "{text}");
+        assert!(text.contains("Engineering"), "{text}");
+        assert!(text.contains("/engineering/testing/release"), "{text}");
+        assert!(
+            text.contains("Store release check findings here."),
+            "{text}"
+        );
     }
 
     #[test]
