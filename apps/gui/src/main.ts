@@ -3593,7 +3593,7 @@ function render(): void {
       </nav>
       <div id="connection"></div>
     </header>
-    <aside>
+    <aside class="agent-panel" ${state.view === "agent" ? "" : "hidden"}>
       <div class="section-title"><span>Agents</span><span><button id="resume-agent" class="mini">Resume</button><button id="new-agent" class="mini">New</button></span></div>
       <div id="agents"></div>
       <div id="spawn-form"></div>
@@ -3621,6 +3621,13 @@ function render(): void {
       </form>
     </section>`;
   app.append(shell);
+  const agentMode = state.view === "agent";
+  shell.classList.toggle("agent-view", agentMode);
+  shell.querySelector<HTMLElement>(".agent-panel")!.hidden = !agentMode;
+  shell.querySelector<HTMLElement>(".tabbar")!.hidden = !agentMode;
+  shell.querySelector<HTMLElement>(".plan-strip")!.hidden = !agentMode;
+  shell.querySelector<HTMLElement>("#history-search")!.hidden = !agentMode;
+  shell.querySelector<HTMLElement>("#composer-form")!.hidden = !agentMode;
 
   shell.querySelectorAll<HTMLButtonElement>("nav button").forEach((button) => {
     button.onclick = () => {
