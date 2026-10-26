@@ -3614,11 +3614,13 @@ function render(): void {
       </div>
       <div class="plan-strip" id="plan"></div>
       <div class="transcript" id="transcript"></div>
-      <div id="history-search" hidden></div>
-      <form class="composer" id="composer-form">
-        <textarea id="composer" rows="3" placeholder="输入消息；Up/Down 历史，Ctrl+R 搜索"></textarea>
-        <button type="submit">发送</button>
-      </form>
+      ${state.view === "agent" ? `
+        <div id="history-search" hidden></div>
+        <form class="composer" id="composer-form">
+          <textarea id="composer" rows="3" placeholder="输入消息；Up/Down 历史，Ctrl+R 搜索"></textarea>
+          <button type="submit">发送</button>
+        </form>
+      ` : ""}
     </section>`;
   app.append(shell);
   const agentMode = state.view === "agent";
@@ -3626,9 +3628,6 @@ function render(): void {
   shell.querySelector<HTMLElement>(".agent-panel")!.hidden = !agentMode;
   shell.querySelector<HTMLElement>(".tabbar")!.hidden = !agentMode;
   shell.querySelector<HTMLElement>(".plan-strip")!.hidden = !agentMode;
-  shell.querySelector<HTMLElement>("#history-search")!.hidden = !agentMode;
-  shell.querySelector<HTMLElement>("#composer-form")!.hidden = !agentMode;
-
   shell.querySelectorAll<HTMLButtonElement>("nav button").forEach((button) => {
     button.onclick = () => {
       state.view = button.dataset.view as View;
@@ -3641,12 +3640,13 @@ function render(): void {
   shell.querySelector<HTMLButtonElement>("#fork-message")!.onclick = () => void openForkMessagePicker();
   shell.querySelector<HTMLButtonElement>("#resume-agent")!.onclick = openResumePicker;
   shell.querySelector<HTMLButtonElement>("#cancel")!.onclick = cancelAgent;
-  const form = shell.querySelector<HTMLFormElement>("#composer-form")!;
-  form.onsubmit = (event) => {
-    event.preventDefault();
-    sendDraft();
-  };
-  const composer = shell.querySelector<HTMLTextAreaElement>("#composer")!;
+  const form = shell.querySelector<HTMLFormElement>("#composer-form");
+  const composer = shell.querySelector<HTMLTextAreaElement>("#composer");
+  if (form && composer) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      sendDraft();
+    };
   composer.value = state.composerDrafts.get(state.activeAgent) ?? "";
   composer.addEventListener("keydown", (event) => {
     const agent = state.activeAgent;
@@ -3753,6 +3753,7 @@ function render(): void {
       state.promptDrafts.delete(agent);
     }
   });
+  }
 
   shell.querySelector<HTMLButtonElement>("#new-agent")!.onclick = () => {
     state.spawnOpen = !state.spawnOpen;
@@ -3980,10 +3981,10 @@ function render(): void {
     void loadKms();
     renderKms(view);
   }
-  if (statusLabel(state.activeAgent).match(/requesting|streaming|executing/i)) {
+  if (composer && statusLabel(state.activeAgent).match(/requesting|streaming|executing/i)) {
     composer.placeholder = "agent 运行中；输入可加入 runtime 队列";
   }
-  syncHistorySearchUi(state.activeAgent, composer);
+  if (composer) syncHistorySearchUi(state.activeAgent, composer);
   renderMessagePickerModal();
   renderResumePickerModal();
   renderCommandPaletteModal();
