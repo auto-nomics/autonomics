@@ -50,8 +50,11 @@ type PdfAnnotationRect = {
 
 type ReaderPane = "thumbnails" | "outline" | "annotations" | "info" | "tags" | "search";
 
+type ReaderTheme = "light" | "dark";
+
 const READER_SIDEBAR_WIDTH_KEY = "autonomics.pdf.sidebarWidth";
 const READER_SIDEBAR_OPEN_KEY = "autonomics.pdf.sidebarOpen";
+const READER_THEME_KEY = "autonomics.pdf.theme";
 
 const READER_RAIL_ICONS: Record<ReaderPane, string> = {
   thumbnails: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 9v12"/></svg>`,
@@ -70,6 +73,9 @@ const READER_RAIL_LABELS: Record<ReaderPane, string> = {
   tags: "Tags",
   search: "Search",
 };
+
+const THEME_DARK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
+const THEME_LIGHT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>`;
 
 export type PdfReaderHandle = {
   close: () => void;
@@ -109,6 +115,9 @@ class ZoteroStylePdfReader {
   private pageObserver: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private relayoutTimer: number | null = null;
+  private wheelZoomFactor = 1;
+  private wheelZoomAnchor: { x: number; y: number } | null = null;
+  private wheelZoomRunning = false;
 
   private root: HTMLDivElement;
   private pageArea: HTMLDivElement;
@@ -131,14 +140,17 @@ class ZoteroStylePdfReader {
   private searchResults: Array<{ page: number; count: number }> = [];
   private activePane: ReaderPane = "thumbnails";
   private sidebarOpen = true;
+  private pdfTheme: ReaderTheme;
 
   private constructor(
     private readonly articleId: string,
     private readonly title: string,
     private readonly article: BibArticle | null,
   ) {
+    this.pdfTheme = this.readTheme();
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
+    this.root.dataset.pdfTheme = this.pdfTheme;
     this.root.innerHTML = `
       <aside class="reader-sidebar-shell">
         <nav class="reader-rail" aria-label="PDF sidebar">
@@ -212,6 +224,9 @@ class ZoteroStylePdfReader {
           <div class="reader-tool-right">
             <button type="button" data-action="text-options" title="Text options">Aa</button>
             <button type="button" data-action="open-search" title="Search PDF">🔍</button>
+            <button type="button" data-action="toggle-theme" title="Toggle dark mode">
+              ${this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON}
+            </button>
           </div>
           <button type="button" data-action="close" title="Close">✕</button>
         </header>
@@ -246,6 +261,7 @@ class ZoteroStylePdfReader {
     this.searchPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="search"]');
     this.searchInput = this.select<HTMLInputElement>('.reader-sidebar-pane[data-pane="search"] [data-input="search"]');
     this.selectionPopup = this.select('[data-output="selection-popup"]');
+    this.applyTheme();
 
     const savedWidth = Number(window.localStorage.getItem(READER_SIDEBAR_WIDTH_KEY));
     if (Number.isFinite(savedWidth) && savedWidth >= 230) {
@@ -282,6 +298,28 @@ class ZoteroStylePdfReader {
     return element;
   }
 
+  private readTheme(): ReaderTheme {
+    const saved = window.localStorage.getItem(READER_THEME_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  private applyTheme() {
+    this.root.dataset.pdfTheme = this.pdfTheme;
+    const button = this.root.querySelector<HTMLButtonElement>('[data-action="toggle-theme"]');
+    if (button) {
+      button.innerHTML = this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON;
+      button.title = this.pdfTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+      button.setAttribute("aria-label", button.title);
+    }
+  }
+
+  private toggleTheme() {
+    this.pdfTheme = this.pdfTheme === "dark" ? "light" : "dark";
+    window.localStorage.setItem(READER_THEME_KEY, this.pdfTheme);
+    this.applyTheme();
+  }
+
   private bindEvents() {
     const action = (name: string, listener: () => void) => {
       this.root.querySelector(`[data-action="${name}"]`)?.addEventListener("click", listener);
@@ -305,6 +343,7 @@ class ZoteroStylePdfReader {
       void this.refit();
     });
     action("sidebar", () => this.setSidebarOpen(!this.sidebarOpen));
+    action("toggle-theme", () => this.toggleTheme());
     action("close-sidebar", () => this.setSidebarOpen(false));
     action("tool-highlight", () => {
       if (this.anchor) void this.addHighlight("yellow");
@@ -409,6 +448,64 @@ class ZoteroStylePdfReader {
       }
     });
 
+    this.root.addEventListener("wheel", this.handleWheelZoom, { passive: false });
+  }
+
+  private readonly handleWheelZoom = (event: WheelEvent) => {
+    if (!event.ctrlKey || event.deltaY === 0) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+    this.wheelZoomFactor = Math.min(Math.max(this.wheelZoomFactor * factor, 0.2 / this.zoom), 6 / this.zoom);
+    const areaRect = this.pageArea.getBoundingClientRect();
+    const localX = event.clientX - areaRect.left;
+    const localY = event.clientY - areaRect.top;
+    const overPageArea = localX >= 0 && localY >= 0
+      && localX <= areaRect.width
+      && localY <= areaRect.height;
+    this.wheelZoomAnchor = overPageArea ? { x: localX, y: localY } : null;
+
+    if (!this.wheelZoomRunning) void this.applyWheelZoom();
+  };
+
+  private async applyWheelZoom() {
+    if (this.wheelZoomRunning) return;
+    this.wheelZoomRunning = true;
+
+    try {
+      while (this.wheelZoomFactor !== 1 && !this.destroyed) {
+        const factor = this.wheelZoomFactor;
+        const anchor = this.wheelZoomAnchor;
+        this.wheelZoomFactor = 1;
+
+        const oldScrollWidth = Math.max(1, this.pageArea.scrollWidth);
+        const oldScrollHeight = Math.max(1, this.pageArea.scrollHeight);
+        const oldRatioX = this.pageArea.scrollLeft / oldScrollWidth;
+        const oldRatioY = this.pageArea.scrollTop / oldScrollHeight;
+        const pointer = anchor ?? {
+          x: this.pageArea.clientWidth / 2,
+          y: this.pageArea.clientHeight / 2,
+        };
+
+        await this.setZoom(this.zoom * factor);
+        if (this.destroyed) return;
+
+        const newScrollWidth = Math.max(1, this.pageArea.scrollWidth);
+        const newScrollHeight = Math.max(1, this.pageArea.scrollHeight);
+        const focusRatioX = anchor
+          ? (oldRatioX * oldScrollWidth + pointer.x) / oldScrollWidth
+          : oldRatioX;
+        const focusRatioY = anchor
+          ? (oldRatioY * oldScrollHeight + pointer.y) / oldScrollHeight
+          : oldRatioY;
+        this.pageArea.scrollLeft = focusRatioX * newScrollWidth - pointer.x;
+        this.pageArea.scrollTop = focusRatioY * newScrollHeight - pointer.y;
+      }
+    } finally {
+      this.wheelZoomRunning = false;
+    }
   }
 
   private metadataRow(label: string, value?: string | number | null) {
@@ -741,7 +838,7 @@ class ZoteroStylePdfReader {
       text: visibleText,
       rects,
       x: last.left,
-      y: last.bottom + 8,
+      y: last.top + last.height + 8,
     };
     this.selectionPopup.style.left = `${Math.min(this.anchor.x, window.innerWidth - 270)}px`;
     this.selectionPopup.style.top = `${Math.min(this.anchor.y, window.innerHeight - 60)}px`;
@@ -754,10 +851,10 @@ class ZoteroStylePdfReader {
   }
 
   private visibleSelectionGeometry(range: Range, layer: HTMLElement): {
-    rects: DOMRect[];
+    rects: Array<{ left: number; top: number; width: number; height: number }>;
     text: string;
   } {
-    const rects: DOMRect[] = [];
+    const rects: Array<{ left: number; top: number; width: number; height: number }> = [];
     const textParts: string[] = [];
     const walker = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
 
@@ -790,7 +887,14 @@ class ZoteroStylePdfReader {
         segment.setStart(node, visibleStart);
         segment.setEnd(node, visibleEnd);
         for (const rect of segment.getClientRects()) {
-          if (rect.width > 0.5 && rect.height > 0.5) rects.push(rect);
+          if (rect.width > 0.5 && rect.height > 0.5) {
+            rects.push({
+              left: rect.left,
+              top: rect.top,
+              width: rect.width,
+              height: rect.height,
+            });
+          }
         }
         textParts.push(node.data.slice(visibleStart, visibleEnd));
       }
@@ -798,8 +902,36 @@ class ZoteroStylePdfReader {
       node = walker.nextNode() as Text | null;
     }
 
+    const sorted = [...rects].sort((left, right) => {
+      const leftCenter = left.top + left.height / 2;
+      const rightCenter = right.top + right.height / 2;
+      return leftCenter - rightCenter || left.left - right.left;
+    });
+    const merged: Array<{ left: number; top: number; width: number; height: number }> = [];
+    for (const rect of sorted) {
+      const previous = merged[merged.length - 1];
+      const previousCenter = previous ? previous.top + previous.height / 2 : 0;
+      const currentCenter = rect.top + rect.height / 2;
+      const sameLine = previous && Math.abs(currentCenter - previousCenter) <= Math.max(previous.height, rect.height) * .45;
+      const gap = previous ? rect.left - (previous.left + previous.width) : Number.POSITIVE_INFINITY;
+      if (previous && sameLine && gap <= rect.height * 2.5) {
+        const left = Math.min(previous.left, rect.left);
+        const top = Math.min(previous.top, rect.top);
+        const right = Math.max(previous.left + previous.width, rect.left + rect.width);
+        const bottom = Math.max(previous.top + previous.height, rect.top + rect.height);
+        merged[merged.length - 1] = {
+          left,
+          top,
+          width: right - left,
+          height: bottom - top,
+        };
+      } else {
+        merged.push({ ...rect });
+      }
+    }
+
     return {
-      rects,
+      rects: merged,
       text: textParts.join(" ").replace(/\s+/g, " ").trim(),
     };
   }
@@ -1092,6 +1224,7 @@ class ZoteroStylePdfReader {
     if (this.destroyed) return;
     this.destroyed = true;
     if (this.relayoutTimer !== null) window.clearTimeout(this.relayoutTimer);
+    this.root.removeEventListener("wheel", this.handleWheelZoom);
     this.resizeObserver?.disconnect();
     this.pageObserver?.disconnect();
     for (const view of this.pageViews.values()) {

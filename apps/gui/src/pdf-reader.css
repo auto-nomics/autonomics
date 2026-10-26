@@ -2,6 +2,11 @@
   --reader-rail-width: 52px;
   --reader-resizer-width: 5px;
   --reader-sidebar-width: clamp(250px, 23vw, 360px);
+  --reader-page-filter: none;
+  --reader-page-background: #ffffff;
+  --reader-page-loading: #ececec;
+  --reader-annotation-blend: multiply;
+  --reader-annotation-opacity: 1;
   position: fixed;
   inset: 0;
   z-index: 160;
@@ -12,6 +17,13 @@
   overflow: hidden;
   background: #0f1113;
   color: #eceded;
+}
+.zotero-pdf-reader[data-pdf-theme="dark"] {
+  --reader-page-filter: invert(100%) hue-rotate(180deg);
+  --reader-page-background: #17191d;
+  --reader-page-loading: #25282e;
+  --reader-annotation-blend: normal;
+  --reader-annotation-opacity: .38;
 }
 .zotero-pdf-reader.sidebar-closed {
   grid-template-columns:
@@ -156,11 +168,16 @@
   place-items: center;
   overflow: hidden;
   border-radius: 3px;
-  background: #24272c;
+  background: var(--reader-page-background);
   color: #767a80;
   font-size: 11px;
 }
-.reader-thumbnail-canvas canvas { display: block; width: 100%; height: auto; }
+.reader-thumbnail-canvas canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  filter: var(--reader-page-filter);
+}
 .reader-thumbnail > span:last-child { font-size: 11px; color: #989da3; }
 .reader-sidebar-pane button {
   display: block;
@@ -209,7 +226,8 @@
 .reader-annotation {
   position: absolute;
   border-radius: 2px;
-  mix-blend-mode: multiply;
+  mix-blend-mode: var(--reader-annotation-blend);
+  opacity: var(--reader-annotation-opacity);
   cursor: pointer;
 }
 .reader-selection-popup {
@@ -344,14 +362,17 @@
   position: relative;
   min-height: 120px;
   box-shadow: 0 14px 44px rgba(0, 0, 0, .42);
-  background: #343941;
+  background: var(--reader-page-background);
 }
 .reader-page-wrapper.rendering {
-  background: linear-gradient(100deg, #343941 40%, #3f454e 50%, #343941 60%);
+  background: linear-gradient(100deg, var(--reader-page-background) 40%, var(--reader-page-loading) 50%, var(--reader-page-background) 60%);
   background-size: 200% 100%;
   animation: reader-render 1.1s linear infinite;
 }
-.reader-page-wrapper canvas { display: block; }
+.reader-page-wrapper canvas {
+  display: block;
+  filter: var(--reader-page-filter);
+}
 .reader-text-layer {
   position: absolute;
   inset: 0;
