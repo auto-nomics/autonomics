@@ -1,5 +1,6 @@
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
+import type { MouseEventHandler, ReactNode } from "react"
 import { cn } from "cn"
 
 const buttonVariants = cva(
@@ -43,11 +44,32 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  type = "button",
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: {
+  className?: string
+  children?: ReactNode
+  disabled?: boolean
+  form?: string
+  onClick?: MouseEventHandler<HTMLButtonElement>
+  title?: string
+  type?: "button" | "submit" | "reset"
+} & VariantProps<typeof buttonVariants>) {
+  const classes = cn(buttonVariants({ variant, size, className }))
+  if (type === "submit") {
+    return (
+      <button
+        data-slot="button"
+        type="submit"
+        className={classes}
+        {...props}
+      />
+    )
+  }
   return (
     <ButtonPrimitive
       data-slot="button"
+      type="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />

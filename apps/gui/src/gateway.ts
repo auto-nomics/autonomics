@@ -33,9 +33,14 @@ function normalizeApiPath(path: string): string {
   const queryStart = trimmed.indexOf("?");
   const pathname = queryStart < 0 ? trimmed : trimmed.slice(0, queryStart);
   const query = queryStart < 0 ? "" : trimmed.slice(queryStart);
-  const agents = pathname.match(/^\/agents\/([^/]+)(\/.*)?$/);
+  const agents = pathname.match(
+    /^\/agents\/(.+?)((?:\/(?:messages|cancel|compact|config|dag|model|sessions))(?:\/.*)?)$/,
+  );
   if (!agents) return trimmed;
-  return `/agents/${encodeURIComponent(agents[1])}${agents[2] ?? ""}${query}`;
+  const agentPath = agents[1].includes("%")
+    ? agents[1]
+    : encodeURIComponent(agents[1]);
+  return `/agents/${agentPath}${agents[2]}${query}`;
 }
 
 function webApiPath(path: string): string {

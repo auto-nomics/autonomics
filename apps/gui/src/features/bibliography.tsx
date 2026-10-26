@@ -1,23 +1,116 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ExternalLink } from "lucide-react";
 import { gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext } from "@/gateway";
+import { openPdfReader } from "@/pdf-reader";
 import type { BibArticle, BibCollection, BibDetail } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
+type BibAuthor = NonNullable<BibArticle["authors"]>[number];
+
+type MetadataRowProps = {
+  label: string;
+  value?: string | number | null;
+  href?: string | null;
+  children?: ReactNode;
+};
+
+function MetadataTable({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+      {children}
+    </div>
+  );
+}
+
+function authorName(author: BibAuthor) {
+  if (author.name) return author.name;
+  return [author.last_name, author.fore_name].filter(Boolean).join(", ");
+}
+
 function articleAuthors(article: BibArticle) {
   return (article.authors ?? [])
-    .map((author) => author.name || [author.fore_name, author.last_name].filter(Boolean).join(" "))
+    .map(authorName)
     .filter(Boolean)
     .join(", ");
 }
 
 function articleIdentifier(article: BibArticle, kind: string) {
-  return article.identifiers?.find((item) => item.kind.toLowerCase() === kind)?.value ?? "—";
+  return article.identifiers?.find((item) => item.kind.toLowerCase() === kind)?.value ?? null;
+}
+
+function encodedUrlPath(value: string) {
+  return value
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3f")
+    .replace(/%/g, "%25")
+    .replace(/"/g, "%22");
+}
+
+function identifierHref(kind: string, value: string) {
+  const normalizedKind = kind.toLowerCase();
+
+  if (normalizedKind === "doi") {
+    const doi = value.match(/10\.\d{4,9}\/\S+/i)?.[0];
+    return doi ? `https://doi.org/${encodedUrlPath(doi)}` : null;
+  }
+  if (normalizedKind === "pmid" && /^\d+$/.test(value)) {
+    return `https://pubmed.ncbi.nlm.nih.gov/${value}/`;
+  }
+  if (normalizedKind === "pmc") {
+    const pmcid = /^PMC\d+$/i.test(value) ? value.toUpperCase() : `PMC${value}`;
+    return /^PMC\d+$/.test(pmcid)
+      ? `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/`
+      : null;
+  }
+  if (normalizedKind === "arxiv") {
+    return `https://arxiv.org/abs/${value.replace(/^arxiv:/i, "")}`;
+  }
+  if (normalizedKind === "openalex" && /^[Ww]\d+$/.test(value)) {
+    return `https://openalex.org/${value.toUpperCase()}`;
+  }
+  return null;
+}
+
+function MetadataRow({ label, value, href, children }: MetadataRowProps) {
+  if (!value && !children) return null;
+
+  return (
+    <div className="group/row col-span-2 grid grid-cols-[subgrid]">
+      <div className="pr-2 text-right text-[13px] leading-6 text-muted-foreground">
+        {label}
+      </div>
+      <div className="flex min-w-0 items-start gap-1">
+        <div
+          className="min-w-0 flex-1 rounded-[5px] px-1 py-[2px] leading-6 transition-colors group-hover/row:bg-accent/40"
+          aria-label={label}
+        >
+          {children ?? (
+            <span className="text-[13px] break-words whitespace-pre-wrap">{value}</span>
+          )}
+        </div>
+        {href && (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={`Open ${label}`}
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "icon-xs" }),
+              "mt-px opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100",
+            )}
+          >
+            <ExternalLink />
+          </a>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function BibliographyView() {
@@ -52,7 +145,7 @@ export function BibliographyView() {
     } finally {
       setLoading(false);
     }
-  }, [query]);
+  }, []);
 
   useEffect(() => {
     void loadArticles("");
@@ -80,6 +173,13 @@ export function BibliographyView() {
   const selected = visibleArticles.find((article) => article.id === selectedArticle)
     ?? detail?.article
     ?? null;
+  const activeDetail = selected && detail?.article.id === selected.id ? detail : null;
+  const headerByline = selected
+    ? [
+        articleAuthors(selected).split(", ")[0],
+        selected.year ? `(${selected.year})` : "",
+      ].filter(Boolean).join(" ")
+    : "";
 
   const importArticle = async () => {
     const identifier = window.prompt("DOI, PMID, arXiv, or OpenAlex ID");
@@ -132,30 +232,18 @@ export function BibliographyView() {
     }
   };
 
-  const detailText = () => {
-    if (!selected) return "No article selected";
-    if (detailLoading) return "Loading…";
-    if (!detail) return "";
-    const fulltext = detail.fulltext;
-    if (detail.article.id !== selected.id) return "";
-    return [
-      `Title: ${selected.title}`,
-      `Authors: ${articleAuthors(selected) || "—"}`,
-      `Year: ${selected.year ?? "—"}`,
-      `Journal: ${selected.journal ?? "—"}`,
-      `DOI: ${articleIdentifier(selected, "doi")}`,
-      `Source: ${selected.source ?? "—"}`,
-      "",
-      "Abstract",
-      selected.abstract_text || "Not available",
-      "",
-      "Full text",
-      fulltext?.text_content || `Extraction: ${fulltext?.extract_status ?? "not uploaded"}`,
-      "",
-      "Notes",
-      detail.annotations.map((note) => `[${note.kind ?? "note"}] ${note.content}`).join("\n") || "No notes yet",
-    ].join("\n");
+  const readPdf = () => {
+    if (!selected) return;
+    void openPdfReader({ articleId: selected.id, title: selected.title }).catch((cause) => setError(String(cause)));
   };
+
+  const identifierRows = [
+    { kind: "doi", label: "DOI" },
+    { kind: "pmid", label: "PMID" },
+    { kind: "pmc", label: "PMCID" },
+    { kind: "arxiv", label: "arXiv" },
+    { kind: "openalex", label: "OpenAlex" },
+  ];
 
   return (
     <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[240px_360px_minmax(0,1fr)]">
@@ -210,7 +298,12 @@ export function BibliographyView() {
             placeholder={`Search ${total.toLocaleString()} articles`}
             onChange={(event) => setQueryDraft(event.target.value)}
           />
-          <Button type="submit" disabled={loading}>Search</Button>
+          <Button
+            type="submit"
+            disabled={loading}
+          >
+            Search
+          </Button>
         </form>
         <Card className="min-h-0 flex-1 overflow-auto p-1.5">
           {visibleArticles.map((article) => (
@@ -235,13 +328,21 @@ export function BibliographyView() {
         </Card>
       </div>
 
-      <Card className="flex min-h-0 flex-col overflow-auto p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <Card className="flex min-h-0 flex-col overflow-hidden p-0">
+        <div className="flex items-start justify-between gap-3 border-b p-4">
           <div className="min-w-0">
-            <h2 className="truncate text-base font-medium">{selected?.title ?? "Bibliography"}</h2>
-            <p className="truncate text-xs text-muted-foreground">{selected?.id ?? "Select an article"}</p>
+            <h2 className="line-clamp-4 text-base leading-[1.333] font-semibold break-words">
+              {selected?.title ?? "Bibliography"}
+            </h2>
+            {selected && headerByline && (
+              <p className="mt-1 text-[13px] text-muted-foreground">{headerByline}</p>
+            )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            {detailLoading && <Badge variant="secondary">Loading…</Badge>}
+            {activeDetail?.fulltext?.file_format?.toLowerCase() === "pdf" && (
+              <Button size="sm" variant="outline" onClick={readPdf}>Read PDF</Button>
+            )}
             <Button size="sm" variant="secondary" onClick={() => void importArticle()} disabled={busy === "import"}>
               Import
             </Button>
@@ -253,26 +354,91 @@ export function BibliographyView() {
             </Button>
           </div>
         </div>
-        <Separator className="my-3" />
-        {error && (
-          <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-            {error}
-          </div>
-        )}
+
         <Tabs defaultValue="metadata" className="flex min-h-0 flex-1 flex-col">
-          <TabsList>
+          <TabsList className="mx-4 mt-3">
             <TabsTrigger value="metadata">Metadata</TabsTrigger>
             <TabsTrigger value="fulltext">Full text</TabsTrigger>
             <TabsTrigger value="notes">Notes</TabsTrigger>
           </TabsList>
-          <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto">
-            <pre className="whitespace-pre-wrap font-sans text-sm">{detailText()}</pre>
+          {error && (
+            <div className="mx-4 mt-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          <TabsContent value="metadata" className="min-h-0 flex-1 overflow-auto p-4">
+            {!selected ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                Select an article
+              </div>
+            ) : (
+              <MetadataTable>
+                {(selected.authors ?? []).map((author, index) => (
+                  <MetadataRow
+                    key={`${author.name ?? author.last_name ?? author.fore_name ?? "author"}-${index}`}
+                    label="Author"
+                    value={authorName(author)}
+                  />
+                ))}
+                <MetadataRow label="Title" value={selected.title} />
+                <MetadataRow label="Publication" value={selected.journal} />
+                <MetadataRow label="Date" value={selected.year} />
+
+                {identifierRows.map(({ kind, label }) => {
+                  const value = articleIdentifier(selected, kind);
+                  return (
+                    <MetadataRow
+                      key={kind}
+                      label={label}
+                      value={value}
+                      href={value ? identifierHref(kind, value) : null}
+                    />
+                  );
+                })}
+
+                {selected.keywords?.length ? (
+                  <MetadataRow label="Keywords">
+                    <div className="flex flex-wrap gap-1 pt-px">
+                      {selected.keywords.map((keyword) => (
+                        <Badge key={keyword} variant="outline">{keyword}</Badge>
+                      ))}
+                    </div>
+                  </MetadataRow>
+                ) : null}
+
+                <MetadataRow label="Source" value={selected.source} />
+                <MetadataRow label="Record" value={selected.id} />
+              </MetadataTable>
+            )}
           </TabsContent>
-          <TabsContent value="fulltext" className="min-h-0 flex-1 overflow-auto">
-            <pre className="whitespace-pre-wrap font-sans text-sm">{detailText()}</pre>
+          <TabsContent value="fulltext" className="min-h-0 flex-1 overflow-auto p-4">
+            {detailLoading ? "Loading…" : activeDetail?.fulltext?.text_content ? (
+              <article className="text-[13px] leading-6 break-words whitespace-pre-wrap">
+                {activeDetail.fulltext.text_content}
+              </article>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                {activeDetail?.fulltext?.extract_status
+                  ? `Extraction: ${activeDetail.fulltext.extract_status}`
+                  : "No full text"}
+              </div>
+            )}
           </TabsContent>
-          <TabsContent value="notes" className="min-h-0 flex-1 overflow-auto">
-            <pre className="whitespace-pre-wrap font-sans text-sm">{detailText()}</pre>
+          <TabsContent value="notes" className="min-h-0 flex-1 overflow-auto p-4">
+            {detailLoading ? "Loading…" : activeDetail?.annotations.length ? (
+              <div className="space-y-3">
+                {activeDetail.annotations.map((note) => (
+                  <article key={note.id} className="space-y-1">
+                    <Badge variant="outline">{note.kind ?? "note"}</Badge>
+                    <p className="text-[13px] leading-6 whitespace-pre-wrap">{note.content}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">
+                No notes yet
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </Card>

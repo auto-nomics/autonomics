@@ -8,6 +8,9 @@ import {
 } from "@/gateway";
 import type { AgentInfo, ChatItem, GatewayFrame, SessionInfo, StateSnapshot } from "@/types";
 import { BibliographyView } from "@/features/bibliography";
+import { ConfigView } from "@/features/config";
+import { KmsView } from "@/features/kms";
+import { DagView } from "@/features/dag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -55,17 +58,6 @@ function statusLabel(status?: unknown) {
   const value = normalized.toLowerCase();
   if (value.includes("stream") || value.includes("requesting") || value.includes("executing")) return value;
   return value.replace(/^.*\./, "");
-}
-
-function Placeholder({ title }: { title: string }) {
-  return (
-    <Card className="grid flex-1 place-items-center p-8">
-      <div className="text-center">
-        <h2 className="text-lg font-medium">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">React migration in progress for this view.</p>
-      </div>
-    </Card>
-  );
 }
 
 export default function App() {
@@ -423,9 +415,9 @@ export default function App() {
         <section className="flex min-h-0 flex-col p-3"><BibliographyView /></section>
       ) : (
         <section className="flex min-h-0 flex-col p-3">
-          {view === "config" && <Placeholder title="Model Config" />}
-          {view === "kms" && <Placeholder title="KMS" />}
-          {view === "dag" && <Placeholder title="DAG" />}
+          {view === "config" && <ConfigView activeAgent={activeAgent} />}
+          {view === "kms" && <KmsView />}
+          {view === "dag" && <DagView activeAgent={activeAgent} />}
         </section>
       )}
     </main>

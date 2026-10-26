@@ -4,6 +4,7 @@ import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { fetchBibFulltextRaw } from "./gateway";
 import { escapeHtml } from "./markdown";
+import "./pdf-reader.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
