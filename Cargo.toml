@@ -24,6 +24,7 @@ members = [
   "crates/node-bundles/nodes-genetics",
   "crates/node-bundles/nodes-mice",
   "apps/autonomics",
+  "apps/gui/src-tauri",
   "crates/opengwas",
   "crates/eutils",
   "crates/allen-brain",
