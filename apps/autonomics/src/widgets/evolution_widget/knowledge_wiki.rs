@@ -97,12 +97,14 @@ impl StatefulWidget for KnowledgeWikiWidget {
             return;
         }
 
+        let list_width = if area.width >= 48 {
+            (area.width * 2 / 5).clamp(28, 60)
+        } else {
+            area.width * 2 / 5
+        };
         let columns = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length((area.width * 2 / 5).clamp(28, 60)),
-                Constraint::Min(20),
-            ])
+            .constraints([Constraint::Length(list_width), Constraint::Min(0)])
             .split(area);
         let title_style = |focus| {
             if state.focus == focus {
@@ -133,25 +135,22 @@ impl StatefulWidget for KnowledgeWikiWidget {
                     &format!("{indent}{}", node.title),
                     list_area.width.saturating_sub(2) as usize,
                 );
-                ListItem::new(vec![
-                    Line::from(vec![
-                        Span::styled(
-                            if selected { "> " } else { "  " },
-                            Style::new().fg(self.accent),
-                        ),
-                        Span::styled(
-                            title,
-                            if selected {
-                                Style::new().add_modifier(Modifier::BOLD)
-                            } else if node.structural {
-                                Style::new().add_modifier(Modifier::DIM)
-                            } else {
-                                Style::new()
-                            },
-                        ),
-                    ]),
-                    Line::styled(format!("  {indent}{}", node.path), dim),
-                ])
+                ListItem::new(vec![Line::from(vec![
+                    Span::styled(
+                        if selected { "> " } else { "  " },
+                        Style::new().fg(self.accent),
+                    ),
+                    Span::styled(
+                        title,
+                        if selected {
+                            Style::new().add_modifier(Modifier::BOLD)
+                        } else if node.structural {
+                            Style::new().add_modifier(Modifier::DIM)
+                        } else {
+                            Style::new()
+                        },
+                    ),
+                ])])
             })
             .collect();
         state.list_state.select(Some(state.selected));
@@ -179,12 +178,6 @@ fn wiki_detail_lines(
     node: &gateway::proto::KmsKnowledgeNodeView,
     dim: Style,
 ) -> Vec<Line<'static>> {
-    let field = |label: &str, value: String| {
-        Line::from(vec![
-            Span::styled(format!("{label:<10}"), dim),
-            Span::raw(value),
-        ])
-    };
     let kind = if node.structural {
         "section"
     } else {
@@ -195,15 +188,22 @@ fn wiki_detail_lines(
             node.title.clone(),
             Style::new().add_modifier(Modifier::BOLD),
         ),
-        field("Path", node.path.clone()),
-        field("Kind", kind.to_string()),
-        field("Status", node.status.clone()),
-        field("Confidence", format!("{:.2}", node.confidence)),
-        field("Created", format_created(node.created_at)),
-        field("Updated", format_created(node.updated_at)),
+        Line::styled(node.path.clone(), dim),
+        Line::from(format!(
+            "{kind} | {} | confidence {:.2}",
+            node.status, node.confidence
+        )),
+        Line::styled(
+            format!(
+                "created {} | updated {}",
+                format_created(node.created_at),
+                format_created(node.updated_at)
+            ),
+            dim,
+        ),
     ];
     if !node.source_hash.is_empty() {
-        lines.push(field("Source", node.source_hash.clone()));
+        lines.push(Line::styled(format!("source {}", node.source_hash), dim));
     }
     lines.push(Line::default());
     lines.push(Line::styled(
@@ -239,9 +239,11 @@ mod tests {
     }
 
     fn draw(state: &mut KnowledgeWikiState) -> Vec<String> {
+        draw_at(state, 100, 18)
+    }
+
+    fn draw_at(state: &mut KnowledgeWikiState, width: usize, height: usize) -> Vec<String> {
         use ratatui::backend::TestBackend;
-        let width = 100_usize;
-        let height = 18;
         let mut terminal =
             ratatui::Terminal::new(TestBackend::new(width as u16, height as u16)).unwrap();
         terminal
@@ -289,6 +291,33 @@ mod tests {
         assert!(text.contains("  Testing"));
         assert!(text.contains("    Release"));
         assert!(text.contains("Run checks first."));
+    }
+
+    #[test]
+    fn narrow_layout_stays_readable_without_duplicating_paths() {
+        let article = node(
+            "/engineering/testing/release-checks-and-deployment",
+            "Release checks and deployment",
+            "Run the smoke suite.",
+        );
+        let section = node("/engineering/testing", "Testing", "");
+        let mut state = KnowledgeWikiState {
+            nodes: vec![article, section, node("/engineering", "Engineering", "")],
+            loaded: true,
+            selected: 0,
+            ..Default::default()
+        };
+        state.set_nodes(state.nodes.clone());
+        state.selected = 2;
+
+        let screen = draw_at(&mut state, 44, 14);
+        let text = screen.concat();
+
+        assert!(text.contains("Engineering"));
+        assert!(text.contains("Release checks"));
+        assert!(!text.contains("Confidence0"));
+        assert!(text.contains("confidence 0.90"));
+        assert!(text.contains("Run the smoke suite."));
     }
 
     #[test]
