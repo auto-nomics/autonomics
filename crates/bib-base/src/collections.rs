@@ -15,6 +15,7 @@ use crate::bib_base::{BibBase, BibCore};
 use crate::error::{Error, Result};
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
+    IdKind, Identifier,
 };
 
 // ---------------------------------------------------------------------------
@@ -517,6 +518,135 @@ impl BibCore {
         Ok(out)
     }
 
+    /// Hydrate every article in a collection in batch.
+    ///
+    /// This intentionally avoids the N+1 `get_article` loop used by early
+    /// clients: collection order, article headers, authors, and identifiers
+    /// are loaded with four bounded queries regardless of collection size.
+    pub async fn list_articles_by_collection(&self, collection_id: &str) -> Result<Vec<Article>> {
+        let associations = self
+            .list_collection_articles(collection_id, None, None)
+            .await?;
+        if associations.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.conn();
+        let mut articles_by_id = std::collections::HashMap::new();
+        for ids in associations.as_slice().chunks(400) {
+            let placeholders = (1..=ids.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let params: Vec<Value> = ids
+                .iter()
+                .map(|association| Value::Text(association.article_id.clone()))
+                .collect();
+            let mut rows = conn
+                .query(
+                    &format!(
+                        "SELECT id, title, abstract, year, month, journal, volume, issue, pages, \
+                         issn, essn, language, pub_types, keywords, source \
+                         FROM articles WHERE id IN ({placeholders})"
+                    ),
+                    turso::params_from_iter(params),
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                let mut article = Article::new(row.get::<String>(0)?, row.get::<String>(1)?);
+                article.abstract_text = crate::bib_base::opt_string(row.get_value(2)?);
+                article.year = crate::bib_base::opt_int(row.get_value(3)?).map(|year| year as u16);
+                article.month =
+                    crate::bib_base::opt_int(row.get_value(4)?).map(|month| month as u8);
+                article.journal = crate::bib_base::opt_string(row.get_value(5)?);
+                article.volume = crate::bib_base::opt_string(row.get_value(6)?);
+                article.issue = crate::bib_base::opt_string(row.get_value(7)?);
+                article.pages = crate::bib_base::opt_string(row.get_value(8)?);
+                article.issn = crate::bib_base::opt_string(row.get_value(9)?);
+                article.essn = crate::bib_base::opt_string(row.get_value(10)?);
+                article.language = crate::bib_base::opt_string(row.get_value(11)?);
+                article.pub_types = crate::bib_base::parse_json_col(&crate::bib_base::opt_string(
+                    row.get_value(12)?,
+                ));
+                article.keywords = crate::bib_base::parse_json_col(&crate::bib_base::opt_string(
+                    row.get_value(13)?,
+                ));
+                article.source = crate::bib_base::opt_string(row.get_value(14)?)
+                    .as_deref()
+                    .and_then(|source| serde_json::from_str(source).ok())
+                    .unwrap_or_default();
+                articles_by_id.insert(article.id.clone(), article);
+            }
+        }
+
+        let ids: Vec<String> = associations
+            .iter()
+            .map(|association| association.article_id.clone())
+            .collect();
+        for ids in ids.chunks(400) {
+            let placeholders = (1..=ids.len())
+                .map(|index| format!("?{index}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let params: Vec<Value> = ids.iter().map(|id| Value::Text(id.clone())).collect();
+
+            let mut author_rows = conn
+                .query(
+                    &format!(
+                        "SELECT article_id, last_name, fore_name, initials, affiliation, orcid, corresponding \
+                         FROM authors WHERE article_id IN ({placeholders}) ORDER BY article_id, position"
+                    ),
+                    turso::params_from_iter(params.clone()),
+                )
+                .await?;
+            while let Some(row) = author_rows.next().await? {
+                let article_id = row.get::<String>(0)?;
+                if let Some(article) = articles_by_id.get_mut(&article_id) {
+                    article.authors.push(bib_types::Author {
+                        last_name: row.get::<String>(1)?,
+                        fore_name: crate::bib_base::opt_string(row.get_value(2)?),
+                        initials: crate::bib_base::opt_string(row.get_value(3)?),
+                        affiliation: crate::bib_base::opt_string(row.get_value(4)?),
+                        orcid: crate::bib_base::opt_string(row.get_value(5)?),
+                        corresponding: row.get::<i64>(6)? != 0,
+                    });
+                }
+            }
+
+            let mut identifier_rows = conn
+                .query(
+                    &format!(
+                        "SELECT article_id, kind, value FROM identifiers \
+                         WHERE article_id IN ({placeholders}) ORDER BY article_id"
+                    ),
+                    turso::params_from_iter(params),
+                )
+                .await?;
+            while let Some(row) = identifier_rows.next().await? {
+                let article_id = row.get::<String>(0)?;
+                let kind = match row.get::<String>(1)?.as_str() {
+                    "doi" => IdKind::Doi,
+                    "pmid" => IdKind::Pmid,
+                    "pmc" => IdKind::Pmc,
+                    "arxiv" => IdKind::Arxiv,
+                    "s2" => IdKind::S2,
+                    "openalex" => IdKind::OpenAlex,
+                    _ => IdKind::Other,
+                };
+                if let Some(article) = articles_by_id.get_mut(&article_id) {
+                    article
+                        .identifiers
+                        .push(Identifier::new(kind, row.get::<String>(2)?));
+                }
+            }
+        }
+
+        Ok(associations
+            .iter()
+            .filter_map(|association| articles_by_id.remove(&association.article_id))
+            .collect())
+    }
+
     /// List all collection-article entries that are waiting for a
     /// full-text upload (`fetch_status = 'fulltext_requested'`).
     ///
@@ -734,6 +864,15 @@ impl BibBase {
             collection_id: collection_id.to_owned(),
             role_filter,
             fetch_filter,
+            reply,
+        })
+        .await
+    }
+
+    /// Load all articles in a collection as one batch, preserving position.
+    pub async fn list_articles_by_collection(&self, collection_id: &str) -> Result<Vec<Article>> {
+        self.call(|reply| BibCommand::ListArticlesByCollection {
+            collection_id: collection_id.to_owned(),
             reply,
         })
         .await

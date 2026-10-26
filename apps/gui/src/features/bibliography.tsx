@@ -277,6 +277,7 @@ export function BibliographyView() {
   const [queryDraft, setQueryDraft] = useState("");
   const [query, setQuery] = useState("");
   const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
+  const [collectionArticles, setCollectionArticles] = useState<BibArticle[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<string | null>(null);
   const [attachmentsOpen, setAttachmentsOpen] = useState(true);
   const [detail, setDetail] = useState<BibDetail | null>(null);
@@ -289,6 +290,7 @@ export function BibliographyView() {
   const [articleOffset, setArticleOffset] = useState(0);
   const [hasMoreArticles, setHasMoreArticles] = useState(false);
   const requestSequence = useRef(0);
+  const collectionRequestSequence = useRef(0);
   const articleLoaderRef = useRef<HTMLDivElement | null>(null);
 
   const loadLibrary = useCallback(async (
@@ -340,12 +342,18 @@ export function BibliographyView() {
   }, [hasMoreArticles, loadMoreArticles, loading]);
 
   const visibleArticles = useMemo(() => {
-    if (!selectedCollection) return articles;
-    const members = new Set(
-      collections.find((collection) => collection.id === selectedCollection)?.article_ids ?? [],
-    );
-    return articles.filter((article) => members.has(article.id));
-  }, [articles, collections, selectedCollection]);
+    const source = selectedCollection ? collectionArticles : articles;
+    const needle = query.trim().toLowerCase();
+    if (!needle) return source;
+    return source.filter((article) => {
+      const authors = (article.authors ?? [])
+        .map((author) => author.name || [author.last_name, author.fore_name].filter(Boolean).join(" "))
+        .join(" ");
+      return `${article.title} ${authors} ${article.journal ?? ""} ${article.id}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [articles, collectionArticles, query, selectedCollection]);
 
   const selectArticle = useCallback((articleId: string | null) => {
     setSelectedArticle(articleId);
@@ -360,9 +368,31 @@ export function BibliographyView() {
       .finally(() => setDetailLoading(false));
   }, []);
 
+  const loadCollectionArticles = useCallback(async (collectionId: string) => {
+    const requestId = ++collectionRequestSequence.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await gatewayRequest(
+        "GET",
+        `/bib/collections/${encodeURIComponent(collectionId)}/articles`,
+      );
+      if (requestId !== collectionRequestSequence.current) return;
+      setCollectionArticles(response.articles ?? []);
+    } catch (cause) {
+      if (requestId !== collectionRequestSequence.current) return;
+      setError(String(cause));
+    } finally {
+      if (requestId === collectionRequestSequence.current) setLoading(false);
+    }
+  }, []);
+
   const selectCollection = (collectionId: string | null) => {
     setSelectedCollection(collectionId);
+    setSelectedArticle(null);
+    setDetail(null);
     setLibraryOpen(false);
+    if (collectionId) void loadCollectionArticles(collectionId);
   };
 
   const selected = visibleArticles.find((article) => article.id === selectedArticle)

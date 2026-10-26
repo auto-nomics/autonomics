@@ -188,6 +188,10 @@ pub(crate) enum BibCommand {
         fetch_filter: Option<FetchStatus>,
         reply: oneshot::Sender<Result<Vec<CollectionArticle>>>,
     },
+    ListArticlesByCollection {
+        collection_id: String,
+        reply: oneshot::Sender<Result<Vec<Article>>>,
+    },
     ListFulltextRequests {
         collection_id: Option<String>,
         reply: oneshot::Sender<Result<Vec<CollectionArticle>>>,
@@ -477,6 +481,12 @@ impl BibCommand {
                     core.list_collection_articles(&collection_id, role_filter, fetch_filter)
                         .await,
                 );
+            }
+            Self::ListArticlesByCollection {
+                collection_id,
+                reply,
+            } => {
+                let _ = reply.send(core.list_articles_by_collection(&collection_id).await);
             }
             Self::ListFulltextRequests {
                 collection_id,
