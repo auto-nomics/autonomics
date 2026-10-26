@@ -39,7 +39,7 @@ type SelectionAnchor = {
   y: number;
 };
 
-type ReaderPane = "thumbnails" | "outline" | "annotations" | "search";
+type ReaderPane = "thumbnails" | "outline" | "annotations" | "info" | "tags" | "search";
 
 const READER_SIDEBAR_WIDTH_KEY = "autonomics.pdf.sidebarWidth";
 const READER_SIDEBAR_OPEN_KEY = "autonomics.pdf.sidebarOpen";
@@ -48,6 +48,8 @@ const READER_RAIL_ICONS: Record<ReaderPane, string> = {
   thumbnails: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 9v12"/></svg>`,
   outline: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h13"/><circle cx="4" cy="6" r=".8" fill="currentColor"/><circle cx="4" cy="12" r=".8" fill="currentColor"/><circle cx="4" cy="18" r=".8" fill="currentColor"/></svg>`,
   annotations: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l5-5V5a2 2 0 0 0-2-2Z"/><path d="M8 8h7"/><path d="M8 12h5"/><path d="M15 21v-5h5"/></svg>`,
+  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 10v7"/><path d="M12 7h.01"/></svg>`,
+  tags: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1"/></svg>`,
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`,
 };
 
@@ -55,21 +57,9 @@ const READER_RAIL_LABELS: Record<ReaderPane, string> = {
   thumbnails: "Pages",
   outline: "Outline",
   annotations: "Notes",
-  search: "Search",
-};
-
-type ContextTab = "info" | "notes" | "tags";
-
-const CONTEXT_RAIL_ICONS: Record<ContextTab, string> = {
-  info: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 10v7"/><path d="M12 7h.01"/></svg>`,
-  notes: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l5-5V5a2 2 0 0 0-2-2Z"/><path d="M8 8h7"/><path d="M8 12h5"/><path d="M15 21v-5h5"/></svg>`,
-  tags: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1"/></svg>`,
-};
-
-const CONTEXT_RAIL_LABELS: Record<ContextTab, string> = {
   info: "Info",
-  notes: "Notes",
   tags: "Tags",
+  search: "Search",
 };
 
 export type PdfReaderHandle = {
@@ -121,6 +111,8 @@ class ZoteroStylePdfReader {
   private outlinePane: HTMLElement;
   private thumbnailsPane: HTMLElement;
   private annotationPane: HTMLElement;
+  private infoPane: HTMLElement;
+  private tagsPane: HTMLElement;
   private searchPane: HTMLElement;
   private searchInput: HTMLInputElement;
   private selectionPopup: HTMLDivElement;
@@ -130,8 +122,6 @@ class ZoteroStylePdfReader {
   private searchResults: Array<{ page: number; count: number }> = [];
   private activePane: ReaderPane = "thumbnails";
   private sidebarOpen = true;
-  private contextOpen = true;
-  private contextTab: ContextTab = "info";
 
   private constructor(
     private readonly articleId: string,
@@ -143,7 +133,7 @@ class ZoteroStylePdfReader {
     this.root.innerHTML = `
       <aside class="reader-sidebar-shell">
         <nav class="reader-rail" aria-label="PDF sidebar">
-          ${(["thumbnails", "outline", "annotations", "search"] as ReaderPane[]).map((pane) => `
+          ${(["thumbnails", "outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
             <button
               type="button"
               class="reader-rail-button${pane === this.activePane ? " active" : ""}"
@@ -164,6 +154,22 @@ class ZoteroStylePdfReader {
             <div class="reader-sidebar-pane" data-pane="thumbnails"></div>
             <div class="reader-sidebar-pane" data-pane="outline" hidden></div>
             <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
+            <div class="reader-sidebar-pane" data-pane="info" hidden>
+              <div class="reader-metadata">
+                ${this.metadataRow("Item Type", this.article?.source === "crossref" ? "Journal Article" : "Article")}
+                ${this.metadataRow("Title", this.article?.title || this.title)}
+                ${this.metadataRow("Authors", this.authorsText())}
+                ${this.metadataRow("Publication", this.article?.journal)}
+                ${this.metadataRow("Date", this.article?.year)}
+                ${this.metadataRow("DOI", this.identifier("doi"))}
+                ${this.metadataRow("PMID", this.identifier("pmid"))}
+                ${this.metadataRow("Source", this.article?.source)}
+                ${this.metadataRow("Record", this.article?.id)}
+              </div>
+            </div>
+            <div class="reader-sidebar-pane" data-pane="tags" hidden>
+              <div class="reader-tags" data-output="sidebar-tags"></div>
+            </div>
             <div class="reader-sidebar-pane" data-pane="search" hidden>
               <input class="reader-search-input" data-input="search" placeholder="Search PDF" />
               <div data-output="search-results"></div>
@@ -214,47 +220,6 @@ class ZoteroStylePdfReader {
           </div>
         </div>
       </main>
-      <aside class="reader-context" data-tab="${this.contextTab}" data-open="${this.contextOpen}">
-        <div class="reader-context-header">
-          <strong>${escapeHtml(this.article?.title || this.title)}</strong>
-          <button type="button" data-action="close-context" title="Close context panel">✕</button>
-        </div>
-        <div class="reader-context-body">
-          <section class="reader-context-section" data-context="info">
-            <div class="reader-metadata">
-              ${this.metadataRow("Item Type", this.article?.source === "crossref" ? "Journal Article" : "Article")}
-              ${this.metadataRow("Title", this.article?.title || this.title)}
-              ${this.metadataRow("Authors", this.authorsText())}
-              ${this.metadataRow("Publication", this.article?.journal)}
-              ${this.metadataRow("Date", this.article?.year)}
-              ${this.metadataRow("DOI", this.identifier("doi"))}
-              ${this.metadataRow("PMID", this.identifier("pmid"))}
-              ${this.metadataRow("Source", this.article?.source)}
-              ${this.metadataRow("Record", this.article?.id)}
-            </div>
-          </section>
-          <section class="reader-context-section" data-context="notes" hidden>
-            <div data-output="context-notes"></div>
-          </section>
-          <section class="reader-context-section" data-context="tags" hidden>
-            <div class="reader-tags" data-output="context-tags"></div>
-          </section>
-        </div>
-      </aside>
-      <nav class="reader-context-rail" aria-label="PDF context">
-        ${(["info", "notes", "tags"] as ContextTab[]).map((tab) => `
-          <button
-            type="button"
-            class="reader-context-button${tab === this.contextTab ? " active" : ""}"
-            data-tab="${tab}"
-            title="${CONTEXT_RAIL_LABELS[tab]}"
-            aria-label="${CONTEXT_RAIL_LABELS[tab]}"
-          >
-            ${CONTEXT_RAIL_ICONS[tab]}
-          </button>
-        `).join("")}
-        ${this.externalHref() ? `<button type="button" class="reader-context-button" data-action="open-external" title="Open source">${CONTEXT_RAIL_ICONS.info}</button>` : ""}
-      </nav>
     `;
     document.body.append(this.root);
 
@@ -267,6 +232,8 @@ class ZoteroStylePdfReader {
     this.outlinePane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="outline"]');
     this.thumbnailsPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="thumbnails"]');
     this.annotationPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="annotations"]');
+    this.infoPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="info"]');
+    this.tagsPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="tags"]');
     this.searchPane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="search"]');
     this.searchInput = this.select<HTMLInputElement>('.reader-sidebar-pane[data-pane="search"] [data-input="search"]');
     this.selectionPopup = this.select('[data-output="selection-popup"]');
@@ -329,15 +296,7 @@ class ZoteroStylePdfReader {
       void this.refit();
     });
     action("sidebar", () => this.setSidebarOpen(!this.sidebarOpen));
-    this.root.addEventListener("click", (event) => {
-      const target = event.target as HTMLElement;
-      const button = target.closest<HTMLButtonElement>(".reader-context-button[data-tab]");
-      if (!button) return;
-      this.setContextTab((button.dataset.tab ?? "info") as ContextTab);
-      this.setContextOpen(true);
-    });
     action("close-sidebar", () => this.setSidebarOpen(false));
-    action("close-context", () => this.setContextOpen(false));
     action("tool-highlight", () => {
       if (this.anchor) void this.addHighlight("yellow");
       else this.setStatus("Select text first");
@@ -465,35 +424,8 @@ class ZoteroStylePdfReader {
     return this.identifier("url") ?? null;
   }
 
-  private renderContext() {
-    this.root.dataset.tab = this.contextTab;
-    this.root.dataset.open = String(this.contextOpen);
-    this.root.querySelectorAll<HTMLButtonElement>(".reader-context-button[data-tab]").forEach((button) => {
-      button.classList.toggle("active", button.dataset.tab === this.contextTab);
-    });
-    this.root.querySelectorAll<HTMLElement>(".reader-context-section").forEach((section) => {
-      section.hidden = section.dataset.context !== this.contextTab;
-    });
-
-    const notes = this.root.querySelector("[data-output=context-notes]");
-    if (notes) {
-      notes.replaceChildren();
-      if (!this.annotations.length) {
-        notes.innerHTML = `<div class="reader-empty">No annotations</div>`;
-      } else {
-        for (const annotation of [...this.annotations].reverse()) {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.innerHTML = `
-            <strong>${escapeHtml(annotation.kind ?? "note")} · page ${Number(annotation.page ?? 1)}</strong>
-            <small>${escapeHtml(annotation.content.slice(0, 240))}</small>`;
-          button.addEventListener("click", () => void this.gotoPage(Number(annotation.page ?? 1)));
-          notes.append(button);
-        }
-      }
-    }
-
-    const tags = this.root.querySelector("[data-output=context-tags]");
+  private renderSidebarTags() {
+    const tags = this.tagsPane.querySelector("[data-output=sidebar-tags]");
     if (tags) {
       const keywords = this.article?.keywords ?? [];
       tags.replaceChildren();
@@ -508,16 +440,6 @@ class ZoteroStylePdfReader {
         }
       }
     }
-  }
-
-  private setContextTab(tab: ContextTab) {
-    this.contextTab = tab;
-    this.renderContext();
-  }
-
-  private setContextOpen(open: boolean) {
-    this.contextOpen = open;
-    this.root.dataset.contextOpen = String(open);
   }
 
   private setStatus(text: string) {
@@ -773,7 +695,7 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     await this.loadAnnotations();
-    this.renderContext();
+    this.renderSidebarTags();
   }
 
   private async addNote() {
@@ -793,14 +715,14 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     await this.loadAnnotations();
-    this.renderContext();
+    this.renderSidebarTags();
   }
 
   private async deleteAnnotation(id: string) {
     if (!window.confirm("Delete this annotation?")) return;
     await gatewayRequest("DELETE", `/bib/annotations/${encodeURIComponent(id)}`);
     await this.loadAnnotations();
-    this.renderContext();
+    this.renderSidebarTags();
   }
 
   private async pageText(page: number) {
@@ -861,6 +783,8 @@ class ZoteroStylePdfReader {
     this.outlinePane.hidden = name !== "outline";
     this.thumbnailsPane.hidden = name !== "thumbnails";
     this.annotationPane.hidden = name !== "annotations";
+    this.infoPane.hidden = name !== "info";
+    this.tagsPane.hidden = name !== "tags";
     this.searchPane.hidden = name !== "search";
   }
 
