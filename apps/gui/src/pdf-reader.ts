@@ -1,5 +1,5 @@
 import * as pdfjs from "pdfjs-dist";
-import type { PDFDocumentProxy, RenderTask } from "pdfjs-dist";
+import type { PDFDocumentProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
@@ -26,6 +26,7 @@ type PageView = {
   wrapper: HTMLDivElement;
   canvas: HTMLCanvasElement;
   text: HTMLDivElement;
+  viewport: PageViewport | null;
   task: RenderTask | null;
   rendering: boolean;
   generation: number;
@@ -34,9 +35,17 @@ type PageView = {
 type SelectionAnchor = {
   page: number;
   text: string;
-  rects: Array<{ left: number; top: number; width: number; height: number }>;
+  rects: Array<PdfAnnotationRect>;
   x: number;
   y: number;
+};
+
+type PdfAnnotationRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  space?: "display" | "pdf";
 };
 
 type ReaderPane = "thumbnails" | "outline" | "annotations" | "info" | "tags" | "search";
@@ -492,7 +501,7 @@ class ZoteroStylePdfReader {
       text.className = "reader-text-layer";
       wrapper.append(canvas, text);
       this.pages.append(wrapper);
-      this.pageViews.set(page, { wrapper, canvas, text, task: null, rendering: false, generation: 0 });
+      this.pageViews.set(page, { wrapper, canvas, text, viewport: null, task: null, rendering: false, generation: 0 });
       this.pageObserver?.observe(wrapper);
     }
   }
@@ -592,27 +601,69 @@ class ZoteroStylePdfReader {
     }
   }
 
-  private renderAnnotations() {
+  private async renderAnnotations() {
     for (const view of this.pageViews.values()) {
       view.wrapper.querySelectorAll(".reader-annotation").forEach((node) => node.remove());
     }
     for (const annotation of this.annotations) {
       const view = this.pageViews.get(Number(annotation.page));
       if (!view || annotation.kind !== "highlight" || !Array.isArray(annotation.rects)) continue;
+      const proxy = await this.document?.getPage(Number(annotation.page));
+      if (!proxy) continue;
+      const viewport = proxy.getViewport({ scale: this.zoom, rotation: this.rotation });
       for (const rect of annotation.rects) {
+        const box = this.annotationDisplayBox(rect, viewport);
+        if (!box) continue;
         const node = document.createElement("div");
         node.className = "reader-annotation";
         node.dataset.annotationId = annotation.id;
-        node.style.left = `${rect.left * 100}%`;
-        node.style.top = `${rect.top * 100}%`;
-        node.style.width = `${rect.width * 100}%`;
-        node.style.height = `${rect.height * 100}%`;
+        node.style.left = `${box.left * 100}%`;
+        node.style.top = `${box.top * 100}%`;
+        node.style.width = `${box.width * 100}%`;
+        node.style.height = `${box.height * 100}%`;
         node.style.background = annotation.color ?? "rgba(255, 214, 0, .38)";
         node.title = "Click to delete annotation";
         node.addEventListener("click", () => void this.deleteAnnotation(annotation.id));
         view.wrapper.append(node);
       }
     }
+
+  }
+
+  private annotationDisplayBox(
+    rect: PdfAnnotationRect,
+    viewport: PageViewport,
+  ): { left: number; top: number; width: number; height: number } | null {
+    if (rect.space !== "pdf") {
+      return {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      };
+    }
+
+    const [pageX0, pageY0, pageX1, pageY1] = viewport.viewBox;
+    const pageWidth = Math.abs(pageX1 - pageX0);
+    const pageHeight = Math.abs(pageY1 - pageY0);
+    if (!pageWidth || !pageHeight) return null;
+
+    const pdfLeft = pageX0 + rect.left * pageWidth;
+    const pdfRight = pageX0 + (rect.left + rect.width) * pageWidth;
+    const pdfBottom = pageY0 + rect.top * pageHeight;
+    const pdfTop = pageY0 + (rect.top + rect.height) * pageHeight;
+    const [left, top, right, bottom] = viewport.convertToViewportRectangle([
+      pdfLeft,
+      pdfBottom,
+      pdfRight,
+      pdfTop,
+    ]);
+    return {
+      left: Math.min(left, right) / viewport.width,
+      top: Math.min(top, bottom) / viewport.height,
+      width: Math.abs(right - left) / viewport.width,
+      height: Math.abs(bottom - top) / viewport.height,
+    };
   }
 
   private renderAnnotationList() {
@@ -647,15 +698,38 @@ class ZoteroStylePdfReader {
       this.hideSelectionPopup();
       return;
     }
-    const wrapperRect = wrapper.getBoundingClientRect();
+    const layer = element?.closest<HTMLElement>(".reader-text-layer");
+    const view = this.pageViews.get(Number(wrapper.dataset.page));
+    if (!layer || !view?.viewport) {
+      this.hideSelectionPopup();
+      return;
+    }
+    const layerRect = layer.getBoundingClientRect();
+    const viewport = view.viewport;
+    const [pageX0, , pageX1, pageY1] = viewport.viewBox;
+    const pageWidth = Math.abs(pageX1 - pageX0);
+    const pageHeight = Math.abs(pageY1 - viewport.viewBox[1]);
     const rects = Array.from(range.getClientRects())
       .filter((rect) => rect.width > 1 && rect.height > 1)
-      .map((rect) => ({
-        left: Math.max(0, (rect.left - wrapperRect.left) / wrapperRect.width),
-        top: Math.max(0, (rect.top - wrapperRect.top) / wrapperRect.height),
-        width: Math.min(1, rect.width / wrapperRect.width),
-        height: rect.height / wrapperRect.height,
-      }))
+      .map((rect) => {
+        const localLeft = rect.left - layerRect.left;
+        const localTop = rect.top - layerRect.top;
+        const [pdfLeft, pdfBottom] = viewport.convertToPdfPoint(
+          localLeft,
+          localTop + rect.height,
+        );
+        const [pdfRight, pdfTop] = viewport.convertToPdfPoint(
+          localLeft + rect.width,
+          localTop,
+        );
+        return {
+          left: Math.max(0, (Math.min(pdfLeft, pdfRight) - pageX0) / pageWidth),
+          top: Math.max(0, (Math.min(pdfBottom, pdfTop) - viewport.viewBox[1]) / pageHeight),
+          width: Math.min(1, Math.abs(pdfRight - pdfLeft) / pageWidth),
+          height: Math.min(1, Math.abs(pdfTop - pdfBottom) / pageHeight),
+          space: "pdf" as const,
+        };
+      })
       .filter((rect) => rect.width > 0 && rect.height > 0);
     if (!rects.length || !selection.toString().trim()) {
       this.hideSelectionPopup();
@@ -923,6 +997,7 @@ class ZoteroStylePdfReader {
       const proxy = await document.getPage(page);
       if (this.destroyed || view.generation !== generation) return;
       const viewport = proxy.getViewport({ scale: this.zoom, rotation: this.rotation });
+      view.viewport = viewport;
       const outputScale = Math.min(window.devicePixelRatio || 1, 2);
       view.canvas.width = Math.floor(viewport.width * outputScale);
       view.canvas.height = Math.floor(viewport.height * outputScale);

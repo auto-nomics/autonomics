@@ -412,6 +412,11 @@ pub struct AnnotationRect {
     pub top: f64,
     pub width: f64,
     pub height: f64,
+
+    /// Coordinate space. Legacy rows used display-normalized CSS boxes;
+    /// new PDF annotations use normalized PDF page space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
 }
 
 impl Annotation {
