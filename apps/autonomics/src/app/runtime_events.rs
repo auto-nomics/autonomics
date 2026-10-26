@@ -589,6 +589,7 @@ impl App {
 
             crate::app_event::AppEvent::SkillEvolutionLoaded {
                 workers,
+                knowledge,
                 skills,
                 proposals,
                 evidence,
@@ -645,6 +646,11 @@ impl App {
                         .observations
                         .set_observations(evidence.into_iter().map(evidence_row).collect()),
                     Err(error) => self.state.skill_evolution.observations.error = Some(error),
+                }
+
+                match knowledge {
+                    Ok(knowledge) => self.state.skill_evolution.wiki.set_nodes(knowledge),
+                    Err(error) => self.state.skill_evolution.wiki.error = Some(error),
                 }
             }
 

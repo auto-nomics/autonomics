@@ -226,6 +226,10 @@ impl GatewayClient {
         self.get("/kms/evidence").await
     }
 
+    pub async fn kms_knowledge(&self) -> Result<Vec<KmsKnowledgeNodeView>> {
+        self.get("/kms/knowledge").await
+    }
+
     pub async fn kms_skills(&self) -> Result<Vec<KmsSkillLibraryView>> {
         self.get("/kms/skills").await
     }

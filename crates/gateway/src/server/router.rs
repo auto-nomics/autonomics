@@ -30,6 +30,7 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/events", get(events::get_events))
         .route("/kms/workers", get(kms::get_worker_statuses))
         .route("/kms/evidence", get(kms::list_evidence))
+        .route("/kms/knowledge", get(kms::list_knowledge))
         .route("/kms/skills", get(kms::list_skills))
         .route("/kms/skills/{name}", get(kms::get_skill_detail))
         .route("/kms/skill-proposals", get(kms::list_skill_proposals))

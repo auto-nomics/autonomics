@@ -126,6 +126,9 @@ impl App {
             CommandAction::SkillEvolutionPanel => {
                 self.open_skill_evolution();
             }
+            CommandAction::KnowledgeWikiPanel => {
+                self.open_knowledge_wiki();
+            }
             CommandAction::SkillEvolve => {
                 self.open_skill_evolution();
             }
