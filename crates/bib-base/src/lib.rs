@@ -34,12 +34,16 @@ pub mod pmc_pdf;
 pub mod managed_fulltext;
 pub mod query;
 pub mod shared;
+pub mod search;
+mod local_index;
+mod search_analyzer;
+mod search_projection;
 pub mod stored_files;
 pub mod zotero_extract;
 pub mod zotero_model;
 pub use zotero_extract::ZoteroExtractor;
 
-pub use bib_base::BibBase;
+pub use bib_base::{BibBase, SearchEngineMode};
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
 pub use extract::{ExtractedImage, ExtractedText, SimpleExtractor, TextExtractor};

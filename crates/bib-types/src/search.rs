@@ -62,8 +62,9 @@ pub struct SearchScope {
     pub collection_id: Option<String>,
     pub include_descendants: bool,
     pub unfiled: bool,
-    /// When true, each child attachment or note must satisfy its own clause.
-    /// When false, matching clauses may be satisfied across a parent and child.
+    /// When true, positive clauses must match one evidence document.
+    /// When false, clauses may match across a parent and different children.
+    /// NOT always excludes the whole article.
     pub require_same_child: bool,
 }
 
@@ -84,6 +85,8 @@ pub enum SearchSort {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct SearchRequestV2 {
+    /// Query-language input. Supply either query or expression.
+    pub query: String,
     pub expression: Option<SearchExpr>,
     pub scope: SearchScope,
     pub sort: SearchSort,
@@ -98,6 +101,7 @@ pub struct SearchRequestV2 {
 impl Default for SearchRequestV2 {
     fn default() -> Self {
         Self {
+            query: String::new(),
             expression: None,
             scope: SearchScope::default(),
             sort: SearchSort::default(),
@@ -107,6 +111,16 @@ impl Default for SearchRequestV2 {
             mode: SearchMode::Lexical,
         }
     }
+}
+
+/// A document-level local search page. A cursor is valid only for the same
+/// request and unchanged ordered result snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchPageV2 {
+    pub hits: Vec<crate::SearchHit>,
+    pub total: usize,
+    pub next_cursor: Option<String>,
+    pub index_generation: String,
 }
 
 /// Recall strategy. Hybrid search must preserve exact identifier and Boolean
@@ -153,4 +167,19 @@ mod tests {
         assert_eq!(decoded, request);
         assert_eq!(SearchRequestV2::default().page_size, 50);
     }
+}
+
+/// Local projection progress. Extraction and indexing have separate lifecycles.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndexStatus {
+    pub engine: String,
+    pub source_revision: u64,
+    pub indexed_revision: Option<u64>,
+    pub pending_articles: usize,
+    pub indexed_documents: usize,
+    pub durable: bool,
+    pub last_error: Option<String>,
+    pub building: bool,
+    pub processed_documents: usize,
+    pub target_revision: Option<u64>,
 }

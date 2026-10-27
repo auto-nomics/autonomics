@@ -1,0 +1,76 @@
+name: Bibliography search qualification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'crates/bib-base/**'
+      - 'crates/bib-types/**'
+      - 'crates/api-server/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'scripts/qualify_bib_search_recovery.py'
+      - '.github/workflows/bib-search.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/bib-base/**'
+      - 'crates/bib-types/**'
+      - 'crates/api-server/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'scripts/qualify_bib_search_recovery.py'
+      - '.github/workflows/bib-search.yml'
+
+permissions:
+  contents: read
+concurrency:
+  group: bib-search-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TARGET_DIR: target
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+jobs:
+  bib-search:
+    name: Bibliography search (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.96
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bib-search-${{ matrix.os }}
+      - name: Locate Windows libclang
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $llvm = 'C:\Program Files\LLVM\bin'
+          if (Test-Path "$llvm\libclang.dll") { "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV }
+      - run: cargo test -p bib-base --locked --test search_v2
+      - run: cargo test -p bib-base --locked --lib search::recovery_tests
+      - run: cargo test -p api-server --locked --test api bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress
+      - run: cargo build -p bib-base --locked --example search_recovery_probe
+      - name: Interrupt and restore isolated processes
+        shell: bash
+        run: |
+          probe=target/debug/examples/search_recovery_probe
+          if [ "${{ runner.os }}" = Windows ]; then probe="$probe.exe"; fi
+          python scripts/qualify_bib_search_recovery.py --probe "$probe" --output "search-recovery-${{ runner.os }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-recovery-${{ runner.os }}
+          path: search-recovery-*.json
+          if-no-files-found: ignore

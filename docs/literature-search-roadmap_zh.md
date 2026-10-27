@@ -1,6 +1,6 @@
 # 文献检索引擎与 GUI 优化实施方案
 
-日期：2026-10-27。依据当前工作区源码和官方产品资料制定；工作区已有大量未提交的文献管理、集合和阅读器改动，本方案以这些改动后的代码为依据，不覆盖现有工作。本文是设计与排期建议，不代表已经完成实现或性能验证。
+日期：2026-10-27。依据当前工作区源码、已落盘的基准收据和官方产品资料更新。基线为已提交的 P0（`01452ed`）及 P1 检索实现；实现、测试代码和基准收据的存在不等于已通过生产发布验收。执行目标为按 P0–P5 自主实现，每阶段一个提交。
 
 ## 1. 建议与产品目标
 
@@ -10,43 +10,44 @@
 2. 库内研究：搜索元数据、全文、笔记与批注，组合条件、保存动态搜索，并直接跳转到证据位置。
 3. 外部发现：跨数据库检索、去重、比较版本、追踪引用、批量导入，保留原始来源和检索过程。
 
-总体建议：保留现有 Rust、Turso、VFS 和 Zotero item 模型；增加统一检索服务，优先验证 Turso 原生 FTS；逐步加入联邦搜索、语义召回和重排。先交付可靠的词法搜索与阅读闭环，再用评价集决定是否上线语义功能。引擎的 P0 原型决策和生产启用门槛见 [本地全文索引 ADR](literature-search-adr.md)。
+总体建议：保留现有 Rust、Turso、VFS 和 Zotero item 模型；增加统一检索服务，已验证 Turso 原生 FTS 并在 P1 采用独立 Tantivy；逐步加入联邦搜索、语义召回和重排。先交付可靠的词法搜索与阅读闭环，再用评价集决定是否上线语义功能。引擎的 P0 原型决策和生产启用门槛见 [本地全文索引 ADR](literature-search-adr.md)。
 
 ## 2. 当前代码：已有基础与具体缺口
 
-| 层面 | 当前实现与代码入口 | 结论 |
+必须区分主分支提交基线与当前未提交实现，避免把已经实现的能力重新排期，也避免把工作区原型当成已发布功能。
+
+| 层面 | 当前工作区实现与入口 | 后续缺口 |
 | --- | --- | --- |
-| 对象与存储 | `crates/bib-base/src/zotero_model.rs`、`docs/zotero-alignment.md` | 已有 libraries/items、creator/tag、父子附件、全文状态、批注和 VFS 定位。可以沿用，无须重建文献对象模型。兼容 articles/fulltexts 仍在参与查询。 |
-| 本地索引 | `crates/bib-base/src/bib_base.rs`：`sync_search_index`、`tokenize`、`search_articles` | 已有事务内维护的 `searchTerms` 倒排表，覆盖标题、摘要、全部附件全文和批注。并非纯 LIKE 搜索；`library_tools.rs` 中 LIKE 描述已落后于实现。 |
-| 集合搜索 | `crates/bib-base/src/collections.rs`：`query_collection_articles` | 已在数据库中先应用集合/子集合范围及词法条件，再计数与分页；不能将其误判为“仅在前 500 条中前端过滤”。已有超过 500 条的回归测试。 |
-| 查询表达 | `crates/bib-types/src/query.rs`：`StructuredSearch` | 已有关键词、标题、作者、MeSH、期刊、类型、机构与年份；模型是扁平条件，无法完整表示嵌套布尔树、短语、邻近、局部搜索范围。 |
-| 外部源 | `crates/bib-base/src/query.rs`、`shared.rs` | 当前共享网关注册 PubMed、arXiv、bioRxiv、OpenAlex、Crossref、Semantic Scholar。bioRxiv 适配器仅能按标识符获取，关键词搜索返回空批次；应明确标识能力。Europe PMC、Embase SDK 的存在不等于已接入该联邦网关。 |
-| 外部 API | `crates/api-server/src/bib.rs`：`search_external` | `/search/external` 当前仅把字符串放入单个 keyword，支持选择源；没有暴露完整结构化查询、连续翻页和融合后的文献级结果。 |
-| 聚合行为 | `LiteratureGateway::search_subset` | 已并发请求并逐源保留错误，但 `join_all` 等全部结束后返回；此层没有跨源去重、全局排名、源游标或流式首批交付。已有 HTTP 超时配置，问题是缺少查询级预算与逐源增量交付。 |
-| GUI | `apps/gui/src/features/bibliography.tsx` | 已有三栏、集合树、搜索提交、500 条分批加载、附件状态、批量选择和请求序号防旧响应覆盖。尚未展示命中片段、过滤面板、高级构建器、保存搜索、外部发现工作区。列表使用普通 map，继续加载会持续增加 DOM。 |
-| 阅读闭环 | `apps/gui/src/pdf-reader.ts`、`reading-mode.ts`、`docs/zotero-reading-mode.md` | 已有 PDF 搜索及 SDT 阅读和映射基础，可以扩展跨文献搜索命中的定位；当前 SearchHit 不携带附件/段落/页码。 |
-| 多端 | `apps/autonomics`、`apps/gui`、`crates/api-server/frontend` | 同时存在 TUI、主 React GUI 和服务器前端。检索语义必须放后端共享；GUI 优先主 React 实现，其他端明确兼容范围。 |
+| 对象与存储 | `crates/bib-base/src/zotero_model.rs`、`docs/zotero-alignment.md`：已有 libraries/items、creator/tag、父子附件、全文状态、批注和 VFS | 沿用现有身份；逐步减少兼容 articles/fulltexts 对搜索路径的影响。 |
+| 本地引擎（P1） | `local_index.rs`、`search_analyzer.rs`：Tantivy 0.26.2，字段 BM25、严格位置短语、精确 ID、中英混排及科研符号 | 真实库相关性评价、宽查询容量边界；邻近、拼写建议、语义召回尚未实现。旧 `searchTerms` 双写仍有成本。 |
+| 查询契约（P0/P1） | `bib-types/src/search.rs`、`search_parser.rs`：V2、嵌套 AND/OR/NOT、字段、年份范围、scope、cursor；外部仍使用扁平 `StructuredSearch` | `hybrid`、外部 sources、引用量排序虽出现在类型中，本地 V2 明确拒绝，不能据此宣称功能可用。缺精确筛选、分面、deadline 和多证据定位契约。 |
+| 同步与恢复（P1） | `search_projection.rs`、`search.rs`、`actor.rs`：只读投影视图、事务 outbox、revision/token、独立检索队列、异步重建及进度 | 搜索与索引重放共用队列；全量重建期间查询排队。需要维护体验与后续双 generation 切换设计。 |
+| 集合范围 | `collections.rs`：先在后端限制集合/子集合，再计数、分页；非空查询已路由到检索服务 | 保留正确的后端 scope；GUI 接 V2 后对齐递归范围、总数与过期游标体验，不能改成前端过滤。 |
+| 命中证据 | `bib-types/src/types.rs::SearchHit`：article_id、title、score、snippet、anchor_key、matched_field | 只有单个最佳证据；没有高亮区间、attachment/annotation 独立引用、page、SDT block、内容 revision，也没有当前页完整展示元数据。 |
+| 外部源 | `query.rs`、`shared.rs`：共享 PubMed、arXiv、bioRxiv、OpenAlex、Crossref、Semantic Scholar 客户端 | bioRxiv 是按 ID 获取，关键词搜索返回空批次；Europe PMC/Embase SDK 不等于已接联邦网关。补 source capability，避免将不支持显示为零结果。 |
+| 联邦 API | `api-server/src/bib.rs::search_external`：字符串放入单个 keyword，可选择源；`search_subset` 使用 `join_all` | 尚无逐源首批、查询级预算、源游标、文献级去重与融合结果。已有 HTTP 超时，不能描述为完全没有超时。 |
+| 主 GUI | `apps/gui/src/features/bibliography.tsx::loadLibrary`：三栏、集合树、Enter 搜索、500 条 offset 分页、列表请求序号保护 | 仍用旧列表 API，未消费 V2 hit/cursor；每次加载先请求集合和 health；普通 map 持续增加 DOM；无片段、高级构建器、保存搜索和发现工作区。 |
+| GUI 竞态与传输 | `selectArticle`、`apps/gui/src/gateway.ts::gatewayRequest` | 详情没有请求序号保护；gatewayRequest 没有 signal/cancel 参数。浏览器 fetch 与 Tauri invoke 两条路径均需设计取消。 |
+| 阅读闭环与多端 | PDF/SDT 阅读器已有搜索与映射基础；另有 TUI 和服务器前端 | 优先主 React GUI，浏览器/Tauri 同验收；其他端共享后端语义并明确功能覆盖，不同时重写三套 UI。 |
 
-### 优先修正的正确性问题
+### 已解决项与仍需验收项
 
-- **重复词漏检**：`tokenize` 保留重复词，两条本地查询路径使用 `COUNT(DISTINCT term) = terms.len()`。例如 `GWAS GWAS` 的不同词数为 1，要求值却为 2，无法命中。先统一查询规范化，补两条路径的回归测试；短语中的重复词则必须保留其位置语义。
-- **检索字段不完整**：现有索引构建实际只写 title、abstract、fulltext、annotation；普通作者、期刊、年份、标识符与文献关键词没有完整纳入对应字段搜索。仅在批注 tag 文本中偶然命中不能替代元数据字段检索。
-- **位置与相关性缺失**：倒排表主键是 `(term, anchorKey, field)`，不保存词频与词位置，无法提供可靠的短语、邻近和 BM25 相关性。当前 score 只是 0–3 字段优先级。
-- **命中附件与片段脱节**：索引覆盖所有附件，但 `search_articles` 读取的片段正文来自兼容 `fulltexts` 的首选附件。非首选附件命中后，可能只返回标题作为片段，也不能打开命中的附件。
-- **多词片段不可靠**：匹配按词的交集执行，`extract_snippet` 却寻找完整原始查询子串；词分散在正文中时会退回标题。
-- **结果排序不统一**：`search_articles` 与集合查询拥有不同排序细节；前者缺少明确的最终唯一键排序，需要稳定分页。
-- **索引更新成本**：任一索引同步先删整篇再重建所有附件与批注词项；批量插入随全文词数生成参数，需要验证数据库参数边界。启动版本变化还会逐篇重建，需改成可恢复后台任务。
+重复词漏检、缺少元数据字段、字段优先级冒充相关性、多附件片段与对象脱节等问题，已由 P0/P1 修复或增加实现与回归用例。本次静态审查确认相应代码存在；不能继续把这些描述为当前唯一实现的缺陷，也不能据此省略最终测试。
 
-以上来自静态代码分析；尚未运行专项复现、性能基准或浏览器体验测试。
+现有 `tests/search_v2.rs` 有 12 项集成测试，覆盖字段/短语/标识符/年份、全篇 NOT、批注独立身份、游标、集合范围、Unicode 片段、中文和科研符号，以及短语不跨作者/关键词/标签边界。恢复资格脚本和三平台 workflow 已存在；macOS/Windows 的实际执行结果仍需补齐。
+
+已落盘的 `*-final-release.json` 显示：10k/100k 合成库各 11 类查询，单类 20 次采样，最慢类别热查询 P95 约 12.1/157.5ms；100k 全量重建约 2.57s、进程峰值 RSS 约 628MiB。维护收据中首个搜索等待约 2.65s，而写入 P95 约 3.9ms。这里只引用本机 release 收据，不代表本次重新执行、真实库质量、操作系统冷缓存或 HTTP/GUI 端到端时延；基准说明已按最终 JSON 对齐。
+
+重点风险是宽匹配时当前实现收集并聚合完整候选、排序和计算游标指纹，分页不等于查询成本只与 page_size 相关。P1/P2 应单独量测纯 NOT、空查询、常见词、大集合和高并发，超出预算后再实现分面/Top-K 优化，不能为提速偷偷改变精确总数与布尔语义。
 
 ## 3. 对标：应吸收的能力
 
 | 对标对象 | 官方资料确认的能力 | 对本项目的取舍 |
 | --- | --- | --- |
 | [Zotero 搜索](https://www.zotero.org/support/searching) | 快速搜索范围、高级条件、动态保存搜索、附件全文索引及重建 | 建立清晰的搜索范围和索引可见性；原生支持嵌套布尔表达式，并增强命中片段和阅读定位。 |
-| [Mendeley 搜索与组织](https://static.mendeley.com/md-stitch/releases/live/03-searching-and-organizing-references.f40ca0f6.html) | 当前集合内搜索，title/author/year/abstract 字段搜索 | 搜索框显示当前集合与递归范围，面向熟练用户提供字段语法，与图形条件构建器共享语义。 |
+| [Mendeley 搜索与组织](https://static.mendeley.com/md-stitch/releases/live/03-searching-and-organizing-references.f40ca0f6.html) | 当前集合内搜索；桌面高级搜索提供 title/author/year/abstract/pdf/tag 等字段、短语和排除，网页端能力不同 | 搜索框显示当前集合与递归范围，面向熟练用户提供字段语法，与图形条件构建器共享语义。 |
 | [Google Scholar 搜索帮助](https://scholar.google.com/intl/en/scholar/help.html) | 相关性与时间排序、被引、相关文献、多版本、全文入口、提醒 | 外部发现页面应围绕“相关性—证据—版本—导入”组织；Google Scholar 本阶段作为外部跳转入口，不列为已具备的 SDK 数据源。 |
-| [Semantic Scholar 产品](https://webflow.semanticscholar.org/product) | 文献筛选、语境化阅读、论文与引用关系 API | 复用已有 S2 客户端，增加相似文献、前后向引文探索；图谱可视化后置，先做好引用列表。 |
+| [Semantic Scholar API](https://webflow.semanticscholar.org/product/api/tutorial) | 文献筛选、语境化阅读、论文与引用关系 API | 复用已有 S2 客户端，增加相似文献、前后向引文探索；图谱可视化后置，先做好引用列表。 |
 | [PubMed 用户指南](https://pubmed.ncbi.nlm.nih.gov/help/) | 字段检索、主题映射、Search Details | 保存每个源实际执行的查询，显示条件是否被支持；专业检索提供原生语法模式，避免自动改写破坏可复现性。 |
 | [OpenAlex API](https://help.openalex.org/api/) | 检索、过滤、排序、聚合、分页等独立能力 | 建立源能力描述、真实游标、筛选兼容性和配额状态。具体能力与预算以接入时官方接口及契约测试为准。 |
 
@@ -76,7 +77,7 @@ flowchart TD
 
 ### 4.1 查询契约
 
-在 `bib-types` 新增 `SearchRequestV2`、`SearchExpr`、`SearchResponseV2`，逐步替代扁平模型的局限。旧接口保留适配层。统一的是用户意图、契约和状态，而非假定所有源拥有相同的搜索能力。
+已有 `SearchRequestV2`、`SearchExpr`、`SearchPageV2` 是本地基础，后续增量扩展结果证据、filters 和外部任务响应，保留旧接口适配层。下面列出目标能力，未在第 2 节明确为已实现的部分均属于后续计划。统一的是用户意图、契约和状态，而非假定所有源拥有相同的搜索能力。
 
 - `SearchExpr`：term、phrase、and、or、not、field、range；邻近查询后续按后端能力启用。
 - `scope`：library、collection、include_descendants、unfiled、local/external；父条目/附件/批注匹配策略显式化。
@@ -90,9 +91,9 @@ flowchart TD
 
 ### 4.2 本地词法引擎选型
 
-P0 已验证 Turso 0.7.2 内置 FTS 的 BM25、短语匹配和高亮，因此 P1 首选评估数据库原生 FTS，避免引入两套索引维护路径。该功能依赖显式启用的实验性索引方法，生产开放前须通过 [ADR](literature-search-adr.md) 所列兼容、恢复与规模门槛。Turso 自身 FTS 以 Tantivy 为引擎；只有原生方案未达门槛时，才评估独立 Tantivy 目录。
+P0 先验证 Turso 0.7.2 原生 FTS；P1 的扩展资格测试发现评分、短语位置及多字段 AND 正确性问题，已按 [ADR](literature-search-adr.md) 的备选路径改用独立 Tantivy 0.26.2。数据库事务维护文档投影和可重放事件，独立索引负责 BM25、位置与字段查询；索引目录可由数据库重建。
 
-暂不引入必须单独运维的 Elasticsearch/OpenSearch 服务；若未来出现组织级超大共享库再评估。不能从 SQLite 兼容性推断标准 FTS5 可用；项目的候选方案为 Turso 特有的 `USING fts` 索引方法。
+暂不引入必须单独运维的 Elasticsearch/OpenSearch 服务；若未来出现组织级超大共享库再评估。生产方案不依赖标准 FTS5 或 Turso 的实验性 FTS 索引方法。
 
 两级检索对象：文献级元数据用于排序、筛选和计数；附件段落/批注级文本用于证据召回。以 item/attachment/annotation key 为稳定身份，article_id 仅作为兼容映射。原型须比较“一条目一文档”和“独立证据文档 + 文献聚合”的成本，明确文献总数与片段总数不能混淆。
 
@@ -102,7 +103,7 @@ P0 已验证 Turso 0.7.2 内置 FTS 的 BM25、短语匹配和高亮，因此 P1
 
 ### 4.3 索引一致性与恢复
 
-引入外部索引后，不能继续声称数据库与索引天然同事务。文献更新事务内写入 outbox，后台 worker 按对象 key 和 revision 幂等更新派生索引，提交索引后再确认消费。崩溃后重复处理安全，旧版本事件不能覆盖新对象。
+引入外部索引后，不能继续声称数据库与索引天然同事务。文献更新事务内写入 outbox，后台 worker 按对象 key 和 revision 幂等更新派生索引，提交索引后推进各自消费水位。当前没有全局消费确认，不得让某个进程删除其他进程仍需重放的事件。崩溃后重复处理安全，旧版本事件不能覆盖新对象。
 
 - 删除、附件替换、批注修改、收藏范围变化都有对应事件；按对象粒度更新，避免重建整篇全部附件。
 - 显示 source_revision/indexed_revision、覆盖率、积压和失败；不能以“提取完成”冒充“已可检索”。
@@ -175,7 +176,7 @@ OpenAlex 当前官方资料对身份、游标和配额有专门要求，不能�
 | P4 语义增强 | 6–10 日 | 分块/模型比较、增量向量索引、混合召回、有限重排、中英查询评测 | 独立测试集较词法基线有收益，精确查找和布尔约束不退化；资源成本达标。 |
 | P5 探索与追踪 | 5–8 日 | 引文/相关文献、检索快照、可复现导出、订阅任务与新文献提醒；图谱按实际需要增加 | 可追溯源查询、时间和版本；提醒只报告新增/更新并去重。 |
 
-合计约 36–57 个工程工作日，另计综合发布缓冲；首个本地检索与 GUI 闭环约 17–27 日。检索快照保存实际结果及来源，动态保存搜索只保存规则，两者分别实现。
+上表是从零实施的原始估算，合计约 36–57 个工程工作日。当前 P0 已提交、P1 本地实现已验收，不能把这些工作再次计入剩余工期。按当前代码，P1 收口暂估 2–4 日；P2 因包含后端过滤/保存搜索/证据定位配套，重估为 8–12 日，首个本地闭环剩余约 10–16 日。P3–P5 原估共 19–30 日，整体剩余约 29–46 日，另计真实库评测、平台问题和发布缓冲；这是排期预算而非完成承诺。检索快照保存实际结果及来源，动态保存搜索只保存规则，两者分别实现。
 
 ### 建议拆分为可审查的变更
 
@@ -209,4 +210,54 @@ OpenAlex 当前官方资料对身份、游标和配额有专门要求，不能�
 - 以 feature flag 控制新引擎、V2 API、外部发现和语义功能；小库和大库分别灰度。
 - 不在同一变更中同时重写对象存储、替换全文提取链路和引入搜索索引；沿用当前 Zotero SDT 与 VFS 的成果。
 - 若原型在分面计数、文献聚合或索引内存上不达标，先缩小证据索引/分块策略，再比较其他后端；不在未测量前承诺最终容量。
-- 本轮没有修改实现、运行测试或请求真实文献搜索 API。实施前先固定一份可测试的工作区快照；文档中的函数名比行号更适合作为当前持续开发中的定位依据。
+- P0 已提交；P1 本地实现及 Linux 验收完成。多语言和并发收据已存在，跨平台实际运行和最终发布验收仍需补齐。按阶段完成验证后提交；持续开发中以函数名作为定位依据。
+
+
+## 9. 从当前工作区开始的执行清单
+
+建议沿用 P0–P5 阶段编号；阶段内按以下顺序实现、审查与验收。各阶段完成所述功能和本地验收后形成独立提交；未取得的平台发布证据单独保留为发布门槛。
+
+### P1 收口：冻结本地能力边界
+
+1. 对齐 ADR、API 文档、最终 benchmark JSON 与汇总；固定数据集、硬件、版本和采样办法，分别报告查询 P95、维护首个查询最大等待、重开/升级、RSS 和索引体积。
+2. 最终运行 Rust 单元/集成/API、格式与 lint，以及 Linux/macOS/Windows 恢复资格；检查旧 API、集合、Agent/TUI 兼容路径。真实库另外覆盖长 PDF、多语言、大量批注、删除与恢复。
+3. 将“维护中搜索排队”作为显式首版行为，GUI 保留旧结果并展示进度、提供重试。若产品要求重建时也保持搜索 SLO，则把独立新 generation 构建、旧 reader 服务和原子切换上移到发布前，不能仅修改提示。
+4. 明确旧 searchTerms 双写的退出条件、升级限制和回退演练；在 P2 完成端到端一致性之前保留回退。
+
+### P2A：V2 数据与交互骨架，优先完成
+
+- `useBibSearch` 统一 query/scope/sort/filter/cursor/selection 状态；空查询沿用普通浏览，非空搜索接 `/search/v2`。当前页元数据通过一次后端批量水合或 V2 summary 返回，避免每条命中额外请求详情。
+- 搜索结果列表虚拟化，默认每页 50；集合树与 health 独立缓存。查询变更使旧 cursor 失效，响应绑定请求序号；过期 cursor 提示刷新并恢复可理解的列表状态。
+- gateway 增加浏览器 AbortSignal；Tauri 用 request/task ID、取消命令及后端取消令牌。取消至少停止排队/后续交付，不能以忽略响应冒充已经中断 CPU 工作。
+- 详情也使用序号保护；IME 输入期不搜索，250ms 防抖 + Enter，快捷键、焦点和多选与虚拟列表一起验收。
+
+### P2B：精确过滤、高级条件与动态保存搜索
+
+- 在契约增加 `filters`：tag_id/creator_id、类型、年份、有全文、有批注、索引状态；ID/枚举筛选与全文词法匹配分别执行。现有 `tag:term` 不能充当精确标签选择器。
+- 所有过滤在排序、计数和分页之前生效。分面基于当前查询和 scope，明确多选 OR/AND、缺失值及“忽略本分面自身筛选”的计数口径，增加可验证的小夹具。
+- 新增保存搜索存储及 CRUD：id、name、library/scope、AST/filters/sort、schema_version、timestamps。保存规则并动态执行；删除保存搜索不删除文献。浏览器/Tauri 共用后端，不仅保存在 localStorage。
+- 图形构建器与文本 parser 共用 AST，支持嵌套分组；无法无损显示的表达式留在文本模式，显示错误位置而非静默改写。
+
+### P2C：证据与阅读闭环
+
+- 新增 `SearchEvidence`：item_key、attachment_key、annotation_key、matched_field、snippet、highlight_ranges、可选 page/SDT block/offset、content_revision、location_status；每篇返回最佳证据与 evidence_count，更多证据按需获取。
+- 明确高亮坐标单位：Rust 的 UTF-8 字节范围不能直接当作 JavaScript UTF-16 索引。选择统一 Unicode code point 范围或明确转换，覆盖中文、emoji、组合字符和大小写折叠测试。
+- 建议 `GET /articles/:id/search-evidence` 接收查询或查询会话 ID；同一权限、scope、内容版本校验后返回证据。没有可靠 PDF 映射时仅打开对应附件及阅读器搜索，不显示推测页码。
+- 索引状态从 `/search/status` 展示覆盖/积压/失败/重建，重建使用现有 202 API。搜索结果以一篇文献一行展示，展开多附件/批注证据；数字不把“文献数”和“证据数”混用。
+
+P2 验收任务：在集合内输入中英混合查询 → 精确筛选年份/标签 → 查看命中附件与高亮 → 打开证据 → 返回保留滚动/选择 → 保存规则 → 新增匹配文献后自动出现。浏览器和 Tauri 分别完成；快速切换文献/集合不能串结果。
+
+### P3：独立发现工作区与联邦会话
+
+- 优先 PubMed/OpenAlex，逐一完成 capability、真实游标、deadline、限流、错误分类和原生查询详情；其他源按真实支持能力显示，不支持的条件禁止静默丢弃。
+- 建议以 `POST /search/sessions` 创建会话，事件推送 source_started/batch/source_failed/completed，通过会话 ID 继续分页、取消、单源重试；这是新接口设计，不是已有端点。浏览器认证和 Tauri 事件转发同步实现。
+- 强 ID 去重、字段来源、预印本/正式版关系、已在库状态、幂等批量导入先于复杂排名。支持分源排名和候选 RRF；不显示未经证明的全网去重总数。
+- 原始查询、各源翻译、时间、源游标与结果 ID 可保存为快照，为系统综述导出与 P5 订阅提供依据。OpenAlex 游标翻页的 key 要求按当前官方文档验收，不能沿用旧注释推断。
+
+### P4 / P5：以评价收益决定增强范围
+
+P4 先建立人工判断集与词法基线，再比较本地多语言 embedding、分块和重排；记录模型版本、许可证、资源占用与数据发送范围。混合检索显式开启，精确 ID/布尔筛选作为硬约束。词法基线未达标时不靠生成回答掩盖漏检。
+
+P5 优先引文列表、相似文献、可复现快照导出与订阅增量去重；图谱可视化按任务收益决定。订阅存水位、失败重试和去重记录；通知渠道需要单独配置，计划本身不意味着已获授权发送消息。
+
+首版发布范围建议限定为 P1 + P2：可靠库内检索、明确 scope、可解释命中、保存规则、原文定位和可诊断索引。外部发现、语义与订阅各自具备独立验收与开关。

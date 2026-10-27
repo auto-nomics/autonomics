@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS search_terms (
 
 CREATE INDEX IF NOT EXISTS idx_search_terms_article ON search_terms(article_id);
 
+CREATE TABLE IF NOT EXISTS searchOutbox (
+    articleID TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS searchOutbox_revision ON searchOutbox(revision);
+
 CREATE TABLE IF NOT EXISTS bib_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -110,6 +116,13 @@ CREATE TABLE IF NOT EXISTS bib_meta (
 // ---------------------------------------------------------------------------
 // BibBase
 // ---------------------------------------------------------------------------
+
+/// Runtime rollout and rollback policy for local search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchEngineMode {
+    Tantivy,
+    Legacy,
+}
 
 /// Bibliography database handle.
 ///
@@ -132,6 +145,23 @@ pub struct BibBase {
 pub(crate) struct BibCore {
     conn: Connection,
     write_conn: Connection,
+    pub(crate) search_engine: SearchEngineMode,
+    pub(crate) search_index: std::sync::Arc<std::sync::Mutex<crate::local_index::LocalIndex>>,
+    pub(crate) search_progress: std::sync::Arc<std::sync::Mutex<crate::local_index::IndexProgress>>,
+    pub(crate) search_context: Option<Box<BibCore>>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct SearchCandidate {
+    pub doc_id: String,
+    pub article_id: String,
+    pub anchor_key: String,
+    pub kind: String,
+    pub title: String,
+    pub year: Option<i64>,
+    pub score: f64,
+    pub matched_field: String,
+    pub snippet_query: String,
 }
 
 impl BibBase {
@@ -150,6 +180,16 @@ impl BibBase {
         Ok(crate::actor::spawn(core))
     }
 
+    /// Select an engine explicitly, bypassing the process rollout flag.
+    pub async fn open_with_search_engine(
+        path: impl AsRef<str>,
+        engine: SearchEngineMode,
+    ) -> Result<Self> {
+        Ok(crate::actor::spawn(
+            BibCore::open_with_search_engine(path, engine).await?,
+        ))
+    }
+
     /// Open an in-memory database (useful for tests).
     pub async fn open_in_memory() -> Result<Self> {
         Self::open(":memory:").await
@@ -159,6 +199,26 @@ impl BibBase {
 impl BibCore {
     /// Open (or create) the connections and run migrations.
     pub(crate) async fn open(path: impl AsRef<str>) -> Result<Self> {
+        let engine = match std::env::var("AUTONOMICS_BIB_SEARCH_ENGINE")
+            .unwrap_or_else(|_| "tantivy".into())
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "tantivy" => SearchEngineMode::Tantivy,
+            "legacy" => SearchEngineMode::Legacy,
+            _ => {
+                return Err(Error::Unknown(
+                    "AUTONOMICS_BIB_SEARCH_ENGINE must be tantivy or legacy".into(),
+                ));
+            }
+        };
+        Self::open_with_search_engine(path, engine).await
+    }
+
+    pub(crate) async fn open_with_search_engine(
+        path: impl AsRef<str>,
+        engine: SearchEngineMode,
+    ) -> Result<Self> {
         let path = path.as_ref();
         let mut builder = Builder::new_local(path);
         if path != ":memory:" {
@@ -181,8 +241,39 @@ impl BibCore {
         for conn in [&conn, &write_conn] {
             conn.pragma_update("foreign_keys", true).await?;
         }
-        let base = Self { conn, write_conn };
+        let index_path = if engine == SearchEngineMode::Legacy {
+            ":memory:".to_owned()
+        } else {
+            path.to_owned()
+        };
+        let search_index =
+            tokio::task::spawn_blocking(move || crate::local_index::LocalIndex::open(&index_path))
+                .await
+                .map_err(|e| Error::Unknown(format!("open search index task: {e}")))??;
+        let search_progress = search_index.progress.clone();
+        let mut base = Self {
+            conn,
+            write_conn,
+            search_engine: engine,
+            search_index: std::sync::Arc::new(std::sync::Mutex::new(search_index)),
+            search_progress,
+            search_context: None,
+        };
         base.migrate().await?;
+        if engine == SearchEngineMode::Tantivy {
+            let reader = db.connect()?;
+            if path != ":memory:" {
+                reader.pragma_update("busy_timeout", 5000).await?;
+            }
+            base.search_context = Some(Box::new(Self {
+                conn: reader.clone(),
+                write_conn: reader,
+                search_engine: engine,
+                search_index: base.search_index.clone(),
+                search_progress: base.search_progress.clone(),
+                search_context: None,
+            }));
+        }
         Ok(base)
     }
 
@@ -204,7 +295,9 @@ impl BibCore {
     pub async fn migrate(&self) -> Result<()> {
         let conn = self.write_conn();
         conn.execute_batch(SCHEMA_SQL).await?;
-        crate::collection_schema::prepare_legacy(&conn).await.map_err(|e| Error::Unknown(format!("prepare collection schema: {e}")))?;
+        crate::collection_schema::prepare_legacy(&conn)
+            .await
+            .map_err(|e| Error::Unknown(format!("prepare collection schema: {e}")))?;
 
         // --- fulltexts extraction-tracking columns -----------------------
         // Databases created before background extraction tracking lack the
@@ -293,7 +386,9 @@ impl BibCore {
         // columns are visible to queries made through `BibCore::conn()`.
         let read_conn = self.conn();
         crate::zotero_model::ensure_schema(&read_conn).await?;
-        crate::collection_schema::migrate(&conn).await.map_err(|e| Error::Unknown(format!("migrate collection schema: {e}")))?;
+        crate::collection_schema::migrate(&conn)
+            .await
+            .map_err(|e| Error::Unknown(format!("migrate collection schema: {e}")))?;
 
         let mut rows = conn
             .query(
@@ -305,25 +400,39 @@ impl BibCore {
             Some(row) => row.get::<String>(0)?,
             None => String::new(),
         };
-        if version != "2" {
-            let mut article_rows = conn
-                .query("SELECT id FROM articles", turso::params![])
-                .await?;
-            let mut article_ids = Vec::new();
-            while let Some(row) = article_rows.next().await? {
-                article_ids.push(row.get::<String>(0)?);
-            }
-            drop(article_rows);
-            for article_id in &article_ids {
-                sync_search_index(&conn, article_id).await?;
-            }
-            conn.execute(
-                "INSERT INTO bib_meta(key, value) VALUES ('search_index_version', '2') \
-                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                turso::params![],
+        drop(rows);
+        let mut rows = conn
+            .query(
+                "SELECT value FROM bib_meta WHERE key='search_revision_token'",
+                (),
             )
             .await?;
+        let token_valid = rows
+            .next()
+            .await?
+            .map(|row| row.get::<String>(0))
+            .transpose()?
+            .is_some_and(|token| uuid::Uuid::parse_str(&token).is_ok());
+        drop(rows);
+        if version != "11" || !token_valid {
+            let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+            let result = async {
+                crate::search_projection::ensure(&tx,true).await?;
+                tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(bib_meta.value AS INTEGER)+1",()).await?;
+                tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_revision_token',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",turso::params![uuid::Uuid::new_v4().to_string()]).await?;
+                tx.execute("INSERT INTO searchOutbox(articleID,revision) SELECT id,(SELECT CAST(value AS INTEGER) FROM bib_meta WHERE key='search_revision') FROM articles WHERE 1=1 ON CONFLICT(articleID) DO UPDATE SET revision=excluded.revision",()).await?;
+                tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_index_version','11') ON CONFLICT(key) DO UPDATE SET value=excluded.value",()).await?;
+                Ok::<_,Error>(())
+            }.await;
+            if let Err(error) = result {
+                let _ = tx.rollback().await;
+                return Err(error);
+            }
+            tx.commit().await?;
+        } else {
+            crate::search_projection::ensure(&conn, false).await?;
         }
+        crate::search_projection::ensure(&read_conn, false).await?;
 
         Ok(())
     }
@@ -355,14 +464,14 @@ impl BibCore {
             if let Err(err) = async {
                 Self::upsert_article_in_tx(&tx, article).await?;
                 crate::zotero_model::ensure_article_item(&tx, &article.id).await?;
-                crate::zotero_model::sync_article_item(&tx, &article.id).await
+                crate::zotero_model::sync_article_item(&tx, &article.id).await?;
+                sync_search_index(&tx, &article.id).await
             }
             .await
             {
                 result = Err(err);
                 break;
             }
-            sync_search_index(&tx, &article.id).await?;
         }
 
         if result.is_err() {
@@ -614,19 +723,34 @@ impl BibCore {
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
-        crate::zotero_model::delete_article_item(&tx, id).await?;
-        let n = tx
-            .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
-            .await?;
-        if n > 0 {
-            tx.execute(
-                "DELETE FROM searchTerms WHERE articleID = ?1",
-                turso::params![id],
-            )
-            .await?;
+        let result = async {
+            crate::zotero_model::delete_article_item(&tx, id).await?;
+            let n = tx
+                .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
+                .await?;
+            if n > 0 {
+                tx.execute(
+                    "DELETE FROM searchTerms WHERE articleID = ?1",
+                    turso::params![id],
+                )
+                .await?;
+            }
+            if n > 0 {
+                bump_search_revision(&tx, id).await?;
+            }
+            Ok::<_, Error>(n)
         }
-        tx.commit().await?;
-        Ok(n)
+        .await;
+        match result {
+            Ok(n) => {
+                tx.commit().await?;
+                Ok(n)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
     }
 
     /// Count articles in the library.
@@ -677,126 +801,13 @@ impl BibCore {
     // Search — indexed full-text search
     // -----------------------------------------------------------------------
 
-    /// Search across article titles, abstracts, stored full-text
-    /// content, **and user annotations** (notes/highlights/comments).
-    /// Returns results ordered by match priority:
-    /// title matches first, then abstract, then annotations, then full-text body.
-    ///
-    /// Uses an inverted index maintained in the same transaction as article,
-    /// full-text, and annotation writes. A query matches when all of its
-    /// lexical terms occur somewhere in the indexed fields.
     pub async fn search_articles(
         &self,
         query: &str,
         limit: usize,
         offset: usize,
     ) -> Result<Vec<SearchHit>> {
-        if query.trim().is_empty() {
-            return self.list_search_hits(limit, offset).await;
-        }
-
-        // The index stores each term once per field/anchor. Keep query term
-        // frequencies out of the boolean match count ("GWAS GWAS" is still
-        // one required lexical term).
-        let terms = unique_query_terms(query);
-        if terms.is_empty() {
-            return Ok(Vec::new());
-        }
-        let term_placeholders = (1..=terms.len())
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "SELECT a.id, a.title, a.abstract, f.text_content, \
-                    (SELECT GROUP_CONCAT(an.content || ' ' || an.comment || ' ' || an.tags, ' ') FROM annotations an \
-                     WHERE an.article_id = a.id), \
-                    SUM(CASE WHEN s.field = 'title' THEN 1 ELSE 0 END), \
-                    SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END), \
-                    SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END), \
-                    SUM(CASE WHEN s.field = 'fulltext' THEN 1 ELSE 0 END) \
-             FROM searchTerms s \
-             JOIN articles a ON a.id = s.articleID \
-             LEFT JOIN fulltexts f ON f.article_id = a.id \
-             WHERE s.term IN ({term_placeholders}) \
-             GROUP BY a.id, a.title, a.abstract, f.text_content \
-             HAVING COUNT(DISTINCT s.term) = ?{} \
-             ORDER BY CASE \
-                 WHEN SUM(CASE WHEN s.field = 'title' THEN 1 ELSE 0 END) > 0 THEN 0 \
-                 WHEN SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END) > 0 THEN 1 \
-                 WHEN SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END) > 0 THEN 2 \
-                 ELSE 3 \
-             END, COUNT(*) DESC, a.id \
-             LIMIT ?{} OFFSET ?{}",
-            terms.len() + 1,
-            terms.len() + 2,
-            terms.len() + 3
-        );
-        let mut params: Vec<Value> = terms.iter().map(|term| Value::Text(term.clone())).collect();
-        params.push(Value::Integer(terms.len() as i64));
-        params.push(Value::Integer(limit as i64));
-        params.push(Value::Integer(offset as i64));
-
-        let conn = self.conn();
-        let mut rows = conn.query(sql, turso::params_from_iter(params)).await?;
-
-        let mut hits = Vec::new();
-        while let Some(row) = rows.next().await? {
-            let article_id = row.get::<String>(0)?;
-            let title = row.get::<String>(1)?;
-            let abstract_text = opt_string(row.get_value(2)?);
-            let fulltext = opt_string(row.get_value(3)?);
-            let annotation = opt_string(row.get_value(4)?);
-            let title_matches = row.get::<i64>(5)?;
-            let abstract_matches = row.get::<i64>(6)?;
-            let annotation_matches = row.get::<i64>(7)?;
-            let _fulltext_matches = row.get::<i64>(8)?;
-            let score = if title_matches > 0 {
-                0.0
-            } else if abstract_matches > 0 {
-                1.0
-            } else if annotation_matches > 0 {
-                2.0
-            } else {
-                3.0
-            };
-
-            let snippet = extract_snippet(
-                query,
-                &title,
-                abstract_text.as_deref(),
-                fulltext.as_deref(),
-                annotation.as_deref(),
-            );
-
-            hits.push(SearchHit {
-                article_id,
-                title,
-                score,
-                snippet,
-            });
-        }
-        Ok(hits)
-    }
-
-    async fn list_search_hits(&self, limit: usize, offset: usize) -> Result<Vec<SearchHit>> {
-        let conn = self.conn();
-        let mut rows = conn
-            .query(
-                "SELECT id, title FROM articles ORDER BY title LIMIT ?1 OFFSET ?2",
-                turso::params![limit as i64, offset as i64],
-            )
-            .await?;
-        let mut hits = Vec::new();
-        while let Some(row) = rows.next().await? {
-            let title = row.get::<String>(1)?;
-            hits.push(SearchHit {
-                article_id: row.get::<String>(0)?,
-                snippet: extract_snippet("", &title, None, None, None),
-                title,
-                score: 0.0,
-            });
-        }
-        Ok(hits)
+        self.search_legacy(query, limit, offset).await
     }
 }
 
@@ -1029,10 +1040,7 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
 
     let mut article_rows = conn
         .query(
-            "SELECT a.title, a.abstract, I.key \
-             FROM articles a JOIN articleItems MAP ON MAP.article_id = a.id \
-             JOIN items I ON I.itemID = MAP.itemID \
-             WHERE a.id = ?1",
+            "SELECT a.title, COALESCE(a.abstract,''), I.key FROM articles a JOIN articleItems MAP ON MAP.article_id=a.id JOIN items I ON I.itemID=MAP.itemID WHERE a.id=?1",
             turso::params![article_id],
         )
         .await?;
@@ -1040,7 +1048,7 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
         return Ok(());
     };
     let title = article.get::<String>(0)?;
-    let abstract_text = opt_string(article.get_value(1)?).unwrap_or_default();
+    let abstract_text = article.get::<String>(1)?;
     let article_key = article.get::<String>(2)?;
     drop(article_rows);
 
@@ -1093,7 +1101,7 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
 
     let mut annotation_rows = conn
         .query(
-            "SELECT COALESCE(PI.key, MI.key), A.content || ' ' || A.comment || ' ' || A.tags \
+            "SELECT COALESCE(MI.key, A.id), A.content || ' ' || A.comment || ' ' || A.tags \
              FROM annotations A \
              LEFT JOIN annotationItems MAP ON MAP.annotation_id = A.id \
              LEFT JOIN items MI ON MI.itemID = MAP.itemID \
@@ -1119,6 +1127,19 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
         )
         .await?;
     }
+    bump_search_revision(conn, article_id).await?;
+    Ok(())
+}
+
+async fn bump_search_revision(conn: &Connection, article_id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO bib_meta(key, value) VALUES ('search_revision', '1') \
+         ON CONFLICT(key) DO UPDATE SET value = CAST(bib_meta.value AS INTEGER) + 1",
+        (),
+    )
+    .await?;
+    conn.execute("INSERT INTO bib_meta(key,value) VALUES ('search_revision_token',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",turso::params![uuid::Uuid::new_v4().to_string()]).await?;
+    conn.execute("INSERT INTO searchOutbox(articleID, revision) VALUES (?1, (SELECT CAST(value AS INTEGER) FROM bib_meta WHERE key='search_revision')) ON CONFLICT(articleID) DO UPDATE SET revision=excluded.revision", turso::params![article_id]).await?;
     Ok(())
 }
 
@@ -1129,45 +1150,37 @@ async fn insert_search_terms(
     field: &str,
     terms: &[String],
 ) -> Result<()> {
-    if terms.is_empty() {
-        return Ok(());
+    for chunk in terms.chunks(200) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let placeholders = (0..chunk.len())
+            .map(|row| {
+                let start = row * 4 + 1;
+                format!("(?{start}, ?{}, ?{}, ?{})", start + 1, start + 2, start + 3)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT OR IGNORE INTO searchTerms(term, anchorKey, field, articleID) VALUES {placeholders}"
+        );
+        let mut params = Vec::with_capacity(chunk.len() * 4);
+        for term in chunk {
+            params.push(Value::Text(term.clone()));
+            params.push(Value::Text(anchor_key.to_owned()));
+            params.push(Value::Text(field.to_owned()));
+            params.push(Value::Text(article_id.to_owned()));
+        }
+        conn.execute(sql, turso::params_from_iter(params)).await?;
     }
-    let placeholders = (0..terms.len())
-        .map(|row| {
-            let start = row * 4 + 1;
-            format!("(?{start}, ?{}, ?{}, ?{})", start + 1, start + 2, start + 3)
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "INSERT OR IGNORE INTO searchTerms(term, anchorKey, field, articleID) \
-         VALUES {placeholders}"
-    );
-    let mut params = Vec::with_capacity(terms.len() * 4);
-    for term in terms {
-        params.push(Value::Text(term.clone()));
-        params.push(Value::Text(anchor_key.to_owned()));
-        params.push(Value::Text(field.to_owned()));
-        params.push(Value::Text(article_id.to_owned()));
-    }
-    conn.execute(sql, turso::params_from_iter(params)).await?;
     Ok(())
 }
 
 pub(crate) fn tokenize(text: &str) -> Vec<String> {
-    let mut terms: Vec<String> = Vec::new();
-    let mut current = String::new();
-    for character in text.chars() {
-        if character.is_alphanumeric() {
-            current.extend(character.to_lowercase());
-        } else if !current.is_empty() {
-            terms.push(std::mem::take(&mut current));
-        }
-    }
-    if !current.is_empty() {
-        terms.push(current);
-    }
-    terms
+    crate::search_analyzer::analyze(text)
+        .into_iter()
+        .map(|token| token.text)
+        .collect()
 }
 
 /// Return the distinct lexical terms in first-seen order for boolean search.
@@ -1181,49 +1194,47 @@ pub(crate) fn unique_query_terms(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Extract a context snippet around the first occurrence of `query` in
-/// the available text fields. Tries title first, then abstract, then
-/// annotations, then full-text body.
-fn extract_snippet(
-    query: &str,
-    title: &str,
-    abstract_text: Option<&str>,
-    fulltext: Option<&str>,
-    annotation: Option<&str>,
-) -> String {
+pub(crate) fn extract_snippet_from_text(query: &str, text: &str) -> Option<String> {
     const SNIPPET_RADIUS: usize = 80;
-
-    let query_terms = unique_query_terms(query);
-    let query_terms_lower: Vec<_> = query_terms
+    let query_tokens = crate::search_analyzer::position_tokens(query);
+    let query_terms = query_tokens
         .iter()
-        .map(|term| term.to_ascii_lowercase())
-        .collect();
-
-    for text in [Some(title), abstract_text, annotation, fulltext]
-        .into_iter()
-        .flatten()
-    {
-        let text_lower = text.to_ascii_lowercase();
-        // Boolean search allows terms to appear separately. Anchor the
-        // preview to the first query term actually present in this field.
-        if let Some((pos, term_len)) = query_terms_lower
-            .iter()
-            .filter_map(|term| text_lower.find(term).map(|pos| (pos, term.len())))
-            .min_by_key(|(pos, _)| *pos)
-        {
-            let start = pos.saturating_sub(SNIPPET_RADIUS);
-            let end = (pos + term_len + SNIPPET_RADIUS).min(text.len());
-            // Snap to UTF-8 char boundaries so we never slice mid-character.
-            let start = text.floor_char_boundary(start);
-            let end = text.ceil_char_boundary(end);
-            let prefix = if start > 0 { "…" } else { "" };
-            let suffix = if end < text.len() { "…" } else { "" };
-            return format!("{prefix}{}{suffix}", &text[start..end]);
-        }
+        .map(|token| token.text.clone())
+        .collect::<Vec<_>>();
+    if query_terms.is_empty() {
+        return None;
     }
-
-    // No match found in any field — return a truncated title as fallback.
-    format!("{title:.120}")
+    // Retain original byte ranges while normalizing exactly as the index does.
+    // Substring matches (gene inside genome) are not indexed word hits.
+    let tokens = crate::search_analyzer::position_tokens(text)
+        .into_iter()
+        .map(|token| {
+            (
+                token.text,
+                token.offset_from,
+                token.offset_to,
+                token.position,
+            )
+        })
+        .collect::<Vec<_>>();
+    let phrase = tokens.windows(query_terms.len()).position(|window| {
+        window.iter().zip(&query_tokens).all(|(token, query)| {
+            token.0 == query.text
+                && token.3 - window[0].3 == query.position - query_tokens[0].position
+        })
+    });
+    let (first, last) = if let Some(first) = phrase {
+        (first, first + query_terms.len() - 1)
+    } else {
+        let terms = query_terms.iter().collect::<std::collections::HashSet<_>>();
+        let first = tokens.iter().position(|token| terms.contains(&token.0))?;
+        (first, first)
+    };
+    let start = text.floor_char_boundary(tokens[first].1.saturating_sub(SNIPPET_RADIUS));
+    let end = text.ceil_char_boundary((tokens[last].2 + SNIPPET_RADIUS).min(text.len()));
+    let prefix = if start > 0 { "…" } else { "" };
+    let suffix = if end < text.len() { "…" } else { "" };
+    Some(format!("{prefix}{}{suffix}", &text[start..end]))
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,7 +1281,34 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn turso_fts_supports_scoring_phrase_queries_and_highlights() {
+    async fn search_index_migration_rebuilds_documents_from_existing_articles() {
+        let core = BibCore::open(":memory:").await.unwrap();
+        core.upsert_article(&Article::new("legacy-article", "Migrationmarker evidence"))
+            .await
+            .unwrap();
+
+        let conn = core.write_conn();
+        conn.execute("DROP VIEW searchDocuments", turso::params![])
+            .await
+            .unwrap();
+        conn.execute(
+            "UPDATE bib_meta SET value = '3' WHERE key = 'search_index_version'",
+            turso::params![],
+        )
+        .await
+        .unwrap();
+
+        core.migrate().await.unwrap();
+        let hits = core
+            .search_articles("migrationmarker", 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].article_id, "legacy-article");
+    }
+
+    #[tokio::test]
+    async fn turso_fts_prototype_smoke_test() {
         let db = Builder::new_local(":memory:")
             .experimental_index_method(true)
             .build()

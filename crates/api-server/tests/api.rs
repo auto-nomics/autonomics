@@ -1744,3 +1744,75 @@ async fn inline_pmc_text_is_repaired_for_raw_download_and_attachment_download() 
         b"PMC"
     );
 }
+
+#[tokio::test]
+async fn bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    shared
+        .bib
+        .upsert_articles(&[
+            bib_types::Article::new("a", "Gene editing evidence"),
+            bib_types::Article::new("b", "Gene editing methods"),
+        ])
+        .await
+        .unwrap();
+    let app = api_server::api_router(shared);
+    let body = serde_json::json!({"query":"title:\"gene editing\"","page_size":1});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(body.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(page["hits"][0]["matched_field"], "title");
+    assert!(page["next_cursor"].is_string());
+
+    let next = serde_json::json!({"query":"title:\"gene editing\"","page_size":1,"cursor":page["next_cursor"]});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(next.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let next: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(page["hits"][0]["article_id"], next["hits"][0]["article_id"]);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(r#"{"query":"title:(broken"}"#.into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/api/v1/bib/search/status", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status["source_revision"], status["indexed_revision"]);
+    assert_eq!(status["pending_articles"], 0);
+    let response = app
+        .oneshot(request("POST", "/api/v1/bib/search/rebuild", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}

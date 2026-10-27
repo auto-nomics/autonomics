@@ -8,10 +8,16 @@ pub enum Error {
     Unknown(String),
     #[error("{0}")]
     Turso(#[from] turso::Error),
+    #[error("search index: {0}")]
+    Index(#[from] tantivy::TantivyError),
+    #[error("search index I/O: {0}")]
+    IndexIo(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid collection: {0}")]
     InvalidCollection(String),
+    #[error("invalid search query: {0}")]
+    InvalidSearchQuery(String),
     #[error("collection conflict: {0}")]
     CollectionConflict(String),
     #[error("not found: {0}")]

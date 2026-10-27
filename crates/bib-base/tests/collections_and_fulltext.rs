@@ -743,6 +743,7 @@ async fn search_basic() {
 
     let mut a2 = sample_article("a2", "GWAS analysis of height");
     a2.abstract_text = Some("We performed a genome-wide association study.".into());
+    a2.keywords.clear();
 
     let mut a3 = sample_article("a3", "CRISPR off-target detection methods");
     a3.abstract_text = Some("Novel methods for detecting CRISPR off-target cleavage.".into());
@@ -875,6 +876,86 @@ async fn search_with_fulltext() {
 }
 
 #[tokio::test]
+async fn search_returns_the_matching_attachment_anchor_and_metadata_fields() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Genetics overview"))
+        .await
+        .unwrap();
+    let fulltext = FullText {
+        article_id: "a1".into(),
+        attachment_key: None,
+        file_path: "/articles/a1.pdf".into(),
+        file_format: FileFormat::Pdf,
+        text_content: Some("Distinctive endothelial biomarker evidence.".into()),
+        source: FullTextSource::UserUpload,
+        file_hash: None,
+        file_size: None,
+        uploaded_at: None,
+        extract_status: None,
+        text_format: None,
+        extracted_by: None,
+        extract_error: None,
+    };
+    db.upsert_fulltext(&fulltext).await.unwrap();
+    let attachment = db.zotero_attachments("a1").await.unwrap();
+
+    let hits = db
+        .search_articles("endothelial biomarker", 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].matched_field.as_deref(), Some("fulltext"));
+    assert_eq!(
+        hits[0].anchor_key.as_deref(),
+        Some(attachment[0].key.as_str())
+    );
+    assert!(hits[0].snippet.contains("endothelial biomarker"));
+
+    let by_author = db.search_articles("Smith John", 10, 0).await.unwrap();
+    assert_eq!(by_author.len(), 1);
+    assert_eq!(by_author[0].matched_field.as_deref(), Some("creator"));
+    let by_year = db.search_articles("2024", 10, 0).await.unwrap();
+    assert_eq!(by_year.len(), 1);
+}
+
+#[tokio::test]
+async fn search_index_tracks_article_refresh_and_delete() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    db.upsert_article(&sample_article("a1", "Rarequill discovery"))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.search_articles("rarequill", 10, 0).await.unwrap().len(),
+        1
+    );
+
+    db.upsert_article(&sample_article("a1", "Copperfield discovery"))
+        .await
+        .unwrap();
+    assert!(
+        db.search_articles("rarequill", 10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        db.search_articles("copperfield", 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    db.delete_article("a1").await.unwrap();
+    assert!(
+        db.search_articles("copperfield", 10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn search_title_ranks_first() {
     let db = BibBase::open_in_memory().await.unwrap();
 
@@ -892,10 +973,11 @@ async fn search_title_ranks_first() {
     assert_eq!(hits.len(), 2);
     // Title match (rank 0) should come first.
     assert_eq!(hits[0].article_id, "a2");
-    assert_eq!(hits[0].score, 0.0);
     // Abstract match (rank 1) second.
     assert_eq!(hits[1].article_id, "a1");
-    assert_eq!(hits[1].score, 1.0);
+    assert!(hits[0].score > hits[1].score);
+    assert_eq!(hits[0].matched_field.as_deref(), Some("title"));
+    assert_eq!(hits[1].matched_field.as_deref(), Some("abstract"));
 }
 
 #[tokio::test]

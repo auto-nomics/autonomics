@@ -36,7 +36,7 @@ use crate::zotero_model::{
 };
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
-    FullText, IdKind, SearchHit, TextFormat,
+    FullText, IdKind, SearchHit, SearchIndexStatus, SearchPageV2, SearchRequestV2, TextFormat,
 };
 
 /// Command channel capacity. A burst of concurrent DAG nodes issuing
@@ -85,6 +85,19 @@ pub(crate) enum BibCommand {
     },
     ListAllArticles {
         reply: oneshot::Sender<Result<Vec<Article>>>,
+    },
+    SearchIndexStatus {
+        reply: oneshot::Sender<Result<SearchIndexStatus>>,
+    },
+    RequestSearchRebuild {
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RebuildSearchIndex {
+        reply: oneshot::Sender<Result<()>>,
+    },
+    SearchV2 {
+        request: SearchRequestV2,
+        reply: oneshot::Sender<Result<SearchPageV2>>,
     },
     SearchArticles {
         query: String,
@@ -380,6 +393,29 @@ impl BibCommand {
             }
             Self::ListAllArticles { reply } => {
                 let _ = reply.send(core.list_all_articles().await);
+            }
+            Self::SearchIndexStatus { reply } => {
+                let _ = reply.send(core.search_index_status().await);
+            }
+            Self::RequestSearchRebuild { reply } => {
+                let _ = reply.send(Err(Error::InvalidSearchQuery(
+                    "background indexing is disabled by the legacy engine rollout flag".into(),
+                )));
+            }
+            Self::RebuildSearchIndex { reply } => {
+                if core.search_engine == crate::SearchEngineMode::Legacy {
+                    let _ = reply.send(Err(Error::InvalidSearchQuery(
+                        "index rebuilding is disabled by the legacy engine rollout flag".into(),
+                    )));
+                    return;
+                }
+                if let Ok(mut index) = core.search_index.lock() {
+                    index.revision = None;
+                }
+                let _ = reply.send(core.refresh_search_index().await);
+            }
+            Self::SearchV2 { request, reply } => {
+                let _ = reply.send(core.search_v2(request).await);
             }
             Self::SearchArticles {
                 query,
@@ -769,19 +805,81 @@ impl BibCommand {
 }
 
 /// Spawn the storage actor around an opened core and return the handle.
-pub(crate) fn spawn(core: BibCore) -> BibBase {
+pub(crate) fn spawn(mut core: BibCore) -> BibBase {
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
-    tokio::spawn(run(core, rx));
+    let search_tx = core.search_context.take().map(|context| {
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
+        tokio::spawn(crate::search::run_search_service(*context, rx));
+        tx
+    });
+    tokio::spawn(run(core, rx, search_tx));
     let (changes, _) = tokio::sync::watch::channel(chrono::Utc::now().timestamp_millis() as u64);
     BibBase { tx, changes }
 }
 
-/// Actor body: drain commands one at a time, each strictly complete
-/// before the next starts — the structural replacement for the old
-/// write-gate/ungated-read split.
-async fn run(core: BibCore, mut rx: mpsc::Receiver<BibCommand>) {
+enum SearchRoute {
+    Search(crate::search::SearchJob),
+    Storage(BibCommand),
+}
+
+impl BibCommand {
+    fn into_search_job(self) -> SearchRoute {
+        use crate::search::SearchJob;
+        let job = match self {
+            Self::SearchV2 { request, reply } => SearchJob::V2 { request, reply },
+            Self::SearchArticles {
+                query,
+                limit,
+                offset,
+                reply,
+            } => SearchJob::Legacy {
+                query,
+                limit,
+                offset,
+                reply,
+            },
+            Self::QueryCollectionArticles { input, reply } if !input.query.trim().is_empty() => {
+                SearchJob::Collection { input, reply }
+            }
+            Self::RebuildSearchIndex { reply } => SearchJob::Rebuild { reply: Some(reply) },
+            other => return SearchRoute::Storage(other),
+        };
+        SearchRoute::Search(job)
+    }
+}
+
+/// Each actor owns its connection. Searches/replays use a dedicated read actor;
+/// mutations and small reads retain the existing FIFO storage actor.
+async fn run(
+    core: BibCore,
+    mut rx: mpsc::Receiver<BibCommand>,
+    search_tx: Option<mpsc::Sender<crate::search::SearchJob>>,
+) {
     while let Some(command) = rx.recv().await {
-        command.run(&core).await;
+        if let Some(search_tx) = &search_tx {
+            if let BibCommand::RequestSearchRebuild { reply } = command {
+                core.mark_build_requested();
+                let result = search_tx
+                    .send(crate::search::SearchJob::Rebuild { reply: None })
+                    .await
+                    .map_err(|_| Error::ActorStopped);
+                let _ = reply.send(result);
+                continue;
+            }
+            match command.into_search_job() {
+                SearchRoute::Search(job) => {
+                    if matches!(&job, crate::search::SearchJob::Rebuild { .. }) {
+                        core.mark_build_requested();
+                    }
+                    if let Err(error) = search_tx.send(job).await {
+                        error.0.reject();
+                    }
+                }
+                SearchRoute::Storage(command) => command.run(&core).await,
+            }
+        } else {
+            command.run(&core).await;
+        }
     }
     tracing::debug!("bib-base storage actor exiting; database connections closed");
 }

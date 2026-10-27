@@ -20,7 +20,7 @@ use bib_base::{
 use bib_types::{
     AddedBy, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource, Author,
     Collection, CollectionStatus, ExportFormat, ExtractStatus, FileFormat, FullText,
-    FullTextSource, IdKind, Identifier, StructuredSearch, TextFormat,
+    FullTextSource, IdKind, Identifier, SearchRequestV2, StructuredSearch, TextFormat,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -153,6 +153,9 @@ pub fn router(shared: BibShared) -> Router {
         .route("/requests", get(list_requests))
         .route("/export", get(export))
         .route("/search/external", get(search_external))
+        .route("/search/v2", post(search_local_v2))
+        .route("/search/status", get(search_index_status))
+        .route("/search/rebuild", post(rebuild_search_index))
         .with_state(Arc::new(shared))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }
@@ -234,6 +237,33 @@ async fn attachment_summary_map(
             )
         })
         .collect())
+}
+
+async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    Ok(Json(serde_json::to_value(shared.bib.search_index_status().await.map_err(internal)?).map_err(internal)?))
+}
+async fn rebuild_search_index(State(shared): State<Arc<BibShared>>) -> Result<(StatusCode,Json<Value>),(StatusCode,Json<ApiError>)> {
+    shared.bib.request_search_rebuild().await.map_err(|failure| {
+        let status=if matches!(&failure,bib_base::Error::InvalidSearchQuery(_)) { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
+        error(status,failure.to_string())
+    })?;
+    let status=shared.bib.search_index_status().await.map_err(internal)?;
+    Ok((StatusCode::ACCEPTED,Json(serde_json::to_value(status).map_err(internal)?)))
+}
+
+async fn search_local_v2(
+    State(shared): State<Arc<BibShared>>,
+    Json(request): Json<SearchRequestV2>,
+) -> ApiResult {
+    let page = shared.bib.search_v2(request).await.map_err(|failure| {
+        let status = match &failure {
+            bib_base::Error::InvalidSearchQuery(_) => StatusCode::BAD_REQUEST,
+            bib_base::Error::NotFound(_) => StatusCode::NOT_FOUND,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        error(status, failure.to_string())
+    })?;
+    Ok(Json(serde_json::to_value(page).map_err(internal)?))
 }
 
 async fn list_articles(
@@ -1820,7 +1850,7 @@ fn collection_error(e: bib_base::error::Error) -> (StatusCode, Json<ApiError>) {
     use bib_base::error::Error;
     let status = match &e {
         Error::NotFound(_) => StatusCode::NOT_FOUND,
-        Error::InvalidCollection(_) => StatusCode::BAD_REQUEST,
+        Error::InvalidCollection(_) | Error::InvalidSearchQuery(_) => StatusCode::BAD_REQUEST,
         Error::CollectionConflict(_) => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };

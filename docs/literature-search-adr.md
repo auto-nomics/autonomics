@@ -1,37 +1,44 @@
 # ADR: 本地全文索引引擎
 
-- 状态：P0 原型结论，待 P1 的兼容性、迁移与性能门槛验收后进入生产。
+- 状态：P1 本地实现与 Linux 验收完成，独立 Tantivy 已替代未通过资格测试的 Turso 原生 FTS 原型；macOS/Windows 实际 CI 结果仍为生产发布门槛。
 - 日期：2026-10-27。
 - 适用对象：本机/服务端文献库的本地词法检索索引。
 
 ## 决策
 
-P1 首选验证 **Turso 原生 FTS**，暂不添加第二个直接 Tantivy 依赖。项目使用 `turso = 0.7.2`，Cargo 默认特性包含 FTS；但 `CREATE INDEX ... USING fts` 属于实验性索引方法，必须在 `Builder` 上设置 `.experimental_index_method(true)`。生产数据库在完成针对现有文件、迁移与目标平台的测试前不得启用。
+使用显式锁定的 `tantivy = 0.26.2` 维护独立的派生索引。数据库仍以 Turso 为权威存储，既有 Zotero item、附件与批注身份保持为检索证据身份。索引目录为数据库路径后附 `.search-v2`，内存数据库使用 RAM 索引。
 
-P0 临时原型已在单独内存数据库中验证以下契约：创建字段索引、`fts_match` 查询、`fts_score` 得分、短语匹配和 `fts_highlight` 标记。对应测试为 `turso_fts_supports_scoring_phrase_queries_and_highlights`。该测试证明当前锁定 crate 可用时的能力，不证明现有 `BibCore` 已启用、不证明磁盘库升级安全，也不构成性能数据。
+P0 的隔离原型证明 Turso 0.7.2 能创建 FTS 索引并返回评分和高亮，但它没有证明严格短语位置和多字段布尔语义。P1 扩展资格用例后实际观察到：过滤查询中 `fts_score` 返回零；`"gene editing"` 召回只有单个词或词不相邻的文章；扩展字段后 AND 查询也会召回缺词文献。原生方案因此未通过正确性门槛，采用原 ADR 预留的独立 Tantivy 备选。生产查询不再依赖 Turso 的实验性 FTS 索引、评分或高亮。
 
-## 理由
+## 索引与查询
 
-- Turso 自身 FTS 已以 Tantivy 为引擎，提供词项位置、BM25、布尔/短语匹配和高亮；直接再加 Tantivy 将增加索引目录管理、双重恢复、额外同步和跨平台写入测试成本。
-- FTS 使用现有数据库、对象 key 和事务边界，适合沿用当前 Zotero 对象模型与 Turso actor。
-- 当前已有 `searchTerms` 可保留为兼容回退和逐阶段对照；待检索结果 parity 和故障恢复验收后再停用。
+- 数据库事务维护 `searchOutbox`；`searchDocuments` 是读取原生文献、附件、批注表的只读视图，不复制正文。初次迁移批量登记事件，由后台构建索引。每篇文献保留最新事件及递增 revision；删除事件保留 tombstone，事件表没有指向已删除文章的外键。
+- 独立索引保存每个文献、附件和批注的文本与稳定 key，批注用自己的 key，防止同一附件下多条批注互相覆盖。
+- 标题、摘要、作者、期刊、关键词、标签、年份文本、标识符、附件正文和批注分别建字段。Tantivy 提供词频、词项位置和 BM25；标识符另有精确字段。汉字片段使用锁定的 Jieba 0.11.0 词典，另存逐字位置以支持复合词内的词召回与严格短语；索引、查询和原文字节片段共用分析规则。英文/Greek 字词不做词干、拼写或同义词扩展。
+- API V2 与文本 parser 共用 AST：AND、OR、全篇排除的 NOT、短语、字段限制和年份范围。默认按文献聚合布尔条件；`require_same_child` 限制正向条件在同一证据文档上满足。NOT 始终排除整篇文献。
+- 排名先使用轻量文档信息，仅为当前页读取对应字段原文片段。游标绑定请求、索引 revision 和有序结果身份；查询、数据或范围结果变化后返回重查错误。
 
-## 生产启用前的验证项
+## 同步与恢复
 
-1. 检查 `turso` 锁定版本和平台构建实际包含 FTS；在 Linux、macOS、Windows 的正式桌面/服务端打包配置运行契约测试。
-2. 建立含标题、摘要、作者、期刊、年份、标识符、关键词、附件段落、批注的独立文档索引。评分时保留 title/abstract/body 权重，元数据过滤和全文正文不能造成错误跨对象合并。
-3. 验证修改、删除、批量导入、附件替换、增量更新和进程异常退出后的索引一致性，以及 `OPTIMIZE INDEX` 是否需要和如何调度。
-4. 针对当前真实迁移方式验证实验性索引持久化、文件升级/降级兼容和备份恢复。建立 generation 切换或显式回退路径。
-5. 以 10k 与 100k 文献及实际全文规模比较当前倒排、Turso FTS 和必要时独立 Tantivy 的索引时间、磁盘、内存、P50/P95 查询延迟。
-6. 确认 Turso FTS 的查询语法由 Autonomics AST 安全生成，不把未转义用户输入直接拼进 FTS DSL；检查高亮返回的标记内容按纯文本解析和安全渲染。
+独立的检索队列拥有自己的只读数据库连接，空闲时重放，查询前也会追平该请求的数据库快照；主存储 actor 继续处理写入、普通浏览和进度读取。CPU 索引与提交运行在 blocking pool。HTTP 重建请求返回 202，由检索队列构建并通过状态接口报告进度。提交 payload 保存已索引 revision 与唯一提交 token，索引成功提交后才推进该游标。提交前失败或进程退出保留数据库事件，重放按文献先删除再添加，因而幂等。
 
-## 后续选项
+事件没有全局消费确认。持有磁盘写锁的进程使用持久索引，其他进程使用自己的 RAM 索引和独立游标，因此不会漏掉别的进程已经处理的更新。缺失索引、数据库 revision 回退、相同 revision 下的提交 token 不同均触发全量重建，防止备份恢复后的版本碰撞。Tantivy 提交以原子 metadata 切换发布新视图。
 
-如实验性 API 的版本兼容、平台支持、全文同步语义或基准未达 P1 门槛，使用独立 Tantivy 目录作为派生索引备选，由 outbox/revision 驱动并可从数据库与 VFS 重建。不要同时维护两种生产索引，除非迁移期明确设定终止条件。
+已验证的用例包括：字段隔离、短语相邻和重复词、布尔排除、跨批注条件与同子项约束、正确证据 key、文章更新/删除、游标过期、磁盘重开后的待处理事件、索引目录丢失重建、两个独立数据库句柄的更新和删除同步。另有真实子进程资格脚本，在源提交后、索引尚未提交时分别强杀进程；验证恢复、两个同时运行进程的独立游标同步，以及不带索引的离线备份恢复。原始收据见基准目录。
+
+旧 `searchTerms` 目前为迁移回退继续双写。终止条件是 P2 的 GUI、SDK、Agent/TUI 与集合路径完成统一语义回归；随后停止默认双写，并把旧引擎回退改为按需重建，避免长期维护两套生产索引。
+
+## 验收与发布门槛
+
+1. 10k/100k 文献和 1k/10k 合成全文的 release 规模门槛、进程重开与维护并发采样见 [基准说明](benchmarks/literature-search-p1.md)。合成测试验证边界和规模，不替代人工相关性判断集，也不代表操作系统冷缓存或全部真实语料。
+2. 初次构建按最多 128 篇或约 4 MB Rust 正文缓冲分批送入 Tantivy，报告实际进程峰值内存。确定性暂停测试证明提交暂停时写入、普通浏览和进度读取仍可完成；检索队列本身串行执行重放和查询，维护期间的搜索等待单独报告。
+3. 中文词、位置短语、中英混排、Unicode 大小写、IL-6/HLA/Greek/p53 科研符号，以及真实进程中断、离线恢复由本地测试覆盖。Linux/macOS/Windows 的资格工作流已配置；macOS/Windows 运行结果仍是生产发布前必须取得的证据，不能由 Linux 测试代替。
+4. 旧 API、Agent/TUI 的本地搜索和集合查询进入同一本地引擎；提供索引状态、异步重建和 `AUTONOMICS_BIB_SEARCH_ENGINE=legacy` 回退。升级前退出不写 outbox 的旧版本进程；同一新版本的多个进程可各自重放。P2 继续完成 GUI 与 SDK 的交互闭环。
 
 ## 参考
 
-- [Turso 0.7.2 Cargo features](https://docs.rs/crate/turso/0.7.2/features)：默认启用 `fts`。
-- [Turso 0.7.2 Builder API](https://docs.rs/turso/0.7.2/turso/struct.Builder.html)：实验性索引方法开关。
-- [Turso FTS 手册](https://github.com/tursodatabase/turso/blob/main/docs/manual.md)：FTS 查询、评分和高亮语义。当前线上手册可能随版本变化，生产验收以 0.7.2 契约测试为准。
-- [Tantivy 位置索引文档](https://docs.rs/tantivy/latest/tantivy/positions/index.html)：词项位置支持短语查询。
+- [Tantivy 0.26.2 文档](https://docs.rs/tantivy/0.26.2/tantivy/)：索引、位置查询、读写快照与提交。
+- [Turso 0.7.2 Builder API](https://docs.rs/turso/0.7.2/turso/struct.Builder.html)：原型所需实验性索引方法开关。
+- [Turso FTS 手册](https://github.com/tursodatabase/turso/blob/main/docs/manual.md)：原生方案资格验证的参考；生产结论以锁定版本的实测为准。
+
+- [Jieba Rust 0.11.0](https://docs.rs/jieba-rs/0.11.0/jieba_rs/)：锁定分词词典与位置分析的依赖。

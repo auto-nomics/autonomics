@@ -85,3 +85,21 @@ curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/fulltext \
 ```
 
 注意：HTTP API 使用 runtime 配置的文献库路径，默认位于 `~/.autonomics/bib.db`，可用 `AUTONOMICS_BIB_DB` 覆盖。`autonomics bib` CLI 子命令沿用同一份 runtime 配置（`AUTONOMICS_BIB_DB` → `~/.autonomics/bib.db`），与 daemon 默认值一致；仅在需要时通过 `--db <PATH>` 显式覆盖。
+
+### 本地文献检索 V2（P1）
+
+`POST /api/v1/bib/search/v2` 接受 `SearchRequestV2`。例如：
+
+```json
+{"query":"title:\"gene editing\" AND year:2020..2026 NOT note:retracted","page_size":50,"sort":"relevance","scope":{"collection_id":"review","include_descendants":true}}
+```
+
+也可传 `expression` AST；`query` 和 `expression` 不能同时设置。文本语法支持大写 `AND`、`OR`、`NOT`、隐式 AND、括号、引号短语、`title/author/abstract/journal/identifier/doi/pmid/year/keyword/tag/note/fulltext` 字段，以及 `year:2020..2026`、`year:>=2020`、`year:<=2026`。普通文字不直接进入后端查询 DSL。裸 DOI 或 DOI URL 自动执行精确标识符检索。
+
+响应为 `hits`、文献级 `total`、`next_cursor`、`index_generation`。下一页带上原请求和 `cursor`；查询或索引版本变化时返回 400 并提示重新检索。命中结果保留 `anchor_key` 与 `matched_field`，用于定位具体附件或批注。分页大小为 1–200；排序支持 relevance、title、newest、oldest。
+
+`GET /api/v1/bib/search/status` 返回源版本、已索引版本、积压篇数、证据文档数和持久化状态。`POST /api/v1/bib/search/rebuild` 返回 202 和受理状态；后台构建通过 `building`、`processed_documents`、`target_revision` 报告进度，原有 `indexed_revision` 在提交成功前保持不变。提取完成和索引追平是独立状态。
+
+发布开关 `AUTONOMICS_BIB_SEARCH_ENGINE=tantivy|legacy` 控制新引擎，默认 `tantivy`。设为 `legacy` 并重启后，旧文章/集合查询使用既有倒排词项表；V2 与重建入口返回明确的禁用错误，索引状态报告 `engine: "legacy"`。Rust 调用方也可用 `BibBase::open_with_search_engine` 显式选择引擎。派生索引和事务事件保留，恢复 `tantivy` 后可追平，不需要回退或替换权威数据库。
+
+汉字使用词典分词和逐字位置约束；中文短语必须相邻，复合词内的词可被召回。`IL-6`、`HLA-A*02:01`、`α-synuclein` 等带符号科学词项按相邻词部分处理，`p53` 不匹配 `p530`。索引分析格式升级使用 `.search-v2` 新目录，旧目录保留以便审查和回退。

@@ -9,6 +9,8 @@ description = "Bibliography management: Turso storage + unified literature query
 [dependencies]
 bib-types = { path = "../bib-types" }
 turso.workspace = true
+tantivy = "=0.26.2"
+jieba-rs = "=0.11.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

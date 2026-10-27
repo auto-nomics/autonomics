@@ -158,7 +158,7 @@ async fn validate_parent(
 
 /// Turso 0.7 does not support recursive CTEs. Traverse a bounded snapshot
 /// iteratively, retaining the same transaction and cycle protection.
-async fn subtree_ids(conn: &turso::Connection, id: &str) -> Result<Vec<(String, i64)>> {
+pub(crate) async fn subtree_ids(conn: &turso::Connection, id: &str) -> Result<Vec<(String, i64)>> {
     let mut rows = conn
         .query(
             "SELECT id,collectionID,parentCollectionID FROM collections",
@@ -952,57 +952,45 @@ impl BibCore {
         } else {
             "1=1".to_owned()
         };
-        let terms = crate::bib_base::unique_query_terms(&input.query);
-        let mut params: Vec<Value> = terms.iter().map(|t| Value::Text(t.clone())).collect();
-        let (search, order) = if input.query.trim().is_empty() {
-            (String::new(), "a.title COLLATE NOCASE,a.id".to_owned())
-        } else if terms.is_empty() {
-            (" AND 0=1".to_owned(), "a.id".to_owned())
+        let (ids, total) = if input.query.trim().is_empty() {
+            let mut rows = conn
+                .query(format!("SELECT COUNT(*) FROM articles a WHERE {scope}"), ())
+                .await?;
+            let total = rows
+                .next()
+                .await?
+                .ok_or_else(|| Error::Unknown("count returned no row".into()))?
+                .get::<i64>(0)?;
+            drop(rows);
+            let mut rows = conn.query(format!("SELECT a.id FROM articles a WHERE {scope} ORDER BY a.title COLLATE NOCASE,a.id LIMIT ?1 OFFSET ?2"), turso::params![input.limit as i64,input.offset as i64]).await?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().await? {
+                ids.push(row.get::<String>(0)?);
+            }
+            (ids, total)
         } else {
-            let placeholders = (1..=terms.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            (
-                format!(
-                    " AND a.id IN (SELECT articleID FROM searchTerms WHERE term IN ({placeholders}) GROUP BY articleID HAVING COUNT(DISTINCT term)={})",
-                    terms.len()
-                ),
-                format!(
-                    "(SELECT MIN(CASE field WHEN 'title' THEN 0 WHEN 'abstract' THEN 1 WHEN 'annotation' THEN 2 ELSE 3 END) FROM searchTerms WHERE articleID=a.id AND term IN ({placeholders})),a.title COLLATE NOCASE,a.id"
-                ),
-            )
+            let mut rows = conn
+                .query(format!("SELECT a.id FROM articles a WHERE {scope}"), ())
+                .await?;
+            let mut allowed = std::collections::HashSet::new();
+            while let Some(row) = rows.next().await? {
+                allowed.insert(row.get::<String>(0)?);
+            }
+            drop(rows);
+            let ranked = self.local_matches_legacy(&input.query).await?;
+            let scoped = ranked
+                .into_iter()
+                .filter(|hit| allowed.contains(&hit.article_id))
+                .collect::<Vec<_>>();
+            let total = scoped.len() as i64;
+            let ids = scoped
+                .into_iter()
+                .skip(input.offset)
+                .take(input.limit)
+                .map(|hit| hit.article_id)
+                .collect::<Vec<_>>();
+            (ids, total)
         };
-        let filter = format!("FROM articles a WHERE {scope}{search}");
-        let mut rows = conn
-            .query(
-                format!("SELECT COUNT(*) {filter}"),
-                turso::params_from_iter(params.clone()),
-            )
-            .await?;
-        let total = rows
-            .next()
-            .await?
-            .ok_or_else(|| Error::Unknown("count returned no row".into()))?
-            .get::<i64>(0)?;
-        drop(rows);
-        params.push(Value::Integer(input.limit as i64));
-        params.push(Value::Integer(input.offset as i64));
-        let mut rows = conn
-            .query(
-                format!(
-                    "SELECT a.id {filter} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
-                    terms.len() + 1,
-                    terms.len() + 2
-                ),
-                turso::params_from_iter(params),
-            )
-            .await?;
-        let mut ids = Vec::new();
-        while let Some(row) = rows.next().await? {
-            ids.push(row.get::<String>(0)?);
-        }
-        drop(rows);
         let mut associations = Vec::new();
         // Fetch all direct provenance for the page, including memberships in
         // other branches. Display deduplication never discards relationship data.
