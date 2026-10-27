@@ -255,10 +255,9 @@ autonomics bib upload \
 ```
 
 Reads the file, detects the format from the extension (`pdf` / `html` / `txt`),
-extracts plain text via `SimpleExtractor`, and stores the original bytes in the
-runtime bibliography VFS using a SHA-256 content-addressed path. PDF extraction
-also tries the optional local `tesseract` command when the built-in extractor
-returns no text. Extraction failure does not reject the upload; the original
+stores the original bytes in the runtime bibliography VFS using a SHA-256
+content-addressed path, and schedules text extraction. PDFs use Zotero SDT,
+with MinerU as fallback; HTML/TXT use `SimpleExtractor`. Extraction failure does not reject the upload; the original
 remains downloadable and the text column is left empty. If `--collection-id` is given, the article's
 `fetch_status` in that collection is updated to `fulltext_available`.
 

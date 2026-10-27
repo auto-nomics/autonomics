@@ -3,7 +3,6 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
 
 const gatewayTarget = `http://${
@@ -28,7 +27,18 @@ function devGatewayToken(): string {
 const gatewayToken = devGatewayToken();
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), {
+    name: "zotero-reader-notice",
+    generateBundle(_options, bundle) {
+      // Preserve attribution after the minifier has processed the generated SDT
+      // module. Complete corresponding sources/notices ship in the runtime.
+      for (const output of Object.values(bundle)) {
+        if (output.type === "chunk" && Object.keys(output.modules).some(id => id.endsWith("zotero-sdt.generated.js"))) {
+          output.code = "/*! Zotero Reader semantic components: AGPL-3.0. Copyright Corporation for Digital Scholarship. Corresponding sources, revisions and notices: tools/zotero-extractor/ (included in release runtimes). */\n" + output.code;
+        }
+      }
+    },
+  }],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

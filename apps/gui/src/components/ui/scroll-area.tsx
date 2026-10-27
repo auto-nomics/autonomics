@@ -31,6 +31,7 @@ function ScrollArea({
         className={cn("size-full overscroll-contain rounded-[inherit] outline-none", viewportClassName)}
       >
         <ScrollAreaPrimitive.Content
+          data-slot="scroll-area-content"
           className={cn(!supportsHorizontal && "min-w-0!", contentClassName)}
         >
           {children}

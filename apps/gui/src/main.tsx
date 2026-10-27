@@ -232,6 +232,14 @@ export default function App() {
         setAgents((current) => current.some((agent) => agent.path === event.info.path) ? current : [...current, event.info]);
       } else if (event.kind === "agent_unregistered") {
         setAgents((current) => current.filter((agent) => agent.path !== event.path));
+        const snapshot = stateRef.current;
+        if (snapshot.activeAgent === event.path) {
+          const index = snapshot.agents.findIndex((agent) => agent.path === event.path);
+          const rest = snapshot.agents.filter((agent) => agent.path !== event.path);
+          const fallback = rest[Math.max(0, index - 1)]?.path ?? "";
+          setActiveAgent(fallback);
+          if (fallback) void loadHistoryRef.current(fallback);
+        }
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
         setStatuses((current) => ({ ...current, [event.path]: statusLabel(event.status) }));
@@ -297,17 +305,32 @@ export default function App() {
     if (!text || !activeAgent || busy === "send") return;
     setBusy("send");
     setDraft("");
-    appendMessage(activeAgent, makeItem("user", text));
-    setPromptHistories((current) => ({
-      ...current,
-      [activeAgent]: [...(current[activeAgent] ?? []), text].slice(-200),
-    }));
     try {
       await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text });
+      // The transcript entry and prompt-history entry both arrive via the
+      // UserMessageAcknowledged event; echoing them here rendered the
+      // message twice.
     } catch (cause) {
+      setDraft(text);
       appendMessage(activeAgent, makeItem("error", String(cause)));
     } finally {
       setBusy(null);
+    }
+  };
+
+  const selectAgent = (path: string) => {
+    setActiveAgent(path);
+    void loadHistory(path);
+  };
+
+  const forgetAgent = (path: string) => {
+    const index = agents.findIndex((agent) => agent.path === path);
+    const next = agents.filter((agent) => agent.path !== path);
+    setAgents(next);
+    if (activeAgent === path) {
+      const fallback = next[Math.max(0, index - 1)]?.path ?? "";
+      setActiveAgent(fallback);
+      if (fallback) void loadHistory(fallback);
     }
   };
 
@@ -325,7 +348,7 @@ export default function App() {
           ...current,
           { path: result.path, agent_id: null, status: "Idle" },
         ]);
-        setActiveAgent(result.path);
+        selectAgent(result.path);
       }
     } catch (cause) {
       window.alert(String(cause));
@@ -338,11 +361,7 @@ export default function App() {
     setBusy(`shutdown:${path}`);
     try {
       await gatewayRequest("POST", `/agents/${path}/shutdown`);
-      setAgents((current) => {
-        const next = current.filter((agent) => agent.path !== path);
-        if (path === activeAgent) setActiveAgent(next[0]?.path ?? "");
-        return next;
-      });
+      forgetAgent(path);
     } catch (cause) {
       window.alert(String(cause));
     } finally {
@@ -356,11 +375,7 @@ export default function App() {
     try {
       await gatewayRequest("DELETE", `/storage/agents/${encodeURIComponent(agentId)}`);
       await gatewayRequest("POST", `/agents/${path}/shutdown`);
-      setAgents((current) => {
-        const next = current.filter((agent) => agent.path !== path);
-        if (path === activeAgent) setActiveAgent(next[0]?.path ?? "");
-        return next;
-      });
+      forgetAgent(path);
     } catch (cause) {
       window.alert(String(cause));
     } finally {
@@ -398,8 +413,7 @@ export default function App() {
   const resumeAgent = async (stored: StoredAgent) => {
     const running = agents.find((agent) => agent.agent_id === stored.id);
     if (running) {
-      setActiveAgent(running.path);
-      void loadHistory(running.path);
+      selectAgent(running.path);
       return;
     }
     const name = stored.name.split("/").filter(Boolean).pop() ?? "";
@@ -416,8 +430,7 @@ export default function App() {
       ...current,
       { path: result.path, agent_id: stored.id, status: "Idle" },
     ]);
-    setActiveAgent(result.path);
-    void loadHistory(result.path);
+    selectAgent(result.path);
   };
 
   const forkMessage = async (message: { id: string; text: string }) => {
@@ -507,10 +520,7 @@ export default function App() {
           draft={draft}
           busy={busy}
           onDraftChange={setDraft}
-          onSelectAgent={(path) => {
-            setActiveAgent(path);
-            void loadHistory(path);
-          }}
+          onSelectAgent={selectAgent}
           onSendMessage={() => void sendMessage()}
           onCancel={() => void gatewayRequest("POST", `/agents/${activeAgent}/cancel`).catch((cause) => window.alert(String(cause)))}
           onCompact={() => void gatewayRequest("POST", `/agents/${activeAgent}/compact`).catch((cause) => window.alert(String(cause)))}

@@ -27,9 +27,13 @@ use crate::Result;
 use crate::bib_base::{BibBase, BibCore};
 use crate::collections::{CollectionAddOutcome, CollectionAssignment, CollectionAssignmentOutcome};
 use crate::error::Error;
-use crate::fulltext::{FullTextPage, PendingExtraction};
+use crate::fulltext::{
+    ExtractedAttachmentBackfill, FullTextPage, PendingAttachmentExtraction, PendingExtraction,
+};
 use crate::types::{Annotation, AnnotationKind, AnnotationRect};
-use crate::zotero_model::{DeletedAttachment, FulltextItemState, NewAttachment, StoredAttachment};
+use crate::zotero_model::{
+    AttachmentTypeSummary, DeletedAttachment, FulltextItemState, NewAttachment, StoredAttachment,
+};
 use bib_types::{
     AddedBy, Article, ArticleRole, Collection, CollectionArticle, CollectionStatus, FetchStatus,
     FullText, IdKind, SearchHit, TextFormat,
@@ -100,6 +104,10 @@ pub(crate) enum BibCommand {
         article_id: String,
         reply: oneshot::Sender<Result<Vec<StoredAttachment>>>,
     },
+    ListAttachmentTypeSummaries {
+        article_ids: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<AttachmentTypeSummary>>>,
+    },
     GetZoteroAttachmentByKey {
         article_id: String,
         key: String,
@@ -130,6 +138,19 @@ pub(crate) enum BibCommand {
     },
 
     // Collections
+    EnsureCollectionMembership {
+        collection_id: String,
+        article_id: String,
+        reply: oneshot::Sender<Result<CollectionAddOutcome>>,
+    },
+    ListCollectionSummaries {
+        include_deleted: bool,
+        reply: oneshot::Sender<Result<Vec<serde_json::Value>>>,
+    },
+    QueryCollectionArticles {
+        input: crate::collections::CollectionQuery,
+        reply: oneshot::Sender<Result<crate::collections::CollectionPage>>,
+    },
     UpsertCollection {
         collection: Collection,
         reply: oneshot::Sender<Result<()>>,
@@ -138,7 +159,13 @@ pub(crate) enum BibCommand {
         id: String,
         reply: oneshot::Sender<Result<Option<Collection>>>,
     },
+    ChangeCollection {
+        id: String,
+        change: crate::collections::CollectionChange,
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
     ListCollections {
+        include_deleted: bool,
         status: Option<CollectionStatus>,
         reply: oneshot::Sender<Result<Vec<Collection>>>,
     },
@@ -229,11 +256,17 @@ pub(crate) enum BibCommand {
     ResetStaleRunning {
         reply: oneshot::Sender<Result<u64>>,
     },
+    ResetStaleAttachmentRunning {
+        reply: oneshot::Sender<Result<u64>>,
+    },
     ListArticlesNeedingExtraction {
         reply: oneshot::Sender<Result<Vec<PendingExtraction>>>,
     },
+    ListAttachmentsNeedingExtraction {
+        reply: oneshot::Sender<Result<Vec<PendingAttachmentExtraction>>>,
+    },
     ListExtractedForBackfill {
-        reply: oneshot::Sender<Result<Vec<(String, String, TextFormat)>>>,
+        reply: oneshot::Sender<Result<Vec<ExtractedAttachmentBackfill>>>,
     },
     GetFulltext {
         article_id: String,
@@ -253,6 +286,32 @@ pub(crate) enum BibCommand {
         article_id: String,
         reply: oneshot::Sender<Result<bool>>,
     },
+    GetAttachmentFulltext {
+        article_id: String,
+        attachment_key: String,
+        reply: oneshot::Sender<Result<Option<FullText>>>,
+    },
+    RestartAttachmentExtraction {
+        attachment_key: String,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    MarkAttachmentExtractionRunning {
+        attachment_key: String,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    RecordAttachmentExtractionSuccess {
+        attachment_key: String,
+        text: String,
+        format: TextFormat,
+        extracted_by: String,
+        extracted_path: String,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
+    RecordAttachmentExtractionFailure {
+        attachment_key: String,
+        error: String,
+        reply: oneshot::Sender<Result<Option<String>>>,
+    },
 
     // Annotations
     AddAnnotation {
@@ -269,6 +328,11 @@ pub(crate) enum BibCommand {
         article_id: String,
         attachment_key: Option<String>,
         reply: oneshot::Sender<Result<Vec<Annotation>>>,
+    },
+    UpdateAnnotation {
+        id: String,
+        patch: crate::types::AnnotationUpdate,
+        reply: oneshot::Sender<Result<Option<Annotation>>>,
     },
     DeleteAnnotation {
         id: String,
@@ -330,6 +394,12 @@ impl BibCommand {
             Self::ListZoteroAttachments { article_id, reply } => {
                 let _ = reply.send(
                     crate::zotero_model::list_attachments_for_article(&core.conn(), &article_id)
+                        .await,
+                );
+            }
+            Self::ListAttachmentTypeSummaries { article_ids, reply } => {
+                let _ = reply.send(
+                    crate::zotero_model::attachment_type_summaries(&core.conn(), &article_ids)
                         .await,
                 );
             }
@@ -396,14 +466,43 @@ impl BibCommand {
                         .await,
                 );
             }
+            Self::EnsureCollectionMembership {
+                collection_id,
+                article_id,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.ensure_collection_membership(&collection_id, &article_id)
+                        .await,
+                );
+            }
+            Self::ListCollectionSummaries {
+                include_deleted,
+                reply,
+            } => {
+                let _ = reply.send(core.list_collection_summaries(include_deleted).await);
+            }
+            Self::QueryCollectionArticles { input, reply } => {
+                let _ = reply.send(core.query_collection_articles(input).await);
+            }
             Self::UpsertCollection { collection, reply } => {
                 let _ = reply.send(core.upsert_collection(&collection).await);
             }
             Self::GetCollection { id, reply } => {
                 let _ = reply.send(core.get_collection(&id).await);
             }
-            Self::ListCollections { status, reply } => {
-                let _ = reply.send(core.list_collections(status).await);
+            Self::ChangeCollection { id, change, reply } => {
+                let _ = reply.send(core.change_collection(&id, change).await);
+            }
+            Self::ListCollections {
+                status,
+                include_deleted,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.list_collections_including_deleted(status, include_deleted)
+                        .await,
+                );
             }
             Self::UpdateCollectionStatus { id, status, reply } => {
                 let _ = reply.send(core.update_collection_status(&id, status).await);
@@ -530,8 +629,14 @@ impl BibCommand {
             Self::ResetStaleRunning { reply } => {
                 let _ = reply.send(core.reset_stale_running().await);
             }
+            Self::ResetStaleAttachmentRunning { reply } => {
+                let _ = reply.send(core.reset_stale_attachment_running().await);
+            }
             Self::ListArticlesNeedingExtraction { reply } => {
                 let _ = reply.send(core.list_articles_needing_extraction().await);
+            }
+            Self::ListAttachmentsNeedingExtraction { reply } => {
+                let _ = reply.send(core.list_attachments_needing_extraction().await);
             }
             Self::ListExtractedForBackfill { reply } => {
                 let _ = reply.send(core.list_extracted_for_backfill().await);
@@ -552,6 +657,60 @@ impl BibCommand {
             }
             Self::HasFulltext { article_id, reply } => {
                 let _ = reply.send(core.has_fulltext(&article_id).await);
+            }
+            Self::GetAttachmentFulltext {
+                article_id,
+                attachment_key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.get_attachment_fulltext(&article_id, &attachment_key)
+                        .await,
+                );
+            }
+            Self::RestartAttachmentExtraction {
+                attachment_key,
+                reply,
+            } => {
+                let _ = reply.send(core.restart_attachment_extraction(&attachment_key).await);
+            }
+            Self::MarkAttachmentExtractionRunning {
+                attachment_key,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.mark_attachment_extraction_running(&attachment_key)
+                        .await,
+                );
+            }
+            Self::RecordAttachmentExtractionSuccess {
+                attachment_key,
+                text,
+                format,
+                extracted_by,
+                extracted_path,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.record_attachment_extraction_success(
+                        &attachment_key,
+                        &text,
+                        format,
+                        &extracted_by,
+                        &extracted_path,
+                    )
+                    .await,
+                );
+            }
+            Self::RecordAttachmentExtractionFailure {
+                attachment_key,
+                error,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.record_attachment_extraction_failure(&attachment_key, &error)
+                        .await,
+                );
             }
             Self::AddAnnotation {
                 article_id,
@@ -586,6 +745,9 @@ impl BibCommand {
                         .await,
                 );
             }
+            Self::UpdateAnnotation { id, patch, reply } => {
+                let _ = reply.send(core.update_annotation(&id, patch).await);
+            }
             Self::DeleteAnnotation { id, reply } => {
                 let _ = reply.send(core.delete_annotation(&id).await);
             }
@@ -597,7 +759,8 @@ impl BibCommand {
 pub(crate) fn spawn(core: BibCore) -> BibBase {
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
     tokio::spawn(run(core, rx));
-    BibBase { tx }
+    let (changes, _) = tokio::sync::watch::channel(chrono::Utc::now().timestamp_millis() as u64);
+    BibBase { tx, changes }
 }
 
 /// Actor body: drain commands one at a time, each strictly complete
@@ -611,6 +774,11 @@ async fn run(core: BibCore, mut rx: mpsc::Receiver<BibCommand>) {
 }
 
 impl BibBase {
+    /// Subscribers are notified only after a successful committed operation.
+    pub fn subscribe_collection_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
     /// Send one command to the storage actor and await its reply.
     ///
     /// `make` receives the reply channel so the command carries it
@@ -622,11 +790,31 @@ impl BibBase {
     {
         let (reply_tx, reply_rx) = oneshot::channel();
         let command = make(reply_tx);
+        let modifies_collections = matches!(
+            &command,
+            BibCommand::UpsertArticle { .. }
+                | BibCommand::UpsertArticles { .. }
+                | BibCommand::DeleteArticle { .. }
+                | BibCommand::UpsertCollection { .. }
+                | BibCommand::ChangeCollection { .. }
+                | BibCommand::DeleteCollection { .. }
+                | BibCommand::EnsureCollectionMembership { .. }
+                | BibCommand::AddToCollection { .. }
+                | BibCommand::RemoveFromCollection { .. }
+                | BibCommand::UpsertArticlesWithCollection { .. }
+                | BibCommand::UpdateArticleRole { .. }
+                | BibCommand::UpdateFetchStatus { .. }
+                | BibCommand::UpdateCollectionStatus { .. }
+        );
         self.tx
             .send(command)
             .await
             .map_err(|_| Error::ActorStopped)?;
         // A dropped reply means the actor task exited mid-operation.
-        reply_rx.await.map_err(|_| Error::ActorStopped)?
+        let result = reply_rx.await.map_err(|_| Error::ActorStopped)?;
+        if modifies_collections && result.is_ok() {
+            self.changes.send_modify(|version| *version += 1);
+        }
+        result
     }
 }

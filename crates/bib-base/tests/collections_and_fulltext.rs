@@ -308,6 +308,7 @@ async fn article_refresh_preserves_related_records() {
     .unwrap();
     db.upsert_fulltext(&FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "/articles/a1.pdf".into(),
         file_format: FileFormat::Pdf,
         text_content: Some("Existing extracted text".into()),
@@ -493,6 +494,7 @@ async fn fulltext_crud() {
 
     let ft = FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "/articles/a1.pdf".into(),
         file_format: FileFormat::Pdf,
         text_content: Some("The full text body of the paper about CRISPR.".into()),
@@ -550,6 +552,7 @@ async fn deleting_fulltext_reverts_collection_status() {
         .unwrap();
     db.upsert_fulltext(&FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "vfs:///literature/a1/source.txt".into(),
         file_format: FileFormat::Txt,
         text_content: Some("body".into()),
@@ -609,6 +612,7 @@ async fn upsert_fulltext_syncs_collection_fetch_status() {
     // Store a full text.
     let ft = FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "/articles/a1.pdf".into(),
         file_format: FileFormat::Pdf,
         text_content: Some("Body text.".into()),
@@ -818,6 +822,7 @@ async fn search_with_fulltext() {
     // Upload full text with the relevant content.
     let ft = FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "/articles/a1.pdf".into(),
         file_format: FileFormat::Pdf,
         text_content: Some(

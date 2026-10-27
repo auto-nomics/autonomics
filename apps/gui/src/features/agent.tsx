@@ -1,4 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  Archive,
+  ArrowDown,
+  ArrowUp,
+  Brain,
+  CheckCircle2,
+  ChevronDown,
+  Copy,
+  GitFork,
+  History,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Pencil,
+  Plus,
+  PowerOff,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Square,
+  Terminal,
+  Trash2,
+  Wrench,
+  X,
+  XCircle,
+} from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import { renderMarkdown } from "@/markdown";
 import type {
@@ -20,7 +48,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +58,12 @@ export type DisplaySettings = {
 };
 
 type View = "agent" | "config" | "bib" | "kms" | "dag";
+
+/** Sliding-window transcript rendering: only the tail of the message list
+ *  stays mounted; earlier messages load on demand (button or scroll-to-top). */
+const DEFAULT_WINDOW = 60;
+const LOAD_CHUNK = 80;
+const MAX_WINDOW = 500;
 
 type PickerMode = "copy" | "fork";
 type PickerItem = { id: string; role: "user" | "assistant"; text: string };
@@ -104,6 +137,191 @@ export type AgentViewProps = {
   onRefreshHistory: () => void;
 };
 
+function statusDot(status?: string) {
+  const value = (status ?? "idle").toLowerCase();
+  if (value.includes("error")) return "bg-destructive";
+  if (value.includes("stream") || value.includes("request")) return "animate-pulse bg-sky-400";
+  if (value.includes("execut")) return "bg-amber-400";
+  if (value.includes("waiting") || value.includes("compact")) return "bg-violet-400";
+  return "bg-muted-foreground/50";
+}
+
+function planStepIcon(status: unknown) {
+  const value = String(status ?? "");
+  if (value === "Completed") return <span className="text-emerald-500">✓</span>;
+  if (value === "Cancelled") return <span className="text-destructive">✗</span>;
+  if (value === "InProgress") return <span className="animate-pulse text-sky-400">◐</span>;
+  return <span className="text-muted-foreground">•</span>;
+}
+
+function formatTime(time: number) {
+  return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseToolCall(text: string) {
+  const match = text.match(/^([\w.:-]+):\s*([\s\S]*)$/);
+  if (!match) return { name: text, input: "" };
+  let input = match[2];
+  try {
+    input = JSON.stringify(JSON.parse(match[2]), null, 2);
+  } catch {
+    // keep raw text
+  }
+  return { name: match[1], input };
+}
+
+function parseToolResult(text: string) {
+  if (text.startsWith("ERR ")) return { ok: false, content: text.slice(4) };
+  if (text.startsWith("OK ")) return { ok: true, content: text.slice(3) };
+  return { ok: true, content: text };
+}
+
+type MessageItemProps = {
+  message: ChatItem;
+  streamingId: number | null;
+  display: DisplaySettings;
+  expanded: Record<number, boolean>;
+  onToggle: (id: number) => void;
+  onCopy: (text: string) => void;
+};
+
+function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy }: MessageItemProps) {
+  const isStreaming = message.id === streamingId;
+
+  if (message.role === "user") {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[75%] rounded-2xl rounded-br-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm whitespace-pre-wrap">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.role === "assistant") {
+    return (
+      <div className="group flex gap-2.5">
+        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+          <Sparkles className="size-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="mb-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span className="font-medium">{isStreaming ? "Generating…" : "Assistant"}</span>
+            {isStreaming && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />}
+            <span>{formatTime(message.time)}</span>
+            {message.usage && <span className="truncate">{message.usage}</span>}
+            <button
+              type="button"
+              className="ml-auto shrink-0 opacity-0 transition hover:text-foreground group-hover:opacity-100"
+              onClick={() => onCopy(message.text)}
+            >
+              <Copy className="size-3" />
+            </button>
+          </div>
+          <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+          {isStreaming && <span className="mt-1 inline-block h-4 w-2 animate-pulse bg-foreground/70 align-text-bottom" />}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.role === "thinking") {
+    const open = expanded[message.id] ?? !display.collapse_thinking;
+    return (
+      <div className="ml-8.5 overflow-hidden rounded-lg border bg-muted/30">
+        <button
+          type="button"
+          onClick={() => onToggle(message.id)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent/50"
+        >
+          <Brain className="size-3.5 shrink-0" />
+          <span className="italic">{isStreaming ? "Thinking…" : "Thought process"}</span>
+          {isStreaming && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />}
+          <ChevronDown className={cn("ml-auto size-3.5 shrink-0 transition-transform", open && "rotate-180")} />
+        </button>
+        {open && (
+          <pre className="max-h-64 overflow-y-auto border-t px-3 py-2 text-xs whitespace-pre-wrap text-muted-foreground italic">
+            {message.text}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
+  if (message.role === "tool") {
+    if (message.kind === "tool_call") {
+      const { name, input } = parseToolCall(message.text);
+      const open = expanded[message.id] ?? !display.collapse_tool_calls;
+      return (
+        <div className="ml-8.5 overflow-hidden rounded-lg border bg-card font-mono text-xs">
+          <button
+            type="button"
+            onClick={() => onToggle(message.id)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/50"
+          >
+            <Wrench className="size-3 shrink-0 text-muted-foreground" />
+            <span className="shrink-0 font-sans font-medium">{name}</span>
+            {input && <span className="truncate text-muted-foreground">{preview(input)}</span>}
+            <ChevronDown className={cn("ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+          </button>
+          {open && input && (
+            <pre className="max-h-48 overflow-auto border-t bg-muted/40 p-2 text-[11px]">{input}</pre>
+          )}
+        </div>
+      );
+    }
+    if (message.kind === "tool_result") {
+      const { ok, content } = parseToolResult(message.text);
+      const open = expanded[message.id] ?? !display.collapse_tool_results;
+      return (
+        <div
+          className={cn(
+            "ml-8.5 overflow-hidden rounded-lg border font-mono text-xs",
+            ok ? "border-emerald-500/25" : "border-destructive/40",
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => onToggle(message.id)}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-accent/50"
+          >
+            {ok ? (
+              <CheckCircle2 className="size-3 shrink-0 text-emerald-500" />
+            ) : (
+              <XCircle className="size-3 shrink-0 text-destructive" />
+            )}
+            <span className="shrink-0 font-sans font-medium">{ok ? "Result" : "Error"}</span>
+            {content && <span className="truncate text-muted-foreground">{preview(content)}</span>}
+            <ChevronDown className={cn("ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
+          </button>
+          {open && content && (
+            <pre className={cn("max-h-48 overflow-auto border-t p-2 text-[11px]", ok ? "bg-muted/40" : "bg-destructive/10 text-destructive")}>
+              {content}
+            </pre>
+          )}
+        </div>
+      );
+    }
+    return (
+      <div className="ml-8.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <Terminal className="size-3 shrink-0" />
+        <span className="truncate">{message.text}</span>
+      </div>
+    );
+  }
+
+  if (message.role === "error") {
+    return (
+      <div className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-destructive">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <pre className="min-w-0 flex-1 font-sans text-xs whitespace-pre-wrap">{message.text}</pre>
+      </div>
+    );
+  }
+
+  return <div className="text-center text-[11px] text-muted-foreground">{message.text}</div>;
+}
+
 export function AgentView(props: AgentViewProps) {
   const {
     activeAgent,
@@ -145,15 +363,99 @@ export function AgentView(props: AgentViewProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
   const [toast, setToast] = useState<string | null>(null);
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [atBottom, setAtBottom] = useState(true);
+  const [windowStart, setWindowStart] = useState(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const windowStartRef = useRef(0);
+  const pendingAnchorRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
 
   const activeInfo = agents.find((agent) => agent.path === activeAgent);
   const planSteps: any[] = plan?.update?.plan ?? [];
   const running = statusLabel(statuses[activeAgent]);
 
+  const toggleExpand = useCallback((id: number) => {
+    setExpanded((current) => ({ ...current, [id]: !current[id] }));
+  }, []);
+
+  const applyWindowStart = useCallback((next: number) => {
+    windowStartRef.current = next;
+    setWindowStart(next);
+  }, []);
+
+  const loadEarlier = useCallback(() => {
+    const viewport = transcriptRef.current;
+    const next = Math.max(0, windowStartRef.current - LOAD_CHUNK);
+    if (next < windowStartRef.current && viewport) {
+      pendingAnchorRef.current = { scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight };
+    }
+    applyWindowStart(next);
+  }, [applyWindowStart]);
+
+  const scrollToBottom = () => {
+    applyWindowStart(Math.max(0, messages.length - DEFAULT_WINDOW));
+    requestAnimationFrame(() => {
+      transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
+    });
+  };
+
+  // Slide the window tail-forward while the user sits at the bottom; freeze it
+  // in place when they have scrolled up so streaming cannot yank their view.
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
+    const tail = Math.max(0, messages.length - DEFAULT_WINDOW);
+    applyWindowStart(atBottomRef.current ? tail : Math.min(windowStartRef.current, Math.max(0, messages.length - 1)));
+  }, [messages.length, applyWindowStart]);
+
+  // Restore the scroll position after prepending earlier messages.
+  useLayoutEffect(() => {
+    const anchor = pendingAnchorRef.current;
+    if (!anchor) return;
+    pendingAnchorRef.current = null;
+    const viewport = transcriptRef.current;
+    if (viewport) {
+      viewport.scrollTop = anchor.scrollTop + viewport.scrollHeight - anchor.scrollHeight;
+    }
+  }, [windowStart]);
+
+  useEffect(() => {
+    if (atBottomRef.current) {
+      transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight });
+    }
   }, [messages.length, streaming?.text]);
+
+  useEffect(() => {
+    const viewport = transcriptRef.current;
+    if (!viewport) return;
+    const onScroll = () => {
+      const bottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 48;
+      atBottomRef.current = bottom;
+      setAtBottom(bottom);
+      if (!bottom && viewport.scrollTop <= 32 && windowStartRef.current > 0 && !pendingAnchorRef.current) {
+        loadEarlier();
+      }
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [activeAgent, loadEarlier]);
+
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      const button = event.target instanceof HTMLElement ? event.target.closest("[data-copy-code]") : null;
+      if (!(button instanceof HTMLElement)) return;
+      const code = button.closest(".md-code")?.querySelector("pre");
+      if (!code) return;
+      void navigator.clipboard.writeText(code.textContent ?? "");
+      button.textContent = "Copied!";
+      window.setTimeout(() => {
+        button.textContent = "Copy";
+      }, 1400);
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -276,195 +578,377 @@ export function AgentView(props: AgentViewProps) {
     return [...promptHistory].reverse().filter((item) => !needle || item.toLowerCase().includes(needle));
   }, [historyQuery, promptHistory]);
 
-  let hiddenThinking = 0;
-  let hiddenCalls = 0;
-  let hiddenResults = 0;
-  const visibleMessages = messages.filter((message) => {
-    if (message.role === "thinking" && display.collapse_thinking) {
-      hiddenThinking += 1;
-      return false;
-    }
-    if (message.role === "tool" && message.kind === "tool_call" && display.collapse_tool_calls) {
-      hiddenCalls += 1;
-      return false;
-    }
-    if (message.role === "tool" && message.kind === "tool_result" && display.collapse_tool_results) {
-      hiddenResults += 1;
-      return false;
-    }
-    return true;
-  });
-  const collapsedSummary = [
-    hiddenThinking && `${hiddenThinking} thinking collapsed`,
-    hiddenCalls && `${hiddenCalls} tool calls collapsed`,
-    hiddenResults && `${hiddenResults} results collapsed`,
-  ].filter(Boolean).join(" · ");
+  const clampedStart = Math.min(windowStart, Math.max(0, messages.length - 1));
+  const visibleMessages = messages.slice(clampedStart, atBottom ? undefined : clampedStart + MAX_WINDOW);
+  const hiddenCount = clampedStart;
 
   return (
-    <section className="grid min-h-0 grid-cols-[300px_minmax(0,1fr)]">
-      <ScrollArea className="min-h-0 border-r bg-muted" contentClassName="p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Agents</h2>
-          <div className="flex gap-1">
-            <Button size="xs" variant="secondary" onClick={openResume}>Resume</Button>
-            <Button size="xs" onClick={() => setSpawnOpen(true)}>New</Button>
+    <section className="flex min-h-0">
+      <aside
+        className={cn(
+          "flex h-full min-h-0 shrink-0 overflow-hidden border-r bg-muted/50 transition-[width] duration-200",
+          leftOpen ? "w-[300px]" : "w-0 border-transparent",
+        )}
+      >
+        <ScrollArea className="min-h-0 w-[300px]" contentClassName="flex flex-col gap-1 p-3">
+          <div className="flex items-center justify-between gap-2 pb-1">
+            <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Agents</h2>
+            <div className="flex gap-0.5">
+              <Button size="icon-xs" variant="ghost" aria-label="Resume agent" onClick={openResume}>
+                <RotateCcw />
+              </Button>
+              <Button size="icon-xs" variant="ghost" aria-label="New agent" onClick={() => setSpawnOpen(true)}>
+                <Plus />
+              </Button>
+            </div>
           </div>
-        </div>
-        <div className="mt-3 space-y-1.5">
           {agents.map((agent) => (
-            <div key={agent.path} className="rounded-lg border bg-card p-1.5">
+            <div
+              key={agent.path}
+              className={cn(
+                "group/agent flex items-center gap-0.5 rounded-md px-1",
+                activeAgent === agent.path && "bg-accent",
+              )}
+            >
               <button
                 type="button"
                 onClick={() => props.onSelectAgent(agent.path)}
-                className={cn("w-full rounded-md px-2 py-1.5 text-left", activeAgent === agent.path && "bg-accent")}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-accent"
+                title={agent.path}
               >
-                <span className="block truncate text-sm">{agent.path}</span>
-                <span className="text-xs text-muted-foreground">{statuses[agent.path] ?? "idle"}</span>
+                <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[agent.path]))} />
+                <span className="truncate text-sm">{agent.path}</span>
               </button>
-              <div className="mt-1 grid grid-cols-2 gap-1">
-                <Button size="xs" variant="ghost" onClick={() => props.onShutdown(agent.path)}>Shutdown</Button>
+              <span className="flex shrink-0 items-center opacity-0 transition group-hover/agent:opacity-100">
                 <Button
-                  size="xs"
+                  size="icon-xs"
                   variant="ghost"
+                  aria-label="Shutdown agent"
+                  onClick={() => props.onShutdown(agent.path)}
+                >
+                  <PowerOff />
+                </Button>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Delete agent"
                   disabled={!agent.agent_id}
                   onClick={() => props.onDelete(agent.path, agent.agent_id)}
                 >
-                  Delete
+                  <Trash2 />
                 </Button>
-              </div>
+              </span>
             </div>
           ))}
-        </div>
-
-        <Separator className="my-4" />
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Sessions</h2>
-          <Button size="xs" onClick={() => setSessionCreating(true)} disabled={!activeAgent}>New</Button>
-        </div>
-        {sessionCreating && (
-          <form
-            className="mt-2 flex gap-1.5"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              await props.onCreateSession(sessionTitle);
-              setSessionTitle("");
-              setSessionCreating(false);
-            }}
-          >
-            <Input value={sessionTitle} placeholder="New session title" onChange={(event) => setSessionTitle(event.target.value)} />
-            <Button type="submit" size="icon" aria-label="Create session">+</Button>
-          </form>
-        )}
-        <div className="mt-3 space-y-1.5">
-          {sessions.map((session) => (
-            <div key={session.id} className="rounded-lg border p-2">
-              {sessionEditor?.id === session.id ? (
-                <form
-                  className="flex gap-1.5"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    await props.onRenameSession(session.id, sessionEditor.title);
-                    setSessionEditor(null);
-                  }}
-                >
-                  <Input value={sessionEditor.title} onChange={(event) => setSessionEditor({ id: session.id, title: event.target.value })} />
-                  <Button type="submit" size="icon" aria-label="Save title">✓</Button>
-                </form>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => void props.onActivateSession(session.id)}
-                    className={cn("w-full rounded-md p-1.5 text-left", activeSessionId === session.id && "bg-accent")}
-                  >
-                    <span className="line-clamp-2 block text-sm">{session.title || session.id}</span>
-                    <span className="text-xs text-muted-foreground">{new Date(session.last_active).toLocaleString()}</span>
-                  </button>
-                  <div className="mt-1 grid grid-cols-2 gap-1">
-                    <Button size="xs" variant="ghost" onClick={() => setSessionEditor({ id: session.id, title: session.title || "" })}>Rename</Button>
-                    <Button size="xs" variant="ghost" onClick={() => void props.onCloseSession(session.id)}>Close</Button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </ScrollArea>
-
-      <div className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto]">
-        <div className="flex items-center justify-between gap-3 border-b px-4 py-2.5">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium">{activeAgent || "No agent"}</div>
-            <div className="truncate text-xs text-muted-foreground">
-              {activeInfo?.model ?? "no model"} · {running}
-              {usage ? ` · ${usage.input} in / ${usage.output} out` : ""}
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-end gap-1.5">
-            <Button size="sm" variant="secondary" onClick={() => setPaletteOpen(true)}>Commands</Button>
-            <Button size="sm" variant="secondary" onClick={openCopy}>Copy</Button>
-            <Button size="sm" variant="secondary" onClick={openFork}>Fork</Button>
-            <Button size="sm" variant="secondary" onClick={props.onCancel}>Cancel</Button>
-            <Button size="sm" variant="secondary" onClick={props.onCompact}>Compact</Button>
-          </div>
-        </div>
-
-        {planSteps.length > 0 && (
-          <div className="truncate border-b px-4 py-1.5 text-xs text-muted-foreground">
-            {planSteps.map((step) => `${step.status === "Completed" ? "✓" : "•"} ${step.step}`).join("    ")}
-          </div>
-        )}
-
-        <ScrollArea viewportRef={transcriptRef} className="min-h-0" contentClassName="space-y-2 p-4">
-          {visibleMessages.map((message) => (
-            <article
-              key={message.id}
-              className={cn(
-                "group rounded-lg border p-3 text-sm",
-                message.role === "user" && "border-primary/40 bg-card",
-                message.role === "assistant" && "bg-card",
-                message.role === "thinking" && "opacity-80",
-                message.role === "tool" && "font-mono text-xs",
-                message.role === "error" && "border-destructive/40 bg-destructive/10 text-destructive",
-              )}
-            >
-              <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground uppercase">
-                <span>{message.role}</span>
-                {(message.role === "user" || message.role === "assistant") && (
-                  <button
-                    type="button"
-                    className="ml-auto opacity-0 transition hover:text-foreground group-hover:opacity-100"
-                    onClick={async () => showToast(await copyText(message.text))}
-                  >
-                    Copy
-                  </button>
-                )}
-              </div>
-              {message.role === "assistant" ? (
-                <div className="text-sm" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
-              ) : (
-                <pre className="font-sans whitespace-pre-wrap">{message.text}</pre>
-              )}
-              {message.usage && <div className="mt-1 text-xs text-muted-foreground">{message.usage}</div>}
-            </article>
-          ))}
-          {streaming && !visibleMessages.some((message) => message.id === streaming.id) && (
-            <pre className="rounded-lg border bg-card p-3 text-sm whitespace-pre-wrap">{streaming.text}</pre>
-          )}
-          {collapsedSummary && <div className="pt-2 text-center text-xs text-muted-foreground">{collapsedSummary}</div>}
         </ScrollArea>
+      </aside>
 
-        <form
-          className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 border-t bg-muted p-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            props.onSendMessage();
-          }}
-        >
-          <Textarea value={draft} rows={3} onChange={(event) => props.onDraftChange(event.target.value)} placeholder="输入消息；Ctrl+R 搜索 prompt 历史" />
-          <Button type="submit" disabled={!draft.trim() || busy === "send"}>发送</Button>
-        </form>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="flex h-10 shrink-0 items-center gap-1 border-b bg-muted/40 px-1.5">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Toggle left sidebar"
+            onClick={() => setLeftOpen((current) => !current)}
+          >
+            {leftOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+          </Button>
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {agents.map((agent) => (
+              <div
+                key={agent.path}
+                className={cn(
+                  "group/tab flex shrink-0 items-center gap-1.5 rounded-md border border-transparent py-1 pr-1 pl-2 text-xs",
+                  activeAgent === agent.path ? "border-border bg-card shadow-sm" : "text-muted-foreground hover:bg-accent",
+                )}
+              >
+                <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[agent.path]))} />
+                <button
+                  type="button"
+                  onClick={() => props.onSelectAgent(agent.path)}
+                  className="max-w-40 truncate"
+                  title={agent.path}
+                >
+                  {leafName(agent.path)}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Shutdown agent"
+                  title="关闭并停止 agent"
+                  onClick={() => props.onShutdown(agent.path)}
+                  className="rounded-sm p-1 opacity-0 transition hover:bg-accent group-hover/tab:opacity-100"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            ))}
+            <Button size="icon-sm" variant="ghost" aria-label="New agent" onClick={() => setSpawnOpen(true)}>
+              <Plus />
+            </Button>
+          </div>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label="Toggle right sidebar"
+            onClick={() => setRightOpen((current) => !current)}
+          >
+            {rightOpen ? <PanelRightClose /> : <PanelRightOpen />}
+          </Button>
+        </div>
+
+        <div className="flex h-8 shrink-0 items-center gap-2 border-b px-3 text-xs text-muted-foreground">
+          <span className="truncate">{activeAgent || "No agent open"}</span>
+          {activeAgent && (
+            <>
+              <span>·</span>
+              <span className="shrink-0">{activeInfo?.model ?? "no model"}</span>
+              <span>·</span>
+              <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[activeAgent]))} />
+              <span className="shrink-0">{running}</span>
+              {usage && (
+                <span className="ml-auto shrink-0">
+                  {usage.input} in / {usage.output} out{usage.cache ? ` / ${usage.cache} cache` : ""}
+                </span>
+              )}
+            </>
+          )}
+        </div>
+
+        {activeAgent ? (
+          <>
+            <div className="relative flex min-h-0 flex-1">
+              <ScrollArea viewportRef={transcriptRef} className="min-h-0 flex-1" contentClassName="space-y-3 p-4">
+                {hiddenCount > 0 && (
+                  <div className="flex justify-center pb-2">
+                    <Button size="xs" variant="outline" onClick={loadEarlier}>
+                      <ArrowUp />
+                      Load earlier messages ({hiddenCount})
+                    </Button>
+                  </div>
+                )}
+                {visibleMessages.map((message) => (
+                  <MessageItem
+                    key={message.id}
+                    message={message}
+                    streamingId={streaming?.id ?? null}
+                    display={display}
+                    expanded={expanded}
+                    onToggle={toggleExpand}
+                    onCopy={async (text) => showToast(await copyText(text))}
+                  />
+                ))}
+                {!messages.length && !streaming && (
+                  <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
+                )}
+              </ScrollArea>
+              {!atBottom && (
+                <button
+                  type="button"
+                  aria-label="Scroll to bottom"
+                  onClick={scrollToBottom}
+                  className="absolute right-4 bottom-4 grid size-8 place-items-center rounded-full border bg-popover text-muted-foreground shadow-lg hover:bg-accent hover:text-foreground"
+                >
+                  <ArrowDown className="size-4" />
+                </button>
+              )}
+            </div>
+
+            <form
+              className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 border-t bg-muted p-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                props.onSendMessage();
+              }}
+            >
+              <Textarea value={draft} rows={3} onChange={(event) => props.onDraftChange(event.target.value)} placeholder="输入消息；Ctrl+R 搜索 prompt 历史" />
+              <Button type="submit" disabled={!draft.trim() || busy === "send"}>发送</Button>
+            </form>
+          </>
+        ) : (
+          <div className="grid min-h-0 flex-1 place-items-center text-sm text-muted-foreground">
+            从左侧选择一个 agent，或点击 + 新建
+          </div>
+        )}
+
+        <div className="flex h-6 shrink-0 items-center justify-between border-t bg-muted/40 px-3 text-[11px] text-muted-foreground">
+          <span className="truncate">{activeAgent ? (streaming ? "streaming…" : running) : ""}</span>
+          <span className="shrink-0">
+            {messages.length ? (visibleMessages.length < messages.length ? `${visibleMessages.length} / ${messages.length} messages` : `${messages.length} messages`) : ""}
+          </span>
+        </div>
       </div>
+
+      <aside
+        className={cn(
+          "flex h-full min-h-0 shrink-0 overflow-hidden border-l bg-muted/50 transition-[width] duration-200",
+          rightOpen ? "w-[264px]" : "w-0 border-transparent",
+        )}
+      >
+        <ScrollArea className="min-h-0 w-[264px]" contentClassName="space-y-4 p-3">
+          <section>
+            <div className="mb-1.5 flex items-center justify-between">
+              <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Sessions</h2>
+              <Button size="icon-xs" variant="ghost" aria-label="New session" onClick={() => setSessionCreating(true)} disabled={!activeAgent}>
+                <Plus />
+              </Button>
+            </div>
+            {sessionCreating && (
+              <form
+                className="flex gap-1.5"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  await props.onCreateSession(sessionTitle);
+                  setSessionTitle("");
+                  setSessionCreating(false);
+                }}
+              >
+                <Input value={sessionTitle} placeholder="New session title" onChange={(event) => setSessionTitle(event.target.value)} />
+                <Button type="submit" size="icon" aria-label="Create session">+</Button>
+              </form>
+            )}
+            <div className="space-y-1">
+              {sessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={cn(
+                    "group/session rounded-md px-1",
+                    activeSessionId === session.id && "bg-accent",
+                  )}
+                >
+                  {sessionEditor?.id === session.id ? (
+                    <form
+                      className="flex gap-1.5"
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        await props.onRenameSession(session.id, sessionEditor.title);
+                        setSessionEditor(null);
+                      }}
+                    >
+                      <Input value={sessionEditor.title} onChange={(event) => setSessionEditor({ id: session.id, title: event.target.value })} />
+                      <Button type="submit" size="icon" aria-label="Save title">✓</Button>
+                    </form>
+                  ) : (
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => void props.onActivateSession(session.id)}
+                        className="min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left hover:bg-accent"
+                        title={session.title || session.id}
+                      >
+                        <span className="line-clamp-2 block text-sm">{session.title || session.id}</span>
+                        <span className="text-xs text-muted-foreground">{new Date(session.last_active).toLocaleString()}</span>
+                      </button>
+                      <span className="flex shrink-0 flex-col opacity-0 transition group-hover/session:opacity-100">
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label="Rename session"
+                          onClick={() => setSessionEditor({ id: session.id, title: session.title || "" })}
+                        >
+                          <Pencil className="size-2.5" />
+                        </Button>
+                        <Button size="icon-xs" variant="ghost" aria-label="Close session" onClick={() => void props.onCloseSession(session.id)}>
+                          <X className="size-2.5" />
+                        </Button>
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {!sessions.length && (
+                <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No sessions</div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Overview</h2>
+            <Card className="p-2.5 text-xs">
+              <div className="truncate" title={activeAgent}>{activeAgent || "No agent"}</div>
+              <div className="mt-1.5 space-y-1 text-muted-foreground">
+                <div className="flex justify-between gap-2">
+                  <span className="shrink-0">Model</span>
+                  <span className="truncate">{activeInfo?.model ?? "—"}</span>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <span className="shrink-0">Status</span>
+                  <span className="truncate">{activeAgent ? running : "—"}</span>
+                </div>
+                {usage && (
+                  <div className="flex justify-between gap-2">
+                    <span className="shrink-0">Tokens</span>
+                    <span className="truncate">{usage.input} in / {usage.output} out</span>
+                  </div>
+                )}
+                {usage?.cache ? (
+                  <div className="flex justify-between gap-2">
+                    <span className="shrink-0">Cache</span>
+                    <span className="truncate">{usage.cache}</span>
+                  </div>
+                ) : null}
+              </div>
+            </Card>
+          </section>
+
+          <section>
+            <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Plan</h2>
+            {planSteps.length ? (
+              <div className="space-y-1">
+                {planSteps.map((step, index) => (
+                  <div key={index} className="flex items-start gap-2 rounded-md border bg-card p-1.5 text-xs">
+                    <span className="mt-px shrink-0">{planStepIcon(step.status)}</span>
+                    <span className={cn("min-w-0", step.status === "Completed" && "text-muted-foreground line-through")}>
+                      {step.step}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No active plan</div>
+            )}
+          </section>
+
+          <section>
+            <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">View</h2>
+            <div className="space-y-0.5">
+              {([
+                ["collapse_thinking", "Collapse thinking"],
+                ["collapse_tool_calls", "Collapse tool calls"],
+                ["collapse_tool_results", "Collapse tool results"],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => props.onToggleDisplay(key)}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+                >
+                  <span>{label}</span>
+                  <span
+                    className={cn(
+                      "flex h-4 w-7 items-center rounded-full px-0.5 transition-colors",
+                      display[key] ? "justify-end bg-primary" : "justify-start bg-muted-foreground/30",
+                    )}
+                  >
+                    <span className="size-3 rounded-full bg-background" />
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Actions</h2>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button size="xs" variant="secondary" onClick={props.onCancel}><Square />Cancel</Button>
+              <Button size="xs" variant="secondary" onClick={props.onCompact}><Archive />Compact</Button>
+              <Button size="xs" variant="secondary" onClick={openCopy}><Copy />Copy</Button>
+              <Button size="xs" variant="secondary" onClick={openFork}><GitFork />Fork</Button>
+              <Button size="xs" variant="secondary" onClick={() => setHistoryOpen(true)}><History />History</Button>
+              <Button size="xs" variant="secondary" onClick={props.onRefreshHistory}><RefreshCw />Refresh</Button>
+            </div>
+          </section>
+        </ScrollArea>
+      </aside>
 
       <Dialog open={spawnOpen} onOpenChange={setSpawnOpen}>
         <DialogContent>

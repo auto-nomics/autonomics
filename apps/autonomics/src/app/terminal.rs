@@ -33,15 +33,6 @@ pub(super) static PANIC_OCCURRED: std::sync::atomic::AtomicBool =
 fn set_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        // Recoverable extraction panics (pdf-extract on malformed fonts)
-        // are converted to errors at the source via bib-base's panic
-        // guard. They must not restore the terminal, print the banner, or
-        // stop the render loop — a single bad PDF cannot kill the TUI.
-        if bib_base::is_expected_panic() {
-            tracing::warn!(payload = %info, "suppressed recoverable extraction panic");
-            return;
-        }
-
         PANIC_OCCURRED.store(true, std::sync::atomic::Ordering::SeqCst);
 
         static RESTORE: std::sync::Once = std::sync::Once::new();

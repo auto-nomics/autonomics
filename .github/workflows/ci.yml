@@ -81,3 +81,24 @@ jobs:
   #         df -h / /home/runner/work
   #         free -h
   #         du -sh target "${CARGO_HOME:-$HOME/.cargo}/registry" 2>/dev/null || true
+
+  reader:
+    name: Zotero structured extraction and PDF reader
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            tools/zotero-extractor/package-lock.json
+            apps/gui/package-lock.json
+      - run: npm ci --prefix tools/zotero-extractor
+      - run: npm ci --prefix apps/gui
+      - run: apps/gui/node_modules/.bin/playwright install --with-deps chromium
+      - run: npm --prefix tools/zotero-extractor test
+      - run: npm --prefix apps/gui run test:reading
+      - run: npm --prefix apps/gui run test:pdf
+      - run: npm --prefix apps/gui run test:pdf-selection
+      - run: npm --prefix apps/gui run build

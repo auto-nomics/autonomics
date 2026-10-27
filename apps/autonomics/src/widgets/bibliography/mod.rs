@@ -11,7 +11,7 @@ mod collection_pane;
 mod search_bar;
 mod status_bar;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bib_base::{Annotation, Article, Collection, FullText};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -108,11 +108,14 @@ impl DetailsTab {
 #[derive(Debug, Clone, Default)]
 pub struct BibliographyState {
     pub collections: Vec<Collection>,
+    pub expanded_collections: HashSet<String>,
+    pub include_subcollections: bool,
     pub articles: Vec<Article>,
     /// `None` means the virtual “All articles” collection.
     pub selected_collection: Option<String>,
     pub selected_article: Option<String>,
     pub query: String,
+    pub authoritative_query: String,
     pub focus: BibliographyFocus,
     pub details_tab: DetailsTab,
     pub details_scroll: u16,
@@ -133,6 +136,21 @@ impl BibliographyState {
                 self.selected_collection = None;
             }
         }
+        let mut ancestor = self.selected_collection.clone();
+        let mut seen = HashSet::new();
+        while let Some(id) = ancestor {
+            if !seen.insert(id.clone()) {
+                break;
+            }
+            ancestor = self
+                .collections
+                .iter()
+                .find(|c| c.id == id)
+                .and_then(|c| c.parent_id.clone());
+            if let Some(parent) = &ancestor {
+                self.expanded_collections.insert(parent.clone());
+            }
+        }
         if let Some(id) = &self.selected_article {
             if !self.articles.iter().any(|a| &a.id == id) {
                 self.selected_article = None;
@@ -149,26 +167,42 @@ impl BibliographyState {
     pub fn filtered_articles(&self) -> impl Iterator<Item = &Article> {
         let collection = self.selected_collection.as_deref();
         let query_words = query_words(&self.query);
+        let mut scope: HashSet<&str> = collection.into_iter().collect();
+        if self.include_subcollections {
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for c in &self.collections {
+                    if !c.deleted
+                        && c.parent_id.as_deref().is_some_and(|p| scope.contains(p))
+                        && scope.insert(c.id.as_str())
+                    {
+                        changed = true;
+                    }
+                }
+            }
+        }
         self.articles.iter().filter(move |article| {
-            let in_collection = collection.is_none_or(|id| {
+            let in_collection = collection.is_none_or(|_| {
                 self.collections
                     .iter()
-                    .filter(|c| c.id == id)
+                    .filter(|c| scope.contains(c.id.as_str()) && !c.deleted)
                     .flat_map(|c| c.article_ids.iter())
                     .any(|member| member == &article.id)
             });
             in_collection
-                && query_words.iter().all(|word| {
-                    article.title.to_lowercase().contains(word)
-                        || article
-                            .abstract_text
-                            .as_deref()
-                            .is_some_and(|text| text.to_lowercase().contains(word))
-                        || article
-                            .keywords
-                            .iter()
-                            .any(|k| k.to_lowercase().contains(word))
-                })
+                && (self.query == self.authoritative_query
+                    || query_words.iter().all(|word| {
+                        article.title.to_lowercase().contains(word)
+                            || article
+                                .abstract_text
+                                .as_deref()
+                                .is_some_and(|text| text.to_lowercase().contains(word))
+                            || article
+                                .keywords
+                                .iter()
+                                .any(|k| k.to_lowercase().contains(word))
+                    }))
         })
     }
 
@@ -207,28 +241,78 @@ impl BibliographyState {
         self.select_article(ids[next].clone());
     }
 
-    pub fn move_collection(&mut self, forward: bool) {
-        if self.collections.is_empty() {
-            self.selected_collection = None;
-            return;
+    /// One shared visible order for rendering and keyboard navigation.
+    pub fn collection_rows(&self) -> Vec<(&Collection, usize)> {
+        let mut children: HashMap<Option<&str>, Vec<&Collection>> = HashMap::new();
+        let live: HashSet<&str> = self
+            .collections
+            .iter()
+            .filter(|c| !c.deleted)
+            .map(|c| c.id.as_str())
+            .collect();
+        for c in self.collections.iter().filter(|c| !c.deleted) {
+            let parent = c.parent_id.as_deref().filter(|id| live.contains(id));
+            children.entry(parent).or_default().push(c);
         }
-        let mut index = self
+        for group in children.values_mut() {
+            group.sort_by(|a, b| {
+                a.name
+                    .to_lowercase()
+                    .cmp(&b.name.to_lowercase())
+                    .then(a.id.cmp(&b.id))
+            });
+        }
+        let mut stack: Vec<(&Collection, usize)> = children
+            .remove(&None)
+            .unwrap_or_default()
+            .into_iter()
+            .rev()
+            .map(|c| (c, 0))
+            .collect();
+        let mut rows = Vec::new();
+        let mut seen = HashSet::new();
+        while let Some((c, depth)) = stack.pop() {
+            if !seen.insert(c.id.as_str()) {
+                continue;
+            }
+            rows.push((c, depth));
+            if self.expanded_collections.contains(&c.id) {
+                for child in children
+                    .remove(&Some(c.id.as_str()))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .rev()
+                {
+                    stack.push((child, depth + 1));
+                }
+            }
+        }
+        rows
+    }
+
+    pub fn move_collection(&mut self, forward: bool) {
+        let ids: Vec<String> = self
+            .collection_rows()
+            .iter()
+            .map(|(c, _)| c.id.clone())
+            .collect();
+        let current = self
             .selected_collection
-            .as_deref()
-            .and_then(|id| self.collections.iter().position(|c| c.id == id))
-            .map(|i| i + 1) // account for the virtual All row
+            .as_ref()
+            .and_then(|id| ids.iter().position(|c| c == id))
+            .map(|i| i + 1)
             .unwrap_or(0);
-        index = if forward {
-            (index + 1) % (self.collections.len() + 1)
-        } else if index == 0 {
-            self.collections.len()
+        let next = if forward {
+            (current + 1) % (ids.len() + 1)
+        } else if current == 0 {
+            ids.len()
         } else {
-            index - 1
+            current - 1
         };
-        self.selected_collection = if index == 0 {
+        self.selected_collection = if next == 0 {
             None
         } else {
-            self.collections.get(index - 1).map(|c| c.id.clone())
+            Some(ids[next - 1].clone())
         };
         self.selected_article = self.first_filtered_article();
         self.details_scroll = 0;
@@ -296,7 +380,16 @@ impl BibliographyState {
                     false
                 }
                 BibliographyFocus::Collections => {
-                    self.focus = BibliographyFocus::Details;
+                    if let Some(id) = self.selected_collection.clone() {
+                        if !self.expanded_collections.remove(&id) {
+                            self.selected_collection = self
+                                .collections
+                                .iter()
+                                .find(|c| c.id == id)
+                                .and_then(|c| c.parent_id.clone());
+                            self.selected_article = self.first_filtered_article();
+                        }
+                    }
                     false
                 }
             },
@@ -311,10 +404,25 @@ impl BibliographyState {
                     false
                 }
                 BibliographyFocus::Collections => {
-                    self.focus = BibliographyFocus::Search;
+                    if let Some(id) = self.selected_collection.clone() {
+                        if self
+                            .collections
+                            .iter()
+                            .any(|c| c.parent_id.as_deref() == Some(id.as_str()))
+                        {
+                            if !self.expanded_collections.insert(id) {
+                                self.move_collection(true);
+                            }
+                        }
+                    }
                     false
                 }
             },
+            KeyCode::Char('R') if self.focus == BibliographyFocus::Collections => {
+                self.include_subcollections = !self.include_subcollections;
+                self.selected_article = self.first_filtered_article();
+                false
+            }
             KeyCode::Down | KeyCode::Char('j') => self.move_forward(),
             KeyCode::Up | KeyCode::Char('k') => self.move_backward(),
             KeyCode::PageDown => {
@@ -447,8 +555,11 @@ impl StatefulWidget for BibliographyWidget {
         }
         .render(rows[0], buf);
 
+        let collection_rows = state.collection_rows();
         CollectionPane {
-            collections: &state.collections,
+            rows: &collection_rows,
+            expanded: &state.expanded_collections,
+            recursive: state.include_subcollections,
             selected: state.selected_collection.as_deref(),
             focused: state.focus == BibliographyFocus::Collections,
             accent: self.accent,

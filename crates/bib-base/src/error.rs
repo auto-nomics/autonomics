@@ -10,6 +10,10 @@ pub enum Error {
     Turso(#[from] turso::Error),
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid collection: {0}")]
+    InvalidCollection(String),
+    #[error("collection conflict: {0}")]
+    CollectionConflict(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error(

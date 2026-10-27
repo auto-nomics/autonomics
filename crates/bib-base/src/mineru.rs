@@ -17,9 +17,9 @@
 //!    until the state is `done` (→ `full_zip_url`) or `failed` (→ `err_msg`).
 //! 4. Download the zip and read `{name}/full.md`.
 //!
-//! The extractor is used as the *primary* stage of a fallback chain: any
-//! error (no key, quota exhausted, network) simply falls through to the
-//! local `pdf-extract`/tesseract chain.
+//! The extractor is the fallback after Zotero SDT. If both PDF backends fail
+//! (for example an unavailable Zotero runtime and no MinerU key), extraction
+//! fails while the original upload remains available for retry.
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -325,6 +325,7 @@ impl TextExtractor for MineruExtractor {
             format: TextFormat::Markdown,
             extractor: "mineru",
             images: output.images,
+            structure: None,
         })
     }
 }

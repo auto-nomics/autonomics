@@ -69,6 +69,9 @@ export interface SourceBatch {
 }
 
 export interface Collection {
+  parent_id?: string | null;
+  deleted?: boolean;
+  key?: string;
   id: string;
   name: string;
   article_ids: string[];
@@ -118,4 +121,10 @@ export function authorLine(article: Article): string {
     return given ? `${author.last_name} ${given}` : author.last_name;
   });
   return names.length === article.authors.length ? names.join(", ") : `${names.join(", ")} et al.`;
+}
+
+export function collectionPath(collections: Collection[], id: string): string {
+  const parts:string[]=[];const seen=new Set<string>();let current=collections.find(c=>c.id===id);
+  while(current && !seen.has(current.id)){seen.add(current.id);parts.unshift(current.name);current=collections.find(c=>c.id===current?.parent_id);}
+  return parts.join(" / ");
 }

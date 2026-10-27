@@ -378,6 +378,14 @@ pub struct Annotation {
     /// The annotation body — note text, highlighted excerpt, or comment.
     pub content: String,
 
+    /// User comment, separate from the highlighted source text.
+    #[serde(default)]
+    pub comment: String,
+
+    /// Tags belonging to this annotation, independent of article tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
+
     /// PDF page number (1-based), if the annotation is anchored to a page.
     #[serde(default)]
     pub page: Option<u32>,
@@ -405,6 +413,26 @@ pub struct Annotation {
     pub created_at: Option<DateTime<Utc>>,
 }
 
+/// Editable annotation metadata. Source text, attachment identity and geometry
+/// are deliberately absent: editing a comment must not move a highlight.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnnotationUpdate {
+    pub comment: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub color: Option<String>,
+}
+
+/// Exact semantic selection in the structured text of a source PDF.
+/// PDF rectangles alone may be too coarse to recover a partial sentence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnnotationTextRange {
+    pub source_hash: String,
+    pub start: Vec<u32>,
+    pub end: Vec<u32>,
+    pub quote: String,
+}
+
 /// A rectangle in normalized page space (0..1 relative to the rendered page).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnnotationRect {
@@ -417,6 +445,10 @@ pub struct AnnotationRect {
     /// new PDF annotations use normalized PDF page space.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
+
+    /// Optional Reading Mode selector, stored on the first rectangle of a page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_range: Option<AnnotationTextRange>,
 }
 
 impl Annotation {
@@ -425,6 +457,8 @@ impl Annotation {
             id: id.into(),
             kind,
             content: content.into(),
+            comment: String::new(),
+            tags: Vec::new(),
             page: None,
             color: None,
             rects: None,
@@ -483,6 +517,20 @@ impl CollectionStatus {
 /// the ordered article IDs, populated on load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Collection {
+    /// Zotero collection identity; legacy public IDs remain stable.
+    #[serde(default)]
+    pub collection_id: i64,
+    #[serde(default = "default_library_id")]
+    pub library_id: i64,
+    #[serde(default)]
+    pub key: String,
+    /// Public ID of the direct parent, or None for a library root.
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub deleted: bool,
+    #[serde(default)]
+    pub version: i64,
     /// Internal collection ID.
     pub id: String,
 
@@ -513,10 +561,20 @@ pub struct Collection {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
+fn default_library_id() -> i64 {
+    1
+}
+
 impl Collection {
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
         let now = Utc::now();
         Self {
+            collection_id: 0,
+            library_id: 1,
+            key: String::new(),
+            parent_id: None,
+            deleted: false,
+            version: 0,
             id: id.into(),
             name: name.into(),
             description: None,
@@ -772,6 +830,10 @@ pub struct FullText {
     /// Article this full text belongs to.
     pub article_id: String,
 
+    /// Zotero attachment item key that owns this full text.
+    #[serde(default)]
+    pub attachment_key: Option<String>,
+
     /// Path within the file store (e.g. `"/articles/abc123.pdf"`).
     pub file_path: String,
 
@@ -926,6 +988,23 @@ impl LibraryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn annotation_rect_preserves_exact_reading_range_and_accepts_legacy_json() {
+        let legacy = serde_json::json!({
+            "left": 0.1, "top": 0.2, "width": 0.3, "height": 0.04, "space": "pdf"
+        });
+        let rect: super::AnnotationRect = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(rect.text_range.is_none());
+        assert_eq!(serde_json::to_value(&rect).unwrap(), legacy);
+        let mut value = legacy;
+        value["text_range"] = serde_json::json!({
+            "source_hash": "source-pdf-hash", "start": [1, 0, 8], "end": [1, 2, 17],
+            "quote": "A partial sentence across inline nodes"
+        });
+        let rect: super::AnnotationRect = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&rect).unwrap(), value);
+    }
 
     #[test]
     fn article_new_sets_defaults() {

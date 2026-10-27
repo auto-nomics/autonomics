@@ -100,6 +100,9 @@ pub struct ListArgs {
 
 #[derive(Debug, Args)]
 pub struct ExportArgs {
+    /// Include articles from descendant collections.
+    #[arg(long)]
+    pub include_descendants: bool,
     /// Output format: bibtex, ris, markdown.
     #[arg(long, default_value = "bibtex")]
     pub format: String,
@@ -109,7 +112,7 @@ pub struct ExportArgs {
     /// Write to file instead of stdout.
     #[arg(long)]
     pub output: Option<PathBuf>,
-    /// Maximum articles to export (default 100).
+    /// Maximum articles to export; omit to export the complete scope.
     #[arg(long)]
     pub limit: Option<usize>,
 }

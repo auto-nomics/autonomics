@@ -73,6 +73,12 @@ tar -xzf "$temporary_dir/$asset" -C "$temporary_dir"
 [[ -f "$temporary_dir/autonomics" ]] || die "archive does not contain autonomics"
 
 mkdir -p "$install_dir"
+# New releases include the pinned extraction engine and its own Node runtime.
+# Install the runtime before replacing the executable that will discover it.
+if [[ -d "$temporary_dir/zotero-extractor" ]]; then
+  mkdir -p "$install_dir/zotero-extractor"
+  cp -R "$temporary_dir/zotero-extractor/." "$install_dir/zotero-extractor/"
+fi
 install -m 0755 "$temporary_dir/autonomics" "$install_dir/autonomics.new"
 mv -f "$install_dir/autonomics.new" "$install_dir/autonomics"
 

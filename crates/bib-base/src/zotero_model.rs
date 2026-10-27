@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS creators (
     fieldMode INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS creators_name ON creators(lastName, firstName, fieldMode);
+
 CREATE TABLE IF NOT EXISTS itemCreators (
     itemID INTEGER NOT NULL REFERENCES items(itemID) ON DELETE CASCADE,
     creatorID INTEGER NOT NULL REFERENCES creators(creatorID) ON DELETE CASCADE,
@@ -223,11 +225,22 @@ CREATE TABLE IF NOT EXISTS fulltextItems (
     extractedTextFormat TEXT,
     extractedBy TEXT,
     extractError TEXT,
-    vfsExtractedPath TEXT
+    vfsExtractedPath TEXT,
+    textContent TEXT
 );
 CREATE INDEX IF NOT EXISTS fulltextItems_synced ON fulltextItems(synced);
 CREATE INDEX IF NOT EXISTS fulltextItems_version ON fulltextItems(version);
 CREATE INDEX IF NOT EXISTS fulltextItems_extractionStatus ON fulltextItems(extractionStatus);
+
+CREATE TABLE IF NOT EXISTS searchTerms (
+    term TEXT NOT NULL,
+    anchorKey TEXT NOT NULL,
+    field TEXT NOT NULL,
+    articleID TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    PRIMARY KEY (term, anchorKey, field)
+);
+CREATE INDEX IF NOT EXISTS searchTerms_anchorKey ON searchTerms(anchorKey);
+CREATE INDEX IF NOT EXISTS searchTerms_articleID ON searchTerms(articleID);
 ";
 
 /// A Zotero-style stored attachment plus project-specific VFS metadata.
@@ -247,6 +260,18 @@ pub struct StoredAttachment {
     pub original_filename: Option<String>,
     pub storage_hash: Option<String>,
     pub file_size: Option<i64>,
+}
+
+/// Compact per-article attachment flags used by list views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AttachmentTypeSummary {
+    pub article_id: String,
+    pub pdf: bool,
+    pub snapshot: bool,
+    pub link: bool,
+    pub file: bool,
+    pub note: bool,
+    pub count: i64,
 }
 
 /// A deleted attachment and its previous compatibility role.
@@ -287,6 +312,7 @@ pub struct FulltextItemState {
     pub extracted_by: Option<String>,
     pub extract_error: Option<String>,
     pub vfs_extracted_path: Option<String>,
+    pub text_content: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -361,7 +387,7 @@ impl LegacyFulltext {
 }
 
 /// Create and idempotently populate Zotero-compatible tables.
-pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
+pub(crate) async fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(ZOTERO_SCHEMA_SQL).await?;
 
     // Existing branch databases created before the explicit size extension
@@ -380,6 +406,48 @@ pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
     if !has_file_size {
         conn.execute_batch("ALTER TABLE itemAttachments ADD COLUMN fileSize INTEGER;")
             .await?;
+    }
+
+    let mut has_text_content = false;
+    {
+        let mut rows = conn
+            .query("PRAGMA table_info(fulltextItems)", turso::params![])
+            .await?;
+        while let Some(row) = rows.next().await? {
+            if row.get::<String>(1)? == "textContent" {
+                has_text_content = true;
+            }
+        }
+    }
+    if !has_text_content {
+        conn.execute_batch("ALTER TABLE fulltextItems ADD COLUMN textContent TEXT;")
+            .await?;
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
+    ensure_schema(conn).await?;
+    // Backfill is a versioned migration, not a metadata refresh on every open.
+    // All ordinary article/fulltext/annotation writes mirror transactionally.
+    // Bump this version when a future schema needs an additional data backfill.
+    const BACKFILL_VERSION: &str = "2026-10-27-collections";
+    let mut rows = conn
+        .query(
+            "SELECT value FROM bib_meta WHERE key='zotero_backfill_version'",
+            (),
+        )
+        .await?;
+    let current = rows.next().await?.map(|r| r.get::<String>(0)).transpose()?;
+    drop(rows);
+    if current.as_deref() == Some(BACKFILL_VERSION) {
+        let mut rows=conn.query("SELECT 1 FROM articles a LEFT JOIN articleItems m ON m.article_id=a.id WHERE m.itemID IS NULL UNION ALL SELECT 1 FROM fulltexts f LEFT JOIN articleItems m ON m.article_id=f.article_id WHERE m.attachmentItemID IS NULL UNION ALL SELECT 1 FROM annotations a LEFT JOIN annotationItems m ON m.annotation_id=a.id WHERE m.itemID IS NULL LIMIT 1",()).await?;
+        let needs_repair = rows.next().await?.is_some();
+        drop(rows);
+        if !needs_repair {
+            return Ok(());
+        }
     }
 
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).await?;
@@ -458,6 +526,7 @@ pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
         sync_annotation_item(&tx, &annotation, None).await?;
     }
 
+    tx.execute("INSERT INTO bib_meta(key,value) VALUES ('zotero_backfill_version',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",turso::params![BACKFILL_VERSION]).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -534,6 +603,95 @@ pub(crate) async fn list_attachments_for_article(
             file_size: opt_int(row.get_value(11)?),
         });
     }
+    Ok(out)
+}
+
+/// Return attachment-type flags for many articles in a bounded number of
+/// queries. List views use this instead of fetching each attachment row.
+pub(crate) async fn attachment_type_summaries(
+    conn: &Connection,
+    article_ids: &[String],
+) -> Result<Vec<AttachmentTypeSummary>> {
+    let mut out = article_ids
+        .iter()
+        .map(|article_id| AttachmentTypeSummary {
+            article_id: article_id.clone(),
+            pdf: false,
+            snapshot: false,
+            link: false,
+            file: false,
+            note: false,
+            count: 0,
+        })
+        .collect::<Vec<_>>();
+    let index = article_ids
+        .iter()
+        .enumerate()
+        .map(|(index, article_id)| (article_id.clone(), index))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for ids in article_ids.chunks(80) {
+        let placeholders = (1..=ids.len())
+            .map(|position| format!("?{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let params = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+        let filename = "lower(coalesce(AI.originalFilename, AI.path, AI.title, ''))";
+        let stored = "(AI.vfsPath IS NOT NULL OR AI.path IS NOT NULL)";
+        let sql = format!(
+            "SELECT MAP.article_id, COUNT(*), \
+                    COALESCE(SUM(CASE WHEN lower(coalesce(AI.contentType, '')) = 'application/pdf' \
+                       OR {filename} LIKE '%.pdf' THEN 1 ELSE 0 END), 0), \
+                    COALESCE(SUM(CASE WHEN {stored} \
+                       AND (lower(coalesce(AI.contentType, '')) = 'text/html' \
+                            OR {filename} LIKE '%.html' OR {filename} LIKE '%.htm') \
+                       THEN 1 ELSE 0 END), 0), \
+                    COALESCE(SUM(CASE WHEN AI.sourceUrl IS NOT NULL \
+                       AND NOT {stored} THEN 1 ELSE 0 END), 0), \
+                    COALESCE(SUM(CASE WHEN {stored} \
+                       AND NOT (lower(coalesce(AI.contentType, '')) = 'application/pdf' \
+                                OR {filename} LIKE '%.pdf' OR {filename} LIKE '%.html' \
+                                OR {filename} LIKE '%.htm') THEN 1 ELSE 0 END), 0) \
+             FROM articleItems MAP \
+             JOIN itemAttachments AI ON AI.parentItemID = MAP.itemID \
+             WHERE MAP.article_id IN ({placeholders}) \
+             GROUP BY MAP.article_id",
+            filename = filename,
+            stored = stored,
+            placeholders = placeholders,
+        );
+        let mut rows = conn
+            .query(sql, turso::params_from_iter(params.clone()))
+            .await?;
+        while let Some(row) = rows.next().await? {
+            let article_id = row.get::<String>(0)?;
+            if let Some(&position) = index.get(&article_id) {
+                let summary = &mut out[position];
+                let attachment_count = row.get::<i64>(1)?;
+                summary.pdf = row.get::<i64>(2)? > 0;
+                summary.snapshot = row.get::<i64>(3)? > 0;
+                summary.link = row.get::<i64>(4)? > 0;
+                summary.file = row.get::<i64>(5)? > 0;
+                summary.count = attachment_count;
+            }
+        }
+
+        let sql = format!(
+            "SELECT article_id, COUNT(*) FROM annotations \
+             WHERE article_id IN ({placeholders}) AND trim(content) <> '' \
+             GROUP BY article_id"
+        );
+        let mut rows = conn.query(sql, turso::params_from_iter(params)).await?;
+        while let Some(row) = rows.next().await? {
+            let article_id = row.get::<String>(0)?;
+            if let Some(&position) = index.get(&article_id) {
+                let note_count = row.get::<i64>(1)?;
+                out[position].note = note_count > 0;
+                out[position].count += note_count;
+            }
+        }
+    }
+
     Ok(out)
 }
 
@@ -891,7 +1049,7 @@ pub(crate) async fn fulltext_state(
         .query(
             "SELECT itemID, indexedPages, totalPages, indexedChars, totalChars, version, synced, \
                     extractionStatus, extractedTextFormat, extractedBy, extractError, \
-                    vfsExtractedPath \
+                    vfsExtractedPath, textContent \
              FROM fulltextItems WHERE itemID = ?1",
             turso::params![item_id],
         )
@@ -917,7 +1075,207 @@ pub(crate) async fn fulltext_state(
         extracted_by: opt_string(row.get_value(9)?),
         extract_error: opt_string(row.get_value(10)?),
         vfs_extracted_path: opt_string(row.get_value(11)?),
+        text_content: opt_string(row.get_value(12)?),
     }))
+}
+
+/// Load the attachment-keyed full-text record used by extraction and search.
+pub(crate) async fn attachment_fulltext(
+    conn: &Connection,
+    article_id: &str,
+    attachment_key: &str,
+) -> Result<Option<FullText>> {
+    let Some(attachment) = attachment_by_key(conn, article_id, attachment_key).await? else {
+        return Ok(None);
+    };
+    let state = fulltext_state(conn, attachment.item_id).await?;
+    let Some(state) = state else {
+        return Ok(None);
+    };
+    Ok(Some(FullText {
+        article_id: article_id.to_owned(),
+        attachment_key: Some(attachment.key),
+        file_path: attachment.vfs_path.clone().unwrap_or_default(),
+        file_format: file_format_from_attachment(attachment.content_type.as_deref()),
+        text_content: state.text_content,
+        source: bib_types::FullTextSource::UserUpload,
+        file_hash: attachment.storage_hash,
+        file_size: attachment.file_size,
+        uploaded_at: None,
+        extract_status: state.extraction_status,
+        text_format: state.extracted_text_format,
+        extracted_by: state.extracted_by,
+        extract_error: state.extract_error,
+    }))
+}
+
+pub(crate) async fn restart_attachment_extraction(
+    conn: &Connection,
+    attachment_key: &str,
+) -> Result<Option<String>> {
+    let article_id = article_id_for_attachment(conn, attachment_key).await?;
+    let Some(article_id) = article_id else {
+        return Ok(None);
+    };
+    let n = conn
+        .execute(
+            "UPDATE fulltextItems SET textContent = NULL, extractionStatus = 'pending', \
+                    extractedTextFormat = NULL, extractedBy = NULL, extractError = NULL \
+             WHERE itemID = (SELECT itemID FROM items WHERE key = ?1)",
+            turso::params![attachment_key],
+        )
+        .await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    conn.execute(
+        "UPDATE fulltexts SET text_content = NULL, extract_status = 'pending', \
+                text_format = NULL, extracted_by = NULL, extract_error = NULL \
+         WHERE article_id = ?1 \
+           AND EXISTS (SELECT 1 FROM articleItems MAP \
+                       WHERE MAP.article_id = ?1 \
+                         AND MAP.attachmentItemID = (SELECT itemID FROM items WHERE key = ?2))",
+        turso::params![article_id.clone(), attachment_key],
+    )
+    .await?;
+    crate::bib_base::sync_search_index(conn, &article_id).await?;
+    Ok(Some(article_id))
+}
+
+pub(crate) async fn mark_attachment_extraction_running(
+    conn: &Connection,
+    attachment_key: &str,
+) -> Result<bool> {
+    let article_id = article_id_for_attachment(conn, attachment_key).await?;
+    let n = conn
+        .execute(
+            "UPDATE fulltextItems SET extractionStatus = 'running' \
+             WHERE extractionStatus = 'pending' \
+               AND itemID = (SELECT itemID FROM items WHERE key = ?1)",
+            turso::params![attachment_key],
+        )
+        .await?;
+    if n > 0
+        && let Some(article_id) = article_id
+    {
+        conn.execute(
+            "UPDATE fulltexts SET extract_status = 'running' \
+             WHERE article_id = ?1 \
+               AND EXISTS (SELECT 1 FROM articleItems MAP \
+                           WHERE MAP.article_id = ?1 \
+                             AND MAP.attachmentItemID = (SELECT itemID FROM items WHERE key = ?2))",
+            turso::params![article_id, attachment_key],
+        )
+        .await?;
+    }
+    Ok(n > 0)
+}
+
+pub(crate) async fn record_attachment_extraction_success(
+    conn: &Connection,
+    attachment_key: &str,
+    text: &str,
+    format: TextFormat,
+    extracted_by: &str,
+    extracted_path: &str,
+) -> Result<Option<String>> {
+    let article_id = article_id_for_attachment(conn, attachment_key).await?;
+    let Some(article_id) = article_id else {
+        return Ok(None);
+    };
+    let chars = char_count(text);
+    let n = conn
+        .execute(
+            "UPDATE fulltextItems SET textContent = ?2, indexedChars = ?3, totalChars = ?3, \
+                    extractionStatus = 'done', extractedTextFormat = ?4, extractedBy = ?5, \
+                    extractError = NULL, vfsExtractedPath = ?6, synced = 1 \
+             WHERE itemID = (SELECT itemID FROM items WHERE key = ?1)",
+            turso::params![
+                attachment_key,
+                text,
+                chars,
+                format.as_str(),
+                extracted_by,
+                extracted_path
+            ],
+        )
+        .await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    conn.execute(
+        "UPDATE fulltexts SET text_content = ?2, extract_status = 'done', \
+                text_format = ?3, extracted_by = ?4, extract_error = NULL \
+         WHERE article_id = ?1 \
+           AND EXISTS (SELECT 1 FROM articleItems MAP \
+                       WHERE MAP.article_id = ?1 \
+                         AND MAP.attachmentItemID = (SELECT itemID FROM items WHERE key = ?5))",
+        turso::params![
+            article_id.clone(),
+            text,
+            format.as_str(),
+            extracted_by,
+            attachment_key
+        ],
+    )
+    .await?;
+    conn.execute(
+        "UPDATE collectionItems SET fetch_status = 'fulltext_available' \
+         WHERE itemID = (SELECT itemID FROM articleItems WHERE article_id=?1) AND fetch_status != 'fulltext_available'",
+        turso::params![article_id.clone()],
+    )
+    .await?;
+    crate::bib_base::sync_search_index(conn, &article_id).await?;
+    Ok(Some(article_id))
+}
+
+pub(crate) async fn record_attachment_extraction_failure(
+    conn: &Connection,
+    attachment_key: &str,
+    error: &str,
+) -> Result<Option<String>> {
+    let article_id = article_id_for_attachment(conn, attachment_key).await?;
+    let Some(article_id) = article_id else {
+        return Ok(None);
+    };
+    conn.execute(
+        "UPDATE fulltextItems SET extractionStatus = 'failed', extractError = ?2 \
+         WHERE itemID = (SELECT itemID FROM items WHERE key = ?1)",
+        turso::params![attachment_key, error],
+    )
+    .await?;
+    conn.execute(
+        "UPDATE fulltexts SET extract_status = 'failed', extract_error = ?2 \
+         WHERE article_id = ?1 \
+           AND EXISTS (SELECT 1 FROM articleItems MAP \
+                       WHERE MAP.article_id = ?1 \
+                         AND MAP.attachmentItemID = (SELECT itemID FROM items WHERE key = ?3))",
+        turso::params![article_id.clone(), error, attachment_key],
+    )
+    .await?;
+    crate::bib_base::sync_search_index(conn, &article_id).await?;
+    Ok(Some(article_id))
+}
+
+async fn article_id_for_attachment(
+    conn: &Connection,
+    attachment_key: &str,
+) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT MAP.article_id \
+             FROM items I \
+             JOIN itemAttachments AI ON AI.itemID = I.itemID \
+             JOIN articleItems MAP ON MAP.itemID = AI.parentItemID \
+             WHERE I.key = ?1",
+            turso::params![attachment_key],
+        )
+        .await?;
+    Ok(rows
+        .next()
+        .await?
+        .map(|row| row.get::<String>(0))
+        .transpose()?)
 }
 
 pub(crate) async fn ensure_article_item(conn: &Connection, article_id: &str) -> Result<i64> {
@@ -1101,7 +1459,7 @@ pub(crate) async fn sync_fulltext_attachment(
     let parent_item_id = ensure_article_item(conn, &fulltext.article_id).await?;
     let attachment_item_id = mapped_attachment_item(conn, &fulltext.article_id)
         .await?
-        .unwrap_or_else(|| 0);
+        .unwrap_or(0);
 
     let attachment_item_id = if attachment_item_id != 0 {
         attachment_item_id
@@ -1192,9 +1550,11 @@ pub(crate) async fn sync_fulltext_attachment(
         .map(char_count)
         .unwrap_or(0);
     let indexed = fulltext.extract_status == Some(ExtractStatus::Done) && text_chars > 0;
+    let attachment_key = item_key(conn, attachment_item_id).await?;
     let extracted_path = if is_vfs {
-        Some(crate::stored_files::extracted_object_path(
+        Some(crate::stored_files::extracted_attachment_object_path(
             &fulltext.article_id,
+            &attachment_key,
             fulltext.text_format.unwrap_or_default(),
         ))
     } else {
@@ -1204,8 +1564,9 @@ pub(crate) async fn sync_fulltext_attachment(
     conn.execute(
         "INSERT INTO fulltextItems \
             (itemID, indexedPages, totalPages, indexedChars, totalChars, version, synced, \
-             extractionStatus, extractedTextFormat, extractedBy, extractError, vfsExtractedPath) \
-         VALUES (?1, NULL, NULL, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9) \
+             extractionStatus, extractedTextFormat, extractedBy, extractError, vfsExtractedPath, \
+             textContent) \
+         VALUES (?1, NULL, NULL, ?2, ?3, 1, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
          ON CONFLICT(itemID) DO UPDATE SET \
             indexedChars = excluded.indexedChars, \
             totalChars = excluded.totalChars, \
@@ -1215,7 +1576,8 @@ pub(crate) async fn sync_fulltext_attachment(
             extractedTextFormat = excluded.extractedTextFormat, \
             extractedBy = excluded.extractedBy, \
             extractError = excluded.extractError, \
-            vfsExtractedPath = excluded.vfsExtractedPath",
+            vfsExtractedPath = excluded.vfsExtractedPath, \
+            textContent = excluded.textContent",
         turso::params![
             attachment_item_id,
             if indexed { Some(text_chars) } else { None },
@@ -1226,6 +1588,7 @@ pub(crate) async fn sync_fulltext_attachment(
             fulltext.extracted_by.clone(),
             fulltext.extract_error.clone(),
             extracted_path,
+            fulltext.text_content.clone(),
         ],
     )
     .await?;
@@ -1332,7 +1695,7 @@ async fn creator_id(conn: &Connection, last_name: &str, first_name: Option<&str>
     last_insert_id(conn).await
 }
 
-async fn tag_id(conn: &Connection, name: &str) -> Result<i64> {
+pub(crate) async fn tag_id(conn: &Connection, name: &str) -> Result<i64> {
     let mut rows = conn
         .query(
             "SELECT tagID FROM tags WHERE name = ?1",
@@ -1466,6 +1829,14 @@ fn parse_file_format(value: &str) -> FileFormat {
     }
 }
 
+fn file_format_from_attachment(content_type: Option<&str>) -> FileFormat {
+    match content_type {
+        Some("application/pdf") => FileFormat::Pdf,
+        Some("text/html") => FileFormat::Html,
+        _ => FileFormat::Txt,
+    }
+}
+
 fn char_count(text: &str) -> i64 {
     text.chars().count() as i64
 }
@@ -1498,6 +1869,7 @@ mod tests {
             .unwrap();
         base.upsert_fulltext(&FullText {
             article_id: "doi:10.1/a".into(),
+            attachment_key: None,
             file_path: "vfs:///literature/doi%3A10.1%2Fa/abc-paper.pdf".into(),
             file_format: FileFormat::Pdf,
             text_content: Some("full text".into()),
@@ -1546,6 +1918,8 @@ mod tests {
                     top: 0.2,
                     width: 0.3,
                     height: 0.4,
+                    space: None,
+                    text_range: None,
                 }]),
                 None,
             )
@@ -1662,5 +2036,80 @@ mod tests {
                 .unwrap()
                 .is_some_and(|attachment| attachment.file_size == Some(4))
         );
+    }
+
+    #[tokio::test]
+    async fn search_terms_use_item_keys_as_anchors() {
+        let core = crate::bib_base::BibCore::open(":memory:").await.unwrap();
+        let conn = core.conn();
+        core.upsert_article(&Article::new("doi:10.1/search", "UniqueTitleWord paper"))
+            .await
+            .unwrap();
+        core.upsert_fulltext(&FullText {
+            article_id: "doi:10.1/search".into(),
+            attachment_key: None,
+            file_path: "vfs:///literature/doi%3A10.1%2Fsearch/paper.pdf".into(),
+            file_format: FileFormat::Pdf,
+            text_content: Some("attachmentanchorterm body".into()),
+            source: FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: Some(ExtractStatus::Done),
+            text_format: Some(TextFormat::Plain),
+            extracted_by: Some("test".into()),
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        let attachment = attachment_for_article(&conn, "doi:10.1/search")
+            .await
+            .unwrap()
+            .unwrap();
+        let article_key = {
+            let mut rows = conn
+                .query(
+                    "SELECT I.key FROM articleItems MAP \
+                     JOIN items I ON I.itemID = MAP.itemID \
+                     WHERE MAP.article_id = 'doi:10.1/search'",
+                    turso::params![],
+                )
+                .await
+                .unwrap();
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap()
+        };
+
+        let mut rows = conn
+            .query(
+                "SELECT term, anchorKey, field, articleID FROM searchTerms \
+                 WHERE term IN ('uniquetitleword', 'attachmentanchorterm') ORDER BY term",
+                turso::params![],
+            )
+            .await
+            .unwrap();
+        let mut anchors = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            anchors.push((
+                row.get::<String>(0).unwrap(),
+                row.get::<String>(1).unwrap(),
+                row.get::<String>(2).unwrap(),
+            ));
+        }
+
+        assert!(anchors.contains(&(
+            "uniquetitleword".to_owned(),
+            article_key,
+            "title".to_owned()
+        )));
+        assert!(anchors.contains(&(
+            "attachmentanchorterm".to_owned(),
+            attachment.key,
+            "fulltext".to_owned()
+        )));
     }
 }

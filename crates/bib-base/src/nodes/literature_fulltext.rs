@@ -483,6 +483,7 @@ mod tests {
             .unwrap();
         let fulltext = FullText {
             article_id: article_id.to_owned(),
+            attachment_key: None,
             file_path: stored.path,
             file_format: FileFormat::Pdf,
             text_content: None,
@@ -566,6 +567,7 @@ mod tests {
             .bib
             .upsert_fulltext(&FullText {
                 article_id: "art-2".into(),
+                attachment_key: None,
                 file_path: "europepmc:PMC42".into(),
                 file_format: FileFormat::Txt,
                 text_content: Some("full text words".into()),

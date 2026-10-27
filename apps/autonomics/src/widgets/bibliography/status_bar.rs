@@ -31,7 +31,7 @@ impl Widget for StatusBar<'_> {
         let selected = self.selected_id.unwrap_or("none");
         let focus = format!("[{}] ", self.focus);
         let full = format!(
-            "Tab switch · / search · j/k move · h/l tabs · r reload · q quit · selected {selected}"
+            "Tab switch · / search · j/k move · h/l tabs/tree · R descendants · r reload · q quit · selected {selected}"
         );
         // Narrow terminals keep the key hints and drop the verbose wording.
         let fits_full =
@@ -40,7 +40,7 @@ impl Widget for StatusBar<'_> {
         let hints = if fits_full {
             full
         } else {
-            format!("Tab / j/k h/l r q · {selected}")
+            format!("Tab / j/k h/l · R descendants · r reload · q quit · {selected}")
         };
 
         let left_len = focus.chars().count() + 1 + hints.chars().count() + 2;

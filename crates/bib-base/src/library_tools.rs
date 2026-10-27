@@ -49,6 +49,8 @@ use crate::collections::CollectionAddOutcome;
                   etc.)."
 )]
 pub struct BibCreateCollectionInput {
+    #[desc = "Parent collection ID; omit for a library-root collection"]
+    pub parent_id: Option<String>,
     #[desc = "Human-readable collection name (e.g. \"eQTL colocalization methods\")"]
     pub name: String,
     #[desc = "Optional description of the collection's purpose"]
@@ -68,15 +70,95 @@ impl ToolFunction for BibCreateCollectionTool {
 
         let mut col = bib_types::Collection::new(&id, &input.name);
         col.description = input.description;
+        col.parent_id = input.parent_id;
 
         self.bib.upsert_collection(&col).await.map_err(box_error)?;
+        let col = self
+            .bib
+            .get_collection(&id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| box_error(crate::error::Error::NotFound(id.clone())))?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "collection_id": id,
+            "parent_id":col.parent_id,
+            "key":col.key,
+            "library_id":col.library_id,
             "name": col.name,
             "description": col.description,
             "status": "active",
         })))
+    }
+}
+
+#[tool(
+    name = "bib_manage_collection",
+    description = "Rename, move, trash, restore or permanently erase a collection subtree. Moving changes only the parent. Trash and erase preserve articles and attachments. Erase requires the collection to be in trash first."
+)]
+pub struct BibManageCollectionInput {
+    #[desc = "Collection public ID"]
+    pub collection_id: String,
+    #[desc = "One of rename, move, trash, restore, erase"]
+    pub action: String,
+    #[desc = "New name for rename"]
+    pub name: Option<String>,
+    #[desc = "Destination parent ID for move; omit to move to the library root"]
+    pub parent_id: Option<String>,
+}
+pub struct BibManageCollectionTool {
+    pub bib: Arc<BibBase>,
+}
+#[async_trait]
+impl ToolFunction for BibManageCollectionTool {
+    type Input = BibManageCollectionInput;
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        use crate::collections::CollectionChange;
+        let change = match input.action.as_str() {
+            "rename" => CollectionChange::Update {
+                name: Some(input.name.ok_or_else(|| {
+                    box_error(crate::error::Error::InvalidCollection(
+                        "name is required".into(),
+                    ))
+                })?),
+                parent_id: None,
+            },
+            "move" => CollectionChange::Update {
+                name: None,
+                parent_id: Some(input.parent_id),
+            },
+            "trash" => CollectionChange::Trash,
+            "restore" => CollectionChange::Restore,
+            "erase" => {
+                let collections = self
+                    .bib
+                    .list_collections_including_deleted(None, true)
+                    .await
+                    .map_err(box_error)?;
+                if !collections
+                    .iter()
+                    .any(|c| c.id == input.collection_id && c.deleted)
+                {
+                    return Err(box_error(crate::error::Error::CollectionConflict(
+                        "erase requires a trashed collection".into(),
+                    )));
+                }
+                CollectionChange::Erase
+            }
+            _ => {
+                return Err(box_error(crate::error::Error::InvalidCollection(
+                    "unknown action".into(),
+                )));
+            }
+        };
+        let affected = self
+            .bib
+            .change_collection(&input.collection_id, change)
+            .await
+            .map_err(box_error)?;
+        Ok(AgentToolResult::success_json(
+            serde_json::json!({"affected_ids":affected}),
+        ))
     }
 }
 
@@ -297,6 +379,10 @@ impl BibAddToCollectionTool {
                   Optionally filter by role or fetch_status when listing articles."
 )]
 pub struct BibListCollectionInput {
+    #[desc = "Include descendant collections when listing articles; default false"]
+    pub include_descendants: Option<bool>,
+    #[desc = "Include trashed collections in the collection listing; default false"]
+    pub include_deleted: Option<bool>,
     #[desc = "Collection ID. If omitted, lists all collections instead."]
     pub collection_id: Option<String>,
     #[desc = "Filter by role: \"requested\", \"referenced\", \"cited\", \"background\""]
@@ -317,13 +403,24 @@ impl ToolFunction for BibListCollectionTool {
         match input.collection_id {
             None => {
                 // List all collections.
-                let collections = self.bib.list_collections(None).await.map_err(box_error)?;
+                let collections = self
+                    .bib
+                    .list_collections_including_deleted(
+                        None,
+                        input.include_deleted.unwrap_or(false),
+                    )
+                    .await
+                    .map_err(box_error)?;
 
                 let items: Vec<serde_json::Value> = collections
                     .iter()
                     .map(|c| {
                         serde_json::json!({
                             "collection_id": c.id,
+                            "parent_id": c.parent_id,
+                            "key": c.key,
+                            "library_id":c.library_id,
+                            "deleted":c.deleted,
                             "name": c.name,
                             "description": c.description,
                             "status": c.status.as_str(),
@@ -339,6 +436,39 @@ impl ToolFunction for BibListCollectionTool {
                 })))
             }
             Some(cid) => {
+                if input.include_descendants.unwrap_or(false) {
+                    let page = self
+                        .bib
+                        .query_collection_articles(crate::collections::CollectionQuery {
+                            collection_id: Some(cid.clone()),
+                            include_descendants: true,
+                            unfiled: false,
+                            query: String::new(),
+                            limit: i64::MAX as usize,
+                            offset: 0,
+                        })
+                        .await
+                        .map_err(box_error)?;
+                    let associations = page
+                        .associations
+                        .into_iter()
+                        .filter(|a| {
+                            input.role.as_deref().is_none_or(|r| a.role.as_str() == r)
+                                && input
+                                    .fetch_status
+                                    .as_deref()
+                                    .is_none_or(|f| a.fetch_status.as_str() == f)
+                        })
+                        .collect::<Vec<_>>();
+                    let articles = page
+                        .articles
+                        .into_iter()
+                        .filter(|a| associations.iter().any(|ca| ca.article_id == a.id))
+                        .collect::<Vec<_>>();
+                    return Ok(AgentToolResult::success_json(
+                        serde_json::json!({"collection_id":cid,"total":articles.len(),"articles":articles,"associations":associations}),
+                    ));
+                }
                 // List articles in a collection.
                 let role_filter = input.role.as_deref().and_then(parse_role_opt);
                 let fetch_filter = input
@@ -732,10 +862,15 @@ impl BibGetArticleTool {
                     bib_types::FileFormat::Pdf | bib_types::FileFormat::Html
                 );
             if extracted {
-                crate::stored_files::extracted_object_path(
-                    &ft.article_id,
-                    ft.text_format.unwrap_or(bib_types::TextFormat::Plain),
-                )
+                let format = ft.text_format.unwrap_or(bib_types::TextFormat::Plain);
+                match ft.attachment_key.as_deref() {
+                    Some(key) => crate::stored_files::extracted_attachment_object_path(
+                        &ft.article_id,
+                        key,
+                        format,
+                    ),
+                    None => crate::stored_files::extracted_object_path(&ft.article_id, format),
+                }
             } else {
                 ft.file_path.clone()
             }
@@ -1197,13 +1332,15 @@ impl ToolFunction for BibDeleteTool {
                   agent-visible VFS. Existing files are replaced."
 )]
 pub struct BibExportInput {
+    #[desc = "Include subcollection articles; default false"]
+    pub include_descendants: Option<bool>,
     #[desc = "Destination path in the agent VFS, e.g. \"/outputs/references.bib\""]
     pub output_path: String,
     #[desc = "Collection ID to export. If omitted, exports entire library."]
     pub collection_id: Option<String>,
     #[desc = "Output format: \"bibtex\", \"ris\", \"markdown\", or \"csl_json\". Default: bibtex"]
     pub format: Option<String>,
-    #[desc = "Maximum articles to export (default 100)"]
+    #[desc = "Maximum articles to export; omit to export the complete scope"]
     pub limit: Option<usize>,
 }
 
@@ -1225,48 +1362,20 @@ impl ToolFunction for BibExportTool {
         }
 
         let format = parse_export_format(input.format.as_deref());
-        let limit = input.limit.unwrap_or(100).clamp(1, 500);
-
-        let articles: Vec<bib_types::Article> = match &input.collection_id {
-            Some(cid) => {
-                let cas = self
-                    .bib
-                    .list_collection_articles(cid, None, None)
-                    .await
-                    .map_err(box_error)?;
-                let mut out = Vec::new();
-                for ca in cas.into_iter().take(limit) {
-                    if let Some(a) = self
-                        .bib
-                        .get_article(&ca.article_id)
-                        .await
-                        .map_err(box_error)?
-                    {
-                        out.push(a);
-                    }
-                }
-                out
-            }
-            None => {
-                let hits = self
-                    .bib
-                    .search_articles("", limit, 0)
-                    .await
-                    .map_err(box_error)?;
-                let mut out = Vec::new();
-                for hit in hits {
-                    if let Some(a) = self
-                        .bib
-                        .get_article(&hit.article_id)
-                        .await
-                        .map_err(box_error)?
-                    {
-                        out.push(a);
-                    }
-                }
-                out
-            }
-        };
+        let limit = input.limit.unwrap_or(i64::MAX as usize).max(1);
+        let articles = self
+            .bib
+            .query_collection_articles(crate::collections::CollectionQuery {
+                collection_id: input.collection_id,
+                include_descendants: input.include_descendants.unwrap_or(false),
+                unfiled: false,
+                query: String::new(),
+                limit,
+                offset: 0,
+            })
+            .await
+            .map_err(box_error)?
+            .articles;
 
         let rendered = crate::export::render_all(&articles, format);
         let count = articles.len();
@@ -1383,7 +1492,12 @@ impl ToolFunction for BibReadFigureTool {
             .ok_or_else(|| ToolError::ExecutionFailed {
                 source: "bibliography VFS storage is not configured in this host".into(),
             })?;
-        let object = crate::stored_files::figure_object_path(&fulltext.article_id, &name);
+        let object = match fulltext.attachment_key.as_deref() {
+            Some(key) => {
+                crate::stored_files::attachment_figure_object_path(&fulltext.article_id, key, &name)
+            }
+            None => crate::stored_files::figure_object_path(&fulltext.article_id, &name),
+        };
         let path = crate::stored_files::vfs_virtual_path(&object).ok_or_else(|| {
             ToolError::ExecutionFailed {
                 source: "figure object path is not VFS-addressable".into(),
@@ -1455,6 +1569,7 @@ pub fn bib_library_registrations(
     use agentik_core::tools::ToolRegistration as R;
     vec![
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
+        R::from(BibManageCollectionTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
         R::from(BibListCollectionTool { bib: bib.clone() }),
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
@@ -1594,6 +1709,7 @@ mod tests {
         };
 
         let input = BibExportInput {
+            include_descendants: None,
             output_path: "/references.bib".into(),
             collection_id: None,
             format: Some("bibtex".into()),
@@ -1631,6 +1747,7 @@ mod tests {
         };
 
         let input = BibExportInput {
+            include_descendants: None,
             output_path: "   ".into(),
             collection_id: None,
             format: None,
@@ -1874,6 +1991,7 @@ mod tests {
         // recorded (record_extraction_success only UPDATEs).
         bib.upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
+            attachment_key: None,
             file_path: "vfs:///literature/seeded/paper.pdf".to_owned(),
             file_format: bib_types::FileFormat::Pdf,
             text_content: None,
@@ -1896,10 +2014,20 @@ mod tests {
         )
         .await
         .unwrap();
-        let path = crate::stored_files::vfs_virtual_path(&crate::stored_files::figure_object_path(
-            &article.id,
-            "aaa.jpg",
-        ))
+        let attachment_key = bib
+            .get_fulltext(&article.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .attachment_key
+            .unwrap();
+        let path = crate::stored_files::vfs_virtual_path(
+            &crate::stored_files::attachment_figure_object_path(
+                &article.id,
+                &attachment_key,
+                "aaa.jpg",
+            ),
+        )
         .unwrap();
         storage.write_bytes(&path, vec![1, 2, 3, 4]).await.unwrap();
         (

@@ -91,6 +91,7 @@ async fn run_bib_upload(
         .await?;
     let ft = bib_base::FullText {
         article_id: args.article_id.clone(),
+        attachment_key: None,
         file_path: stored.path,
         file_format: format,
         text_content: extracted.as_ref().map(|text| text.text.clone()),
@@ -337,31 +338,17 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
         _ => bib_base::ExportFormat::Bibtex,
     };
 
-    let limit = args.limit.unwrap_or(100).clamp(1, 500);
-
-    // Gather articles.
-    let articles: Vec<bib_base::Article> = match &args.collection_id {
-        Some(cid) => {
-            let cas = db.list_collection_articles(cid, None, None).await?;
-            let mut out = Vec::new();
-            for ca in cas.into_iter().take(limit) {
-                if let Some(a) = db.get_article(&ca.article_id).await? {
-                    out.push(a);
-                }
-            }
-            out
-        }
-        None => {
-            let hits = db.search_articles("", limit, 0).await?;
-            let mut out = Vec::new();
-            for hit in hits {
-                if let Some(a) = db.get_article(&hit.article_id).await? {
-                    out.push(a);
-                }
-            }
-            out
-        }
-    };
+    let articles = db
+        .query_collection_articles(bib_base::collections::CollectionQuery {
+            collection_id: args.collection_id,
+            include_descendants: args.include_descendants,
+            unfiled: false,
+            query: String::new(),
+            limit: args.limit.unwrap_or(i64::MAX as usize).max(1),
+            offset: 0,
+        })
+        .await?
+        .articles;
 
     if articles.is_empty() {
         println!("No articles to export.");
@@ -469,13 +456,18 @@ async fn reload_bibliography(
 ) -> bib_base::Result<()> {
     let query = state.query.trim().to_string();
     let collections = db.list_collections(None).await?;
-    let hits = db.search_articles(&query, 500, 0).await?;
-    let mut articles = Vec::with_capacity(hits.len());
-    for hit in hits {
-        if let Some(article) = db.get_article(&hit.article_id).await? {
-            articles.push(article);
-        }
-    }
+    let articles = db
+        .query_collection_articles(bib_base::collections::CollectionQuery {
+            collection_id: None,
+            include_descendants: false,
+            unfiled: false,
+            query: query.clone(),
+            limit: i64::MAX as usize,
+            offset: 0,
+        })
+        .await?
+        .articles;
+    state.authoritative_query = query;
     state.set_snapshot(collections, articles);
     state.status = format!("{} articles loaded", state.articles.len());
     state.error = None;

@@ -80,170 +80,406 @@ pub struct CollectionAssignmentOutcome {
 // Collection CRUD
 // ---------------------------------------------------------------------------
 
-impl BibCore {
-    /// Insert or update a collection. Child rows (`collection_articles`)
-    /// are **not** touched — use [`Self::add_to_collection`] for that.
-    pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
-            "INSERT INTO collections \
-             (id, name, description, tags, status, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-             ON CONFLICT(id) DO UPDATE SET \
-                name = excluded.name, \
-                description = excluded.description, \
-                tags = excluded.tags, \
-                status = excluded.status, \
-                created_at = COALESCE(collections.created_at, excluded.created_at), \
-                updated_at = excluded.updated_at",
-            turso::params![
-                collection.id.clone(),
-                collection.name.clone(),
-                collection.description.clone(),
-                serde_json::to_string(&collection.tags)?,
-                collection.status.as_str(),
-                collection.created_at.map(|t| t.to_rfc3339()),
-                collection.updated_at.map(|t| t.to_rfc3339()),
-            ],
+/// Structural operations are validated and committed in one actor turn.
+#[derive(Debug, Clone)]
+pub enum CollectionChange {
+    Update {
+        name: Option<String>,
+        parent_id: Option<Option<String>>,
+    },
+    Trash,
+    Restore,
+    Erase,
+}
+
+const COLLECTION_SELECT: &str = "SELECT c.id,c.collectionName,c.description,c.tags,c.status,c.created_at,c.updated_at, c.collectionID,c.libraryID,c.key,p.id, c.version, CASE WHEN d.collectionID IS NULL THEN 0 ELSE 1 END FROM collections c LEFT JOIN collections p ON p.collectionID=c.parentCollectionID LEFT JOIN deletedCollections d ON d.collectionID=c.collectionID";
+
+fn decode_collection(row: &turso::Row) -> Result<Collection> {
+    let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
+    col.description = opt_string(row.get_value(2)?);
+    col.tags = parse_json_col(&opt_string(row.get_value(3)?));
+    col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
+    col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
+    col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
+    col.collection_id = row.get(7)?;
+    col.library_id = row.get(8)?;
+    col.key = row.get(9)?;
+    col.parent_id = opt_string(row.get_value(10)?);
+    col.version = row.get(11)?;
+    col.deleted = row.get::<i64>(12)? != 0;
+    Ok(col)
+}
+
+async fn stored_collection(conn: &turso::Connection, id: &str) -> Result<Collection> {
+    let mut rows = conn
+        .query(
+            format!("{COLLECTION_SELECT} WHERE c.id=?1"),
+            turso::params![id],
         )
         .await?;
-        Ok(())
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("collection {id}")))?;
+    decode_collection(&row)
+}
+
+async fn validate_parent(
+    conn: &turso::Connection,
+    id: &str,
+    library_id: i64,
+    parent_id: Option<&str>,
+) -> Result<Option<i64>> {
+    let mut cursor = parent_id.map(str::to_owned);
+    let mut seen = std::collections::HashSet::new();
+    let mut direct = None;
+    while let Some(parent) = cursor {
+        if parent == id || !seen.insert(parent.clone()) {
+            return Err(Error::CollectionConflict(
+                "cannot move a collection into itself or its descendants".into(),
+            ));
+        }
+        let col = stored_collection(conn, &parent).await?;
+        if col.deleted {
+            return Err(Error::CollectionConflict(
+                "parent collection is in trash".into(),
+            ));
+        }
+        if col.library_id != library_id {
+            return Err(Error::CollectionConflict(
+                "parent belongs to another library".into(),
+            ));
+        }
+        direct = direct.or(Some(col.collection_id));
+        cursor = col.parent_id;
+    }
+    Ok(direct)
+}
+
+/// Turso 0.7 does not support recursive CTEs. Traverse a bounded snapshot
+/// iteratively, retaining the same transaction and cycle protection.
+async fn subtree_ids(conn: &turso::Connection, id: &str) -> Result<Vec<(String, i64)>> {
+    let mut rows = conn
+        .query(
+            "SELECT id,collectionID,parentCollectionID FROM collections",
+            (),
+        )
+        .await?;
+    let mut children: std::collections::HashMap<i64, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    let mut root = None;
+    while let Some(row) = rows.next().await? {
+        let public = row.get::<String>(0)?;
+        let native = row.get::<i64>(1)?;
+        if public == id {
+            root = Some((public.clone(), native));
+        }
+        if let turso::Value::Integer(parent) = row.get_value(2)? {
+            children.entry(parent).or_default().push((public, native));
+        }
+    }
+    drop(rows);
+    let root = root.ok_or_else(|| Error::NotFound(format!("collection {id}")))?;
+    let mut queue = vec![root];
+    let mut seen = std::collections::HashSet::new();
+    let mut at = 0;
+    while at < queue.len() {
+        let native = queue[at].1;
+        if !seen.insert(native) {
+            return Err(Error::CollectionConflict("cycle in collection tree".into()));
+        }
+        if let Some(kids) = children.remove(&native) {
+            queue.extend(kids);
+        }
+        at += 1;
+    }
+    Ok(queue)
+}
+
+#[derive(Debug, Clone)]
+pub struct CollectionQuery {
+    pub collection_id: Option<String>,
+    pub include_descendants: bool,
+    pub unfiled: bool,
+    pub query: String,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CollectionPage {
+    pub articles: Vec<Article>,
+    pub associations: Vec<CollectionArticle>,
+    pub total: i64,
+}
+
+async fn mark_membership_change(conn: &turso::Connection, article_id: &str) -> Result<()> {
+    conn.execute("UPDATE items SET synced=0,clientVersion=clientVersion+1,dateModified=?1,clientDateModified=?1 WHERE itemID=(SELECT itemID FROM articleItems WHERE article_id=?2)",turso::params![Utc::now().to_rfc3339(),article_id]).await?;
+    Ok(())
+}
+
+async fn require_editable(conn: &turso::Connection, library_id: i64) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT editable,archived FROM libraries WHERE libraryID=?1",
+            turso::params![library_id],
+        )
+        .await?;
+    let row = rows
+        .next()
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("library {library_id}")))?;
+    if row.get::<i64>(0)? == 0 || row.get::<i64>(1)? != 0 {
+        return Err(Error::CollectionConflict("library is not editable".into()));
+    }
+    Ok(())
+}
+
+impl BibCore {
+    /// Legacy public IDs remain stable; native Zotero keys are allocated once.
+    /// Existing parentage is preserved by metadata upsert. Use change_collection
+    /// for an explicit move (including a move to the library root).
+    pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result: Result<()> = async {
+            if collection.name.trim().is_empty() { return Err(Error::InvalidCollection("name is required".into())); }
+            require_editable(&tx,collection.library_id).await?;
+            let existing=match stored_collection(&tx,&collection.id).await {
+                Ok(c) => Some(c), Err(Error::NotFound(_)) => None, Err(e) => return Err(e),
+            };
+            if let Some(c)=&existing {
+                if c.deleted { return Err(Error::CollectionConflict("collection is in trash".into())); }
+                if c.library_id != collection.library_id { return Err(Error::CollectionConflict("cannot change collection library".into())); }
+            }
+            let parent=if let Some(c)=&existing { c.parent_id.as_deref() } else { collection.parent_id.as_deref() };
+            let parent_native=validate_parent(&tx,&collection.id,collection.library_id,parent).await?;
+            let key=existing.as_ref().map(|c|c.key.clone()).unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase());
+            tx.execute("INSERT INTO collections (id,collectionName,parentCollectionID,libraryID,key,description,tags,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(id) DO UPDATE SET collectionName=excluded.collectionName,description=excluded.description,tags=excluded.tags,status=excluded.status,updated_at=excluded.updated_at,clientDateModified=excluded.updated_at,synced=0,clientVersion=collections.clientVersion+1",turso::params![collection.id.clone(),collection.name.trim(),parent_native,collection.library_id,key,collection.description.clone(),serde_json::to_string(&collection.tags)?,collection.status.as_str(),collection.created_at.map(|t|t.to_rfc3339()),Utc::now().to_rfc3339()]).await?;
+            Ok(())
+        }.await;
+        match result {
+            Ok(()) => {
+                tx.commit().await?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
     }
 
-    /// Look up a single collection by ID, with its article IDs hydrated
-    /// in order.
     pub async fn get_collection(&self, id: &str) -> Result<Option<Collection>> {
-        let conn = self.conn();
-        let mut rows = conn
-            .query(
-                "SELECT id, name, description, tags, status, created_at, updated_at \
-                 FROM collections WHERE id = ?1",
-                turso::params![id],
-            )
-            .await?;
-
-        let row = match rows.next().await? {
-            Some(row) => row,
-            None => return Ok(None),
+        let mut col = match stored_collection(&self.conn(), id).await {
+            Ok(c) if !c.deleted => c,
+            Ok(_) | Err(Error::NotFound(_)) => return Ok(None),
+            Err(e) => return Err(e),
         };
-
-        let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
-        col.description = opt_string(row.get_value(2)?);
-        col.tags = parse_json_col(&opt_string(row.get_value(3)?));
-        col.status = CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
-        col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
-        col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
-
-        // Close the header cursor before the hydration query — an open
-        // turso cursor keeps statement state alive on the connection, and
-        // a second statement overlapping it trips the concurrent-use
-        // guard even on a single task.
-        drop(rows);
-
-        // Hydrate article_ids in position order.
         col.article_ids = self.collection_article_ids(id).await?;
-
         Ok(Some(col))
     }
 
-    /// List collections, optionally filtered by status.
-    ///
-    /// Each collection's `article_ids` are batch-hydrated in position order
-    /// via a single extra query, so `article_ids.len()` gives the correct
-    /// article count without an N+1 pattern.
-    pub async fn list_collections(
+    pub async fn list_collection_summaries(
         &self,
-        status: Option<CollectionStatus>,
-    ) -> Result<Vec<Collection>> {
+        include_deleted: bool,
+    ) -> Result<Vec<serde_json::Value>> {
         let conn = self.conn();
-        let sql = match status {
-            Some(_) => {
-                "SELECT id, name, description, tags, status, created_at, updated_at \
-                        FROM collections WHERE status = ?1 ORDER BY updated_at DESC"
-            }
-            None => {
-                "SELECT id, name, description, tags, status, created_at, updated_at \
-                     FROM collections ORDER BY updated_at DESC"
-            }
-        };
-
-        let mut rows = if let Some(s) = status {
-            conn.query(sql, turso::params![s.as_str()]).await?
-        } else {
-            conn.query(sql, turso::params![]).await?
-        };
-
-        let mut out = Vec::new();
+        let mut rows = conn
+            .query(
+                format!("{COLLECTION_SELECT} ORDER BY c.collectionName COLLATE NOCASE,c.id"),
+                (),
+            )
+            .await?;
+        let mut collections = Vec::new();
         while let Some(row) = rows.next().await? {
-            let mut col = Collection::new(row.get::<String>(0)?, row.get::<String>(1)?);
-            col.description = opt_string(row.get_value(2)?);
-            col.tags = parse_json_col(&opt_string(row.get_value(3)?));
-            col.status =
-                CollectionStatus::from_str(&opt_string(row.get_value(4)?).unwrap_or_default());
-            col.created_at = opt_string(row.get_value(5)?).as_deref().and_then(parse_dt);
-            col.updated_at = opt_string(row.get_value(6)?).as_deref().and_then(parse_dt);
-            out.push(col);
+            let c = decode_collection(&row)?;
+            if include_deleted || !c.deleted {
+                collections.push(c);
+            }
         }
         drop(rows);
-
-        // Batch-hydrate article_ids for all collections in one query,
-        // grouped in Rust. Without this, callers that display article
-        // counts (e.g. `bib_list_collection`'s list-all path) would see 0
-        // for every collection — the data is in the DB but never reaches
-        // the user, which looks like a persistence bug on restart.
-        if !out.is_empty() {
-            let ids: Vec<&str> = out.iter().map(|c| c.id.as_str()).collect();
-            let placeholders = (0..ids.len())
-                .map(|i| format!("?{}", i + 1))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!(
-                "SELECT collection_id, article_id FROM collection_articles \
-                 WHERE collection_id IN ({placeholders}) ORDER BY collection_id, position"
-            );
-            let params: Vec<Value> = ids.into_iter().map(|s| Value::Text(s.to_owned())).collect();
-            let mut ca_rows = conn.query(sql, turso::params_from_iter(params)).await?;
-            // Index into `out` by collection id for O(1) assignment.
-            // Owns the id strings so the map doesn't borrow `out`.
-            let mut idx: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::with_capacity(out.len());
-            for (i, c) in out.iter().enumerate() {
-                idx.insert(c.id.clone(), i);
-            }
-            while let Some(row) = ca_rows.next().await? {
-                let cid = row.get::<String>(0)?;
-                let aid = row.get::<String>(1)?;
-                if let Some(&i) = idx.get(&cid) {
-                    out[i].article_ids.push(aid);
-                }
+        let mut counts = std::collections::HashMap::new();
+        let mut rows = conn
+            .query(
+                "SELECT collectionID,COUNT(*) FROM collectionItems GROUP BY collectionID",
+                (),
+            )
+            .await?;
+        while let Some(row) = rows.next().await? {
+            counts.insert(row.get::<i64>(0)?, row.get::<i64>(1)?);
+        }
+        let mut children = std::collections::HashMap::new();
+        for c in &collections {
+            if let Some(pid) = &c.parent_id {
+                *children.entry((pid.as_str(), c.deleted)).or_insert(0usize) += 1;
             }
         }
-
+        let mut out = Vec::new();
+        for c in &collections {
+            let mut value = serde_json::to_value(c)?;
+            value.as_object_mut().unwrap().remove("article_ids");
+            value["direct_article_count"] =
+                serde_json::json!(counts.get(&c.collection_id).copied().unwrap_or(0));
+            value["child_count"] = serde_json::json!(
+                children
+                    .get(&(c.id.as_str(), c.deleted))
+                    .copied()
+                    .unwrap_or(0)
+            );
+            out.push(value);
+        }
         Ok(out)
     }
 
-    /// Update the status of a collection.
-    pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
-        let conn = self.write_conn();
-        conn.execute(
-            "UPDATE collections SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            turso::params![status.as_str(), Utc::now().to_rfc3339(), id],
-        )
-        .await?;
-        Ok(())
+    pub async fn list_collections_including_deleted(
+        &self,
+        status: Option<CollectionStatus>,
+        include_deleted: bool,
+    ) -> Result<Vec<Collection>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                format!("{COLLECTION_SELECT} ORDER BY c.collectionName COLLATE NOCASE,c.id"),
+                (),
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let c = decode_collection(&row)?;
+            if (include_deleted || !c.deleted) && status.is_none_or(|s| s == c.status) {
+                out.push(c);
+            }
+        }
+        drop(rows);
+        let index: std::collections::HashMap<String, usize> = out
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id.clone(), i))
+            .collect();
+        let mut rows=conn.query("SELECT c.id,a.article_id FROM collectionItems ci JOIN collections c USING(collectionID) JOIN articleItems a USING(itemID) ORDER BY c.id,ci.orderIndex",()).await?;
+        while let Some(row) = rows.next().await? {
+            if let Some(&i) = index.get(&row.get::<String>(0)?) {
+                out[i].article_ids.push(row.get(1)?);
+            }
+        }
+        Ok(out)
     }
 
-    /// Delete a collection (FK CASCADE removes `collection_articles` rows).
+    pub async fn update_collection_status(&self, id: &str, status: CollectionStatus) -> Result<()> {
+        let mut col = self
+            .get_collection(id)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("collection {id}")))?;
+        col.status = status;
+        self.upsert_collection(&col).await
+    }
+
+    /// Move the complete subtree to trash, preserving membership for restore.
     pub async fn delete_collection(&self, id: &str) -> Result<()> {
-        self.write_conn()
-            .execute("DELETE FROM collections WHERE id = ?1", turso::params![id])
-            .await?;
-        Ok(())
+        self.change_collection(id, CollectionChange::Trash)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn change_collection(
+        &self,
+        id: &str,
+        change: CollectionChange,
+    ) -> Result<Vec<String>> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result:Result<Vec<String>>=async {
+            let col=stored_collection(&tx,id).await?;
+            require_editable(&tx,col.library_id).await?;
+            let mut subtree=subtree_ids(&tx,id).await?;
+            match change {
+                CollectionChange::Update{name,parent_id} => {
+                    if col.deleted {return Err(Error::CollectionConflict("collection is in trash".into()));}
+                    let name=name.unwrap_or_else(||col.name.clone());
+                    if name.trim().is_empty() {return Err(Error::InvalidCollection("name is required".into()));}
+                    let parent=parent_id.unwrap_or_else(||col.parent_id.clone());
+                    let native=validate_parent(&tx,id,col.library_id,parent.as_deref()).await?;
+                    if name.trim()==col.name && parent==col.parent_id {return Ok(vec![id.to_owned()]);}
+                    tx.execute("UPDATE collections SET collectionName=?1,parentCollectionID=?2,updated_at=?3,clientDateModified=?3,synced=0,clientVersion=clientVersion+1 WHERE id=?4",turso::params![name.trim(),native,Utc::now().to_rfc3339(),id]).await?;
+                    return Ok(vec![id.to_owned()]);
+                }
+                CollectionChange::Trash => {
+                    for (_,native) in &subtree {
+                        tx.execute("INSERT OR IGNORE INTO deletedCollections(collectionID) VALUES (?1)",turso::params![*native]).await?;
+                    }
+                }
+                CollectionChange::Restore => {
+                    // Restoring a subtree must also restore its ancestors, so
+                    // no live collection remains below a trashed parent.
+                    let mut parent=col.parent_id;
+                    let mut seen=std::collections::HashSet::new();
+                    while let Some(pid)=parent {
+                        if !seen.insert(pid.clone()) {return Err(Error::CollectionConflict("invalid ancestry".into()));}
+                        let ancestor=stored_collection(&tx,&pid).await?;
+                        tx.execute("DELETE FROM deletedCollections WHERE collectionID=?1",turso::params![ancestor.collection_id]).await?;
+                        if !subtree.iter().any(|(id,_)|id==&pid) {subtree.push((pid,ancestor.collection_id));}
+                        parent=ancestor.parent_id;
+                    }
+                    for (_,native) in &subtree {tx.execute("DELETE FROM deletedCollections WHERE collectionID=?1",turso::params![*native]).await?;}
+                }
+                CollectionChange::Erase => {
+                    if !col.deleted {return Err(Error::CollectionConflict("move collection to trash before permanently erasing it".into()));}
+                    // Clear parent links before deleting to avoid recursion limits.
+                    for (_,native) in &subtree {tx.execute("UPDATE collections SET parentCollectionID=NULL WHERE collectionID=?1",turso::params![*native]).await?;}
+                    for (_,native) in &subtree {tx.execute("DELETE FROM collections WHERE collectionID=?1",turso::params![*native]).await?;}
+                    return Ok(subtree.into_iter().map(|(id,_)|id).collect());
+                }
+            }
+            for (_,native) in &subtree {tx.execute("UPDATE collections SET synced=0,clientVersion=clientVersion+1,clientDateModified=?1,updated_at=?1 WHERE collectionID=?2",turso::params![Utc::now().to_rfc3339(),*native]).await?;}
+            Ok(subtree.into_iter().map(|(id,_)|id).collect())
+        }.await;
+        match result {
+            Ok(ids) => {
+                tx.commit().await?;
+                Ok(ids)
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
     // Collection ↔ Article association
     // -----------------------------------------------------------------------
+
+    /// User drag/add without relationship edits is idempotent: it must not
+    /// downgrade an existing Cited role or replace a relationship note.
+    pub async fn ensure_collection_membership(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+    ) -> Result<CollectionAddOutcome> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result:Result<CollectionAddOutcome>=async {
+            let col=stored_collection(&tx,collection_id).await?;
+            require_editable(&tx,col.library_id).await?;
+            if col.deleted {return Err(Error::CollectionConflict("collection is in trash".into()));}
+            let mut rows=tx.query("SELECT role,note FROM collection_articles WHERE collection_id=?1 AND article_id=?2",turso::params![collection_id,article_id]).await?;
+            let existing=rows.next().await?.map(|row|Ok::<_,Error>((ArticleRole::from_str(&row.get::<String>(0)?),opt_string(row.get_value(1)?)))).transpose()?;
+            drop(rows);
+            if let Some((role,note))=existing {return Ok(CollectionAddOutcome::Updated{previous_role:role,previous_note:note,role_changed:false,note_changed:false});}
+            Self::add_to_collection_in_tx(&tx,collection_id,article_id,ArticleRole::Referenced,AddedBy::User,None).await
+        }.await;
+        match result {
+            Ok(outcome) => {
+                tx.commit().await?;
+                Ok(outcome)
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
+    }
 
     /// Associate an article with a collection.
     ///
@@ -299,6 +535,8 @@ impl BibCore {
         ) -> Result<Vec<CollectionAssignmentOutcome>> {
             for article in articles {
                 BibCore::upsert_article_in_tx(tx, article).await?;
+                crate::zotero_model::ensure_article_item(tx, &article.id).await?;
+                crate::zotero_model::sync_article_item(tx, &article.id).await?;
                 crate::bib_base::sync_search_index(tx, &article.id).await?;
             }
 
@@ -339,14 +577,26 @@ impl BibCore {
         collection_id: &str,
         article_id: &str,
     ) -> Result<()> {
-        self.write_conn()
-            .execute(
-                "DELETE FROM collection_articles \
-                 WHERE collection_id = ?1 AND article_id = ?2",
-                turso::params![collection_id, article_id],
-            )
-            .await?;
-        Ok(())
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result:Result<()>=async {
+            let col=stored_collection(&tx,collection_id).await?;
+            require_editable(&tx,col.library_id).await?;
+            if col.deleted {return Err(Error::CollectionConflict("collection is in trash".into()));}
+            let changed=tx.execute("DELETE FROM collectionItems WHERE collectionID=?1 AND itemID=(SELECT itemID FROM articleItems WHERE article_id=?2)",turso::params![col.collection_id,article_id]).await?;
+            if changed>0 {mark_membership_change(&tx,article_id).await?;}
+            Ok(())
+        }.await;
+        match result {
+            Ok(()) => {
+                tx.commit().await?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = tx.rollback().await;
+                Err(e)
+            }
+        }
     }
 
     /// Update the role of an article within a collection.
@@ -358,8 +608,8 @@ impl BibCore {
     ) -> Result<()> {
         self.write_conn()
             .execute(
-                "UPDATE collection_articles SET role = ?1 \
-                 WHERE collection_id = ?2 AND article_id = ?3",
+                "UPDATE collectionItems SET role = ?1 \
+                 WHERE collectionID = (SELECT collectionID FROM collections WHERE id=?2) AND itemID = (SELECT itemID FROM articleItems WHERE article_id=?3)",
                 turso::params![role.as_str(), collection_id, article_id],
             )
             .await?;
@@ -375,8 +625,8 @@ impl BibCore {
     ) -> Result<()> {
         self.write_conn()
             .execute(
-                "UPDATE collection_articles SET fetch_status = ?1 \
-                 WHERE collection_id = ?2 AND article_id = ?3",
+                "UPDATE collectionItems SET fetch_status = ?1 \
+                 WHERE collectionID = (SELECT collectionID FROM collections WHERE id=?2) AND itemID = (SELECT itemID FROM articleItems WHERE article_id=?3)",
                 turso::params![status.as_str(), collection_id, article_id],
             )
             .await?;
@@ -390,6 +640,23 @@ impl BibCore {
         added_by: AddedBy,
         note: Option<&str>,
     ) -> Result<CollectionAddOutcome> {
+        let collection = stored_collection(conn, collection_id).await?;
+        require_editable(conn, collection.library_id).await?;
+        if collection.deleted {
+            return Err(Error::CollectionConflict("collection is in trash".into()));
+        }
+        {
+            let mut rows=conn.query("SELECT i.libraryID FROM articleItems a JOIN items i USING(itemID) WHERE a.article_id=?1",turso::params![article_id]).await?;
+            let row = rows
+                .next()
+                .await?
+                .ok_or_else(|| Error::NotFound(format!("article {article_id}")))?;
+            if row.get::<i64>(0)? != collection.library_id {
+                return Err(Error::CollectionConflict(
+                    "item belongs to another library".into(),
+                ));
+            }
+        }
         // Fetch the existing row (if any) so we can report what changed.
         let existing = {
             let mut rows = conn
@@ -423,11 +690,12 @@ impl BibCore {
                     .await?
                     .ok_or_else(|| Error::Unknown("MAX(position) returned no rows".into()))?
                     .get::<i64>(0)? as i32;
+                drop(pos_rows);
 
                 conn.execute(
-                    "INSERT INTO collection_articles \
-                     (collection_id, article_id, position, role, fetch_status, added_by, note, added_at) \
-                     VALUES (?1, ?2, ?3, ?4, 'metadata_only', ?5, ?6, ?7)",
+                    "INSERT INTO collectionItems \
+                     (collectionID, itemID, orderIndex, role, fetch_status, added_by, note, added_at) \
+                     VALUES ((SELECT collectionID FROM collections WHERE id=?1), (SELECT itemID FROM articleItems WHERE article_id=?2), ?3, ?4, 'metadata_only', ?5, ?6, ?7)",
                     turso::params![
                         collection_id,
                         article_id,
@@ -440,6 +708,7 @@ impl BibCore {
                 )
                 .await?;
 
+                mark_membership_change(conn, article_id).await?;
                 Ok(CollectionAddOutcome::Inserted)
             }
             Some((prev_role, prev_note)) => {
@@ -449,9 +718,9 @@ impl BibCore {
                 let role_changed = prev_role != role;
 
                 conn.execute(
-                    "UPDATE collection_articles \
+                    "UPDATE collectionItems \
                      SET role = ?1, added_by = ?2, note = COALESCE(?3, note) \
-                     WHERE collection_id = ?4 AND article_id = ?5",
+                     WHERE collectionID = (SELECT collectionID FROM collections WHERE id=?4) AND itemID = (SELECT itemID FROM articleItems WHERE article_id=?5)",
                     turso::params![
                         role.as_str(),
                         added_by.as_str(),
@@ -527,13 +796,20 @@ impl BibCore {
         let associations = self
             .list_collection_articles(collection_id, None, None)
             .await?;
+        self.hydrate_associations(&associations).await
+    }
+
+    async fn hydrate_associations(
+        &self,
+        associations: &[CollectionArticle],
+    ) -> Result<Vec<Article>> {
         if associations.is_empty() {
             return Ok(Vec::new());
         }
 
         let conn = self.conn();
         let mut articles_by_id = std::collections::HashMap::new();
-        for ids in associations.as_slice().chunks(400) {
+        for ids in associations.chunks(400) {
             let placeholders = (1..=ids.len())
                 .map(|index| format!("?{index}"))
                 .collect::<Vec<_>>()
@@ -647,6 +923,129 @@ impl BibCore {
             .collect())
     }
 
+    /// Apply collection scope and lexical full-text matching before count/paging.
+    pub async fn query_collection_articles(
+        &self,
+        input: CollectionQuery,
+    ) -> Result<CollectionPage> {
+        let conn = self.conn();
+        let scope = if let Some(id) = &input.collection_id {
+            let col = stored_collection(&conn, id).await?;
+            if col.deleted {
+                return Err(Error::NotFound(format!("collection {id}")));
+            }
+            let ids = if input.include_descendants {
+                subtree_ids(&conn, id).await?
+            } else {
+                vec![(id.clone(), col.collection_id)]
+            };
+            let ids = ids
+                .iter()
+                .map(|(_, native)| native.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "EXISTS (SELECT 1 FROM collectionItems ci JOIN collections c USING(collectionID) JOIN articleItems ai USING(itemID) WHERE ai.article_id=a.id AND c.collectionID IN ({ids}) AND NOT EXISTS (SELECT 1 FROM deletedCollections d WHERE d.collectionID=c.collectionID))"
+            )
+        } else if input.unfiled {
+            "NOT EXISTS (SELECT 1 FROM collection_articles ca WHERE ca.article_id=a.id)".to_owned()
+        } else {
+            "1=1".to_owned()
+        };
+        let terms = crate::bib_base::tokenize(&input.query);
+        let mut params: Vec<Value> = terms.iter().map(|t| Value::Text(t.clone())).collect();
+        let (search, order) = if input.query.trim().is_empty() {
+            (String::new(), "a.title COLLATE NOCASE,a.id".to_owned())
+        } else if terms.is_empty() {
+            (" AND 0=1".to_owned(), "a.id".to_owned())
+        } else {
+            let placeholders = (1..=terms.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            (
+                format!(
+                    " AND a.id IN (SELECT articleID FROM searchTerms WHERE term IN ({placeholders}) GROUP BY articleID HAVING COUNT(DISTINCT term)={})",
+                    terms.len()
+                ),
+                format!(
+                    "(SELECT MIN(CASE field WHEN 'title' THEN 0 WHEN 'abstract' THEN 1 WHEN 'annotation' THEN 2 ELSE 3 END) FROM searchTerms WHERE articleID=a.id AND term IN ({placeholders})),a.title COLLATE NOCASE,a.id"
+                ),
+            )
+        };
+        let filter = format!("FROM articles a WHERE {scope}{search}");
+        let mut rows = conn
+            .query(
+                format!("SELECT COUNT(*) {filter}"),
+                turso::params_from_iter(params.clone()),
+            )
+            .await?;
+        let total = rows
+            .next()
+            .await?
+            .ok_or_else(|| Error::Unknown("count returned no row".into()))?
+            .get::<i64>(0)?;
+        drop(rows);
+        params.push(Value::Integer(input.limit as i64));
+        params.push(Value::Integer(input.offset as i64));
+        let mut rows = conn
+            .query(
+                format!(
+                    "SELECT a.id {filter} ORDER BY {order} LIMIT ?{} OFFSET ?{}",
+                    terms.len() + 1,
+                    terms.len() + 2
+                ),
+                turso::params_from_iter(params),
+            )
+            .await?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(row.get::<String>(0)?);
+        }
+        drop(rows);
+        let mut associations = Vec::new();
+        // Fetch all direct provenance for the page, including memberships in
+        // other branches. Display deduplication never discards relationship data.
+        for chunk in ids.chunks(400) {
+            let placeholders = (1..=chunk.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut rows=conn.query(format!("SELECT collection_id,article_id,position,role,fetch_status,added_by,note,added_at FROM collection_articles WHERE article_id IN ({placeholders}) ORDER BY collection_id,position"),turso::params_from_iter(chunk.iter().cloned().map(Value::Text))).await?;
+            while let Some(row) = rows.next().await? {
+                associations.push(CollectionArticle {
+                    collection_id: row.get(0)?,
+                    article_id: row.get(1)?,
+                    position: row.get::<i64>(2)? as i32,
+                    role: ArticleRole::from_str(&row.get::<String>(3)?),
+                    fetch_status: FetchStatus::from_str(&row.get::<String>(4)?),
+                    added_by: AddedBy::from_str(&row.get::<String>(5)?),
+                    note: opt_string(row.get_value(6)?),
+                    added_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
+                });
+            }
+        }
+        let hydration = ids
+            .iter()
+            .map(|id| CollectionArticle {
+                collection_id: String::new(),
+                article_id: id.clone(),
+                position: 0,
+                role: ArticleRole::Referenced,
+                fetch_status: FetchStatus::MetadataOnly,
+                added_by: AddedBy::User,
+                note: None,
+                added_at: None,
+            })
+            .collect::<Vec<_>>();
+        let articles = self.hydrate_associations(&hydration).await?;
+        Ok(CollectionPage {
+            articles,
+            associations,
+            total,
+        })
+    }
+
     /// List all collection-article entries that are waiting for a
     /// full-text upload (`fetch_status = 'fulltext_requested'`).
     ///
@@ -724,6 +1123,62 @@ impl BibCore {
 // ---------------------------------------------------------------------------
 
 impl BibBase {
+    pub async fn ensure_collection_membership(
+        &self,
+        collection_id: &str,
+        article_id: &str,
+    ) -> Result<CollectionAddOutcome> {
+        self.call(|reply| BibCommand::EnsureCollectionMembership {
+            collection_id: collection_id.to_owned(),
+            article_id: article_id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn list_collection_summaries(
+        &self,
+        include_deleted: bool,
+    ) -> Result<Vec<serde_json::Value>> {
+        self.call(|reply| BibCommand::ListCollectionSummaries {
+            include_deleted,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn query_collection_articles(
+        &self,
+        input: CollectionQuery,
+    ) -> Result<CollectionPage> {
+        self.call(|reply| BibCommand::QueryCollectionArticles { input, reply })
+            .await
+    }
+
+    pub async fn change_collection(
+        &self,
+        id: &str,
+        change: CollectionChange,
+    ) -> Result<Vec<String>> {
+        self.call(|reply| BibCommand::ChangeCollection {
+            id: id.to_owned(),
+            change,
+            reply,
+        })
+        .await
+    }
+    pub async fn list_collections_including_deleted(
+        &self,
+        status: Option<CollectionStatus>,
+        include_deleted: bool,
+    ) -> Result<Vec<Collection>> {
+        self.call(|reply| BibCommand::ListCollections {
+            status,
+            include_deleted,
+            reply,
+        })
+        .await
+    }
     /// Insert or update a collection.
     pub async fn upsert_collection(&self, collection: &Collection) -> Result<()> {
         self.call(|reply| BibCommand::UpsertCollection {
@@ -748,8 +1203,12 @@ impl BibBase {
         &self,
         status: Option<CollectionStatus>,
     ) -> Result<Vec<Collection>> {
-        self.call(|reply| BibCommand::ListCollections { status, reply })
-            .await
+        self.call(|reply| BibCommand::ListCollections {
+            status,
+            include_deleted: false,
+            reply,
+        })
+        .await
     }
 
     /// Update the status of a collection.

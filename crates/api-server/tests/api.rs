@@ -456,6 +456,14 @@ async fn bib_serves_and_cleans_extracted_figures() {
     // Simulate a MinerU run: rewrite the row as markdown referencing two
     // figures and store their bytes exactly as extraction would.
     let article_id = "doi:10.1000/figure-test";
+    let attachment_key = shared
+        .bib
+        .get_fulltext(article_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .attachment_key
+        .unwrap();
     shared
         .bib
         .record_extraction_success(
@@ -467,11 +475,19 @@ async fn bib_serves_and_cleans_extracted_figures() {
         .await
         .unwrap();
     let storage = shared.file_storage.as_ref().unwrap();
-    let aaa =
-        bib_base::vfs_virtual_path(&bib_base::figure_object_path(article_id, "aaa.jpg")).unwrap();
+    let aaa = bib_base::vfs_virtual_path(&bib_base::attachment_figure_object_path(
+        article_id,
+        &attachment_key,
+        "aaa.jpg",
+    ))
+    .unwrap();
     storage.write_bytes(&aaa, vec![1, 2, 3]).await.unwrap();
-    let bbb =
-        bib_base::vfs_virtual_path(&bib_base::figure_object_path(article_id, "bbb.png")).unwrap();
+    let bbb = bib_base::vfs_virtual_path(&bib_base::attachment_figure_object_path(
+        article_id,
+        &attachment_key,
+        "bbb.png",
+    ))
+    .unwrap();
     storage.write_bytes(&bbb, vec![4]).await.unwrap();
 
     let base = "/api/v1/bib/articles/doi%3A10.1000%2Ffigure-test/fulltext/images";
@@ -575,6 +591,7 @@ async fn bib_reextract_rejects_non_vfs_sources() {
         .bib
         .upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
+            attachment_key: None,
             file_path: "europepmc:PMC123456/fullTextXML".to_owned(),
             file_format: bib_types::FileFormat::Html,
             text_content: Some("<p>inline text</p>".to_owned()),
@@ -784,6 +801,16 @@ async fn bib_supports_multiple_zotero_attachments() {
     let second_key = body["attachment"]["key"].as_str().unwrap().to_owned();
     assert_ne!(first_key, second_key);
 
+    let first_fulltext_uri = format!(
+        "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{first_key}/fulltext"
+    );
+    let first_fulltext = wait_for_extraction(&app, &first_fulltext_uri).await;
+    assert_eq!(
+        first_fulltext["fulltext"]["text_content"],
+        "first attachment"
+    );
+    assert_eq!(first_fulltext["fulltext"]["attachment_key"], first_key);
+
     let response = app
         .clone()
         .oneshot(request(
@@ -849,6 +876,24 @@ async fn bib_supports_multiple_zotero_attachments() {
     let response = app
         .clone()
         .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles?query=multi%20attachment&limit=10",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let summary = &body["attachment_summaries"]["doi:10.1000/multi-attachment"];
+    assert_eq!(summary["file"], true);
+    assert_eq!(summary["note"], true);
+    assert_eq!(summary["count"], 3);
+    assert_eq!(summary["pdf"], false);
+
+    let response = app
+        .clone()
+        .oneshot(request(
             "DELETE",
             &format!("/api/v1/bib/annotations/{annotation_id}"),
             None,
@@ -885,6 +930,38 @@ async fn bib_supports_multiple_zotero_attachments() {
             .as_str()
             .unwrap()
             .contains(&format!("/attachments/{second_key}/"))
+    );
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles?query=first%20attachment&limit=10",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["total"], 1);
+
+    let second_fulltext_uri = format!(
+        "/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}/fulltext/reextract"
+    );
+    let response = app
+        .clone()
+        .oneshot(request("POST", &second_fulltext_uri, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second_fulltext_uri = second_fulltext_uri
+        .trim_end_matches("/reextract")
+        .to_owned();
+    let second_fulltext = wait_for_extraction(&app, &second_fulltext_uri).await;
+    assert_eq!(
+        second_fulltext["fulltext"]["text_content"],
+        "second attachment"
     );
 
     let response = app
@@ -946,4 +1023,618 @@ async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
         .with_file_storage(file_storage);
     let app = api_server::api_router(shared.clone());
     (app, shared, directory)
+}
+
+#[tokio::test]
+async fn bib_structured_fulltext_cache_is_attachment_scoped_and_invalidated_on_reextract() {
+    use bib_base::zotero_extract::store_structure;
+    use bib_types::{Article, FileFormat, FullText, FullTextSource};
+    let (app, shared, _directory) = build_app_with_vfs().await;
+    let id = "doi:10.1000/reading-mode";
+    shared
+        .bib
+        .upsert_article(&Article::new(id, "Semantic PDF"))
+        .await
+        .unwrap();
+    let stored = bib_base::stored_fulltext(id, "paper.pdf", b"source PDF");
+    let storage = shared.file_storage.as_ref().unwrap();
+    storage
+        .write_bytes(
+            &bib_base::vfs_virtual_path(&stored.path).unwrap(),
+            b"source PDF".to_vec(),
+        )
+        .await
+        .unwrap();
+    shared
+        .bib
+        .upsert_fulltext(&FullText {
+            article_id: id.into(),
+            attachment_key: None,
+            file_path: stored.path,
+            file_format: FileFormat::Pdf,
+            text_content: Some("old continuous text".into()),
+            source: FullTextSource::UserUpload,
+            file_hash: Some(stored.file_hash),
+            file_size: Some(10),
+            uploaded_at: None,
+            extract_status: Some(bib_types::ExtractStatus::Done),
+            text_format: Some(bib_types::TextFormat::Plain),
+            extracted_by: Some("simple".into()),
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+    let base = "/api/v1/bib/articles/doi%3A10.1000%2Freading-mode";
+    let endpoint = format!("{base}/fulltext/structured");
+    let response = app
+        .clone()
+        .oneshot(request("GET", &endpoint, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let attachment = shared.bib.zotero_attachment(id).await.unwrap().unwrap();
+    let fulltext = shared.bib.get_fulltext(id).await.unwrap().unwrap();
+    let structure = serde_json::json!({
+        "schemaVersion": "1.2.0", "metadata": { "processor": { "type": "pdf", "version": 15 } },
+        "catalog": { "pages": [], "outline": [] },
+        "content": [{ "type": "paragraph", "content": [{ "text": "First paragraph." }] }]
+    });
+    store_structure(
+        storage,
+        id,
+        Some(&attachment.key),
+        &fulltext,
+        Some(&structure),
+    )
+    .await
+    .unwrap();
+    for method in ["GET", "POST"] {
+        for url in [
+            endpoint.clone(),
+            format!("{base}/attachments/{}/fulltext/structured", attachment.key),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(request(method, &url, None))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: serde_json::Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(body["structure"], structure);
+        }
+    }
+    // A processor upgrade or source replacement must not reuse old coordinates.
+    let mut stale = structure.clone();
+    stale["metadata"]["processor"]["version"] = 14.into();
+    store_structure(storage, id, Some(&attachment.key), &fulltext, Some(&stale))
+        .await
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(request("GET", &endpoint, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    store_structure(
+        storage,
+        id,
+        Some(&attachment.key),
+        &fulltext,
+        Some(&structure),
+    )
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(request("DELETE", &format!("{base}/fulltext"), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let path = bib_base::vfs_virtual_path(&bib_base::stored_files::structured_object_path(
+        id,
+        Some(&attachment.key),
+    ))
+    .unwrap();
+    assert!(
+        storage.content_length(&path).await.is_err(),
+        "deleting an attachment must remove its source map"
+    );
+    let response = app.oneshot(request("GET", &endpoint, None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires Node >=22 and npm ci in tools/zotero-extractor"]
+async fn bib_zotero_migrates_flattened_text_on_reading_mode_open() {
+    use bib_types::{Article, FileFormat, FullText, FullTextSource};
+    let (app, shared, _directory) = build_app_with_vfs().await;
+    let id = "doi:10.1000/zotero-migration";
+    let bytes =
+        include_bytes!("../../../tools/zotero-extractor/test/fixtures/synthetic-list-links.pdf");
+    shared
+        .bib
+        .upsert_article(&Article::new(id, "Semantic migration"))
+        .await
+        .unwrap();
+    let stored = bib_base::stored_fulltext(id, "paper.pdf", bytes);
+    let storage = shared.file_storage.as_ref().unwrap();
+    storage
+        .write_bytes(
+            &bib_base::vfs_virtual_path(&stored.path).unwrap(),
+            bytes.to_vec(),
+        )
+        .await
+        .unwrap();
+    shared
+        .bib
+        .upsert_fulltext(&FullText {
+            article_id: id.into(),
+            attachment_key: None,
+            file_path: stored.path,
+            file_format: FileFormat::Pdf,
+            text_content: Some("old continuous text".into()),
+            source: FullTextSource::UserUpload,
+            file_hash: Some(stored.file_hash),
+            file_size: Some(bytes.len() as i64),
+            uploaded_at: None,
+            extract_status: Some(bib_types::ExtractStatus::Done),
+            text_format: Some(bib_types::TextFormat::Plain),
+            extracted_by: Some("simple".into()),
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+    let url = "/api/v1/bib/articles/doi%3A10.1000%2Fzotero-migration/fulltext/structured";
+    let response = app
+        .clone()
+        .oneshot(request("POST", url, None))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["structure"]["content"][1]["type"], "paragraph");
+    let fulltext = shared.bib.get_fulltext(id).await.unwrap().unwrap();
+    assert_eq!(fulltext.extracted_by.as_deref(), Some("zotero-sdt"));
+    assert!(
+        fulltext
+            .text_content
+            .as_deref()
+            .unwrap()
+            .contains("Synthetic reference links\n\nThe invented sources")
+    );
+    let key = shared.bib.zotero_attachment(id).await.unwrap().unwrap().key;
+    let path = bib_base::vfs_virtual_path(&bib_base::extracted_attachment_object_path(
+        id,
+        &key,
+        bib_types::TextFormat::Plain,
+    ))
+    .unwrap();
+    let text = bib_base::read_full(storage, &path).await.unwrap();
+    assert_eq!(
+        String::from_utf8(text).unwrap(),
+        fulltext.text_content.unwrap()
+    );
+    let response = app.oneshot(request("GET", url, None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn bib_annotation_metadata_updates_preserve_quote_geometry_and_survive_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("annotations.db");
+    let shared = BibShared::open(database.to_str().unwrap()).await.unwrap();
+    shared
+        .bib
+        .upsert_article(&bib_types::Article::new(
+            "annotation-edit",
+            "Annotation editing",
+        ))
+        .await
+        .unwrap();
+    let rects = vec![bib_types::AnnotationRect {
+        left: 0.1,
+        top: 0.2,
+        width: 0.4,
+        height: 0.03,
+        space: Some("pdf".into()),
+        text_range: Some(bib_types::AnnotationTextRange {
+            source_hash: "source-pdf-hash".into(),
+            start: vec![1, 0, 8],
+            end: vec![1, 2, 17],
+            quote: "Unchanged source quote".into(),
+        }),
+    }];
+    let original = shared
+        .bib
+        .add_annotation(
+            "annotation-edit",
+            bib_types::AnnotationKind::Highlight,
+            "Unchanged source quote",
+            Some(5),
+            Some("yellow".into()),
+            Some(rects.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+    let app = api_server::api_router(shared.clone());
+    let url = format!("/api/v1/bib/annotations/{}", original.id);
+    let response = app.clone().oneshot(request("PATCH", &url, Some(serde_json::json!({ "comment": "A persistent interpretation", "tags": ["brain", "methods", "brain"], "color": "#ff6666" }).to_string()))).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(result["annotation"]["content"], "Unchanged source quote");
+    assert_eq!(
+        result["annotation"]["comment"],
+        "A persistent interpretation"
+    );
+    assert_eq!(
+        result["annotation"]["tags"],
+        serde_json::json!(["brain", "methods"])
+    );
+    assert_eq!(result["annotation"]["page"], 5);
+    assert_eq!(
+        result["annotation"]["rects"],
+        serde_json::to_value(&rects).unwrap()
+    );
+    let reopened = BibShared::open(database.to_str().unwrap()).await.unwrap();
+    let saved = reopened
+        .bib
+        .list_annotations("annotation-edit", None)
+        .await
+        .unwrap();
+    assert_eq!(saved[0].comment, "A persistent interpretation");
+    assert_eq!(saved[0].tags, vec!["brain", "methods"]);
+    assert_eq!(saved[0].rects, Some(rects));
+    for body in [
+        serde_json::json!({}),
+        serde_json::json!({"color": "url(bad)"}),
+        serde_json::json!({"tags": [""]}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("PATCH", &url, Some(body.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            "/api/v1/bib/annotations/missing",
+            Some("{\"comment\":\"x\"}".into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let response = app
+        .oneshot(request(
+            "PATCH",
+            &url,
+            Some("{\"comment\":\"\",\"tags\":[]}".into()),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let cleared = shared
+        .bib
+        .list_annotations("annotation-edit", None)
+        .await
+        .unwrap();
+    assert_eq!(cleared[0].comment, "");
+    assert!(cleared[0].tags.is_empty());
+    assert_eq!(cleared[0].content, original.content);
+}
+
+#[tokio::test]
+async fn nested_collections_api_moves_trashes_restores_and_preserves_provenance() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let db = shared.bib.clone();
+    let app = api_server::api_router(shared);
+    async fn send(
+        app: &axum::Router,
+        method: &str,
+        path: &str,
+        value: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = app
+            .clone()
+            .oneshot(request(
+                method,
+                path,
+                if value.is_null() {
+                    None
+                } else {
+                    Some(value.to_string())
+                },
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    let (status, a) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/collections",
+        serde_json::json!({"name":"Parent"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let aid = a["collection"]["id"].as_str().unwrap();
+    assert!(a["collection"]["collection_id"].as_i64().unwrap() > 0);
+    assert!(!a["collection"]["key"].as_str().unwrap().is_empty());
+    let (_, b) = send(
+        &app,
+        "POST",
+        "/api/v1/bib/collections",
+        serde_json::json!({"name":"Child","parent_id":aid}),
+    )
+    .await;
+    let bid = b["collection"]["id"].as_str().unwrap();
+    db.upsert_article(&bib_base::Article::new("p", "Shared"))
+        .await
+        .unwrap();
+    for id in [aid, bid] {
+        send(
+            &app,
+            "POST",
+            &format!("/api/v1/bib/collections/{id}/articles"),
+            serde_json::json!({"article_id":"p"}),
+        )
+        .await;
+    }
+    let (status, page) = send(
+        &app,
+        "GET",
+        &format!("/api/v1/bib/collections/{aid}/articles?include_descendants=true"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["articles"].as_array().unwrap().len(), 1);
+    assert_eq!(page["associations"].as_array().unwrap().len(), 2);
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/bib/collections/{aid}"),
+        serde_json::json!({"parent_id":bid}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/bib/collections/{bid}"),
+        serde_json::json!({"parent_id":"missing"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, renamed) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/bib/collections/{bid}"),
+        serde_json::json!({"name":"Renamed"}),
+    )
+    .await;
+    assert_eq!(renamed["collection"]["parent_id"], aid);
+    let (_, moved) = send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/bib/collections/{bid}"),
+        serde_json::json!({"parent_id":null}),
+    )
+    .await;
+    assert!(moved["collection"]["parent_id"].is_null());
+    send(
+        &app,
+        "PATCH",
+        &format!("/api/v1/bib/collections/{bid}"),
+        serde_json::json!({"parent_id":aid}),
+    )
+    .await;
+    let (_, deleted) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/bib/collections/{aid}"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(deleted["deleted_ids"].as_array().unwrap().len(), 2);
+    let (_, trash) = send(
+        &app,
+        "GET",
+        "/api/v1/bib/collections/trash",
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(trash["collections"].as_array().unwrap().len(), 2);
+    let (_, unfiled) = send(
+        &app,
+        "GET",
+        "/api/v1/bib/articles/unfiled",
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(unfiled["total"], 1);
+    let (status, _) = send(
+        &app,
+        "POST",
+        &format!("/api/v1/bib/collections/{aid}/restore"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, summary) = send(
+        &app,
+        "GET",
+        "/api/v1/bib/collections?view=summary",
+        serde_json::Value::Null,
+    )
+    .await;
+    assert!(summary["collections"][0].get("article_ids").is_none());
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/bib/collections/{aid}?permanent=true"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/bib/collections/{aid}"),
+        serde_json::Value::Null,
+    )
+    .await;
+    let (status, _) = send(
+        &app,
+        "DELETE",
+        &format!("/api/v1/bib/collections/{aid}?permanent=true"),
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(db.article_count().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn bib_export_ids_exports_only_requested_records_in_order() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = api_server::api_router(shared);
+    let records = [
+        ("Alpha", "1111111"),
+        ("Beta", "2222222"),
+        ("Gamma", "3333333"),
+    ];
+    for (title, pmid) in records {
+        let payload = format!(
+            r#"{{ "title": "{title}", "pmid": "{pmid}", "authors": ["Smith John"], "year": 2026, "source": "manual" }}"#
+        );
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/api/v1/bib/articles", Some(payload)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    // Explicit ids skip `limit`, ignore unknown ids and keep the given order.
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/export?format=bibtex&ids=pmid:3333333,pmid:1111111",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["count"], 2);
+    let export = body["export"].as_str().unwrap();
+    let gamma = export.find("Gamma").expect("Gamma entry rendered");
+    let alpha = export.find("Alpha").expect("Alpha entry rendered");
+    assert!(gamma < alpha, "ids order must be preserved");
+    assert!(
+        !export.contains("Beta"),
+        "unselected records must be excluded"
+    );
+}
+
+#[tokio::test]
+async fn collection_changes_wait_for_commit_and_cached_import_preserves_membership() {
+    use bib_types::{AddedBy, ArticleRole, Collection, Identifier};
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let db = shared.bib.clone();
+    let app = api_server::api_router(shared);
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/api/v1/bib/collections/changes", None))
+        .await
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let revision = body["revision"].as_u64().unwrap();
+    let waiting = app.clone().oneshot(request(
+        "GET",
+        &format!("/api/v1/bib/collections/changes?since={revision}"),
+        None,
+    ));
+    let write = async {
+        db.upsert_collection(&Collection::new("collection", "Collection"))
+            .await
+            .unwrap();
+    };
+    let (_, response) = tokio::join!(write, waiting);
+    let response = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        response.unwrap()
+    })
+    .await
+    .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(body["revision"].as_u64().unwrap() > revision);
+    let mut article = bib_base::Article::new("cached", "Cached paper");
+    article
+        .identifiers
+        .push(Identifier::doi("10.1000/collection-cached"));
+    db.upsert_article(&article).await.unwrap();
+    db.add_to_collection(
+        "collection",
+        "cached",
+        ArticleRole::Cited,
+        AddedBy::Agent,
+        Some("Preserve semantic note"),
+    )
+    .await
+    .unwrap();
+    let before = db
+        .list_collection_articles("collection", None, None)
+        .await
+        .unwrap();
+    for (path, body) in [
+        (
+            "/api/v1/bib/articles/import",
+            serde_json::json!({"id_type":"doi","id":"10.1000/collection-cached","collection_id":"collection","fetch_fulltext":false}),
+        ),
+        (
+            "/api/v1/bib/collections/collection/articles",
+            serde_json::json!({"article_id":"cached"}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("POST", path, Some(body.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        db.list_collection_articles("collection", None, None)
+            .await
+            .unwrap(),
+        before
+    );
 }

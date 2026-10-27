@@ -1,0 +1,21 @@
+{
+  "name": "@autonomics/zotero-extractor",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "0.1.100",
+    "fastest-levenshtein": "1.0.16",
+    "onnxruntime-web": "1.27.0",
+    "pako": "2.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

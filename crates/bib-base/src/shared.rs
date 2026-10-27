@@ -124,7 +124,7 @@ pub struct BibShared {
     /// rate limit).
     pub s2: Arc<semantic_scholar::S2Client>,
 
-    /// Full-text extraction chain (MinerU cloud → local simple + OCR).
+    /// Full-text extraction chain (PDF: Zotero SDT → MinerU; HTML/TXT: built-in).
     ///
     /// Shared so every upload, re-extract, and sweep in the process uses
     /// one MinerU client (one `MINERU_API_KEY` warning, one connection

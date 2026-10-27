@@ -108,6 +108,7 @@ fn renders_all_child_panes_without_overlap() {
     let mut state = snapshot();
     let mut ft = FullText {
         article_id: "a1".into(),
+        attachment_key: None,
         file_path: "/articles/a1.pdf".into(),
         file_format: bib_base::FileFormat::Pdf,
         text_content: Some("Extracted introduction.".into()),
@@ -128,6 +129,8 @@ fn renders_all_child_panes_without_overlap() {
             id: "n1".into(),
             kind: AnnotationKind::Note,
             content: "Check methods".into(),
+            comment: String::new(),
+            tags: Vec::new(),
             page: Some(2),
             color: None,
             rects: None,
@@ -171,6 +174,7 @@ fn print_real_layout() {
         "a1".into(),
         Some(FullText {
             article_id: "a1".into(),
+            attachment_key: None,
             file_path: "/articles/a1.pdf".into(),
             file_format: bib_base::FileFormat::Pdf,
             text_content: Some("Extracted paragraph.".into()),
@@ -187,4 +191,26 @@ fn print_real_layout() {
     );
     println!("--- 120x28 ---\n{}", render(&mut state, 120, 28));
     println!("--- 80x24 ---\n{}", render(&mut state, 80, 24));
+}
+
+#[test]
+fn nested_collection_rows_navigation_and_recursive_membership_share_one_tree() {
+    let mut state = snapshot();
+    state.collections[1].parent_id = Some("col-gwas".into());
+    state.focus = BibliographyFocus::Collections;
+    assert_eq!(state.collection_rows().len(), 1);
+    state.move_collection(true);
+    assert_eq!(state.selected_collection.as_deref(), Some("col-gwas"));
+    state.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(state.collection_rows().len(), 2);
+    assert_eq!(state.collection_rows()[1].1, 1);
+    state.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    assert_eq!(state.selected_collection.as_deref(), Some("col-methods"));
+    state.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(state.selected_collection.as_deref(), Some("col-gwas"));
+    assert_eq!(state.filtered_articles().count(), 2);
+    state.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT));
+    assert_eq!(state.filtered_articles().count(), 3);
+    state.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+    assert_eq!(state.collection_rows().len(), 1);
 }

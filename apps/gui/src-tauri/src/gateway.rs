@@ -157,6 +157,11 @@ pub async fn api(
         .http
         .request(verb, endpoint(&base, &normalized_path))
         .bearer_auth(token.unwrap_or_default());
+    // Structured PDF extraction runs the local Zotero layout models. Keep the
+    // normal API deadline short while allowing a first Reading Mode conversion.
+    if method.eq_ignore_ascii_case("POST") && normalized_path.ends_with("/fulltext/structured") {
+        request = request.timeout(Duration::from_secs(210));
+    }
     if matches!(&body, Some(value) if !value.is_null()) {
         request = request.json(&body);
     }

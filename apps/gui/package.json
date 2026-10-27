@@ -8,7 +8,16 @@
     "build": "tsc --noEmit && vite build",
     "build:gateway": "npm run build && node scripts/sync-gateway-dist.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:pdf": "node tests/pdf-reader.mjs",
+    "test:pdf-selection": "node tests/pdf-selection.mjs",
+    "test:pdf-tools": "node tests/pdf-tools.mjs",
+    "test:reading-selection": "node tests/reading-selection.mjs",
+    "test:highlight-notes": "node tests/highlight-notes.mjs",
+    "test:reading": "node tests/reading-mode.mjs",
+    "test:txt": "node tests/txt-reader.mjs",
+    "test:bib-menu": "node tests/bibliography-menu.mjs",
+    "test:collections": "node tests/nested-collections.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
@@ -32,6 +41,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "playwright": "^1.64.1",
     "shadcn": "^4.22.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",

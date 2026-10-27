@@ -159,6 +159,13 @@ export type BibArticle = {
 };
 
 export type BibCollection = {
+  parent_id?: string | null;
+  collection_id?: number;
+  library_id?: number;
+  key?: string;
+  deleted?: boolean;
+  direct_article_count?: number;
+  child_count?: number;
   id: string;
   name: string;
   description?: string | null;
@@ -179,6 +186,8 @@ export type BibFullText = {
 
 export type BibAnnotation = {
   id: string;
+  comment?: string;
+  tags?: string[];
   kind?: string;
   content: string;
   page?: number | null;

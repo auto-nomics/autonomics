@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ArticleDetailPanel } from "@/components/bibliography/article-detail";
@@ -15,25 +15,11 @@ import {
 } from "@/lib/bib-api";
 
 
-function matchesQuery(article: Article, query: string): boolean {
-  if (!query.trim()) return true;
-  const haystack = [
-    article.title,
-    article.abstract_text ?? "",
-    article.journal ?? "",
-    ...article.authors.map((author) => `${author.last_name} ${author.fore_name ?? ""}`),
-  ]
-    .join(" ")
-    .toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((term) => haystack.includes(term));
-}
-
 export function App() {
   const [health, setHealth] = useState<BibHealth | null>(null);
+  const [recursive,setRecursive]=useState(()=>{try{return localStorage.getItem("bib.collections.recursive")==="true";}catch{return false;}});
+  const recursiveRef=useRef(recursive);
+  const recordSequence=useRef(0);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeView, setActiveView] = useState<CollectionView>("all");
   const [records, setRecords] = useState<Article[]>([]);
@@ -51,7 +37,7 @@ export function App() {
   }, []);
 
   const loadCollections = useCallback(async () => {
-    const data = await api<{ collections: Collection[] }>("/api/v1/bib/collections");
+    const data = await api<{ collections: Collection[] }>("/api/v1/bib/collections?include_deleted=true");
     setCollections(data.collections);
     return data.collections;
   }, []);
@@ -93,41 +79,45 @@ export function App() {
 
   const loadRecords = useCallback(
     async (view: CollectionView, searchTerm: string) => {
+      const sequence=++recordSequence.current;
       setRecordsLoading(true);
       try {
         let nextRecords: Article[] = [];
 
-        if (view === "all") {
-          const data = await api<{ articles: Article[] }>(
-            `/api/v1/bib/articles?limit=500&query=${encodeURIComponent(searchTerm.trim())}`,
-          );
-          nextRecords = data.articles;
-        } else if (view === "unfiled") {
-          const data = await api<{ articles: Article[] }>(
-            `/api/v1/bib/articles/unfiled?limit=500`,
-          );
-          nextRecords = data.articles.filter((article) => matchesQuery(article, searchTerm));
-        } else {
-          const collectionId = view.slice("col:".length);
-          const collectionData = await api<{ articles: Article[] }>(
-            `/api/v1/bib/collections/${encodeURIComponent(collectionId)}/articles`,
-          );
-          const searchHits = searchTerm.trim()
-            ? await api<{ articles: Article[] }>(
-                `/api/v1/bib/articles?limit=500&query=${encodeURIComponent(searchTerm.trim())}`,
-              )
-            : { articles: collectionData.articles };
-          const matchingIds = new Set(searchHits.articles.map((article) => article.id));
-          nextRecords = collectionData.articles.filter((article) => matchingIds.has(article.id));
+        const endpoint=view==="all"?"/api/v1/bib/articles":view==="unfiled"?"/api/v1/bib/articles/unfiled":`/api/v1/bib/collections/${encodeURIComponent(view.slice(4))}/articles`;
+        let offset=0;
+        for (;;) {
+          const data=await api<{articles:Article[];total:number}>(`${endpoint}?query=${encodeURIComponent(searchTerm.trim())}&include_descendants=${recursiveRef.current}&limit=500&offset=${offset}`);
+          nextRecords.push(...data.articles);offset+=data.articles.length;
+          if(!data.articles.length || data.articles.length<500 || (typeof data.total==="number" && offset>=data.total))break;
         }
 
-        setRecords(nextRecords);
+        if(sequence===recordSequence.current)setRecords(nextRecords);
       } finally {
-        setRecordsLoading(false);
+        if(sequence===recordSequence.current)setRecordsLoading(false);
       }
     },
     [],
   );
+
+  const latestCollectionReload=useRef<()=>Promise<void>>(async()=>{});
+  latestCollectionReload.current=async()=>{
+    const next=await loadCollections();
+    const view=activeView.startsWith("col:") && !next.some(c=>!c.deleted && c.id===activeView.slice(4)) ? "all" : activeView;
+    if(view!==activeView){setActiveView(view);setSelected(null);}
+    await Promise.all([loadHealth(),loadRecords(view,query)]);
+  };
+  useEffect(()=>{
+    let stopped=false;let revision:number|undefined;
+    void(async()=>{while(!stopped){try{
+      const next=await api<{revision:number}>(`/api/v1/bib/collections/changes${revision===undefined?"":`?since=${revision}`}`);
+      if(stopped)return;
+      if(typeof next.revision!=="number")throw new Error("Missing revision");
+      if(revision!==undefined && revision!==next.revision)await latestCollectionReload.current();
+      revision=next.revision;
+    }catch{if(!stopped)await new Promise(resolve=>setTimeout(resolve,2000));}}})();
+    return ()=>{stopped=true;};
+  },[]);
 
   useEffect(() => {
     void (async () => {
@@ -156,18 +146,10 @@ export function App() {
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ id_type: idType, id: id.trim(), fetch_fulltext: true }),
+          body: JSON.stringify({ id_type: idType, id: id.trim(), fetch_fulltext: true, collection_id:activeView.startsWith("col:")?activeView.slice(4):null }),
         },
       );
 
-      if (activeView.startsWith("col:")) {
-        const collectionId = activeView.slice("col:".length);
-        await api(`/api/v1/bib/collections/${encodeURIComponent(collectionId)}/articles`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ article_id: data.article.id }),
-        });
-      }
 
       await loadCollections();
       await Promise.all([loadHealth(), loadRecords(activeView, query), selectArticle(data.article.id)]);
@@ -239,11 +221,11 @@ export function App() {
     toast.success("Removed from collection");
   }
 
-  async function createCollection(name: string) {
+  async function createCollection(name: string,parentId:string|null) {
     const data = await api<{ collection: Collection }>("/api/v1/bib/collections", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name,parent_id:parentId }),
     });
     await loadCollections();
     setActiveView(`col:${data.collection.id}`);
@@ -253,12 +235,17 @@ export function App() {
   }
 
   async function deleteCollection(id: string) {
-    await api(`/api/v1/bib/collections/${encodeURIComponent(id)}`, { method: "DELETE" });
-    const nextView: CollectionView = activeView === `col:${id}` ? "all" : activeView;
+    const result=await api<{deleted_ids:string[]}>(`/api/v1/bib/collections/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const nextView: CollectionView = activeView.startsWith("col:") && result.deleted_ids.includes(activeView.slice(4)) ? "all" : activeView;
     await loadCollections();
     setActiveView(nextView);
     await loadRecords(nextView, query);
     toast.success("Collection deleted");
+  }
+
+  async function manageCollection(id:string,action:"rename"|"move"|"restore"|"erase",value?:string|null) {
+    await api(`/api/v1/bib/collections/${encodeURIComponent(id)}${action==="restore"?"/restore":action==="erase"?"?permanent=true":""}`,{method:action==="restore"?"POST":action==="erase"?"DELETE":"PATCH",headers:{"content-type":"application/json"},...((action==="rename"||action==="move")?{body:JSON.stringify(action==="rename"?{name:value}:{parent_id:value??null})}:{})});
+    await loadCollections();await loadRecords(activeView,query);
   }
 
   async function deleteArticle() {
@@ -282,6 +269,9 @@ export function App() {
             allCount={health?.article_count ?? 0}
             onSelect={(view) => void changeView(view)}
             onCreate={createCollection}
+            onManage={manageCollection}
+            recursive={recursive}
+            onRecursive={value=>{setRecursive(value);recursiveRef.current=value;localStorage.setItem("bib.collections.recursive",String(value));void loadRecords(activeView,query).catch((e:Error)=>toast.error(e.message));}}
             onDelete={deleteCollection}
           />
         </aside>

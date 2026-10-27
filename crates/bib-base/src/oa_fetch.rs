@@ -71,6 +71,7 @@ pub async fn try_fetch_fulltext_with(
 
     Some(FullText {
         article_id: article.id.clone(),
+        attachment_key: None,
         file_path: format!("europepmc:{pmc_id}"),
         file_format: FileFormat::Txt,
         text_content: Some(text),

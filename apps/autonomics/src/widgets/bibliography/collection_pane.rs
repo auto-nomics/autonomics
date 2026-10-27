@@ -10,7 +10,9 @@ use ratatui::{
 };
 
 pub(super) struct CollectionPane<'a> {
-    pub collections: &'a [Collection],
+    pub rows: &'a [(&'a Collection, usize)],
+    pub expanded: &'a std::collections::HashSet<String>,
+    pub recursive: bool,
     pub selected: Option<&'a str>,
     pub focused: bool,
     pub accent: Color,
@@ -25,7 +27,11 @@ impl Widget for CollectionPane<'_> {
         });
         let block = Block::default()
             .title(Span::styled(
-                " Collections ",
+                if self.recursive {
+                    " Collections (+ descendants) "
+                } else {
+                    " Collections "
+                },
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {
@@ -37,17 +43,27 @@ impl Widget for CollectionPane<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        let mut items = Vec::with_capacity(self.collections.len() + 1);
+        let mut items = Vec::with_capacity(self.rows.len() + 1);
         let mut state = ratatui::widgets::ListState::default();
         if self.selected.is_none() {
             state.select(Some(0));
         }
         items.push(row("All articles", self.selected.is_none(), inner.width));
-        for (index, collection) in self.collections.iter().enumerate() {
+        for (index, (collection, depth)) in self.rows.iter().enumerate() {
             if self.selected == Some(collection.id.as_str()) {
                 state.select(Some(index + 1));
             }
-            let label = format!("{} ({})", collection.name, collection.article_ids.len());
+            let label = format!(
+                "{}{} {} ({})",
+                "  ".repeat(*depth),
+                if self.expanded.contains(&collection.id) {
+                    "▾"
+                } else {
+                    "▸"
+                },
+                collection.name,
+                collection.article_ids.len()
+            );
             items.push(row(
                 &label,
                 self.selected == Some(collection.id.as_str()),

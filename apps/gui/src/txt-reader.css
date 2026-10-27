@@ -1,0 +1,31 @@
+/* TXT reader additions on top of the shared Zotero-style reader shell
+   (pdf-reader.css). The root element reuses .zotero-pdf-reader plus
+   [data-reader-kind="txt"]. */
+
+/* The whole file is a single preformatted text node: hard line breaks and
+   blank-line spacing are part of the document, so render them faithfully. */
+.reader-txt-document {
+  white-space: pre-wrap;
+  text-align: start;
+  overflow-wrap: break-word;
+  tab-size: 4;
+}
+
+/* Transient focus flash used by search results, outline jumps and section
+   navigation. Lives in its own overlay layer so annotation redraws never
+   cancel an active flash. */
+.reader-txt-flash {
+  position: absolute;
+  border-radius: 2px;
+  background: #8ab4f8;
+  mix-blend-mode: multiply;
+  opacity: .45;
+  pointer-events: none;
+  animation: reader-txt-flash-fade 1.5s ease-out forwards;
+}
+.reader-reflow[data-reading-theme="dark"] .reader-txt-flash { mix-blend-mode: screen; }
+@keyframes reader-txt-flash-fade {
+  0% { opacity: .6; }
+  60% { opacity: .45; }
+  100% { opacity: 0; }
+}

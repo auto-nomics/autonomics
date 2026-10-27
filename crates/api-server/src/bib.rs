@@ -9,11 +9,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use bib_base::collections::{CollectionAssignment, CollectionChange, CollectionQuery};
 use bib_base::extraction::read_full;
 use bib_base::{
-    BibShared, NewAttachment, extracted_object_path, figure_object_path, sanitize_figure_name,
-    scan_image_refs, spawn_extraction, stored_attachment, stored_fulltext, try_fetch_fulltext_with,
-    vfs_virtual_path,
+    AttachmentTypeSummary, BibShared, NewAttachment, attachment_figure_object_path,
+    extracted_attachment_object_path, extracted_object_path, figure_object_path,
+    sanitize_figure_name, scan_image_refs, spawn_attachment_extraction, stored_attachment,
+    stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource, Author,
@@ -79,6 +81,14 @@ pub fn router(shared: BibShared) -> Router {
             get(list_attachment_annotations).post(add_attachment_annotation),
         )
         .route(
+            "/articles/{id}/attachments/{key}/fulltext",
+            get(get_attachment_fulltext),
+        )
+        .route(
+            "/articles/{id}/attachments/{key}/fulltext/reextract",
+            post(reextract_attachment_fulltext),
+        )
+        .route(
             "/articles/{id}/attachments/{key}/raw",
             get(download_attachment),
         )
@@ -87,6 +97,14 @@ pub fn router(shared: BibShared) -> Router {
             get(get_fulltext)
                 .post(upload_fulltext)
                 .delete(delete_fulltext),
+        )
+        .route(
+            "/articles/{id}/fulltext/structured",
+            get(get_structured_fulltext).post(generate_structured_fulltext),
+        )
+        .route(
+            "/articles/{id}/attachments/{key}/fulltext/structured",
+            get(get_attachment_structure).post(generate_attachment_structure),
         )
         .route(
             "/articles/{id}/fulltext/raw",
@@ -104,14 +122,19 @@ pub fn router(shared: BibShared) -> Router {
             "/articles/{id}/annotations",
             get(list_annotations).post(add_annotation),
         )
-        .route("/annotations/{id}", delete(delete_annotation))
+        .route(
+            "/annotations/{id}",
+            delete(delete_annotation).patch(update_annotation),
+        )
         .route(
             "/collections",
             get(list_collections).post(create_collection),
         )
         .route(
             "/collections/{id}",
-            get(get_collection).delete(delete_collection),
+            get(get_collection)
+                .delete(delete_collection)
+                .patch(update_collection),
         )
         .route(
             "/collections/{id}/articles",
@@ -121,6 +144,11 @@ pub fn router(shared: BibShared) -> Router {
             "/collections/{id}/articles/{article_id}",
             delete(remove_from_collection),
         )
+        .route("/collections/top", get(list_top_collections))
+        .route("/collections/changes", get(collection_changes))
+        .route("/collections/trash", get(list_trashed_collections))
+        .route("/collections/{id}/collections", get(list_child_collections))
+        .route("/collections/{id}/restore", post(restore_collection))
         .route("/collections/{id}/status", put(update_collection_status))
         .route("/requests", get(list_requests))
         .route("/export", get(export))
@@ -165,12 +193,47 @@ fn parse_limit(raw: Option<&str>, default: usize) -> Result<usize, (StatusCode, 
 }
 
 fn parse_offset(raw: Option<&str>) -> Result<usize, (StatusCode, Json<ApiError>)> {
-    raw.as_deref().unwrap_or("0").parse::<usize>().map_err(|_| {
+    raw.unwrap_or("0").parse::<usize>().map_err(|_| {
         error(
             StatusCode::BAD_REQUEST,
             "offset must be a non-negative integer",
         )
     })
+}
+
+fn attachment_type_summary(summary: &AttachmentTypeSummary) -> Value {
+    json!({
+        "pdf": summary.pdf,
+        "snapshot": summary.snapshot,
+        "link": summary.link,
+        "file": summary.file,
+        "note": summary.note,
+        "count": summary.count,
+    })
+}
+
+async fn attachment_summary_map(
+    shared: &BibShared,
+    articles: &[Article],
+) -> Result<HashMap<String, Value>, (StatusCode, Json<ApiError>)> {
+    let ids = articles
+        .iter()
+        .map(|article| article.id.clone())
+        .collect::<Vec<_>>();
+    let summaries = shared
+        .bib
+        .attachment_type_summaries(&ids)
+        .await
+        .map_err(internal)?;
+    Ok(summaries
+        .into_iter()
+        .map(|summary| {
+            (
+                summary.article_id.clone(),
+                attachment_type_summary(&summary),
+            )
+        })
+        .collect())
 }
 
 async fn list_articles(
@@ -180,25 +243,21 @@ async fn list_articles(
     let query = params.get("query").map(String::as_str).unwrap_or("");
     let limit = parse_limit(params.get("limit").map(String::as_str), 100)?;
     let offset = parse_offset(params.get("offset").map(String::as_str))?;
-    let hits = shared
+    let page = shared
         .bib
-        .search_articles(query, limit, offset)
+        .query_collection_articles(CollectionQuery {
+            collection_id: None,
+            include_descendants: false,
+            unfiled: false,
+            query: query.to_owned(),
+            limit,
+            offset,
+        })
         .await
-        .map_err(internal)?;
-    let total = shared.bib.article_count().await.map_err(internal)?;
-    let mut articles = Vec::with_capacity(hits.len());
-    for hit in &hits {
-        if let Some(article) = shared
-            .bib
-            .get_article(&hit.article_id)
-            .await
-            .map_err(internal)?
-        {
-            articles.push(article);
-        }
-    }
+        .map_err(collection_error)?;
+    let attachment_summaries = attachment_summary_map(&shared, &page.articles).await?;
     Ok(Json(
-        json!({ "total": total, "hits": hits, "articles": articles }),
+        json!({"total":page.total,"articles":page.articles,"associations":page.associations,"attachment_summaries":attachment_summaries}),
     ))
 }
 
@@ -207,22 +266,23 @@ async fn list_unfiled_articles(
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
     let limit = parse_limit(params.get("limit").map(String::as_str), 500)?;
-    let collections = shared.bib.list_collections(None).await.map_err(internal)?;
-    let filed_ids = collections
-        .iter()
-        .flat_map(|collection| collection.article_ids.iter())
-        .collect::<std::collections::HashSet<_>>();
-    let articles = shared
+    let offset = parse_offset(params.get("offset").map(String::as_str))?;
+    let page = shared
         .bib
-        .list_all_articles()
+        .query_collection_articles(CollectionQuery {
+            collection_id: None,
+            include_descendants: false,
+            unfiled: true,
+            query: params.get("query").cloned().unwrap_or_default(),
+            limit,
+            offset,
+        })
         .await
-        .map_err(internal)?
-        .into_iter()
-        .filter(|article| !filed_ids.contains(&article.id))
-        .take(limit)
-        .collect::<Vec<_>>();
-    let total = articles.len();
-    Ok(Json(json!({ "total": total, "articles": articles })))
+        .map_err(collection_error)?;
+    let attachment_summaries = attachment_summary_map(&shared, &page.articles).await?;
+    Ok(Json(
+        json!({"total":page.total,"articles":page.articles,"associations":page.associations,"attachment_summaries":attachment_summaries}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -398,6 +458,13 @@ async fn import_article(
         .await
         .map_err(internal)?
     {
+        if let Some(collection_id) = input.collection_id.as_deref() {
+            shared
+                .bib
+                .ensure_collection_membership(collection_id, &existing.id)
+                .await
+                .map_err(collection_error)?;
+        }
         return Ok(Json(json!({ "cached": true, "article": existing })));
     }
 
@@ -426,11 +493,7 @@ async fn import_article(
         ));
     }
     article.updated_at = Some(Utc::now());
-    shared
-        .bib
-        .upsert_article(&article)
-        .await
-        .map_err(internal)?;
+    save_imported_article(&shared, &article, input.collection_id.as_deref()).await?;
 
     let fulltext_fetched = if input.fetch_fulltext.unwrap_or(true) {
         match try_fetch_fulltext_with(&shared.europe_pmc, &article).await {
@@ -456,10 +519,37 @@ async fn import_article(
 
 #[derive(Deserialize)]
 struct ImportArticleRequest {
+    collection_id: Option<String>,
     id_type: String,
     id: String,
     source: Option<String>,
     fetch_fulltext: Option<bool>,
+}
+
+async fn save_imported_article(
+    shared: &BibShared,
+    article: &Article,
+    collection_id: Option<&str>,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if let Some(id) = collection_id {
+        shared
+            .bib
+            .upsert_articles_with_collection(
+                std::slice::from_ref(article),
+                id,
+                &[CollectionAssignment {
+                    article_id: article.id.clone(),
+                    role: ArticleRole::Referenced,
+                    added_by: AddedBy::User,
+                    note: None,
+                }],
+            )
+            .await
+            .map_err(collection_error)?;
+    } else {
+        shared.bib.upsert_article(article).await.map_err(internal)?;
+    }
+    Ok(())
 }
 
 fn parse_id_kind(value: &str) -> Option<IdKind> {
@@ -562,6 +652,65 @@ async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<Str
     Ok(Json(
         json!({ "deleted": removed > 0, "id": id, "rows_removed": removed }),
     ))
+}
+
+async fn structure_response(
+    shared: &BibShared,
+    id: &str,
+    key: Option<&str>,
+    generate: bool,
+) -> ApiResult {
+    let fulltext = match key {
+        Some(key) => shared.bib.get_attachment_fulltext(id, key).await,
+        None => shared.bib.get_fulltext(id).await,
+    }
+    .map_err(internal)?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "PDF attachment was not found"))?;
+    if fulltext.file_format != FileFormat::Pdf {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Reading Mode requires a PDF attachment",
+        ));
+    }
+    file_storage(shared)?;
+    let structure = bib_base::zotero_extract::structured_fulltext(shared, id, key, generate)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| {
+            error(
+                StatusCode::NOT_FOUND,
+                "Zotero structured text has not been generated yet",
+            )
+        })?;
+    Ok(Json(json!({ "structure": structure })))
+}
+
+async fn get_structured_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    structure_response(&shared, &id, None, false).await
+}
+
+async fn generate_structured_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    structure_response(&shared, &id, None, true).await
+}
+
+async fn get_attachment_structure(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    structure_response(&shared, &id, Some(&key), false).await
+}
+
+async fn generate_attachment_structure(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    structure_response(&shared, &id, Some(&key), true).await
 }
 
 async fn get_fulltext(
@@ -762,6 +911,7 @@ async fn upload_attachment(
     if make_preferred {
         let fulltext = FullText {
             article_id: article.id.clone(),
+            attachment_key: Some(attachment.key.clone()),
             file_path: stored.path.clone(),
             file_format: format,
             text_content: None,
@@ -791,8 +941,12 @@ async fn upload_attachment(
         if let Some(previous) = shared.bib.get_fulltext(&id).await.map_err(internal)? {
             delete_article_figures(&shared, &previous).await;
         }
-        spawn_extraction(shared.as_ref().clone(), article.id.clone());
     }
+    spawn_attachment_extraction(
+        shared.as_ref().clone(),
+        article.id.clone(),
+        attachment.key.clone(),
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -914,6 +1068,7 @@ async fn set_preferred_attachment(
     }
     let fulltext = FullText {
         article_id: id.clone(),
+        attachment_key: Some(key.clone()),
         file_path: attachment.vfs_path.clone().expect("checked above"),
         file_format: format,
         text_content: None,
@@ -934,7 +1089,7 @@ async fn set_preferred_attachment(
     if let Some(previous) = shared.bib.get_fulltext(&id).await.map_err(internal)? {
         delete_article_figures(&shared, &previous).await;
     }
-    spawn_extraction(shared.as_ref().clone(), id.clone());
+    spawn_attachment_extraction(shared.as_ref().clone(), id.clone(), key.clone());
     Ok(Json(json!({ "attachment": attachment })))
 }
 
@@ -942,6 +1097,11 @@ async fn delete_attachment_by_key(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    let existing_fulltext = shared
+        .bib
+        .get_attachment_fulltext(&id, &key)
+        .await
+        .map_err(internal)?;
     let deleted = shared
         .bib
         .delete_zotero_attachment(&id, &key)
@@ -955,6 +1115,9 @@ async fn delete_attachment_by_key(
         if let Some(legacy) = legacy {
             delete_article_figures(&shared, &legacy).await;
         }
+    }
+    if let Some(existing) = existing_fulltext {
+        delete_attachment_figures(&shared, &id, &key, &existing).await;
     }
     if let Some(path) = deleted
         .attachment
@@ -975,6 +1138,86 @@ async fn delete_attachment_by_key(
         "attachment": deleted.attachment,
         "was_preferred": deleted.was_preferred,
     })))
+}
+
+async fn get_attachment_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+    Query(page_query): Query<FulltextPageQuery>,
+) -> ApiResult {
+    let (offset, limit) = page_query.normalized();
+    let fulltext = shared
+        .bib
+        .get_attachment_fulltext(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    let total_chars = fulltext
+        .text_content
+        .as_deref()
+        .map_or(0, |content| content.chars().count());
+    let text = fulltext
+        .text_content
+        .as_deref()
+        .map(|content| content.chars().skip(offset).take(limit).collect::<String>());
+    let returned = text.as_deref().map_or(0, |content| content.chars().count());
+    let next_offset = (offset + returned < total_chars).then_some(offset + returned);
+    let mut fulltext = fulltext;
+    fulltext.text_content = text;
+    let pagination = json!({
+        "offset": offset,
+        "limit": limit,
+        "total_chars": total_chars,
+        "truncated": next_offset.is_some(),
+        "next_offset": next_offset,
+    });
+    Ok(Json(
+        json!({ "fulltext": fulltext, "pagination": pagination }),
+    ))
+}
+
+async fn reextract_attachment_fulltext(
+    State(shared): State<Arc<BibShared>>,
+    Path((id, key)): Path<(String, String)>,
+) -> ApiResult {
+    let attachment = shared
+        .bib
+        .zotero_attachment_by_key(&id, &key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+    if vfs_virtual_path(attachment.vfs_path.as_deref().unwrap_or_default()).is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("attachment {key} has no VFS-stored original"),
+        ));
+    }
+    let existing = shared
+        .bib
+        .get_attachment_fulltext(&id, &key)
+        .await
+        .map_err(internal)?;
+    if let Some(existing) = existing {
+        delete_attachment_figures(&shared, &id, &key, &existing).await;
+    }
+    shared
+        .bib
+        .restart_attachment_extraction(&key)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| {
+            error(
+                StatusCode::NOT_FOUND,
+                format!("full text for {key} not found"),
+            )
+        })?;
+    spawn_attachment_extraction(shared.as_ref().clone(), id.clone(), key.clone());
+    let fulltext = shared
+        .bib
+        .get_attachment_fulltext(&id, &key)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({ "fulltext": fulltext })))
 }
 
 async fn upload_fulltext(
@@ -1034,6 +1277,7 @@ async fn upload_fulltext(
     write_stored_file(&shared, &path, content.to_vec()).await?;
     let fulltext = FullText {
         article_id: article.id.clone(),
+        attachment_key: None,
         file_path: stored.path,
         file_format: format,
         text_content: None,
@@ -1085,7 +1329,20 @@ async fn upload_fulltext(
     }
     // Content-addressed paths guarantee the queued task reads the object
     // just written, even though this handler returns immediately.
-    spawn_extraction(shared.as_ref().clone(), article.id.clone());
+    if let Some(preferred) = shared
+        .bib
+        .zotero_attachment(&article.id)
+        .await
+        .map_err(internal)?
+    {
+        spawn_attachment_extraction(shared.as_ref().clone(), article.id.clone(), preferred.key);
+    }
+    let fulltext = shared
+        .bib
+        .get_fulltext(&article.id)
+        .await
+        .map_err(internal)?
+        .unwrap_or(fulltext);
     Ok(Json(json!({ "fulltext": fulltext })))
 }
 
@@ -1121,14 +1378,27 @@ async fn reextract_fulltext(
     }
     // The restart below clears the old markdown from the row, so this is
     // the last point where the figures it referenced are identifiable.
-    delete_article_figures(&shared, &existing).await;
-    if !shared.bib.restart_extraction(&id).await.map_err(internal)? {
+    let preferred = shared.bib.zotero_attachment(&id).await.map_err(internal)?;
+    let Some(preferred) = preferred else {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            format!("full text for {id} not found"),
+        ));
+    };
+    delete_attachment_figures(&shared, &id, &preferred.key, &existing).await;
+    if shared
+        .bib
+        .restart_attachment_extraction(&preferred.key)
+        .await
+        .map_err(internal)?
+        .is_none()
+    {
         return Err(error(
             StatusCode::NOT_FOUND,
             format!("full text for {id} not found"),
         ));
     }
-    spawn_extraction(shared.as_ref().clone(), id.clone());
+    spawn_attachment_extraction(shared.as_ref().clone(), id.clone(), preferred.key.clone());
     let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
     Ok(Json(json!({ "fulltext": fulltext })))
 }
@@ -1261,13 +1531,8 @@ async fn download_figure(
     State(shared): State<Arc<BibShared>>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
-    if shared
-        .bib
-        .get_fulltext(&id)
-        .await
-        .map_err(internal)?
-        .is_none()
-    {
+    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
+    if fulltext.is_none() {
         return Err(error(
             StatusCode::NOT_FOUND,
             format!("full text for {id} not found"),
@@ -1298,8 +1563,14 @@ async fn download_figure(
         }
     };
     let storage = file_storage(&shared)?;
-    let path =
-        vfs_virtual_path(&figure_object_path(&id, &name)).expect("figure path is VFS-addressable");
+    let object = match fulltext
+        .as_ref()
+        .and_then(|fulltext| fulltext.attachment_key.as_deref())
+    {
+        Some(key) => attachment_figure_object_path(&id, key, &name),
+        None => figure_object_path(&id, &name),
+    };
+    let path = vfs_virtual_path(&object).expect("figure path is VFS-addressable");
     let length = storage.content_length(&path).await.map_err(|failure| {
         if failure.kind() == opendal::ErrorKind::NotFound {
             error(
@@ -1420,6 +1691,55 @@ async fn add_annotation(
     ))
 }
 
+async fn update_annotation(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Json(patch): Json<bib_types::AnnotationUpdate>,
+) -> ApiResult {
+    if patch.comment.is_none() && patch.tags.is_none() && patch.color.is_none() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "No annotation changes were provided",
+        ));
+    }
+    if patch
+        .comment
+        .as_ref()
+        .is_some_and(|comment| comment.chars().count() > 20_000)
+        || patch.tags.as_ref().is_some_and(|tags| {
+            tags.len() > 50
+                || tags
+                    .iter()
+                    .any(|tag| tag.trim().is_empty() || tag.chars().count() > 80)
+        })
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "Annotation comment or tags exceed their limits",
+        ));
+    }
+    if let Some(color) = patch.color.as_deref() {
+        let hex = color.strip_prefix('#').is_some_and(|hex| {
+            matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
+        if !hex
+            && ![
+                "yellow", "red", "green", "blue", "purple", "magenta", "orange", "gray",
+            ]
+            .contains(&color)
+        {
+            return Err(error(StatusCode::BAD_REQUEST, "Invalid annotation color"));
+        }
+    }
+    let annotation = shared
+        .bib
+        .update_annotation(&id, patch)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "Annotation not found"))?;
+    Ok(Json(json!({ "annotation": annotation })))
+}
+
 async fn delete_annotation(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1484,14 +1804,165 @@ async fn add_attachment_annotation(
     ))
 }
 
-async fn list_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {
-    let collections = shared.bib.list_collections(None).await.map_err(internal)?;
-    Ok(Json(json!({ "collections": collections })))
+fn collection_error(e: bib_base::error::Error) -> (StatusCode, Json<ApiError>) {
+    use bib_base::error::Error;
+    let status = match &e {
+        Error::NotFound(_) => StatusCode::NOT_FOUND,
+        Error::InvalidCollection(_) => StatusCode::BAD_REQUEST,
+        Error::CollectionConflict(_) => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error(status, e.to_string())
+}
+
+fn bool_param(
+    params: &HashMap<String, String>,
+    key: &str,
+) -> Result<bool, (StatusCode, Json<ApiError>)> {
+    match params.get(key).map(String::as_str) {
+        None | Some("false") | Some("0") => Ok(false),
+        Some("true") | Some("1") => Ok(true),
+        _ => Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("{key} must be a boolean"),
+        )),
+    }
+}
+
+async fn list_collections(
+    State(shared): State<Arc<BibShared>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let include_deleted = bool_param(&params, "include_deleted")?;
+    if params.get("view").is_some_and(|s| s == "summary") {
+        let collections = shared
+            .bib
+            .list_collection_summaries(include_deleted)
+            .await
+            .map_err(collection_error)?;
+        return Ok(Json(json!({"collections":collections})));
+    }
+    let collections = shared
+        .bib
+        .list_collections_including_deleted(None, include_deleted)
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(json!({"collections":collections})))
+}
+
+async fn collection_changes(
+    State(shared): State<Arc<BibShared>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResult {
+    let mut receiver = shared.bib.subscribe_collection_changes();
+    let since = params
+        .get("since")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| error(StatusCode::BAD_REQUEST, "since must be a revision number"))
+        })
+        .transpose()?;
+    if since == Some(*receiver.borrow_and_update()) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(25), receiver.changed()).await;
+    }
+    let revision = *receiver.borrow_and_update();
+    Ok(Json(json!({"revision":revision})))
+}
+
+async fn list_top_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    let collections = shared
+        .bib
+        .list_collections(None)
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(
+        json!({"collections":collections.into_iter().filter(|c|c.parent_id.is_none()).collect::<Vec<_>>()}),
+    ))
+}
+async fn list_child_collections(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    shared
+        .bib
+        .get_collection(&id)
+        .await
+        .map_err(collection_error)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "collection not found"))?;
+    let collections = shared
+        .bib
+        .list_collections(None)
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(
+        json!({"collections":collections.into_iter().filter(|c|c.parent_id.as_deref()==Some(id.as_str())).collect::<Vec<_>>()}),
+    ))
+}
+async fn list_trashed_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    let collections = shared
+        .bib
+        .list_collections_including_deleted(None, true)
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(
+        json!({"collections":collections.into_iter().filter(|c|c.deleted).collect::<Vec<_>>()}),
+    ))
+}
+async fn update_collection(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Json(input): Json<Value>,
+) -> ApiResult {
+    let object = input
+        .as_object()
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "expected an object"))?;
+    let name = object
+        .get("name")
+        .map(|v| {
+            v.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| error(StatusCode::BAD_REQUEST, "name must be a string"))
+        })
+        .transpose()?;
+    let parent_id = object
+        .get("parent_id")
+        .map(|v| {
+            if v.is_null() {
+                Ok(None)
+            } else {
+                v.as_str().map(|s| Some(s.to_owned())).ok_or_else(|| {
+                    error(
+                        StatusCode::BAD_REQUEST,
+                        "parent_id must be a string or null",
+                    )
+                })
+            }
+        })
+        .transpose()?;
+    shared
+        .bib
+        .change_collection(&id, CollectionChange::Update { name, parent_id })
+        .await
+        .map_err(collection_error)?;
+    get_collection(State(shared), Path(id)).await
+}
+async fn restore_collection(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let restored_ids = shared
+        .bib
+        .change_collection(&id, CollectionChange::Restore)
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(json!({"restored_ids":restored_ids})))
 }
 
 #[derive(Deserialize)]
 struct CreateCollectionRequest {
     name: String,
+    parent_id: Option<String>,
     description: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
@@ -1508,11 +1979,18 @@ async fn create_collection(
     let mut collection = Collection::new(&id, input.name.trim());
     collection.description = clean_optional(input.description);
     collection.tags = input.tags;
+    collection.parent_id = input.parent_id;
     shared
         .bib
         .upsert_collection(&collection)
         .await
-        .map_err(internal)?;
+        .map_err(collection_error)?;
+    let collection = shared
+        .bib
+        .get_collection(&id)
+        .await
+        .map_err(collection_error)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "collection not found"))?;
     Ok((
         StatusCode::CREATED,
         Json(json!({ "collection": collection })),
@@ -1532,36 +2010,65 @@ async fn get_collection(State(shared): State<Arc<BibShared>>, Path(id): Path<Str
 async fn delete_collection(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
-    shared.bib.delete_collection(&id).await.map_err(internal)?;
-    Ok(Json(json!({ "deleted": true, "id": id })))
+    let permanent = bool_param(&params, "permanent")?;
+    if permanent {
+        let col = shared
+            .bib
+            .list_collections_including_deleted(None, true)
+            .await
+            .map_err(collection_error)?
+            .into_iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "collection not found"))?;
+        if !col.deleted {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "move collection to trash before permanently erasing it",
+            ));
+        }
+    }
+    let ids = shared
+        .bib
+        .change_collection(
+            &id,
+            if permanent {
+                CollectionChange::Erase
+            } else {
+                CollectionChange::Trash
+            },
+        )
+        .await
+        .map_err(collection_error)?;
+    Ok(Json(
+        json!({"deleted":true,"id":id,"deleted_ids":ids,"permanent":permanent}),
+    ))
 }
 
 async fn list_collection_articles(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult {
-    shared
+    let limit = parse_limit(params.get("limit").map(String::as_str), 500)?;
+    let offset = parse_offset(params.get("offset").map(String::as_str))?;
+    let page = shared
         .bib
-        .get_collection(&id)
+        .query_collection_articles(CollectionQuery {
+            collection_id: Some(id),
+            include_descendants: bool_param(&params, "include_descendants")?,
+            unfiled: false,
+            query: params.get("query").cloned().unwrap_or_default(),
+            limit,
+            offset,
+        })
         .await
-        .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("collection {id} not found")))?;
-
-    let articles = shared
-        .bib
-        .list_articles_by_collection(&id)
-        .await
-        .map_err(internal)?;
-    let associations = shared
-        .bib
-        .list_collection_articles(&id, None, None)
-        .await
-        .map_err(internal)?;
-    Ok(Json(json!({
-        "associations": associations,
-        "articles": articles,
-    })))
+        .map_err(collection_error)?;
+    let attachment_summaries = attachment_summary_map(&shared, &page.articles).await?;
+    Ok(Json(
+        json!({"total":page.total,"articles":page.articles,"associations":page.associations,"attachment_summaries":attachment_summaries}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1580,7 +2087,7 @@ async fn add_to_collection(
         .bib
         .get_collection(&collection_id)
         .await
-        .map_err(internal)?
+        .map_err(collection_error)?
         .ok_or_else(|| {
             error(
                 StatusCode::NOT_FOUND,
@@ -1591,7 +2098,7 @@ async fn add_to_collection(
         .bib
         .get_article(&input.article_id)
         .await
-        .map_err(internal)?
+        .map_err(collection_error)?
         .ok_or_else(|| {
             error(
                 StatusCode::NOT_FOUND,
@@ -1600,18 +2107,25 @@ async fn add_to_collection(
         })?;
 
     let role = parse_article_role(input.role.as_deref());
-    let inserted = shared
-        .bib
-        .add_to_collection(
-            &collection_id,
-            &input.article_id,
-            role,
-            AddedBy::User,
-            input.note.as_deref(),
-        )
-        .await
-        .map_err(internal)?
-        .was_inserted();
+    let outcome = if input.role.is_none() && input.note.is_none() {
+        shared
+            .bib
+            .ensure_collection_membership(&collection_id, &input.article_id)
+            .await
+    } else {
+        shared
+            .bib
+            .add_to_collection(
+                &collection_id,
+                &input.article_id,
+                role,
+                AddedBy::User,
+                input.note.as_deref(),
+            )
+            .await
+    }
+    .map_err(collection_error)?;
+    let inserted = outcome.was_inserted();
     Ok(Json(json!({
         "collection_id": collection_id,
         "article_id": input.article_id,
@@ -1636,7 +2150,7 @@ async fn remove_from_collection(
         .bib
         .remove_from_collection(&collection_id, &article_id)
         .await
-        .map_err(internal)?;
+        .map_err(collection_error)?;
     Ok(Json(json!({
         "removed": true,
         "collection_id": collection_id,
@@ -1669,7 +2183,7 @@ async fn update_collection_status(
         .bib
         .update_collection_status(&id, status)
         .await
-        .map_err(internal)?;
+        .map_err(collection_error)?;
     Ok(Json(json!({ "id": id, "status": input.status })))
 }
 
@@ -1702,22 +2216,33 @@ async fn export(
         "csl_json" | "csljson" | "json" => ExportFormat::CslJson,
         _ => ExportFormat::Bibtex,
     };
-    let limit = parse_limit(params.get("limit").map(String::as_str), 500)?;
+    let limit = if params.contains_key("limit") {
+        parse_limit(params.get("limit").map(String::as_str), 500)?
+    } else {
+        i64::MAX as usize
+    };
 
     let articles = if let Some(collection_id) = params.get("collection_id") {
-        let associations = shared
+        shared
             .bib
-            .list_collection_articles(collection_id, None, None)
+            .query_collection_articles(CollectionQuery {
+                collection_id: Some(collection_id.clone()),
+                include_descendants: bool_param(&params, "include_descendants")?,
+                unfiled: false,
+                query: params.get("query").cloned().unwrap_or_default(),
+                limit,
+                offset: 0,
+            })
             .await
-            .map_err(internal)?;
+            .map_err(collection_error)?
+            .articles
+    } else if let Some(ids) = params.get("ids") {
+        // Export exactly the requested records, in the order given (the
+        // selection order in the UI). Unknown ids are skipped; `limit` does
+        // not apply because the caller chose the set explicitly.
         let mut articles = Vec::new();
-        for association in associations.into_iter().take(limit) {
-            if let Some(article) = shared
-                .bib
-                .get_article(&association.article_id)
-                .await
-                .map_err(internal)?
-            {
+        for id in ids.split(',').map(str::trim).filter(|id| !id.is_empty()) {
+            if let Some(article) = shared.bib.get_article(id).await.map_err(internal)? {
                 articles.push(article);
             }
         }
@@ -1725,12 +2250,17 @@ async fn export(
     } else {
         shared
             .bib
-            .list_all_articles()
+            .query_collection_articles(CollectionQuery {
+                collection_id: None,
+                include_descendants: false,
+                unfiled: bool_param(&params, "unfiled")?,
+                query: params.get("query").cloned().unwrap_or_default(),
+                limit,
+                offset: 0,
+            })
             .await
-            .map_err(internal)?
-            .into_iter()
-            .take(limit)
-            .collect()
+            .map_err(collection_error)?
+            .articles
     };
 
     let rendered = bib_base::render_all(&articles, format);
@@ -1889,6 +2419,16 @@ async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
         return;
     };
 
+    let object = bib_base::stored_files::structured_object_path(
+        &fulltext.article_id,
+        fulltext.attachment_key.as_deref(),
+    );
+    if let Some(path) = vfs_virtual_path(&object) {
+        if let Err(failure) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %failure, "failed to remove Zotero structure");
+        }
+    }
+
     // The canonical extracted-text object goes away with its markdown,
     // whatever produced the row.
     if let Some(format) = fulltext.text_format {
@@ -1925,6 +2465,43 @@ async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
         };
         if let Err(failure) = storage.delete_object(&path).await {
             tracing::warn!(path = %path, error = %failure, "failed to remove figure object");
+        }
+    }
+}
+
+/// Best-effort cleanup of one attachment's derived text and figures.
+async fn delete_attachment_figures(
+    shared: &BibShared,
+    article_id: &str,
+    attachment_key: &str,
+    fulltext: &FullText,
+) {
+    let Some(storage) = shared.file_storage.as_ref() else {
+        return;
+    };
+    let object = bib_base::stored_files::structured_object_path(article_id, Some(attachment_key));
+    if let Some(path) = vfs_virtual_path(&object) {
+        if let Err(failure) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %failure, "failed to remove attachment Zotero structure");
+        }
+    }
+    let format = fulltext.text_format.unwrap_or_default();
+    let extracted = extracted_attachment_object_path(article_id, attachment_key, format);
+    if let Some(path) = vfs_virtual_path(&extracted) {
+        if let Err(failure) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %failure, "failed to remove attachment extracted text");
+        }
+    }
+    if fulltext.text_format != Some(TextFormat::Markdown) {
+        return;
+    }
+    for name in scan_image_refs(fulltext.text_content.as_deref().unwrap_or_default()) {
+        let object = attachment_figure_object_path(article_id, attachment_key, &name);
+        let Some(path) = vfs_virtual_path(&object) else {
+            continue;
+        };
+        if let Err(failure) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %failure, "failed to remove attachment figure");
         }
     }
 }

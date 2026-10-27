@@ -17,6 +17,7 @@ mod actor;
 pub mod annotations;
 pub mod bib_base;
 pub mod collections;
+mod collection_schema;
 pub use collections::CollectionAddOutcome;
 pub use collections::{CollectionAssignment, CollectionAssignmentOutcome};
 pub mod error;
@@ -32,20 +33,20 @@ pub mod oa_fetch;
 pub mod query;
 pub mod shared;
 pub mod stored_files;
+pub mod zotero_extract;
 pub mod zotero_model;
+pub use zotero_extract::ZoteroExtractor;
 
 pub use bib_base::BibBase;
 pub use error::{Error, Result};
 pub use export::{cite_key, render, render_all, to_bibtex, to_csl_json, to_markdown, to_ris};
-pub use extract::{
-    ExtractedImage, ExtractedText, OcrFallbackExtractor, SimpleExtractor, TextExtractor,
-    is_expected_panic,
-};
+pub use extract::{ExtractedImage, ExtractedText, SimpleExtractor, TextExtractor};
 pub use extraction::{
     FallbackChainExtractor, backfill_extracted_objects, default_extractor, read_full,
-    run_extraction, run_extraction_parts, spawn_extraction, sweep_pending,
+    run_attachment_extraction, run_attachment_extraction_parts, run_extraction,
+    run_extraction_parts, spawn_attachment_extraction, spawn_extraction, sweep_pending,
 };
-pub use fulltext::{FullTextPage, PendingExtraction};
+pub use fulltext::{FullTextPage, PendingAttachmentExtraction, PendingExtraction};
 pub use http_options::BibHttpOptions;
 pub use library_tools::bib_all_registrations;
 pub use mineru::{
@@ -58,11 +59,12 @@ pub use query::{
 };
 pub use shared::BibShared;
 pub use stored_files::{
-    StoredFulltext, VFS_PREFIX, extracted_object_path, figure_object_path, sanitize_figure_name,
-    scan_image_refs, stored_attachment, stored_extracted_text, stored_fulltext, vfs_virtual_path,
+    StoredFulltext, VFS_PREFIX, attachment_figure_object_path, extracted_attachment_object_path,
+    extracted_object_path, figure_object_path, sanitize_figure_name, scan_image_refs,
+    stored_attachment, stored_extracted_text, stored_fulltext, vfs_virtual_path,
 };
 pub use zotero_model::LINK_MODE_IMPORTED_FILE;
-pub use zotero_model::{DeletedAttachment, NewAttachment, StoredAttachment};
+pub use zotero_model::{AttachmentTypeSummary, DeletedAttachment, NewAttachment, StoredAttachment};
 
 /// Convenience: a [`LiteratureGateway`] pre-loaded with PubMed + arXiv + bioRxiv.
 ///

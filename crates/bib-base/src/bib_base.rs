@@ -72,33 +72,10 @@ CREATE TABLE IF NOT EXISTS annotations (
     page        INTEGER,
     color       TEXT,
     rects       TEXT,
+    comment     TEXT NOT NULL DEFAULT '',
+    tags        TEXT NOT NULL DEFAULT '[]',
     created_at  TEXT
 );
-
-CREATE TABLE IF NOT EXISTS collections (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    description TEXT,
-    tags        TEXT,
-    status      TEXT NOT NULL DEFAULT 'active',
-    created_at  TEXT,
-    updated_at  TEXT
-);
-
-CREATE TABLE IF NOT EXISTS collection_articles (
-    collection_id  TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
-    article_id     TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
-    position       INTEGER NOT NULL,
-    role           TEXT NOT NULL DEFAULT 'referenced',
-    fetch_status   TEXT NOT NULL DEFAULT 'metadata_only',
-    added_by       TEXT NOT NULL DEFAULT 'agent',
-    note           TEXT,
-    added_at       TEXT,
-    PRIMARY KEY (collection_id, article_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_collection_articles_fetch
-    ON collection_articles(fetch_status) WHERE fetch_status = 'fulltext_requested';
 
 CREATE TABLE IF NOT EXISTS fulltexts (
     article_id   TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
@@ -143,6 +120,7 @@ CREATE TABLE IF NOT EXISTS bib_meta (
 /// longer trip turso's `concurrent use forbidden` guard (issue #143).
 pub struct BibBase {
     pub(crate) tx: mpsc::Sender<BibCommand>,
+    pub(crate) changes: tokio::sync::watch::Sender<u64>,
 }
 
 /// Implementation core owned by the storage actor.
@@ -226,6 +204,7 @@ impl BibCore {
     pub async fn migrate(&self) -> Result<()> {
         let conn = self.write_conn();
         conn.execute_batch(SCHEMA_SQL).await?;
+        crate::collection_schema::prepare_legacy(&conn).await.map_err(|e| Error::Unknown(format!("prepare collection schema: {e}")))?;
 
         // --- fulltexts extraction-tracking columns -----------------------
         // Databases created before background extraction tracking lack the
@@ -282,6 +261,29 @@ impl BibCore {
             .await?;
         }
 
+        let mut annotation_columns = std::collections::HashSet::new();
+        let mut rows = conn
+            .query("PRAGMA table_info(annotations)", turso::params![])
+            .await?;
+        while let Some(row) = rows.next().await? {
+            annotation_columns.insert(row.get::<String>(1)?);
+        }
+        drop(rows);
+        if !annotation_columns.contains("comment") {
+            conn.execute(
+                "ALTER TABLE annotations ADD COLUMN comment TEXT NOT NULL DEFAULT ''",
+                turso::params![],
+            )
+            .await?;
+        }
+        if !annotation_columns.contains("tags") {
+            conn.execute(
+                "ALTER TABLE annotations ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
+                turso::params![],
+            )
+            .await?;
+        }
+
         // Mirror existing legacy rows into Zotero-compatible item tables.
         // This runs after legacy column backfills because it reads
         // extraction provenance from `fulltexts`.
@@ -290,7 +292,8 @@ impl BibCore {
         // idempotent DDL to the read side ensures freshly added extension
         // columns are visible to queries made through `BibCore::conn()`.
         let read_conn = self.conn();
-        crate::zotero_model::migrate(&read_conn).await?;
+        crate::zotero_model::ensure_schema(&read_conn).await?;
+        crate::collection_schema::migrate(&conn).await.map_err(|e| Error::Unknown(format!("migrate collection schema: {e}")))?;
 
         let mut rows = conn
             .query(
@@ -302,9 +305,7 @@ impl BibCore {
             Some(row) => row.get::<String>(0)?,
             None => String::new(),
         };
-        if version != "1" {
-            conn.execute("DELETE FROM search_terms", turso::params![])
-                .await?;
+        if version != "2" {
             let mut article_rows = conn
                 .query("SELECT id FROM articles", turso::params![])
                 .await?;
@@ -317,7 +318,7 @@ impl BibCore {
                 sync_search_index(&conn, article_id).await?;
             }
             conn.execute(
-                "INSERT INTO bib_meta(key, value) VALUES ('search_index_version', '1') \
+                "INSERT INTO bib_meta(key, value) VALUES ('search_index_version', '2') \
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 turso::params![],
             )
@@ -619,7 +620,7 @@ impl BibCore {
             .await?;
         if n > 0 {
             tx.execute(
-                "DELETE FROM search_terms WHERE article_id = ?1",
+                "DELETE FROM searchTerms WHERE articleID = ?1",
                 turso::params![id],
             )
             .await?;
@@ -704,14 +705,14 @@ impl BibCore {
             .join(", ");
         let sql = format!(
             "SELECT a.id, a.title, a.abstract, f.text_content, \
-                    (SELECT GROUP_CONCAT(an.content, ' ') FROM annotations an \
+                    (SELECT GROUP_CONCAT(an.content || ' ' || an.comment || ' ' || an.tags, ' ') FROM annotations an \
                      WHERE an.article_id = a.id), \
                     SUM(CASE WHEN s.field = 'title' THEN 1 ELSE 0 END), \
                     SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END), \
                     SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END), \
                     SUM(CASE WHEN s.field = 'fulltext' THEN 1 ELSE 0 END) \
-             FROM search_terms s \
-             JOIN articles a ON a.id = s.article_id \
+             FROM searchTerms s \
+             JOIN articles a ON a.id = s.articleID \
              LEFT JOIN fulltexts f ON f.article_id = a.id \
              WHERE s.term IN ({term_placeholders}) \
              GROUP BY a.id, a.title, a.abstract, f.text_content \
@@ -920,6 +921,21 @@ impl BibBase {
         .await
     }
 
+    /// Return compact attachment-type flags for many articles in one actor
+    /// round trip.
+    pub async fn attachment_type_summaries(
+        &self,
+        article_ids: &[String],
+    ) -> Result<Vec<crate::zotero_model::AttachmentTypeSummary>> {
+        self.call(
+            |reply| crate::actor::BibCommand::ListAttachmentTypeSummaries {
+                article_ids: article_ids.to_vec(),
+                reply,
+            },
+        )
+        .await
+    }
+
     /// Return one Zotero attachment by its item key.
     pub async fn zotero_attachment_by_key(
         &self,
@@ -1003,68 +1019,139 @@ impl BibBase {
 
 pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Result<()> {
     conn.execute(
-        "DELETE FROM search_terms WHERE article_id = ?1",
+        "DELETE FROM searchTerms WHERE articleID = ?1",
         turso::params![article_id],
     )
     .await?;
 
-    let mut rows = conn
+    let mut article_rows = conn
         .query(
-            "SELECT a.title, a.abstract, f.text_content, \
-                    (SELECT GROUP_CONCAT(an.content, ' ') FROM annotations an \
-                     WHERE an.article_id = a.id) \
-             FROM articles a LEFT JOIN fulltexts f ON f.article_id = a.id \
+            "SELECT a.title, a.abstract, I.key \
+             FROM articles a JOIN articleItems MAP ON MAP.article_id = a.id \
+             JOIN items I ON I.itemID = MAP.itemID \
              WHERE a.id = ?1",
             turso::params![article_id],
         )
         .await?;
-    let Some(row) = rows.next().await? else {
+    let Some(article) = article_rows.next().await? else {
         return Ok(());
     };
+    let title = article.get::<String>(0)?;
+    let abstract_text = opt_string(article.get_value(1)?).unwrap_or_default();
+    let article_key = article.get::<String>(2)?;
+    drop(article_rows);
 
-    let fields = [
-        ("title", row.get::<String>(0)?),
-        (
-            "abstract",
+    insert_search_terms(
+        conn,
+        &article_key,
+        article_id,
+        "title",
+        &tokenize(&title).into_iter().collect::<Vec<_>>(),
+    )
+    .await?;
+    insert_search_terms(
+        conn,
+        &article_key,
+        article_id,
+        "abstract",
+        &tokenize(&abstract_text).into_iter().collect::<Vec<_>>(),
+    )
+    .await?;
+
+    let mut attachment_rows = conn
+        .query(
+            "SELECT I.key, F.textContent \
+             FROM articleItems MAP \
+             JOIN itemAttachments AI ON AI.parentItemID = MAP.itemID \
+             JOIN items I ON I.itemID = AI.itemID \
+             LEFT JOIN fulltextItems F ON F.itemID = AI.itemID \
+             WHERE MAP.article_id = ?1",
+            turso::params![article_id],
+        )
+        .await?;
+    let mut attachment_texts = Vec::new();
+    while let Some(row) = attachment_rows.next().await? {
+        attachment_texts.push((
+            row.get::<String>(0)?,
             opt_string(row.get_value(1)?).unwrap_or_default(),
-        ),
-        (
+        ));
+    }
+    drop(attachment_rows);
+    for (attachment_key, text) in attachment_texts {
+        insert_search_terms(
+            conn,
+            &attachment_key,
+            article_id,
             "fulltext",
-            opt_string(row.get_value(2)?).unwrap_or_default(),
-        ),
-        (
-            "annotation",
-            opt_string(row.get_value(3)?).unwrap_or_default(),
-        ),
-    ];
+            &tokenize(&text).into_iter().collect::<Vec<_>>(),
+        )
+        .await?;
+    }
 
-    for (field, text) in fields {
-        let terms: Vec<_> = tokenize(&text).into_iter().collect();
-        if terms.is_empty() {
-            continue;
-        }
-        let placeholders = (0..terms.len())
-            .map(|row| {
-                let start = row * 3 + 1;
-                format!("(?{start}, ?{}, ?{})", start + 1, start + 2)
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            "INSERT OR IGNORE INTO search_terms(term, article_id, field) VALUES {placeholders}"
-        );
-        let mut params = Vec::with_capacity(terms.len() * 3);
-        for term in terms {
-            params.push(Value::Text(term));
-            params.push(Value::Text(article_id.to_owned()));
-            params.push(Value::Text(field.to_owned()));
-        }
-        conn.execute(sql, turso::params_from_iter(params)).await?;
+    let mut annotation_rows = conn
+        .query(
+            "SELECT COALESCE(PI.key, MI.key), A.content || ' ' || A.comment || ' ' || A.tags \
+             FROM annotations A \
+             LEFT JOIN annotationItems MAP ON MAP.annotation_id = A.id \
+             LEFT JOIN items MI ON MI.itemID = MAP.itemID \
+             LEFT JOIN itemAnnotations IA ON IA.itemID = MAP.itemID \
+             LEFT JOIN itemAttachments PA ON PA.itemID = IA.parentItemID \
+             LEFT JOIN items PI ON PI.itemID = PA.itemID \
+             WHERE A.article_id = ?1",
+            turso::params![article_id],
+        )
+        .await?;
+    let mut annotations = Vec::new();
+    while let Some(row) = annotation_rows.next().await? {
+        annotations.push((row.get::<String>(0)?, row.get::<String>(1)?));
+    }
+    drop(annotation_rows);
+    for (anchor_key, text) in annotations {
+        insert_search_terms(
+            conn,
+            &anchor_key,
+            article_id,
+            "annotation",
+            &tokenize(&text).into_iter().collect::<Vec<_>>(),
+        )
+        .await?;
     }
     Ok(())
 }
 
-fn tokenize(text: &str) -> Vec<String> {
+async fn insert_search_terms(
+    conn: &Connection,
+    anchor_key: &str,
+    article_id: &str,
+    field: &str,
+    terms: &[String],
+) -> Result<()> {
+    if terms.is_empty() {
+        return Ok(());
+    }
+    let placeholders = (0..terms.len())
+        .map(|row| {
+            let start = row * 4 + 1;
+            format!("(?{start}, ?{}, ?{}, ?{})", start + 1, start + 2, start + 3)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "INSERT OR IGNORE INTO searchTerms(term, anchorKey, field, articleID) \
+         VALUES {placeholders}"
+    );
+    let mut params = Vec::with_capacity(terms.len() * 4);
+    for term in terms {
+        params.push(Value::Text(term.clone()));
+        params.push(Value::Text(anchor_key.to_owned()));
+        params.push(Value::Text(field.to_owned()));
+        params.push(Value::Text(article_id.to_owned()));
+    }
+    conn.execute(sql, turso::params_from_iter(params)).await?;
+    Ok(())
+}
+
+pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let mut terms: Vec<String> = Vec::new();
     let mut current = String::new();
     for character in text.chars() {

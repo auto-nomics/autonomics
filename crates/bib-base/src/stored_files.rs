@@ -67,6 +67,16 @@ pub fn figure_object_path(article_id: &str, name: &str) -> String {
     )
 }
 
+/// VFS location of a figure derived from one attachment item.
+pub fn attachment_figure_object_path(article_id: &str, attachment_key: &str, name: &str) -> String {
+    format!(
+        "{VFS_PREFIX}/literature/{}/attachments/{}/images/{}",
+        encode_component(article_id),
+        encode_component(attachment_key),
+        encode_component(name),
+    )
+}
+
 /// Canonical VFS location for an article's **extracted text** — the
 /// markdown / plain-text product of the extraction chain, as opposed to
 /// the uploaded original addressed by [`stored_fulltext`].
@@ -85,6 +95,23 @@ pub fn extracted_object_path(article_id: &str, format: bib_types::TextFormat) ->
     format!(
         "{VFS_PREFIX}/literature/{}/extracted/fulltext.{extension}",
         encode_component(article_id)
+    )
+}
+
+/// Canonical extracted-text object for one attachment item.
+pub fn extracted_attachment_object_path(
+    article_id: &str,
+    attachment_key: &str,
+    format: bib_types::TextFormat,
+) -> String {
+    let extension = match format {
+        bib_types::TextFormat::Markdown => "md",
+        bib_types::TextFormat::Plain => "txt",
+    };
+    format!(
+        "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.{extension}",
+        encode_component(article_id),
+        encode_component(attachment_key),
     )
 }
 
@@ -240,5 +267,21 @@ mod tests {
         // captured by design (dedup keeps it harmless); the bare marker
         // followed by a space yields nothing.
         assert_eq!(refs, ["aaa.jpg", "bbb.png", "ccc.jpg", "ddd.jpg"]);
+    }
+}
+
+/// Semantic Zotero SDT sidecar. Attachment scope prevents preferred-file changes
+/// from reusing another PDF's paragraphs or annotation coordinates.
+pub fn structured_object_path(article_id: &str, attachment_key: Option<&str>) -> String {
+    match attachment_key {
+        Some(key) => format!(
+            "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.sdt.json",
+            encode_component(article_id),
+            encode_component(key),
+        ),
+        None => format!(
+            "{VFS_PREFIX}/literature/{}/extracted/fulltext.sdt.json",
+            encode_component(article_id),
+        ),
     }
 }

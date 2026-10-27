@@ -47,6 +47,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Build release binary
         run: cargo build --release --locked -p autonomics --target "$TARGET"
         env:
@@ -57,7 +60,8 @@ jobs:
           set -euo pipefail
           mkdir dist
           cp "target/$TARGET/release/autonomics" dist/autonomics
-          tar -C dist -czf "dist/autonomics-$TARGET.tar.gz" autonomics
+          node tools/zotero-extractor/package-runtime.mjs dist/zotero-extractor
+          tar -C dist -czf "dist/autonomics-$TARGET.tar.gz" autonomics zotero-extractor
         env:
           TARGET: ${{ matrix.target }}
       - uses: actions/upload-artifact@v4

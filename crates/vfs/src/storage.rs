@@ -396,6 +396,10 @@ impl OpendalFileStorage {
         let path = self.resolve_path(virtual_path);
         let operator = self.resolve(virtual_path);
         let staging_path = staging_key(&path);
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            let directory = format!("{}/", parent.to_string_lossy());
+            operator.create_dir(&directory).await?;
+        }
         let buffer = opendal::Buffer::from(content);
         operator.write(&staging_path, buffer).await?;
 

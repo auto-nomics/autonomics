@@ -328,3 +328,21 @@ export function reportFrontendReady(
   if (!isTauri) return;
   void tauriInvoke("frontend_ready", { stage, detail }).catch(() => {});
 }
+
+// JSON long polling uses the same authenticated bridge in web and Tauri.
+export function watchBibCollections(onChange: () => void): () => void {
+  let stopped = false;
+  let revision: number | undefined;
+  void (async () => {
+    while (!stopped) {
+      try {
+        const response = await gatewayRequest("GET", `/bib/collections/changes${revision === undefined ? "" : `?since=${revision}`}`);
+        if (stopped) return;
+        if (typeof response.revision !== "number") throw new Error("Missing bibliography revision");
+        if (revision !== undefined && revision !== response.revision) onChange();
+        revision = response.revision;
+      } catch { if (!stopped) await new Promise(resolve => setTimeout(resolve, 2000)); }
+    }
+  })();
+  return () => { stopped = true; };
+}

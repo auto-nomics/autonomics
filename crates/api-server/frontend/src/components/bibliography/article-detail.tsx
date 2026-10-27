@@ -52,6 +52,7 @@ import {
   authorLine,
   type ArticleDetail,
   type Collection,
+  collectionPath,
 } from "@/lib/bib-api";
 
 const noteTypes = ["note", "highlight", "comment"];
@@ -175,10 +176,10 @@ export function ArticleDetailPanel({
 
   const article = detail.article;
   const memberships = collections.filter((collection) =>
-    collection.article_ids.includes(article.id),
+    !collection.deleted && collection.article_ids.includes(article.id),
   );
   const availableCollections = collections.filter(
-    (collection) => !collection.article_ids.includes(article.id),
+    (collection) => !!collection.deleted && collection.article_ids.includes(article.id),
   );
   const metadata = [
     { label: "DOI", value: articleIdentifier(article, ["doi"])?.value },
@@ -376,11 +377,11 @@ export function ArticleDetailPanel({
           <div className="flex flex-wrap gap-2">
             {memberships.map((collection) => (
               <Badge key={collection.id} variant="secondary" className="gap-1 py-1 pl-2 pr-1">
-                {collection.name}
+                {collectionPath(collections,collection.id)}
                 <button
                   type="button"
                   className="rounded-sm p-0.5 hover:bg-muted-foreground/15"
-                  aria-label={`Remove from ${collection.name}`}
+                  aria-label={`Remove from ${collectionPath(collections,collection.id)}`}
                   onClick={() => onRemoveFromCollection(collection.id, article.id)}
                 >
                   <X className="size-3" />
@@ -401,7 +402,7 @@ export function ArticleDetailPanel({
                 <SelectContent>
                   {availableCollections.map((collection) => (
                     <SelectItem key={collection.id} value={collection.id}>
-                      {collection.name}
+                      {collectionPath(collections,collection.id)}
                     </SelectItem>
                   ))}
                 </SelectContent>

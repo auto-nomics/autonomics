@@ -43,6 +43,24 @@ pub struct PendingExtraction {
     pub file_format: FileFormat,
 }
 
+/// An attachment-keyed extraction work item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingAttachmentExtraction {
+    pub article_id: String,
+    pub attachment_key: String,
+    pub file_path: String,
+    pub file_format: FileFormat,
+}
+
+/// A completed attachment extraction whose derived VFS object may be missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExtractedAttachmentBackfill {
+    pub article_id: String,
+    pub attachment_key: String,
+    pub text: String,
+    pub format: TextFormat,
+}
+
 impl BibCore {
     /// Insert or update a full-text record.
     ///
@@ -96,9 +114,9 @@ impl BibCore {
             // reflect the true full-text availability.
             result = tx
                 .execute(
-                    "UPDATE collection_articles \
+                    "UPDATE collectionItems \
              SET fetch_status = 'fulltext_available' \
-             WHERE article_id = ?1 AND fetch_status != 'fulltext_available'",
+             WHERE itemID = (SELECT itemID FROM articleItems WHERE article_id=?1) AND fetch_status != 'fulltext_available'",
                     turso::params![ft.article_id.clone()],
                 )
                 .await
@@ -113,6 +131,9 @@ impl BibCore {
             let legacy = crate::zotero_model::LegacyFulltext::from_fulltext(ft);
             result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
         }
+        if result.is_ok() {
+            result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
+        }
 
         if result.is_err() {
             let _ = tx.rollback().await;
@@ -121,6 +142,74 @@ impl BibCore {
 
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Load full-text state by its Zotero attachment item key.
+    pub async fn get_attachment_fulltext(
+        &self,
+        article_id: &str,
+        attachment_key: &str,
+    ) -> Result<Option<FullText>> {
+        let conn = self.conn();
+        crate::zotero_model::attachment_fulltext(&conn, article_id, attachment_key).await
+    }
+
+    /// Reset one attachment's extraction state.
+    pub async fn restart_attachment_extraction(
+        &self,
+        attachment_key: &str,
+    ) -> Result<Option<String>> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result =
+            crate::zotero_model::restart_attachment_extraction(&tx, attachment_key).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    /// Atomically claim extraction for one attachment key.
+    pub async fn mark_attachment_extraction_running(&self, attachment_key: &str) -> Result<bool> {
+        let conn = self.write_conn();
+        crate::zotero_model::mark_attachment_extraction_running(&conn, attachment_key).await
+    }
+
+    /// Record extraction success for one attachment key.
+    pub async fn record_attachment_extraction_success(
+        &self,
+        attachment_key: &str,
+        text: &str,
+        format: TextFormat,
+        extracted_by: &str,
+        extracted_path: &str,
+    ) -> Result<Option<String>> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result = crate::zotero_model::record_attachment_extraction_success(
+            &tx,
+            attachment_key,
+            text,
+            format,
+            extracted_by,
+            extracted_path,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    /// Record extraction failure for one attachment key.
+    pub async fn record_attachment_extraction_failure(
+        &self,
+        attachment_key: &str,
+        error: &str,
+    ) -> Result<Option<String>> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let result =
+            crate::zotero_model::record_attachment_extraction_failure(&tx, attachment_key, error)
+                .await?;
+        tx.commit().await?;
+        Ok(result)
     }
 
     /// Insert or update a full-text record whose text is not extracted yet.
@@ -179,6 +268,9 @@ impl BibCore {
             legacy.extract_error = None;
             result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
         }
+        if result.is_ok() {
+            result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
+        }
 
         if result.is_err() {
             let _ = tx.rollback().await;
@@ -194,6 +286,14 @@ impl BibCore {
     ///
     /// Returns `false` when no full-text row exists for `article_id`.
     pub async fn restart_extraction(&self, article_id: &str) -> Result<bool> {
+        if let Some(attachment) =
+            crate::zotero_model::attachment_for_article(&self.conn(), article_id).await?
+        {
+            return Ok(self
+                .restart_attachment_extraction(&attachment.key)
+                .await?
+                .is_some());
+        }
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let n = tx
@@ -213,6 +313,7 @@ impl BibCore {
         if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await? {
             crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await?;
         }
+        crate::bib_base::sync_search_index(&tx, article_id).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -223,6 +324,13 @@ impl BibCore {
     /// re-extract, CLI backfill, startup sweep) proceeds per row; the rest
     /// see `false` and skip. Returns whether this caller claimed the row.
     pub async fn mark_extraction_running(&self, article_id: &str) -> Result<bool> {
+        if let Some(attachment) =
+            crate::zotero_model::attachment_for_article(&self.conn(), article_id).await?
+        {
+            return self
+                .mark_attachment_extraction_running(&attachment.key)
+                .await;
+        }
         let conn = self.write_conn();
         let n = conn
             .execute(
@@ -244,6 +352,25 @@ impl BibCore {
         format: TextFormat,
         extracted_by: &str,
     ) -> Result<()> {
+        if let Some(attachment) =
+            crate::zotero_model::attachment_for_article(&self.conn(), article_id).await?
+        {
+            let path = crate::stored_files::extracted_attachment_object_path(
+                article_id,
+                &attachment.key,
+                format,
+            );
+            return self
+                .record_attachment_extraction_success(
+                    &attachment.key,
+                    text,
+                    format,
+                    extracted_by,
+                    &path,
+                )
+                .await
+                .map(|_| ());
+        }
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let mut result: Result<()> = tx
@@ -263,9 +390,9 @@ impl BibCore {
             // reflect that real full text now exists.
             result = tx
                 .execute(
-                    "UPDATE collection_articles \
+                    "UPDATE collectionItems \
              SET fetch_status = 'fulltext_available' \
-             WHERE article_id = ?1 AND fetch_status != 'fulltext_available'",
+             WHERE itemID = (SELECT itemID FROM articleItems WHERE article_id=?1) AND fetch_status != 'fulltext_available'",
                     turso::params![article_id],
                 )
                 .await
@@ -281,6 +408,9 @@ impl BibCore {
             {
                 result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
             }
+        }
+        if result.is_ok() {
+            result = crate::bib_base::sync_search_index(&tx, article_id).await;
         }
 
         if result.is_err() {
@@ -298,6 +428,14 @@ impl BibCore {
     /// restarts clear it before re-running), so a failure never destroys
     /// the last good extraction of a *different* run's row.
     pub async fn record_extraction_failure(&self, article_id: &str, error: &str) -> Result<()> {
+        if let Some(attachment) =
+            crate::zotero_model::attachment_for_article(&self.conn(), article_id).await?
+        {
+            return self
+                .record_attachment_extraction_failure(&attachment.key, error)
+                .await
+                .map(|_| ());
+        }
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         tx.execute(
@@ -309,6 +447,7 @@ impl BibCore {
         if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await? {
             crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await?;
         }
+        crate::bib_base::sync_search_index(&tx, article_id).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -319,9 +458,24 @@ impl BibCore {
     /// process — no live worker would leave them — so resetting them all
     /// is safe at startup, before any new task is spawned.
     pub async fn reset_stale_running(&self) -> Result<u64> {
+        let attachment_count = self.reset_stale_attachment_running().await?;
+        let conn = self.write_conn();
+        let legacy_count = conn
+            .execute(
+                "UPDATE fulltexts SET extract_status = 'pending' WHERE extract_status = 'running'",
+                turso::params![],
+            )
+            .await
+            .map_err(crate::error::Error::from)?;
+        Ok(attachment_count.max(legacy_count))
+    }
+
+    /// Return attachment-keyed `running` rows to `pending`.
+    pub async fn reset_stale_attachment_running(&self) -> Result<u64> {
         let conn = self.write_conn();
         conn.execute(
-            "UPDATE fulltexts SET extract_status = 'pending' WHERE extract_status = 'running'",
+            "UPDATE fulltextItems SET extractionStatus = 'pending' \
+             WHERE extractionStatus = 'running'",
             turso::params![],
         )
         .await
@@ -353,27 +507,70 @@ impl BibCore {
         Ok(pending)
     }
 
+    /// List attachment items whose keyed extraction state is unfinished.
+    pub async fn list_attachments_needing_extraction(
+        &self,
+    ) -> Result<Vec<PendingAttachmentExtraction>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT MAP.article_id, I.key, AI.vfsPath, AI.contentType \
+                 FROM articleItems MAP \
+                 JOIN itemAttachments AI ON AI.parentItemID = MAP.itemID \
+                 JOIN items I ON I.itemID = AI.itemID \
+                 LEFT JOIN fulltextItems F ON F.itemID = AI.itemID \
+                 WHERE COALESCE(F.extractionStatus, 'pending') IN ('pending', 'failed') \
+                   AND AI.vfsPath LIKE 'vfs://%'",
+                turso::params![],
+            )
+            .await?;
+        let mut pending = Vec::new();
+        while let Some(row) = rows.next().await? {
+            pending.push(PendingAttachmentExtraction {
+                article_id: row.get::<String>(0)?,
+                attachment_key: row.get::<String>(1)?,
+                file_path: row.get::<String>(2)?,
+                file_format: match row.get::<String>(3)?.as_str() {
+                    "application/pdf" => FileFormat::Pdf,
+                    "text/html" => FileFormat::Html,
+                    _ => FileFormat::Txt,
+                },
+            });
+        }
+        Ok(pending)
+    }
+
     /// List `done` rows that carry extracted text, for the startup
     /// backfill that materializes their canonical `extracted/` VFS
     /// objects. Returns `(article_id, text, format)` — rows with NULL
     /// text or an unparseable format are skipped (nothing to write).
-    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<(String, String, TextFormat)>> {
+    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<ExtractedAttachmentBackfill>> {
         let conn = self.conn();
         let mut rows = conn
             .query(
-                "SELECT article_id, text_content, text_format FROM fulltexts \
-                 WHERE extract_status = 'done' AND text_content IS NOT NULL",
+                "SELECT MAP.article_id, I.key, L.text_content, L.text_format \
+                 FROM fulltexts L \
+                 JOIN articleItems MAP ON MAP.article_id = L.article_id \
+                 JOIN itemAttachments AI ON AI.itemID = MAP.attachmentItemID \
+                 JOIN items I ON I.itemID = AI.itemID \
+                 JOIN fulltextItems F ON F.itemID = AI.itemID \
+                 WHERE L.extract_status = 'done' AND L.text_content IS NOT NULL",
                 turso::params![],
             )
             .await?;
         let mut done = Vec::new();
         while let Some(row) = rows.next().await? {
-            let format = match opt_string(row.get_value(2)?) {
+            let format = match opt_string(row.get_value(3)?) {
                 Some(raw) => TextFormat::from_str(&raw),
                 None => continue,
             };
-            if let Some(text) = opt_string(row.get_value(1)?) {
-                done.push((row.get::<String>(0)?, text, format));
+            if let Some(text) = opt_string(row.get_value(2)?) {
+                done.push(ExtractedAttachmentBackfill {
+                    article_id: row.get::<String>(0)?,
+                    attachment_key: row.get::<String>(1)?,
+                    text,
+                    format,
+                });
             }
         }
         Ok(done)
@@ -396,9 +593,14 @@ impl BibCore {
             Some(row) => row,
             None => return Ok(None),
         };
+        drop(rows);
+        let attachment_key = crate::zotero_model::attachment_for_article(&conn, article_id)
+            .await?
+            .map(|attachment| attachment.key);
 
         Ok(Some(FullText {
             article_id: row.get::<String>(0)?,
+            attachment_key,
             file_path: row.get::<String>(1)?,
             file_format: parse_file_format(&row.get::<String>(2)?),
             text_content: opt_string(row.get_value(3)?),
@@ -444,6 +646,10 @@ impl BibCore {
             Some(row) => row,
             None => return Ok(None),
         };
+        drop(rows);
+        let attachment_key = crate::zotero_model::attachment_for_article(&conn, article_id)
+            .await?
+            .map(|attachment| attachment.key);
         let total_chars = row.get::<i64>(12)? as usize;
         let page_text = opt_string(row.get_value(13)?);
         let returned_chars = page_text.as_ref().map_or(0, |text| text.chars().count());
@@ -452,6 +658,7 @@ impl BibCore {
 
         let fulltext = FullText {
             article_id: row.get::<String>(0)?,
+            attachment_key,
             file_path: row.get::<String>(1)?,
             file_format: parse_file_format(&row.get::<String>(2)?),
             text_content: page_text,
@@ -490,9 +697,9 @@ impl BibCore {
         )
         .await?;
         tx.execute(
-            "UPDATE collection_articles \
+            "UPDATE collectionItems \
              SET fetch_status = 'metadata_only' \
-             WHERE article_id = ?1 AND fetch_status = 'fulltext_available'",
+             WHERE itemID = (SELECT itemID FROM articleItems WHERE article_id=?1) AND fetch_status = 'fulltext_available'",
             turso::params![article_id],
         )
         .await?;
@@ -523,6 +730,72 @@ impl BibBase {
     pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
         self.call(|reply| BibCommand::UpsertFulltext {
             ft: ft.clone(),
+            reply,
+        })
+        .await
+    }
+
+    /// Load full-text state by Zotero attachment key.
+    pub async fn get_attachment_fulltext(
+        &self,
+        article_id: &str,
+        attachment_key: &str,
+    ) -> Result<Option<FullText>> {
+        self.call(|reply| BibCommand::GetAttachmentFulltext {
+            article_id: article_id.to_owned(),
+            attachment_key: attachment_key.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Reset and claim extraction by Zotero attachment key.
+    pub async fn restart_attachment_extraction(
+        &self,
+        attachment_key: &str,
+    ) -> Result<Option<String>> {
+        self.call(|reply| BibCommand::RestartAttachmentExtraction {
+            attachment_key: attachment_key.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn mark_attachment_extraction_running(&self, attachment_key: &str) -> Result<bool> {
+        self.call(|reply| BibCommand::MarkAttachmentExtractionRunning {
+            attachment_key: attachment_key.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn record_attachment_extraction_success(
+        &self,
+        attachment_key: &str,
+        text: &str,
+        format: TextFormat,
+        extracted_by: &str,
+        extracted_path: &str,
+    ) -> Result<Option<String>> {
+        self.call(|reply| BibCommand::RecordAttachmentExtractionSuccess {
+            attachment_key: attachment_key.to_owned(),
+            text: text.to_owned(),
+            format,
+            extracted_by: extracted_by.to_owned(),
+            extracted_path: extracted_path.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn record_attachment_extraction_failure(
+        &self,
+        attachment_key: &str,
+        error: &str,
+    ) -> Result<Option<String>> {
+        self.call(|reply| BibCommand::RecordAttachmentExtractionFailure {
+            attachment_key: attachment_key.to_owned(),
+            error: error.to_owned(),
             reply,
         })
         .await
@@ -596,8 +869,16 @@ impl BibBase {
             .await
     }
 
+    /// List unfinished attachment-keyed extractions.
+    pub async fn list_attachments_needing_extraction(
+        &self,
+    ) -> Result<Vec<PendingAttachmentExtraction>> {
+        self.call(|reply| BibCommand::ListAttachmentsNeedingExtraction { reply })
+            .await
+    }
+
     /// List `done` rows carrying extracted text, for the startup backfill.
-    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<(String, String, TextFormat)>> {
+    pub async fn list_extracted_for_backfill(&self) -> Result<Vec<ExtractedAttachmentBackfill>> {
         self.call(|reply| BibCommand::ListExtractedForBackfill { reply })
             .await
     }
@@ -609,6 +890,12 @@ impl BibBase {
             reply,
         })
         .await
+    }
+
+    /// Return attachment-keyed `running` rows to `pending`.
+    pub async fn reset_stale_attachment_running(&self) -> Result<u64> {
+        self.call(|reply| BibCommand::ResetStaleAttachmentRunning { reply })
+            .await
     }
 
     /// Read one bounded character page of a full text.
@@ -692,6 +979,7 @@ mod tests {
     fn pending_upload(article_id: &str) -> FullText {
         FullText {
             article_id: article_id.to_owned(),
+            attachment_key: None,
             file_path: format!("vfs://literature/{article_id}/deadbeef-paper.pdf"),
             file_format: FileFormat::Pdf,
             text_content: None,

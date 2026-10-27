@@ -20,8 +20,8 @@ pub mod types;
 pub use evidence::{EvidenceRecord, EvidenceSet};
 pub use query::{BoolOp, StructuredSearch, YearRange};
 pub use types::{
-    AddedBy, Annotation, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource,
-    Author, Collection, CollectionArticle, CollectionStatus, ExportFormat, ExtractStatus,
-    FetchStatus, FileFormat, FullText, FullTextSource, IdKind, Identifier, LibraryEntry, Reference,
-    SearchHit, TextFormat,
+    AddedBy, Annotation, AnnotationKind, AnnotationRect, AnnotationTextRange, AnnotationUpdate,
+    Article, ArticleRole, ArticleSource, Author, Collection, CollectionArticle, CollectionStatus,
+    ExportFormat, ExtractStatus, FetchStatus, FileFormat, FullText, FullTextSource, IdKind,
+    Identifier, LibraryEntry, Reference, SearchHit, TextFormat,
 };

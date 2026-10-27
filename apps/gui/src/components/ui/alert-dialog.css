@@ -1,0 +1,71 @@
+.app-alert-overlay {
+  position: fixed;
+  z-index: 230;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 45%);
+  animation: app-alert-fade .12s ease-out;
+}
+.app-alert-overlay[hidden] { display: none; }
+.app-alert-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  width: 100%;
+  max-width: 384px;
+  padding: 16px;
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  border-radius: calc(var(--radius, 0.625rem) * 1.4);
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 10px 38px -10px rgb(0 0 0 / 35%), 0 10px 20px -15px rgb(0 0 0 / 30%);
+  font: 400 14px/1.5 system-ui, sans-serif;
+  animation: app-alert-pop .12s ease-out;
+}
+.app-alert-icon { display: flex; flex: none; color: var(--destructive); }
+.app-alert-icon svg { width: 20px; height: 20px; }
+.app-alert-title { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.4; }
+.app-alert-description { margin: 0; color: var(--muted-foreground); font-size: 13px; overflow-wrap: anywhere; }
+.app-alert-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 10px -16px -16px;
+  padding: 12px 16px;
+  border-top: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  background: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+.app-alert-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius, 0.625rem) * 0.8);
+  font: 500 13px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+.app-alert-button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.app-alert-button[data-variant="outline"] { border-color: var(--input); background: var(--background); color: var(--foreground); }
+.app-alert-button[data-variant="outline"]:hover { background: var(--accent); color: var(--accent-foreground); }
+.app-alert-button[data-variant="primary"] { background: var(--primary); color: var(--primary-foreground); }
+.app-alert-button[data-variant="primary"]:hover { background: color-mix(in oklab, var(--primary) 90%, transparent); }
+.app-alert-button[data-variant="destructive"] { background: var(--destructive); color: var(--destructive-foreground); }
+.app-alert-button[data-variant="destructive"]:hover { background: color-mix(in oklab, var(--destructive) 90%, black); }
+@keyframes app-alert-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes app-alert-pop {
+  from { opacity: 0; transform: translateY(6px) scale(.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-alert-overlay, .app-alert-dialog { animation: none; }
+}
