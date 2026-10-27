@@ -9,7 +9,7 @@ use serde_json::json;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
-use super::auth::bearer_auth;
+use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
@@ -161,38 +161,52 @@ pub fn api_router(state: GatewayState) -> Router {
 /// `/api/v1`, the bib module under `/api/v1/bib`, the bib web frontend's
 /// static routes, and `/api/health`.
 ///
-/// Auth policy: the gateway API is always bearer-guarded (by the env
-/// token when provided, else the generated token file). The bib module
-/// keeps its documented contract — open on loopback unless
-/// `AUTONOMICS_HTTP_API_TOKEN` is set, in which case that env token also
-/// guards it. Swagger UI and its OpenAPI document are metadata-only and
-/// intentionally browser-loadable; the operations they describe still
-/// require the gateway bearer token.
+/// Auth policy: the gateway API is always guarded — by the bearer
+/// token (the env token when provided, else the generated token file)
+/// or by a browser session cookie. The bib module keeps its documented
+/// contract — open on loopback unless `AUTONOMICS_HTTP_API_TOKEN` is
+/// set, in which case that env token also guards it. Swagger UI and its
+/// OpenAPI document are metadata-only and intentionally
+/// browser-loadable; the operations they describe still require a
+/// credential.
+///
+/// The session endpoints live at `/api/session`, *outside* the guarded
+/// `/api/v1` nest: `POST /api/session` is how a browser exchanges the
+/// bearer token for a session cookie, so it cannot sit behind the
+/// guard it exists to satisfy.
 pub fn router_with_bib(
     state: GatewayState,
     gateway_token: String,
     bib_shared: bib_base::BibShared,
     env_token: Option<String>,
 ) -> Router {
+    let auth = Arc::new(AuthContext::new(gateway_token));
     let api = api_router(state).layer(axum::middleware::from_fn_with_state(
-        Arc::new(gateway_token.clone()),
-        bearer_auth,
+        auth.clone(),
+        bearer_or_session,
     ));
     let docs =
         SwaggerUi::new("/swagger-ui").url("/api/v1/api-docs/openapi.json", ApiDoc::openapi());
     let bib = api_server::bib::router(bib_shared);
     let bib = match env_token.filter(|t| !t.trim().is_empty()) {
-        Some(token) => bib.layer(axum::middleware::from_fn_with_state(
-            Arc::new(token),
-            bearer_auth,
+        Some(_) => bib.layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            bearer_or_session,
         )),
         None => bib,
     };
+    let session: Router = Router::new()
+        .route(
+            "/api/session",
+            post(auth::login).get(auth::session_status).delete(auth::logout),
+        )
+        .with_state(auth);
     Router::new()
         .merge(docs)
+        .merge(session)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1", api)
-        .merge(gui::router(gateway_token.clone()))
+        .merge(gui::router())
         .route("/api/health", get(health))
         .route("/api/v1", get(lifecycle::api_index))
 }

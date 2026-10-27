@@ -1,7 +1,8 @@
 export type GatewayProbe = {
   running: boolean;
   addr: string;
-  token_found: boolean;
+  /** Whether the caller holds a usable credential. */
+  authenticated: boolean;
 };
 
 import type { GatewayFrame } from "./types";
@@ -15,17 +16,35 @@ export type GatewayStatusHandler = (
 const isTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const WEB_API_PREFIX = "/api/v1";
+/** Session endpoints live outside the `/api/v1` namespace. */
+const WEB_SESSION_PATH = "/api/session";
 let webEventsStarted = false;
 
 declare global {
   interface Window {
-    __AUTONOMICS_GATEWAY_TOKEN__?: string;
     __TAURI_INTERNALS__?: unknown;
   }
 }
 
-function gatewayToken(): string | undefined {
-  return window.__AUTONOMICS_GATEWAY_TOKEN__;
+/**
+ * An HTTP failure that carries the response status.
+ *
+ * The SPA needs the status to tell "not authenticated" (401 — show the
+ * login form) apart from a genuine error.
+ */
+export class GatewayHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "GatewayHttpError";
+    this.status = status;
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  if (error instanceof GatewayHttpError) return error.status === 404;
+  return String(error).includes("404");
 }
 
 function normalizeApiPath(path: string): string {
@@ -52,11 +71,6 @@ async function tauriInvoke<T>(command: string, args?: unknown): Promise<T> {
   return core.invoke<T>(command, args as any);
 }
 
-function authHeaders(): HeadersInit {
-  const token = gatewayToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 export async function gatewayRequest(
   method: string,
   path: string,
@@ -71,18 +85,21 @@ export async function gatewayRequest(
     return result.data;
   }
 
+  // The session cookie rides along automatically; the bearer token
+  // never reaches the browser.
   const response = await fetch(webApiPath(path), {
     method,
-    headers: {
-      ...authHeaders(),
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
+    credentials: "same-origin",
+    headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
   const payload = text ? JSON.parse(text) : null;
   if (!response.ok) {
-    throw new Error(payload?.error ?? `${response.status} ${response.statusText}`);
+    throw new GatewayHttpError(
+      response.status,
+      payload?.error ?? `${response.status} ${response.statusText}`,
+    );
   }
   return payload;
 }
@@ -91,17 +108,76 @@ export async function gatewayRequestOptional(path: string): Promise<any | null> 
   try {
     return await gatewayRequest("GET", path);
   } catch (error) {
-    if (String(error).includes("404")) return null;
+    if (isNotFound(error)) return null;
     throw error;
   }
 }
 
+/**
+ * Exchange the gateway bearer token for a browser session cookie.
+ *
+ * The token is posted once and never stored in JavaScript: the server
+ * answers with an `HttpOnly` cookie the browser sends on its own.
+ */
+export async function loginGateway(token: string): Promise<void> {
+  if (isTauri) {
+    // The desktop app reads the token from the local state directory
+    // and attaches it in Rust — there is nothing to exchange.
+    return;
+  }
+  const response = await fetch(WEB_SESSION_PATH, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new GatewayHttpError(
+      response.status,
+      payload?.error ?? `登录失败 (${response.status})`,
+    );
+  }
+}
+
+/** Drop the browser session. */
+export async function logoutGateway(): Promise<void> {
+  if (isTauri) return;
+  await fetch(WEB_SESSION_PATH, {
+    method: "DELETE",
+    credentials: "same-origin",
+  }).catch(() => {});
+}
+
+/** Whether the browser holds a live session cookie. */
+export async function sessionAuthenticated(): Promise<boolean> {
+  if (isTauri) {
+    const view = await tauriInvoke<{ token_found: boolean }>("probe");
+    return Boolean(view.token_found);
+  }
+  const response = await fetch(WEB_SESSION_PATH, {
+    credentials: "same-origin",
+  }).catch(() => null);
+  return Boolean(response?.ok);
+}
+
 export async function probeGateway(): Promise<GatewayProbe> {
-  if (isTauri) return tauriInvoke("probe");
+  if (isTauri) {
+    const view = await tauriInvoke<{
+      running: boolean;
+      addr: string;
+      token_found: boolean;
+    }>("probe");
+    return {
+      running: view.running,
+      addr: view.addr,
+      authenticated: Boolean(view.token_found),
+    };
+  }
   return {
     running: true,
     addr: window.location.host,
-    token_found: Boolean(gatewayToken()),
+    authenticated: await sessionAuthenticated(),
   };
 }
 
@@ -146,8 +222,8 @@ async function connectEvents(
   for (;;) {
     try {
       const response = await fetch(webApiPath("/events"), {
+        credentials: "same-origin",
         headers: {
-          ...authHeaders(),
           "Last-Event-ID": String(sequence),
           Accept: "text/event-stream",
         },
@@ -256,7 +332,7 @@ export async function uploadBibFulltext(
   form.append("file", file, file.name);
   const response = await fetch(webApiPath(path), {
     method: "POST",
-    headers: authHeaders(),
+    credentials: "same-origin",
     body: form,
   });
   const text = await response.text();
@@ -283,7 +359,7 @@ export async function fetchBibFulltextRaw(
 
   const response = await fetch(
     webApiPath(`/bib/articles/${encodeURIComponent(articleId)}/fulltext/raw`),
-    { headers: authHeaders() },
+    { credentials: "same-origin" },
   );
   if (!response.ok) {
     const payload = await response.json().catch(() => null);

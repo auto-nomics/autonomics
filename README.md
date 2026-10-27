@@ -332,7 +332,7 @@ By default, state is stored under `~/.autonomics`, downloaded files under `~/.au
 
 ### Use the local HTTP API
 
-The gateway daemon serves the bibliography frontend, a Swagger UI, and the `/api/v1` API on `127.0.0.1:8765` by default. Override the address with `AUTONOMICS_HTTP_API_ADDR`. If the server is exposed beyond loopback, set `AUTONOMICS_HTTP_API_TOKEN` to require bearer authentication for API routes.
+The gateway daemon serves the bibliography frontend, a Swagger UI, and the `/api/v1` API on `127.0.0.1:8765` by default. Override the address with `AUTONOMICS_HTTP_API_ADDR`. The `/api/v1` routes require a credential: either the bearer token (read from `~/.autonomics/gateway.token`, or `AUTONOMICS_HTTP_API_TOKEN` when set) or a browser session cookie. A browser gets the cookie by posting the token once to `/api/session` — the token itself is never embedded in the page, in a JS global, or in the console. If the server is exposed beyond loopback, set `AUTONOMICS_HTTP_API_TOKEN` to a fixed value so the token survives daemon restarts.
 
 ```bash
 curl http://127.0.0.1:8765/api/health

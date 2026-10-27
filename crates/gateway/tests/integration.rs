@@ -217,6 +217,92 @@ async fn bearer_token_gates_the_api() {
     gateway_daemon.stop().await;
 }
 
+/// The browser frontend must never carry the daemon's bearer token:
+/// no HTML bootstrap, no JS global, no console output. The browser
+/// authenticates with an `HttpOnly` session cookie instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn browser_never_sees_the_bearer_token() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+
+    // The served page carries no credential at all.
+    let page = http.get(&base).send().await.unwrap().text().await.unwrap();
+    assert!(!page.contains(token), "the page leaked the bearer token");
+    assert!(
+        !page.contains("__AUTONOMICS_GATEWAY_TOKEN__"),
+        "the page still bootstraps a token global"
+    );
+
+    // The login endpoint does not echo the token either.
+    let body = serde_json::json!({ "token": token });
+    let response = http
+        .post(format!("{base}/api/session"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let set_cookie = response
+        .headers()
+        .get(reqwest::header::SET_COOKIE)
+        .expect("session cookie")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    assert!(set_cookie.contains("SameSite=Strict"), "{set_cookie}");
+    let text = response.text().await.unwrap();
+    assert!(!text.contains(token), "the login response echoed the token");
+
+    // The cookie alone opens the API.
+    let cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .to_owned();
+    let authorized = http
+        .get(format!("{base}/api/v1/state"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), 200);
+
+    // Without it: 401 — the cookie is the only browser credential.
+    let anonymous = http
+        .get(format!("{base}/api/v1/state"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), 401);
+
+    gateway_daemon.stop().await;
+}
+
+/// A wrong token must not mint a session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_login_rejects_a_wrong_token() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+
+    let response = http
+        .post(format!("{base}/api/session"))
+        .json(&serde_json::json!({ "token": "not-the-token" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert!(
+        response.headers().get(reqwest::header::SET_COOKIE).is_none(),
+        "a rejected login must not set a cookie"
+    );
+
+    gateway_daemon.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn swagger_docs_expose_the_gateway_api() {
     let gateway_daemon = start_mock_gateway("x").await;

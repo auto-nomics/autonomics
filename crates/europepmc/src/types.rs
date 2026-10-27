@@ -257,6 +257,9 @@ pub struct RequestEcho {
 /// on response shape.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SearchResult {
+    /// PMC accession supplied on MED search hits as well as PMC records.
+    #[serde(default)]
+    pub pmcid: Option<String>,
     /// Article identifier within the source (e.g. PubMed ID).
     #[serde(default)]
     pub id: String,

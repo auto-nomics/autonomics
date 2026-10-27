@@ -308,7 +308,7 @@ cargo run -p autonomics -- run "总结最近关于 BMI 的 GWAS meta 分析。" 
 
 ### 使用本地 HTTP API
 
-gateway 守护进程默认在 `127.0.0.1:8765` 上提供文献前端、Swagger UI 与 `/api/v1` API。可用 `AUTONOMICS_HTTP_API_ADDR` 覆盖地址。若服务暴露到回环之外，请设置 `AUTONOMICS_HTTP_API_TOKEN` 以对 API 路由启用 Bearer 认证。
+gateway 守护进程默认在 `127.0.0.1:8765` 上提供文献前端、Swagger UI 与 `/api/v1` API。可用 `AUTONOMICS_HTTP_API_ADDR` 覆盖地址。`/api/v1` 路由需要凭据：Bearer 令牌（来自 `~/.autonomics/gateway.token`，若设置了 `AUTONOMICS_HTTP_API_TOKEN` 则以它为准）或浏览器会话 Cookie。浏览器只需把令牌 POST 一次到 `/api/session` 换取 Cookie——令牌本身不会出现在页面、JS 全局变量或 console 里。若服务暴露到回环之外，请设置一个固定的 `AUTONOMICS_HTTP_API_TOKEN`，这样守护进程重启后令牌不变。
 
 ```bash
 curl http://127.0.0.1:8765/api/health

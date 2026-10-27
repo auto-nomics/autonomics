@@ -61,7 +61,9 @@ pub fn result_to_article(result: &SearchResult) -> Article {
     }
 
     // PMC ID: if source is PMC, the id is a PMC identifier.
-    if result.source == "PMC" && !result.id.is_empty() {
+    if let Some(id) = result.pmcid.as_deref().filter(|s| !s.is_empty()) {
+        identifiers.push(Identifier::new(IdKind::Pmc, id));
+    } else if result.source == "PMC" && !result.id.is_empty() {
         identifiers.push(Identifier::new(IdKind::Pmc, &result.id));
     }
 

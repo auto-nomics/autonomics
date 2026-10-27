@@ -30,6 +30,8 @@ pub mod library_tools;
 pub mod mineru;
 pub mod nodes;
 pub mod oa_fetch;
+pub mod pmc_pdf;
+pub mod managed_fulltext;
 pub mod query;
 pub mod shared;
 pub mod stored_files;
@@ -52,7 +54,7 @@ pub use library_tools::bib_all_registrations;
 pub use mineru::{
     DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, MineruZipOutput, markdown_from_zip,
 };
-pub use oa_fetch::{try_fetch_fulltext, try_fetch_fulltext_with};
+pub use oa_fetch::fetch_fulltext_stored;
 pub use query::{
     ArxivSource, BiorxivSource, CrossrefSource, LiteratureGateway, LiteratureSource,
     OpenAlexSource, PubmedSource, S2Source, SourceBatch,

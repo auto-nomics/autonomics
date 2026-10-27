@@ -30,7 +30,7 @@ use dag_core::value::{FileFingerprint, FileRef, PortType};
 use crate::nodes::{read_file_bytes, shared_bib};
 use crate::oa_fetch::fetch_fulltext_stored;
 use crate::shared::BibShared;
-use crate::stored_files::{stored_extracted_text, vfs_virtual_path};
+use crate::stored_files::vfs_virtual_path;
 
 /// Spec for [`LiteratureFulltextNode`].
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
@@ -178,19 +178,13 @@ impl LiteratureFulltextNode {
             return Ok(None);
         };
         let fetched = match shared.file_storage.as_ref() {
-            Some(storage) => fetch_fulltext_stored(&shared.europe_pmc, storage, &article).await,
+            Some(_) => fetch_fulltext_stored(shared, &article).await,
             // No storage handle: fetching would produce a synthetic
             // pointer, which this node exists to eliminate.
             None => return Ok(None),
         };
         match fetched {
-            Some(mut fulltext) => {
-                fulltext.article_id = article_id;
-                bib.upsert_fulltext(&fulltext)
-                    .await
-                    .map_err(|error| format!("storing full text for `{}`: {error}", describe()))?;
-                Ok(Some(fulltext))
-            }
+            Some(fulltext) => Ok(Some(fulltext)),
             None => Ok(None),
         }
     }
@@ -202,43 +196,15 @@ impl LiteratureFulltextNode {
         &self,
         bib: &Arc<crate::bib_base::BibBase>,
         storage: &Arc<vfs::OpendalFileStorage>,
-        mut fulltext: FullText,
+        fulltext: FullText,
     ) -> Result<FullText, DagError> {
-        let text = fulltext.text_content.clone().unwrap_or_default();
-        if text.is_empty() {
-            return Err(DagError::Schedule(format!(
-                "full text for `{}` is a synthetic pointer with no inline text",
-                fulltext.article_id
-            )));
-        }
-        let stored = stored_extracted_text(
-            &fulltext.article_id,
-            bib_types::TextFormat::Plain,
-            text.as_bytes(),
-        );
-        let virtual_path = vfs_virtual_path(&stored.path)
-            .ok_or_else(|| DagError::Schedule(format!("invalid stored path `{}`", stored.path)))?;
-        let byte_len = text.len();
-        storage
-            .write_bytes(&virtual_path, text.into_bytes())
+        let shared = self.shared()?;
+        let mut shared = shared.as_ref().clone();
+        shared.bib = bib.clone();
+        shared.file_storage = Some(storage.clone());
+        crate::managed_fulltext::materialize_legacy(&shared, fulltext)
             .await
-            .map_err(|error| {
-                DagError::Schedule(format!(
-                    "cannot materialize full text for `{}`: {error}",
-                    fulltext.article_id
-                ))
-            })?;
-        fulltext.file_path = stored.path;
-        fulltext.file_format = FileFormat::Txt;
-        fulltext.file_hash = Some(stored.file_hash.clone());
-        fulltext.file_size = Some(byte_len as i64);
-        bib.upsert_fulltext(&fulltext).await.map_err(|error| {
-            DagError::Schedule(format!(
-                "cannot record materialized full text for `{}`: {error}",
-                fulltext.article_id
-            ))
-        })?;
-        Ok(fulltext)
+            .map_err(|e| DagError::Schedule(e.to_string()))
     }
 }
 

@@ -738,8 +738,23 @@ pub(crate) async fn create_attachment(
     input: &NewAttachment,
     make_preferred: bool,
 ) -> Result<StoredAttachment> {
+    create_attachment_with_key(conn, input, make_preferred, None).await
+}
+
+pub(crate) async fn create_attachment_with_key(
+    conn: &Connection,
+    input: &NewAttachment,
+    make_preferred: bool,
+    requested_key: Option<&str>,
+) -> Result<StoredAttachment> {
     let parent_item_id = ensure_article_item(conn, &input.article_id).await?;
-    let attachment_item_id = insert_item(conn, ITEM_TYPE_ATTACHMENT).await?;
+    let attachment_item_id = if let Some(key) = requested_key {
+        let now = Utc::now().to_rfc3339();
+        conn.execute("INSERT INTO items(itemTypeID,dateAdded,dateModified,clientDateModified,libraryID,key) VALUES (?1,?2,?2,?2,1,?3)",turso::params![ITEM_TYPE_ATTACHMENT,now,key]).await?;
+        last_insert_id(conn).await?
+    } else {
+        insert_item(conn, ITEM_TYPE_ATTACHMENT).await?
+    };
     let key = item_key(conn, attachment_item_id).await?;
     let title = input
         .title
@@ -1092,13 +1107,22 @@ pub(crate) async fn attachment_fulltext(
     let Some(state) = state else {
         return Ok(None);
     };
+    let source = if attachment.source_url.as_deref().is_some_and(|url| {
+        url.starts_with("https://pmc-oa-opendata.s3.amazonaws.com/")
+            || url.starts_with("https://www.ebi.ac.uk/europepmc/")
+            || url.starts_with("europepmc:")
+    }) {
+        bib_types::FullTextSource::OpenAccess
+    } else {
+        bib_types::FullTextSource::UserUpload
+    };
     Ok(Some(FullText {
         article_id: article_id.to_owned(),
         attachment_key: Some(attachment.key),
         file_path: attachment.vfs_path.clone().unwrap_or_default(),
         file_format: file_format_from_attachment(attachment.content_type.as_deref()),
         text_content: state.text_content,
-        source: bib_types::FullTextSource::UserUpload,
+        source,
         file_hash: attachment.storage_hash,
         file_size: attachment.file_size,
         uploaded_at: None,
@@ -1648,7 +1672,7 @@ async fn mapped_attachment_item(conn: &Connection, article_id: &str) -> Result<O
     Ok(opt_int(row.get_value(0)?))
 }
 
-async fn item_data_value_id(conn: &Connection, value: &str) -> Result<i64> {
+pub(crate) async fn item_data_value_id(conn: &Connection, value: &str) -> Result<i64> {
     let mut rows = conn
         .query(
             "SELECT valueID FROM itemDataValues WHERE value = ?1",

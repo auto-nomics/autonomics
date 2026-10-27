@@ -18,8 +18,19 @@ pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
         .bib_db_path(&db_path)
         .build();
     let file_storage = gateway::bibliography_file_storage(&config)?;
+    if matches!(&bib.action, BibAction::RepairStorage) {
+        let shared = bib_base::BibShared::open(&db_path)
+            .await?
+            .with_file_storage(file_storage);
+        let count = bib_base::managed_fulltext::repair_legacy_open_access(&shared).await?;
+        println!(
+            "Repaired {count} legacy full-text attachments; original attachment keys and annotations preserved."
+        );
+        return Ok(());
+    }
     let db = bib_base::BibBase::open(&db_path.to_string_lossy()).await?;
     match bib.action {
+        BibAction::RepairStorage => unreachable!("handled before opening the CLI database"),
         BibAction::Upload(args) => run_bib_upload(&db, &file_storage, args).await,
         BibAction::Reextract(args) => run_bib_reextract(&db, &file_storage, args).await,
         BibAction::Requests(args) => run_bib_requests(&db, args).await,

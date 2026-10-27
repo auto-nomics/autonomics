@@ -62,16 +62,8 @@ pub struct ExtractedAttachmentBackfill {
 }
 
 impl BibCore {
-    /// Insert or update a full-text record.
-    ///
-    /// As a side effect, all `collection_articles` rows referencing this
-    /// article have their `fetch_status` promoted to `fulltext_available`.
-    /// Without this sync, collection-level status stays stale at
-    /// `metadata_only` even after a full text is stored.
-    pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
-        let conn = self.write_conn();
-        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
-        let mut result: Result<()> = tx
+    pub(crate) async fn write_fulltext_row(conn: &turso::Connection, ft: &FullText) -> Result<()> {
+        let result: Result<()> = conn
             .execute(
                 "INSERT INTO fulltexts \
              (article_id, file_path, file_format, text_content, source, \
@@ -108,6 +100,20 @@ impl BibCore {
             .await
             .map(|_| ())
             .map_err(crate::error::Error::from);
+
+        result
+    }
+
+    /// Insert or update a full-text record.
+    ///
+    /// As a side effect, all `collection_articles` rows referencing this
+    /// article have their `fetch_status` promoted to `fulltext_available`.
+    /// Without this sync, collection-level status stays stale at
+    /// `metadata_only` even after a full text is stored.
+    pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let mut result = Self::write_fulltext_row(&tx, ft).await;
 
         if result.is_ok() {
             // Sync collection_articles.fetch_status so collection listings

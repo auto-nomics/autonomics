@@ -10,6 +10,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort",
     "tauri": "tauri",
     "test:pdf": "node tests/pdf-reader.mjs",
+    "test:login": "node tests/login-flow.mjs",
     "test:pdf-selection": "node tests/pdf-selection.mjs",
     "test:pdf-tools": "node tests/pdf-tools.mjs",
     "test:reading-selection": "node tests/reading-selection.mjs",

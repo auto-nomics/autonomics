@@ -137,6 +137,13 @@ pub(crate) enum BibCommand {
         reply: oneshot::Sender<Result<Option<DeletedAttachment>>>,
     },
 
+    CommitManagedImport {
+        input: crate::managed_fulltext::ManagedImport,
+        reply: oneshot::Sender<Result<Option<FullText>>>,
+    },
+    LegacyInlineFulltexts {
+        reply: oneshot::Sender<Result<Vec<FullText>>>,
+    },
     // Collections
     EnsureCollectionMembership {
         collection_id: String,
@@ -595,6 +602,12 @@ impl BibCommand {
             } => {
                 let _ = reply.send(core.list_fulltext_requests(collection_id.as_deref()).await);
             }
+            Self::CommitManagedImport { input, reply } => {
+                let _ = reply.send(core.commit_managed_import(input).await);
+            }
+            Self::LegacyInlineFulltexts { reply } => {
+                let _ = reply.send(core.legacy_inline_fulltexts().await);
+            }
             Self::UpsertFulltext { ft, reply } => {
                 let _ = reply.send(core.upsert_fulltext(&ft).await);
             }
@@ -795,6 +808,7 @@ impl BibBase {
             BibCommand::UpsertArticle { .. }
                 | BibCommand::UpsertArticles { .. }
                 | BibCommand::DeleteArticle { .. }
+                | BibCommand::CommitManagedImport { .. }
                 | BibCommand::UpsertCollection { .. }
                 | BibCommand::ChangeCollection { .. }
                 | BibCommand::DeleteCollection { .. }

@@ -20,6 +20,8 @@ pub struct BibArgs {
 /// Subcommands under `autonomics bib ...`.
 #[derive(Debug, Subcommand)]
 pub enum BibAction {
+    /// Materialize legacy inline PMC text as attachment-owned VFS files.
+    RepairStorage,
     /// Upload a PDF (or other document) as the full text for an article.
     /// Extracts plain text automatically and stores it in the library.
     Upload(UploadArgs),

@@ -1638,3 +1638,109 @@ async fn collection_changes_wait_for_commit_and_cached_import_preserves_membersh
         before
     );
 }
+
+#[tokio::test]
+async fn inline_pmc_text_is_repaired_for_raw_download_and_attachment_download() {
+    use bib_types::{Article, ExtractStatus, FileFormat, FullText, FullTextSource, TextFormat};
+    let shared = BibShared::open_in_memory()
+        .await
+        .unwrap()
+        .with_file_storage(Arc::new(OpendalFileStorage::new_temp()));
+    let db = shared.bib.clone();
+    db.upsert_article(&Article::new("legacy-pmc", "PMC paper"))
+        .await
+        .unwrap();
+    let text = "PMC text — 原文\nSecond paragraph";
+    db.upsert_fulltext(&FullText {
+        article_id: "legacy-pmc".into(),
+        attachment_key: None,
+        file_path: "europepmc:PMC42".into(),
+        file_format: FileFormat::Txt,
+        text_content: Some(text.into()),
+        source: FullTextSource::OpenAccess,
+        file_hash: None,
+        file_size: Some(9999),
+        uploaded_at: None,
+        extract_status: Some(ExtractStatus::Done),
+        text_format: Some(TextFormat::Plain),
+        extracted_by: Some("europepmc".into()),
+        extract_error: None,
+    })
+    .await
+    .unwrap();
+    let key = db
+        .zotero_attachment("legacy-pmc")
+        .await
+        .unwrap()
+        .unwrap()
+        .key;
+    let app = api_server::api_router(shared);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/bib/articles/legacy-pmc/fulltext/raw",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(response.headers()["content-length"], text.len().to_string());
+    assert!(response.headers().contains_key("etag"));
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], text.as_bytes());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/api/v1/bib/articles/legacy-pmc/attachments/{key}/raw"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        &response.into_body().collect().await.unwrap().to_bytes()[..],
+        text.as_bytes()
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "HEAD",
+            "/api/v1/bib/articles/legacy-pmc/fulltext/raw",
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-length"], text.len().to_string());
+    assert!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/bib/articles/legacy-pmc/fulltext/raw")
+                .header("range", "bytes=0-2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        &response.into_body().collect().await.unwrap().to_bytes()[..],
+        b"PMC"
+    );
+}

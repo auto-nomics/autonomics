@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import "./app.css";
 import {
+  GatewayHttpError,
   gatewayRequest,
+  loginGateway,
+  logoutGateway,
   probeGateway,
   startGatewayEvents,
 } from "@/gateway";
@@ -26,6 +29,7 @@ import { DagView } from "@/features/dag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 
 type View = "agent" | "config" | "bib" | "kms" | "dag";
 type MessageMap = Record<string, ChatItem[]>;
@@ -77,6 +81,12 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  // The web build authenticates with a session cookie; when the daemon
+  // rejects the request the user is asked for the gateway token once.
+  const [needsLogin, setNeedsLogin] = useState(false);
+  const [loginToken, setLoginToken] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
   const [view, setView] = useState<View>("agent");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo[]>>({});
@@ -253,7 +263,7 @@ export default function App() {
   const hydrate = useCallback(async () => {
     try {
       const probe = await probeGateway();
-      if (!probe.running) throw new Error(`${probe.addr} (token ${probe.token_found ? "found" : "missing"})`);
+      if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
       const snapshot: StateSnapshot = await gatewayRequest("GET", "/state");
       const nextActiveSessions: Record<string, string | null> = {};
       for (const [agent, agentSessions] of Object.entries(snapshot.sessions)) {
@@ -286,7 +296,9 @@ export default function App() {
       if (nextAgent) void loadHistory(nextAgent);
     } catch (cause) {
       setConnected(false);
-      setConnectionError(String(cause));
+      const unauthorized = cause instanceof GatewayHttpError && cause.status === 401;
+      setNeedsLogin(unauthorized);
+      setConnectionError(unauthorized ? "需要 Gateway 令牌" : String(cause));
       setBooting(false);
     }
   }, [loadHistory]);
@@ -295,6 +307,26 @@ export default function App() {
   hydrateRef.current = hydrate;
   const loadHistoryRef = useRef(loadHistory);
   loadHistoryRef.current = loadHistory;
+
+  // Exchange the gateway token for a session cookie. The token is
+  // posted once and dropped from JS state immediately afterwards — it
+  // is never stored, logged, or put into the DOM.
+  const submitLogin = async () => {
+    const token = loginToken.trim();
+    if (!token || loginBusy) return;
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      await loginGateway(token);
+      setLoginToken("");
+      setNeedsLogin(false);
+      await hydrateRef.current?.();
+    } catch (cause) {
+      setLoginError(String(cause));
+    } finally {
+      setLoginBusy(false);
+    }
+  };
 
   useEffect(() => {
     void hydrate();
@@ -470,6 +502,43 @@ export default function App() {
     return <div className="grid h-full place-items-center text-sm text-muted-foreground">正在连接 Gateway…</div>;
   }
 
+  if (needsLogin) {
+    return (
+      <div className="grid h-full place-items-center p-8">
+        <Card className="w-full max-w-lg p-6">
+          <h1 className="text-xl font-medium">需要 Gateway 令牌</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            令牌在运行 Gateway 的机器上:~/.autonomics/gateway.token
+            (或环境变量 AUTONOMICS_HTTP_API_TOKEN)。令牌只提交一次,
+            之后由 HttpOnly 会话 Cookie 维持登录。
+          </p>
+          <form
+            className="mt-4 flex items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitLogin();
+            }}
+          >
+            <Input
+              type="password"
+              autoComplete="off"
+              autoFocus
+              placeholder="Gateway 令牌"
+              value={loginToken}
+              onChange={(event) => setLoginToken(event.target.value)}
+            />
+            <Button type="submit" disabled={loginBusy || !loginToken.trim()}>
+              {loginBusy ? "连接中…" : "连接"}
+            </Button>
+          </form>
+          {loginError ? (
+            <pre className="mt-3 text-sm text-destructive">{loginError}</pre>
+          ) : null}
+        </Card>
+      </div>
+    );
+  }
+
   if (!connected && !agents.length) {
     return (
       <div className="grid h-full place-items-center p-8">
@@ -498,9 +567,24 @@ export default function App() {
             </Button>
           ))}
         </nav>
-        <Badge variant={connected ? "default" : "destructive"} className="shrink-0">
-          {connected ? "Gateway 已连接" : "已断开"}
-        </Badge>
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge variant={connected ? "default" : "destructive"}>
+            {connected ? "Gateway 已连接" : "已断开"}
+          </Badge>
+          <Button
+            size="sm"
+            variant="ghost"
+            title="结束浏览器会话"
+            onClick={() => {
+              void logoutGateway().then(() => {
+                setNeedsLogin(true);
+                setConnected(false);
+              });
+            }}
+          >
+            退出登录
+          </Button>
+        </div>
       </header>
 
       {view === "agent" ? (

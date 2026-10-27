@@ -13,9 +13,9 @@ use bib_base::collections::{CollectionAssignment, CollectionChange, CollectionQu
 use bib_base::extraction::read_full;
 use bib_base::{
     AttachmentTypeSummary, BibShared, NewAttachment, attachment_figure_object_path,
-    extracted_attachment_object_path, extracted_object_path, figure_object_path,
-    sanitize_figure_name, scan_image_refs, spawn_attachment_extraction, stored_attachment,
-    stored_fulltext, try_fetch_fulltext_with, vfs_virtual_path,
+    extracted_attachment_object_path, extracted_object_path, fetch_fulltext_stored,
+    figure_object_path, sanitize_figure_name, scan_image_refs, spawn_attachment_extraction,
+    stored_attachment, stored_fulltext, vfs_virtual_path,
 };
 use bib_types::{
     AddedBy, AnnotationKind, AnnotationRect, Article, ArticleRole, ArticleSource, Author,
@@ -465,7 +465,14 @@ async fn import_article(
                 .await
                 .map_err(collection_error)?;
         }
-        return Ok(Json(json!({ "cached": true, "article": existing })));
+        let fulltext_fetched = if input.fetch_fulltext.unwrap_or(true) {
+            fetch_fulltext_stored(&shared, &existing).await.is_some()
+        } else {
+            false
+        };
+        return Ok(Json(
+            json!({ "cached": true, "article": existing,"fulltext_fetched":fulltext_fetched }),
+        ));
     }
 
     let fetched = if let Some(source) = input.source.as_deref() {
@@ -496,15 +503,7 @@ async fn import_article(
     save_imported_article(&shared, &article, input.collection_id.as_deref()).await?;
 
     let fulltext_fetched = if input.fetch_fulltext.unwrap_or(true) {
-        match try_fetch_fulltext_with(&shared.europe_pmc, &article).await {
-            Some(fulltext) => shared
-                .bib
-                .upsert_fulltext(&fulltext)
-                .await
-                .map_err(internal)
-                .is_ok(),
-            None => false,
-        }
+        fetch_fulltext_stored(&shared, &article).await.is_some()
     } else {
         false
     };
@@ -971,12 +970,22 @@ async fn download_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    if let Some(ft) = shared
+        .bib
+        .get_attachment_fulltext(&id, &key)
+        .await
+        .map_err(internal)?
+    {
+        bib_base::managed_fulltext::materialize_legacy(&shared, ft)
+            .await
+            .map_err(internal)?;
+    }
     let attachment = shared
         .bib
         .zotero_attachment_by_key(&id, &key)
         .await
         .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("attachment {key} not found")))?;
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "attachment disappeared"))?;
     let virtual_path = vfs_virtual_path(
         attachment
             .vfs_path
@@ -1420,6 +1429,9 @@ async fn download_fulltext(
                 format!("full text for {id} not found"),
             )
         })?;
+    let fulltext = bib_base::managed_fulltext::materialize_legacy(&shared, fulltext)
+        .await
+        .map_err(internal)?;
     let path = vfs_virtual_path(&fulltext.file_path).ok_or_else(|| {
         error(
             StatusCode::NOT_FOUND,

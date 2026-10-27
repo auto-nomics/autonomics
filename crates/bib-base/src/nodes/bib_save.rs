@@ -615,7 +615,7 @@ impl DagNode for BibSaveNode {
             }
 
             if fetch_fulltext {
-                let Some(storage) = shared.file_storage.as_ref() else {
+                let Some(_storage) = shared.file_storage.as_ref() else {
                     return Err(DagError::Schedule(
                         "bib_save fetch_fulltext requires mounted VFS file storage".into(),
                     ));
@@ -629,14 +629,8 @@ impl DagNode for BibSaveNode {
                     if !should_fetch {
                         continue;
                     }
-                    match fetch_fulltext_stored(&shared.europe_pmc, storage, article).await {
-                        Some(fulltext) => {
-                            bib.upsert_fulltext(&fulltext).await.map_err(|error| {
-                                DagError::Schedule(format!(
-                                    "bib_save stored fetched full text for `{}`: {error}",
-                                    article.id
-                                ))
-                            })?;
+                    match fetch_fulltext_stored(&shared, article).await {
+                        Some(_fulltext) => {
                             if let Some(row) = rows
                                 .iter_mut()
                                 .find(|row| row.article_id.as_deref() == Some(article.id.as_str()))
@@ -645,7 +639,7 @@ impl DagNode for BibSaveNode {
                             }
                         }
                         None => reporter.warn(format!(
-                            "no Europe PMC open-access full text found for article `{}`",
+                            "no PMC open-access PDF available for article `{}`",
                             article.id
                         )),
                     }
