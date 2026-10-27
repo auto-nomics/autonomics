@@ -695,7 +695,10 @@ impl BibCore {
             return self.list_search_hits(limit, offset).await;
         }
 
-        let terms = tokenize(query);
+        // The index stores each term once per field/anchor. Keep query term
+        // frequencies out of the boolean match count ("GWAS GWAS" is still
+        // one required lexical term).
+        let terms = unique_query_terms(query);
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -722,7 +725,7 @@ impl BibCore {
                  WHEN SUM(CASE WHEN s.field = 'abstract' THEN 1 ELSE 0 END) > 0 THEN 1 \
                  WHEN SUM(CASE WHEN s.field = 'annotation' THEN 1 ELSE 0 END) > 0 THEN 2 \
                  ELSE 3 \
-             END, COUNT(*) DESC \
+             END, COUNT(*) DESC, a.id \
              LIMIT ?{} OFFSET ?{}",
             terms.len() + 1,
             terms.len() + 2,
@@ -1167,6 +1170,17 @@ pub(crate) fn tokenize(text: &str) -> Vec<String> {
     terms
 }
 
+/// Return the distinct lexical terms in first-seen order for boolean search.
+/// Indexing continues to use [`tokenize`] directly; only query clauses need
+/// duplicate removal because `searchTerms` is a set of terms per field.
+pub(crate) fn unique_query_terms(text: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    tokenize(text)
+        .into_iter()
+        .filter(|term| seen.insert(term.clone()))
+        .collect()
+}
+
 /// Extract a context snippet around the first occurrence of `query` in
 /// the available text fields. Tries title first, then abstract, then
 /// annotations, then full-text body.
@@ -1179,16 +1193,26 @@ fn extract_snippet(
 ) -> String {
     const SNIPPET_RADIUS: usize = 80;
 
-    let query_lower = query.to_ascii_lowercase();
+    let query_terms = unique_query_terms(query);
+    let query_terms_lower: Vec<_> = query_terms
+        .iter()
+        .map(|term| term.to_ascii_lowercase())
+        .collect();
 
     for text in [Some(title), abstract_text, annotation, fulltext]
         .into_iter()
         .flatten()
     {
         let text_lower = text.to_ascii_lowercase();
-        if let Some(pos) = text_lower.find(&query_lower) {
+        // Boolean search allows terms to appear separately. Anchor the
+        // preview to the first query term actually present in this field.
+        if let Some((pos, term_len)) = query_terms_lower
+            .iter()
+            .filter_map(|term| text_lower.find(term).map(|pos| (pos, term.len())))
+            .min_by_key(|(pos, _)| *pos)
+        {
             let start = pos.saturating_sub(SNIPPET_RADIUS);
-            let end = (pos + query.len() + SNIPPET_RADIUS).min(text.len());
+            let end = (pos + term_len + SNIPPET_RADIUS).min(text.len());
             // Snap to UTF-8 char boundaries so we never slice mid-character.
             let start = text.floor_char_boundary(start);
             let end = text.ceil_char_boundary(end);
@@ -1244,6 +1268,62 @@ mod tests {
     use bib_types::Collection;
 
     use super::*;
+
+    #[tokio::test]
+    async fn turso_fts_supports_scoring_phrase_queries_and_highlights() {
+        let db = Builder::new_local(":memory:")
+            .experimental_index_method(true)
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE fts_probe (id TEXT PRIMARY KEY, title TEXT, body TEXT);\
+                 CREATE INDEX fts_probe_idx ON fts_probe USING fts (title, body);\
+                 INSERT INTO fts_probe VALUES\
+                   ('a', 'CRISPR editing', 'A phrase search in full text'),\
+                   ('b', 'Other paper', 'Different material');",
+        )
+        .await
+        .unwrap();
+
+        let mut rows = conn
+            .query(
+                "SELECT id, fts_score(title, body, 'phrase search') AS score,\
+                        fts_highlight(body, '<mark>', '</mark>', 'phrase search')\
+                 FROM fts_probe WHERE fts_match(title, body, 'phrase search')\
+                 ORDER BY score DESC",
+                turso::params![],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("FTS should find a row");
+        assert_eq!(row.get::<String>(0).unwrap(), "a");
+        assert!(row.get::<f64>(1).unwrap().is_finite());
+        let highlight = row.get::<String>(2).unwrap();
+        assert!(highlight.contains("<mark>phrase</mark>"));
+        assert!(highlight.contains("<mark>search</mark>"));
+        assert!(rows.next().await.unwrap().is_none());
+
+        let mut rows = conn
+            .query(
+                "SELECT id FROM fts_probe \
+                 WHERE fts_match(body, '\"phrase search\"')",
+                turso::params![],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "a"
+        );
+        assert!(rows.next().await.unwrap().is_none());
+    }
 
     /// Regression test for issue #143: two concurrent readers on one
     /// shared `Arc<BibBase>` used to race on the read connection and one

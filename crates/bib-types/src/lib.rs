@@ -15,10 +15,12 @@
 pub mod convert;
 pub mod evidence;
 pub mod query;
+pub mod search;
 pub mod types;
 
 pub use evidence::{EvidenceRecord, EvidenceSet};
 pub use query::{BoolOp, StructuredSearch, YearRange};
+pub use search::{SearchExpr, SearchField, SearchMode, SearchRequestV2, SearchScope, SearchSort};
 pub use types::{
     AddedBy, Annotation, AnnotationKind, AnnotationRect, AnnotationTextRange, AnnotationUpdate,
     Article, ArticleRole, ArticleSource, Author, Collection, CollectionArticle, CollectionStatus,

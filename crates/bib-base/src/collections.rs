@@ -952,7 +952,7 @@ impl BibCore {
         } else {
             "1=1".to_owned()
         };
-        let terms = crate::bib_base::tokenize(&input.query);
+        let terms = crate::bib_base::unique_query_terms(&input.query);
         let mut params: Vec<Value> = terms.iter().map(|t| Value::Text(t.clone())).collect();
         let (search, order) = if input.query.trim().is_empty() {
             (String::new(), "a.title COLLATE NOCASE,a.id".to_owned())

@@ -263,7 +263,7 @@ async fn scoped_search_counts_and_pages_beyond_five_hundred() {
         .await
         .unwrap();
     let mut q = query(Some("a"), true, false);
-    q.query = "scopekeyword".into();
+    q.query = "scopekeyword scopekeyword".into();
     q.limit = 500;
     let first = db.query_collection_articles(q.clone()).await.unwrap();
     q.offset = 500;

@@ -802,6 +802,14 @@ async fn search_does_not_treat_sql_wildcards_as_matches() {
         db.search_articles("alpha beta", 10, 0).await.unwrap().len(),
         1
     );
+    assert_eq!(
+        db.search_articles("alpha alpha beta", 10, 0)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "repeating a term must not make an otherwise valid AND query impossible"
+    );
 }
 
 #[tokio::test]
@@ -826,8 +834,8 @@ async fn search_with_fulltext() {
         file_path: "/articles/a1.pdf".into(),
         file_format: FileFormat::Pdf,
         text_content: Some(
-            "In section 3 we describe a deep neural network architecture \
-             for predicting regulatory variants."
+            "In section 3 we describe a deep neural network architecture with unusual \
+             layers for predicting regulatory variants."
                 .into(),
         ),
         source: FullTextSource::UserUpload,
@@ -855,6 +863,15 @@ async fn search_with_fulltext() {
             .to_lowercase()
             .contains("deep neural network")
     );
+
+    // Boolean search allows terms to appear separately, so the snippet
+    // should anchor on a matching indexed-text term rather than the title.
+    let hits = db
+        .search_articles("deep unusual architecture", 10, 0)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.to_lowercase().contains("deep neural"));
 }
 
 #[tokio::test]
