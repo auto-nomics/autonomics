@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod gateway;
+mod request_cancellation;
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -20,6 +21,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             gateway::probe,
             gateway::api,
+            gateway::cancel_api_request,
             gateway::start_events,
             gateway::frontend_ready,
             gateway::upload_bib_fulltext,

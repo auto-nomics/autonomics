@@ -71,37 +71,40 @@ async function tauriInvoke<T>(command: string, args?: unknown): Promise<T> {
   return core.invoke<T>(command, args as any);
 }
 
+function requestId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16).padStart(8,"0")).join("");
+}
 export async function gatewayRequest(
-  method: string,
-  path: string,
-  body?: unknown,
+  method: string, path: string, body?: unknown, options: { signal?: AbortSignal } = {},
 ): Promise<any> {
-  if (isTauri) {
-    const result = await tauriInvoke<{ data: any }>("api", {
-      method,
-      path,
-      body: body === undefined ? null : body,
+  const signal = options.signal;
+  signal?.throwIfAborted();
+  const id = signal ? requestId() : undefined;
+  const search = /^\/bib\/(search\/(v2|export)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
+  const cancel = () => {
+    if (!id) return;
+    if (isTauri) void tauriInvoke("cancel_api_request", {requestId:id}).catch(() => {});
+    else if (search) void fetch(webApiPath("/bib/search/cancel"), {method:"POST",credentials:"same-origin",keepalive:true,headers:{"Content-Type":"application/json"},body:JSON.stringify({request_id:id})}).catch(() => {});
+  };
+  signal?.addEventListener("abort",cancel,{once:true});
+  try {
+    if (isTauri) {
+      const result = await tauriInvoke<{data:any}>("api",{method,path,body:body===undefined?null:body,requestId:id??null});
+      signal?.throwIfAborted();return result.data;
+    }
+    const response = await fetch(webApiPath(path), {
+      method, signal, credentials:"same-origin",
+      headers:{...(body===undefined?{}:{"Content-Type":"application/json"}),...(id&&search?{"x-search-request-id":id}:{})},
+      body:body===undefined?undefined:JSON.stringify(body),
     });
-    return result.data;
-  }
-
-  // The session cookie rides along automatically; the bearer token
-  // never reaches the browser.
-  const response = await fetch(webApiPath(path), {
-    method,
-    credentials: "same-origin",
-    headers: body === undefined ? {} : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    throw new GatewayHttpError(
-      response.status,
-      payload?.error ?? `${response.status} ${response.statusText}`,
-    );
-  }
-  return payload;
+    const text = await response.text();
+    let payload: any = null;
+    if (text) {try {payload=JSON.parse(text);} catch {if(response.ok)throw new Error("Server returned an invalid JSON response");payload={error:text};}}
+    if (!response.ok) throw new GatewayHttpError(response.status,payload?.error??`${response.status} ${response.statusText}`);
+    return payload;
+  } catch (error) { signal?.throwIfAborted();throw error; }
+  finally {signal?.removeEventListener("abort",cancel);}
 }
 
 export async function gatewayRequestOptional(path: string): Promise<any | null> {
@@ -343,12 +346,14 @@ export async function uploadBibFulltext(
 
 export async function fetchBibFulltextRaw(
   articleId: string,
+  attachmentKey?: string | null,
+  expectedHash?: string | null,
 ): Promise<{ bytes: Uint8Array; contentType: string }> {
   if (isTauri) {
     const result = await tauriInvoke<{
       data_base64: string;
       content_type: string;
-    }>("bib_fulltext_raw", { articleId });
+    }>("bib_fulltext_raw", { articleId, attachmentKey: attachmentKey ?? null, expectedHash: expectedHash ?? null });
     const binary = atob(result.data_base64);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) {
@@ -358,7 +363,7 @@ export async function fetchBibFulltextRaw(
   }
 
   const response = await fetch(
-    webApiPath(`/bib/articles/${encodeURIComponent(articleId)}/fulltext/raw`),
+    webApiPath(`${attachmentKey ? `/bib/articles/${encodeURIComponent(articleId)}/attachments/${encodeURIComponent(attachmentKey)}/raw` : `/bib/articles/${encodeURIComponent(articleId)}/fulltext/raw`}${expectedHash ? `?expected_hash=${encodeURIComponent(expectedHash)}` : ""}`),
     { credentials: "same-origin" },
   );
   if (!response.ok) {

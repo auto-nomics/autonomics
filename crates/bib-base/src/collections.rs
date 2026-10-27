@@ -799,6 +799,53 @@ impl BibCore {
         self.hydrate_associations(&associations).await
     }
 
+    pub(crate) async fn article_associations(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<CollectionArticle>> {
+        let conn = self.conn();
+        let mut associations = Vec::new();
+        // Fetch all direct provenance for the page, including memberships in
+        // other branches. Display deduplication never discards relationship data.
+        for chunk in ids.chunks(400) {
+            let placeholders = (1..=chunk.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let mut rows=conn.query(format!("SELECT collection_id,article_id,position,role,fetch_status,added_by,note,added_at FROM collection_articles WHERE article_id IN ({placeholders}) ORDER BY collection_id,position"),turso::params_from_iter(chunk.iter().cloned().map(Value::Text))).await?;
+            while let Some(row) = rows.next().await? {
+                associations.push(CollectionArticle {
+                    collection_id: row.get(0)?,
+                    article_id: row.get(1)?,
+                    position: row.get::<i64>(2)? as i32,
+                    role: ArticleRole::from_str(&row.get::<String>(3)?),
+                    fetch_status: FetchStatus::from_str(&row.get::<String>(4)?),
+                    added_by: AddedBy::from_str(&row.get::<String>(5)?),
+                    note: opt_string(row.get_value(6)?),
+                    added_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
+                });
+            }
+        }
+        Ok(associations)
+    }
+
+    pub(crate) async fn hydrate_article_ids(&self, ids: &[String]) -> Result<Vec<Article>> {
+        let associations = ids
+            .iter()
+            .map(|id| CollectionArticle {
+                collection_id: String::new(),
+                article_id: id.clone(),
+                position: 0,
+                role: ArticleRole::Referenced,
+                fetch_status: FetchStatus::MetadataOnly,
+                added_by: AddedBy::User,
+                note: None,
+                added_at: None,
+            })
+            .collect::<Vec<_>>();
+        self.hydrate_associations(&associations).await
+    }
+
     async fn hydrate_associations(
         &self,
         associations: &[CollectionArticle],
@@ -929,6 +976,27 @@ impl BibCore {
         input: CollectionQuery,
     ) -> Result<CollectionPage> {
         let conn = self.conn();
+        let behavior = if self.search_engine == crate::SearchEngineMode::Legacy {
+            TransactionBehavior::Immediate
+        } else {
+            TransactionBehavior::Deferred
+        };
+        let tx = Transaction::new_unchecked(&conn, behavior).await?;
+        let result = self.query_collection_snapshot(input).await;
+        match result {
+            Ok(page) => {
+                tx.commit().await?;
+                Ok(page)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn query_collection_snapshot(&self, input: CollectionQuery) -> Result<CollectionPage> {
+        let conn = self.conn();
         let scope = if let Some(id) = &input.collection_id {
             let col = stored_collection(&conn, id).await?;
             if col.deleted {
@@ -977,7 +1045,7 @@ impl BibCore {
                 allowed.insert(row.get::<String>(0)?);
             }
             drop(rows);
-            let ranked = self.local_matches_legacy(&input.query).await?;
+            let ranked = self.local_matches_snapshot(&input.query).await?;
             let scoped = ranked
                 .into_iter()
                 .filter(|hit| allowed.contains(&hit.article_id))
@@ -991,28 +1059,7 @@ impl BibCore {
                 .collect::<Vec<_>>();
             (ids, total)
         };
-        let mut associations = Vec::new();
-        // Fetch all direct provenance for the page, including memberships in
-        // other branches. Display deduplication never discards relationship data.
-        for chunk in ids.chunks(400) {
-            let placeholders = (1..=chunk.len())
-                .map(|i| format!("?{i}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            let mut rows=conn.query(format!("SELECT collection_id,article_id,position,role,fetch_status,added_by,note,added_at FROM collection_articles WHERE article_id IN ({placeholders}) ORDER BY collection_id,position"),turso::params_from_iter(chunk.iter().cloned().map(Value::Text))).await?;
-            while let Some(row) = rows.next().await? {
-                associations.push(CollectionArticle {
-                    collection_id: row.get(0)?,
-                    article_id: row.get(1)?,
-                    position: row.get::<i64>(2)? as i32,
-                    role: ArticleRole::from_str(&row.get::<String>(3)?),
-                    fetch_status: FetchStatus::from_str(&row.get::<String>(4)?),
-                    added_by: AddedBy::from_str(&row.get::<String>(5)?),
-                    note: opt_string(row.get_value(6)?),
-                    added_at: opt_string(row.get_value(7)?).as_deref().and_then(parse_dt),
-                });
-            }
-        }
+        let associations = self.article_associations(&ids).await?;
         let hydration = ids
             .iter()
             .map(|id| CollectionArticle {

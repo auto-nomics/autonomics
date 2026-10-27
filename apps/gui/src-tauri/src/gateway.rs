@@ -18,19 +18,25 @@ pub struct GatewayState {
     base: std::sync::RwLock<String>,
     token: std::sync::RwLock<Option<String>>,
     event_task: Mutex<Option<JoinHandle<()>>>,
+    requests: std::sync::Arc<crate::request_cancellation::Requests>,
 }
 
 impl GatewayState {
     pub fn new() -> Self {
+        Self::for_endpoint(&env_addr(), read_token())
+    }
+
+    pub(crate) fn for_endpoint(addr: &str, token: Option<String>) -> Self {
         Self {
             http: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(30))
                 .build()
                 .expect("build gateway HTTP client"),
-            base: std::sync::RwLock::new(format!("http://{DEFAULT_ADDR}/api/v1")),
-            token: std::sync::RwLock::new(read_token()),
+            base: std::sync::RwLock::new(format!("http://{addr}/api/v1")),
+            token: std::sync::RwLock::new(token),
             event_task: Mutex::new(None),
+            requests: Default::default(),
         }
     }
 }
@@ -133,53 +139,104 @@ pub async fn api(
     method: String,
     path: String,
     body: Option<Value>,
+    request_id: Option<String>,
 ) -> Result<ApiOk, String> {
+    api_request(&state, method, path, body, request_id).await
+}
+async fn api_request(
+    state: &GatewayState,
+    method: String,
+    path: String,
+    body: Option<Value>,
+    request_id: Option<String>,
+) -> Result<ApiOk, String> {
+    let registration = request_id
+        .as_deref()
+        .map(|id| state.requests.start(id))
+        .transpose()?;
+    let operation = async {
+        let base = lock(&state.base).clone();
+        let token = lock(&state.token).clone();
+        let path = path.trim_start_matches('/');
+        let normalized_path = if path.starts_with("agents/") {
+            match path.split_once('/') {
+                Some(("agents", rest)) => match rest.split_once('/') {
+                    Some((agent, tail)) => {
+                        format!("agents/{}/{}", encoded_segment(agent), tail)
+                    }
+                    None => format!("agents/{}", encoded_segment(rest)),
+                },
+                _ => path.to_string(),
+            }
+        } else {
+            path.to_string()
+        };
+
+        let verb = reqwest::Method::from_bytes(method.to_uppercase().as_bytes())
+            .map_err(|error| format!("invalid HTTP method: {error}"))?;
+        let mut request = state
+            .http
+            .request(verb, endpoint(&base, &normalized_path))
+            .bearer_auth(token.unwrap_or_default());
+        if let Some(id) = request_id.as_deref() {
+            request = request.header("x-search-request-id", id);
+        }
+        // Structured PDF extraction runs the local Zotero layout models. Keep the
+        // normal API deadline short while allowing a first Reading Mode conversion.
+        if method.eq_ignore_ascii_case("POST") && normalized_path.ends_with("/fulltext/structured")
+        {
+            request = request.timeout(Duration::from_secs(210));
+        }
+        if matches!(&body, Some(value) if !value.is_null()) {
+            request = request.json(&body);
+        }
+        let response = request.send().await.map_err(|error| error.to_string())?;
+        let status = response.status();
+        let payload = response.json::<Value>().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            let fallback = status.to_string();
+            return Err(payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or(fallback.as_str())
+                .to_string());
+        }
+        Ok(ApiOk {
+            ok: true,
+            data: payload,
+        })
+    };
+    if let Some((_guard, cancelled)) = registration {
+        tokio::select! {biased;_ = cancelled=>Err("Request cancelled".into()),result=operation=>result}
+    } else {
+        operation.await
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_api_request(
+    state: State<'_, GatewayState>,
+    request_id: String,
+) -> Result<(), String> {
+    state.requests.cancel(&request_id)?;
     let base = lock(&state.base).clone();
     let token = lock(&state.token).clone();
-    let path = path.trim_start_matches('/');
-    let normalized_path = if path.starts_with("agents/") {
-        match path.split_once('/') {
-            Some(("agents", rest)) => match rest.split_once('/') {
-                Some((agent, tail)) => {
-                    format!("agents/{}/{}", encoded_segment(agent), tail)
-                }
-                None => format!("agents/{}", encoded_segment(rest)),
-            },
-            _ => path.to_string(),
-        }
-    } else {
-        path.to_string()
-    };
-
-    let verb = reqwest::Method::from_bytes(method.to_uppercase().as_bytes())
-        .map_err(|error| format!("invalid HTTP method: {error}"))?;
-    let mut request = state
+    let response = state
         .http
-        .request(verb, endpoint(&base, &normalized_path))
-        .bearer_auth(token.unwrap_or_default());
-    // Structured PDF extraction runs the local Zotero layout models. Keep the
-    // normal API deadline short while allowing a first Reading Mode conversion.
-    if method.eq_ignore_ascii_case("POST") && normalized_path.ends_with("/fulltext/structured") {
-        request = request.timeout(Duration::from_secs(210));
+        .post(endpoint(&base, "bib/search/cancel"))
+        .bearer_auth(token.unwrap_or_default())
+        .json(&serde_json::json!({"request_id":request_id}))
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Server cancellation rejected: {}",
+            response.status()
+        ));
     }
-    if matches!(&body, Some(value) if !value.is_null()) {
-        request = request.json(&body);
-    }
-    let response = request.send().await.map_err(|error| error.to_string())?;
-    let status = response.status();
-    let payload = response.json::<Value>().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        let fallback = status.to_string();
-        return Err(payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or(fallback.as_str())
-            .to_string());
-    }
-    Ok(ApiOk {
-        ok: true,
-        data: payload,
-    })
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -342,20 +399,38 @@ pub struct BibBinaryView {
 pub async fn bib_fulltext_raw(
     state: State<'_, GatewayState>,
     article_id: String,
+    attachment_key: Option<String>,
+    expected_hash: Option<String>,
+) -> Result<BibBinaryView, String> {
+    fulltext_request(&state, article_id, attachment_key, expected_hash).await
+}
+async fn fulltext_request(
+    state: &GatewayState,
+    article_id: String,
+    attachment_key: Option<String>,
+    expected_hash: Option<String>,
 ) -> Result<BibBinaryView, String> {
     let base = lock(&state.base).clone();
     let token = lock(&state.token).clone();
     let url = endpoint(
         &base,
-        &format!("bib/articles/{}/fulltext/raw", encoded_segment(&article_id)),
+        &match attachment_key {
+            Some(key) => format!(
+                "bib/articles/{}/attachments/{}/raw",
+                encoded_segment(&article_id),
+                encoded_segment(&key)
+            ),
+            None => format!("bib/articles/{}/fulltext/raw", encoded_segment(&article_id)),
+        },
     );
-    let response = state
+    let mut request = state
         .http
         .get(url)
-        .bearer_auth(token.as_deref().unwrap_or_default())
-        .send()
-        .await
-        .map_err(|error| error.to_string())?;
+        .bearer_auth(token.as_deref().unwrap_or_default());
+    if let Some(hash) = expected_hash {
+        request = request.query(&[("expected_hash", hash)]);
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
     let status = response.status();
     let content_type = response
         .headers()
@@ -464,5 +539,97 @@ mod tests {
         assert_eq!(event_boundary("id: 1\n\n"), Some((5, 7)));
         assert_eq!(event_boundary("id: 1\r\n\r\n"), Some((5, 9)));
         assert_eq!(event_boundary("id: 1\n"), None);
+    }
+}
+
+#[cfg(test)]
+mod search_transport_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn request_head(stream: &mut tokio::net::TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let count = stream.read(&mut buffer).await.unwrap();
+            assert!(count > 0);
+            bytes.extend_from_slice(&buffer[..count]);
+            if bytes.windows(4).any(|b| b == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+    fn state(addr: std::net::SocketAddr) -> GatewayState {
+        let state = GatewayState::new();
+        *state.base.write().unwrap() = format!("http://{addr}/api/v1");
+        *state.token.write().unwrap() = Some("fixture-token".into());
+        state
+    }
+    #[tokio::test]
+    async fn native_search_cancellation_drops_the_real_http_connection() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = std::sync::Arc::new(state(listener.local_addr().unwrap()));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = request_head(&mut stream).await;
+            assert!(head.starts_with("GET /api/v1/bib/search/status HTTP/1.1"));
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-token")
+            );
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("x-search-request-id: native-slow")
+            );
+            let _ = started.send(());
+            let mut byte = [0];
+            let count = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(count, 0, "cancel must close the pending HTTP request");
+        });
+        let client_state = state.clone();
+        let client = tokio::spawn(async move {
+            api_request(
+                &client_state,
+                "GET".into(),
+                "/bib/search/status".into(),
+                None,
+                Some("native-slow".into()),
+            )
+            .await
+        });
+        ready.await.unwrap();
+        state.requests.cancel("native-slow").unwrap();
+        assert_eq!(client.await.unwrap().unwrap_err(), "Request cancelled");
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn native_binary_fetch_targets_the_requested_attachment_and_hash() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = state(listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = request_head(&mut stream).await;
+            assert!(head.starts_with("GET /api/v1/bib/articles/doi:10%2Fitem/attachments/SECOND/raw?expected_hash=expected HTTP/1.1"));
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-token")
+            );
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody").await.unwrap();
+        });
+        let result = fulltext_request(
+            &state,
+            "doi:10/item".into(),
+            Some("SECOND".into()),
+            Some("expected".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.content_type, "text/plain");
+        assert_eq!(BASE64.decode(result.data_base64).unwrap(), b"body");
+        server.await.unwrap();
     }
 }

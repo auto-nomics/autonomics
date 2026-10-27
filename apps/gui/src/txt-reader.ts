@@ -1,3 +1,4 @@
+import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget } from "./reader-target";
 import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
 import { escapeHtml } from "./markdown";
 import type { BibArticle } from "./types";
@@ -99,25 +100,28 @@ export type TxtReaderHandle = {
   close: () => void;
 };
 
-let activeTxtReader: TxtReaderHandle | null = null;
-
 export async function openTxtReader(options: {
   articleId: string;
   title: string;
   article?: BibArticle | null;
   bytes?: { bytes: Uint8Array; contentType: string };
+  attachmentKey?: string | null;
+  expectedHash?: string | null;
+  search?: ReaderSearchTarget;
+  sessionToken?: number;
 }): Promise<TxtReaderHandle> {
-  activeTxtReader?.close();
+  const token = options.sessionToken ?? beginReaderSession();
+  const bytes = options.bytes ?? await fetchBibFulltextRaw(options.articleId, options.attachmentKey, options.expectedHash);
+  if (!isReaderSession(token)) throw new DOMException("Reader opening superseded", "AbortError");
   const reader = await ZoteroStyleTxtReader.open(
     options.articleId,
     options.title,
     options.article ?? null,
-    options.bytes,
+    bytes, options.attachmentKey ?? undefined, options.search, token,
   );
   const handle: TxtReaderHandle = {
     close: () => reader.destroy(),
   };
-  activeTxtReader = handle;
   return handle;
 }
 
@@ -165,10 +169,15 @@ class ZoteroStyleTxtReader {
     private readonly articleId: string,
     private readonly title: string,
     private readonly bibArticle: BibArticle | null,
+    private readonly sessionToken: number,
+    private readonly attachmentKey?: string,
+    private readonly initialSearch?: ReaderSearchTarget,
   ) {
     this.appearance = this.readAppearance();
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
+    this.root.setAttribute("role","dialog");this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
+    this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
     this.root.dataset.readerKind = "txt";
     this.root.innerHTML = `
       <aside class="reader-sidebar-shell">
@@ -319,12 +328,17 @@ class ZoteroStyleTxtReader {
     title: string,
     bibArticle: BibArticle | null = null,
     fulltext?: { bytes: Uint8Array; contentType: string },
+    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(),
   ): Promise<ZoteroStyleTxtReader> {
-    const reader = new ZoteroStyleTxtReader(articleId, title, bibArticle);
+    const reader = new ZoteroStyleTxtReader(articleId, title, bibArticle, sessionToken, attachmentKey, initialSearch);
+    if (!registerReaderSession(sessionToken, () => reader.destroy())) {reader.destroy();throw new DOMException("Reader opening superseded", "AbortError");}
     try {
-      const raw = fulltext ?? await fetchBibFulltextRaw(articleId);
+      const raw = fulltext ?? await fetchBibFulltextRaw(articleId, attachmentKey);
       if (reader.destroyed) return reader;
       await reader.load(raw);
+      if (!isReaderSession(sessionToken) || reader.destroyed) throw new DOMException("Reader closed", "AbortError");
+      reader.root.focus({preventScroll:true});
+      if (initialSearch) reader.revealSearch(initialSearch);
       return reader;
     } catch (error) {
       reader.destroy();
@@ -362,7 +376,7 @@ class ZoteroStyleTxtReader {
     this.resizeObserver.observe(this.article);
     await this.loadAnnotations();
     this.renderSidebarTags();
-    this.restoreReadingLocation();
+    if (!this.initialSearch) this.restoreReadingLocation();
     this.updateProgress();
     this.setStatus(
       `${this.raw.length.toLocaleString()} characters · ${this.outline.length.toLocaleString()} sections`,
@@ -720,7 +734,7 @@ class ZoteroStyleTxtReader {
     try {
       const response = await gatewayRequest(
         "GET",
-        `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+        annotationPath(this.articleId, this.attachmentKey),
       );
       this.annotations = response.annotations ?? [];
       this.renderAnnotations();
@@ -803,7 +817,7 @@ class ZoteroStyleTxtReader {
     const anchor = this.anchor;
     await gatewayRequest(
       "POST",
-      `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+      annotationPath(this.articleId, this.attachmentKey),
       {
         content: anchor.text,
         kind: "highlight",
@@ -825,7 +839,7 @@ class ZoteroStyleTxtReader {
     const anchor = this.anchor;
     await gatewayRequest(
       "POST",
-      `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+      annotationPath(this.articleId, this.attachmentKey),
       {
         content: comment.trim(),
         kind: "comment",
@@ -961,19 +975,17 @@ class ZoteroStyleTxtReader {
 
   // -- Search -------------------------------------------------------------
 
-  private runSearch(term: string) {
-    const results: SearchResult[] = [];
-    if (term) {
-      const haystack = this.raw.toLowerCase();
-      const needle = term.toLowerCase();
-      let from = 0;
-      while (results.length < MAX_SEARCH_RESULTS) {
-        const hit = haystack.indexOf(needle, from);
-        if (hit < 0) break;
-        results.push({ start: hit, end: hit + needle.length });
-        from = hit + needle.length;
-      }
+  private revealSearch(target: ReaderSearchTarget) {
+    if (target.annotationId) {
+      const annotation = this.annotations.find(note => note.id === target.annotationId);
+      if (!annotation) throw new Error("The annotation changed. Refresh search results.");
+      const span = this.charSpan(annotation); if (span) this.flashSpan(span.start, span.end);
+      this.selectPane("annotations"); this.setSidebarOpen(true); this.annotationInspector.select(target.annotationId); return;
     }
+    if (target.query) {this.searchInput.value = target.query;this.selectPane("search");this.setSidebarOpen(true);this.searchInput.focus();this.runSearch(target.query,true);const first=this.searchResults[0];if(first)this.flashSpan(first.start,first.end);}
+  }
+  private runSearch(term: string, wordBoundary = false) {
+    const results = findTextRanges(this.raw, term, wordBoundary, MAX_SEARCH_RESULTS);
     this.searchResults = results;
     this.renderSearchResults();
     this.setStatus(term
@@ -1061,7 +1073,7 @@ class ZoteroStyleTxtReader {
   private saveReadingLocation() {
     try {
       const max = this.container.scrollHeight - this.container.clientHeight;
-      localStorage.setItem(`autonomics.txt.readingLocation.${this.articleId}`, JSON.stringify({
+      localStorage.setItem(`autonomics.txt.readingLocation.${readerLocationId(this.articleId, this.attachmentKey)}`, JSON.stringify({
         fraction: max > 0 ? this.container.scrollTop / max : 0,
       }));
     } catch { /* Reading still works when local storage is unavailable. */ }
@@ -1069,7 +1081,7 @@ class ZoteroStyleTxtReader {
 
   private restoreReadingLocation() {
     try {
-      const saved = JSON.parse(localStorage.getItem(`autonomics.txt.readingLocation.${this.articleId}`) ?? "null");
+      const saved = JSON.parse(localStorage.getItem(`autonomics.txt.readingLocation.${readerLocationId(this.articleId, this.attachmentKey)}`) ?? "null");
       if (!saved || !Number.isFinite(saved.fraction)) return;
       requestAnimationFrame(() => {
         if (this.destroyed) return;
@@ -1084,14 +1096,14 @@ class ZoteroStyleTxtReader {
     if (this.destroyed) return;
     this.saveReadingLocation();
     this.destroyed = true;
+    releaseReaderSession(this.sessionToken);
     this.events.abort();
     this.toast.destroy();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
     this.annotationInspector.destroy();
     this.resizeObserver?.disconnect();
-    if (this.returnFocus instanceof HTMLElement && this.returnFocus.isConnected) this.returnFocus.focus();
+    restoreReaderFocus(this.returnFocus);
     this.root.remove();
-    if (activeTxtReader) activeTxtReader = null;
   }
 }

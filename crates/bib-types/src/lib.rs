@@ -23,8 +23,10 @@ pub mod types;
 pub use evidence::{EvidenceRecord, EvidenceSet};
 pub use query::{BoolOp, StructuredSearch, YearRange};
 pub use search::{
-    SearchExpr, SearchField, SearchIndexStatus, SearchMode, SearchPageV2, SearchRequestV2,
-    SearchScope, SearchSort,
+    SaveSearchInput, SavedSearch, SearchEvidence, SearchEvidencePage, SearchEvidenceRequest,
+    SearchExpr, SearchFacetValue, SearchFacets, SearchField, SearchFilters, SearchFulltextStatus,
+    SearchHighlight, SearchIndexStatus, SearchMode, SearchPageV2, SearchRequestV2, SearchScope,
+    SearchSort,
 };
 pub use types::{
     AddedBy, Annotation, AnnotationKind, AnnotationRect, AnnotationTextRange, AnnotationUpdate,

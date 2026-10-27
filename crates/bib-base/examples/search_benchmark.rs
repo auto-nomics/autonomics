@@ -89,6 +89,7 @@ fn article(i: usize, abstract_chars: usize) -> Article {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let gui = argument("--gui", "false") == "true";
     let count: usize = argument("--count", "10000").parse()?;
     let abstract_chars: usize = argument("--abstract-chars", "1000").parse()?;
     let fulltext_every: usize = argument("--fulltext-every", "10").parse()?;
@@ -212,6 +213,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let request = SearchRequestV2 {
             query: query.into(),
             page_size: 50,
+            include_facets: gui,
+            include_articles: gui,
             ..Default::default()
         };
         let cold = Instant::now();
@@ -268,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("known identifier Top-1 check failed".into());
         }
     }
-    let report = json!({"schema_version":2,"synthetic":true,"reused_existing_fixture":reuse,"open_ms":open_ms,"profile":if cfg!(debug_assertions){"debug"}else{"release"},"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+    let report = json!({"schema_version":2,"synthetic":true,"gui_facets_and_articles":gui,"reused_existing_fixture":reuse,"open_ms":open_ms,"profile":if cfg!(debug_assertions){"debug"}else{"release"},"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
         "dataset":{"articles":count,"abstract_chars_per_article":abstract_chars,"attachments":attachments,"fulltext_chars_per_attachment":fulltext_chars,"han_abstract_every":50,"scientific_symbol_every":100},
         "metadata_import_with_background_indexing_ms":metadata_import_ms,"fulltext_import_with_background_indexing_ms":fulltext_import_ms,"explicit_full_rebuild_ms":rebuild_ms,"initial_index_catchup_ms":initial_index_catchup_ms,"known_identifier_checks":{"queries":known_checks,"top1_correct":known_checks},
         "memory":memory(),"database_bytes":directory_bytes(&database),"index_bytes":directory_bytes(&PathBuf::from(format!("{}.search-v2",database.to_string_lossy()))),"all_artifact_bytes":directory_bytes(&root),

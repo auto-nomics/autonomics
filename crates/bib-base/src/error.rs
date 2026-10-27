@@ -18,6 +18,10 @@ pub enum Error {
     InvalidCollection(String),
     #[error("invalid search query: {0}")]
     InvalidSearchQuery(String),
+    #[error("search request cancelled")]
+    SearchCancelled,
+    #[error("saved search conflict: {0}")]
+    SearchConflict(String),
     #[error("collection conflict: {0}")]
     CollectionConflict(String),
     #[error("not found: {0}")]

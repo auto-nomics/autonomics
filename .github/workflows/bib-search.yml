@@ -58,8 +58,9 @@ jobs:
         run: |
           $llvm = 'C:\Program Files\LLVM\bin'
           if (Test-Path "$llvm\libclang.dll") { "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV }
-      - run: cargo test -p bib-base --locked --test search_v2
+      - run: cargo test -p bib-base --locked --test search_v2 --test search_workflow
       - run: cargo test -p bib-base --locked --lib search::recovery_tests
+      - run: cargo test -p bib-base --locked --lib legacy_index::tests
       - run: cargo test -p api-server --locked --test api bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress
       - run: cargo build -p bib-base --locked --example search_recovery_probe
       - name: Interrupt and restore isolated processes

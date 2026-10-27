@@ -824,6 +824,21 @@ async fn bib_supports_multiple_zotero_attachments() {
     let body: serde_json::Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(body["attachments"].as_array().unwrap().len(), 2);
+    let hash = body["attachments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["key"] == second_key)
+        .unwrap()["storage_hash"]
+        .as_str()
+        .unwrap();
+    for (expected, status) in [
+        (hash, StatusCode::OK),
+        ("outdated-hash", StatusCode::CONFLICT),
+    ] {
+        let response=app.clone().oneshot(request("GET",&format!("/api/v1/bib/articles/doi%3A10.1000%2Fmulti-attachment/attachments/{second_key}/raw?expected_hash={expected}"),None)).await.unwrap();
+        assert_eq!(response.status(), status);
+    }
 
     let response = app
         .clone()
@@ -1815,4 +1830,193 @@ async fn bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn saved_search_crud_filters_and_evidence_are_exposed_with_conflict_statuses() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let mut article = bib_types::Article::new("rule-a", "Unicode 😀 Study");
+    article.keywords = vec!["gene".into()];
+    shared.bib.upsert_article(&article).await.unwrap();
+    let app = api_server::bib::router(shared.clone());
+    let response=app.clone().oneshot(request("POST","/search/v2",Some(serde_json::json!({"query":"title:Study","include_facets":true,"include_articles":true}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let page: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(page["articles"][0]["id"], "rule-a");
+    assert_eq!(page["facets"]["tags"][0]["label"], "gene");
+    let range = &page["hits"][0]["highlight_ranges"][0];
+    let chars = page["hits"][0]["snippet"]
+        .as_str()
+        .unwrap()
+        .chars()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        chars[range["start"].as_u64().unwrap() as usize..range["end"].as_u64().unwrap() as usize]
+            .iter()
+            .collect::<String>(),
+        "Study"
+    );
+    for (filters, expected) in [
+        (serde_json::json!({"has_annotations":true}), 0),
+        (serde_json::json!({}), 1),
+    ] {
+        let export = serde_json::json!({"format":"bibtex","search":{"query":"title:Study","page_size":1,"filters":filters}});
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/search/export", Some(export.to_string())))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let exported: serde_json::Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(exported["count"], expected);
+        if expected == 1 {
+            assert!(exported["export"].as_str().unwrap().contains("Study"));
+        }
+    }
+    let body = serde_json::json!({"name":"Living review","request":{"query":"title:Study"}});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/saved-searches", Some(body.to_string())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let rule: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let id = rule["saved_search"]["id"].as_str().unwrap();
+    let update = serde_json::json!({"name":"Edited review","request":{"query":"title:Study"},"expected_version":1});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &format!("/saved-searches/{id}"),
+            Some(update.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &format!("/saved-searches/{id}"),
+            Some(update.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = app
+        .clone()
+        .oneshot(request("GET", "/saved-searches", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(list["saved_searches"][0]["name"], "Edited review");
+    let evidence = serde_json::json!({"search":{"query":"title:Study"},"index_generation":page["index_generation"]});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/articles/rule-a/search-evidence",
+            Some(evidence.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let data: serde_json::Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(data["total"], 1);
+    assert_eq!(data["evidence"][0]["location_status"], "metadata");
+    assert!(data["evidence"][0]["page"].is_null());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/saved-searches/{id}?expected_version=1"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/saved-searches/{id}?expected_version=2"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .oneshot(request(
+            "DELETE",
+            &format!("/saved-searches/{id}?expected_version=2"),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn search_request_ids_support_early_cancellation_and_safe_reuse() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    shared
+        .bib
+        .upsert_article(&bib_types::Article::new("cancel-a", "Cancellation target"))
+        .await
+        .unwrap();
+    let app = api_server::bib::router(shared.clone());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/search/cancel",
+            Some(serde_json::json!({"request_id":"early-search"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let mut req = request(
+        "POST",
+        "/search/v2",
+        Some(serde_json::json!({"query":"target"}).to_string()),
+    );
+    req.headers_mut()
+        .insert("x-search-request-id", "early-search".parse().unwrap());
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status().as_u16(), 499);
+    let mut req = request(
+        "POST",
+        "/search/v2",
+        Some(serde_json::json!({"query":"target"}).to_string()),
+    );
+    req.headers_mut()
+        .insert("x-search-request-id", "early-search".parse().unwrap());
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/search/parse",
+            Some(serde_json::json!({"query":"title:(alpha OR beta) NOT year:2020"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/search/cancel",
+            Some(serde_json::json!({"request_id":"bad id"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

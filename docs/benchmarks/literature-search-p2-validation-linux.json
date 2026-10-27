@@ -1,0 +1,48 @@
+{
+  "recorded_at": "2026-10-27T13:59:34.041071+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "rust": {
+    "command": "cargo test -p bib-base -p api-server -p bib-types -p autonomics-gui --locked",
+    "passed": 249,
+    "failed": 0,
+    "ignored": 3,
+    "test_binaries_and_doc_suites": 16
+  },
+  "checks": [
+    {
+      "command": "cargo clippy -p bib-base -p bib-types -p api-server --lib --locked -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "cargo clippy -p autonomics-gui --all-targets --locked -- -D warnings",
+      "result": "passed"
+    },
+    {
+      "command": "npm --prefix apps/gui run test:bib-workflow",
+      "result": "passed"
+    },
+    {
+      "command": "isolated staged GUI npm run build with HEAD main/agent and bundled Zotero sources",
+      "result": "passed"
+    },
+    {
+      "command": "npm --prefix apps/gui run test:bib-native",
+      "result": "passed"
+    },
+    {
+      "command": "python3 scripts/qualify_bib_search_recovery.py --probe target/debug/examples/search_recovery_probe --output docs/benchmarks/literature-search-p2-process-recovery-linux.json",
+      "result": "passed",
+      "interruption": "two actual SIGKILL exits (-9)"
+    }
+  ],
+  "release_gates": [
+    "actual macOS/Windows qualification",
+    "manual screen reader and accessibility review",
+    "real-library relevance judgement set and HTTP/GUI performance qualification"
+  ],
+  "additional_ignored_test_run": {
+    "passed": 3,
+    "failed": 0,
+    "scope": "Zotero extraction paragraph/PDF anchors, malformed PDF process handling, and API flattened-text migration; executed the exact binaries from the default test run"
+  }
+}

@@ -1008,7 +1008,10 @@ dependencies = [
 name = "autonomics-gui"
 version = "0.1.0"
 dependencies = [
+ "api-server",
  "base64 0.22.1",
+ "bib-base",
+ "bib-types",
  "futures-util",
  "reqwest 0.12.28",
  "serde",
@@ -1018,6 +1021,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tokio",
  "tracing",
+ "vfs",
 ]
 
 [[package]]

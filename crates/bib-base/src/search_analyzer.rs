@@ -159,3 +159,42 @@ impl TokenStream for BibliographyTokenStream {
         &mut self.current
     }
 }
+
+pub(crate) fn highlight_ranges(query: &str, snippet: &str) -> Vec<bib_types::SearchHighlight> {
+    let query = position_tokens(query);
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let tokens = position_tokens(snippet);
+    let mut bytes = Vec::new();
+    for window in tokens.windows(query.len()) {
+        if window.iter().zip(&query).all(|(token, query_token)| {
+            token.text == query_token.text
+                && token.position - window[0].position == query_token.position - query[0].position
+        }) {
+            bytes.push((window[0].offset_from, window[window.len() - 1].offset_to));
+        }
+    }
+    if bytes.is_empty() {
+        let wanted: std::collections::HashSet<_> = query.into_iter().map(|t| t.text).collect();
+        bytes.extend(
+            tokens
+                .into_iter()
+                .filter(|t| wanted.contains(&t.text))
+                .map(|t| (t.offset_from, t.offset_to)),
+        );
+    }
+    let mut ranges: Vec<bib_types::SearchHighlight> = Vec::new();
+    for (from, to) in bytes {
+        let start = snippet[..from].chars().count();
+        let end = start + snippet[from..to].chars().count();
+        if let Some(previous) = ranges.last_mut() {
+            if previous.end >= start {
+                previous.end = previous.end.max(end);
+                continue;
+            }
+        }
+        ranges.push(bib_types::SearchHighlight { start, end });
+    }
+    ranges
+}

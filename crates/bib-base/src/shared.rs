@@ -76,6 +76,7 @@ fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
 /// (`Arc`-backed).
 #[derive(Clone)]
 pub struct BibShared {
+    pub search_cancellations: Arc<crate::search_cancellation::SearchCancellationRegistry>,
     /// Storage handle for the bibliography library (articles, collections,
     /// fulltexts, annotations, …).
     pub bib: Arc<BibBase>,
@@ -178,6 +179,7 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            search_cancellations: Default::default(),
             bib,
             file_storage: None,
             gateway,
@@ -222,6 +224,7 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            search_cancellations: Default::default(),
             bib,
             file_storage: None,
             gateway,

@@ -101,4 +101,9 @@ jobs:
       - run: npm --prefix apps/gui run test:reading
       - run: npm --prefix apps/gui run test:pdf
       - run: npm --prefix apps/gui run test:pdf-selection
+      - run: npm --prefix apps/gui run test:txt
+      - run: npm --prefix apps/gui run test:bib-menu
+      - run: npm --prefix apps/gui run test:collections
+      - run: npm --prefix apps/gui run test:bib-search
+      - run: npm --prefix apps/gui run test:bib-workflow
       - run: npm --prefix apps/gui run build

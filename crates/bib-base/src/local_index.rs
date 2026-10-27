@@ -51,6 +51,7 @@ pub(crate) struct IndexProgress {
 }
 
 pub(crate) struct LocalIndex {
+    pub(crate) filter_cache: crate::search_filters::MetadataCache,
     pub progress: std::sync::Arc<std::sync::Mutex<IndexProgress>>,
     reader: IndexReader,
     writer: IndexWriter,
@@ -172,6 +173,7 @@ impl LocalIndex {
             writer,
             fields,
             metadata: HashMap::new(),
+            filter_cache: Default::default(),
             revision,
             commit_token,
             pending: None,
@@ -407,6 +409,113 @@ impl LocalIndex {
         Ok(ranked)
     }
 
+    /// Collect actual positive-clause evidence only for an eligible article.
+    /// OR visits successful branches; NOT contributes no positive snippet.
+    pub(crate) fn evidence(
+        &self,
+        expression: Option<&SearchExpr>,
+        same_child: bool,
+        article_id: &str,
+    ) -> Result<Vec<SearchCandidate>> {
+        let searcher = self.reader.searcher();
+        let allowed = if same_child {
+            match expression {
+                Some(expr) => self.evaluate(expr, true, &searcher)?,
+                None => self.universe(true),
+            }
+        } else {
+            HashMap::new()
+        };
+        let mut out: HashMap<String, SearchCandidate> = HashMap::new();
+        if let Some(expr) = expression {
+            self.collect_evidence(
+                expr,
+                article_id,
+                &searcher,
+                same_child.then_some(&allowed),
+                true,
+                &mut out,
+            )?;
+        }
+        let mut out = out.into_values().collect::<Vec<_>>();
+        out.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.doc_id.cmp(&b.doc_id))
+        });
+        Ok(out)
+    }
+    fn collect_evidence(
+        &self,
+        expr: &SearchExpr,
+        article_id: &str,
+        searcher: &Searcher,
+        allowed: Option<&Matches>,
+        positive: bool,
+        out: &mut HashMap<String, SearchCandidate>,
+    ) -> Result<()> {
+        let eligible = self.evaluate(expr, allowed.is_some() && positive, searcher)?;
+        let matched = eligible
+            .values()
+            .any(|hit| hit.candidate.article_id == article_id);
+        if matched != positive {
+            return Ok(());
+        }
+        let narrowed = if positive {
+            allowed.map(|allowed| {
+                eligible
+                    .iter()
+                    .filter(|(key, _)| allowed.contains_key(*key))
+                    .map(|(key, hit)| (key.clone(), hit.clone()))
+                    .collect::<Matches>()
+            })
+        } else {
+            None
+        };
+        let allowed = if positive { narrowed.as_ref() } else { allowed };
+        match expr {
+            SearchExpr::And { clauses } | SearchExpr::Or { clauses } => {
+                for clause in clauses {
+                    self.collect_evidence(clause, article_id, searcher, allowed, positive, out)?;
+                }
+            }
+            SearchExpr::Not { clause } => {
+                self.collect_evidence(clause, article_id, searcher, allowed, !positive, out)?;
+            }
+            SearchExpr::Term { .. } | SearchExpr::Phrase { .. } | SearchExpr::Range { .. }
+                if positive =>
+            {
+                for hit in self.evaluate(expr, true, searcher)?.into_values() {
+                    let mut candidate = hit.candidate;
+                    if candidate.article_id != article_id
+                        || allowed.is_some_and(|allowed| !allowed.contains_key(&candidate.doc_id))
+                    {
+                        continue;
+                    }
+                    if !matches!(candidate.matched_field.as_str(), "fulltext" | "annotation") {
+                        if let Some(parent) = self
+                            .metadata
+                            .values()
+                            .find(|m| m.article_id == article_id && m.kind == "item")
+                        {
+                            candidate.doc_id = parent.doc_id.clone();
+                            candidate.anchor_key = parent.anchor_key.clone();
+                            candidate.kind = "item".into();
+                        }
+                    }
+                    if out
+                        .get(&candidate.doc_id)
+                        .is_none_or(|old| old.score < candidate.score)
+                    {
+                        out.insert(candidate.doc_id.clone(), candidate);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn evaluate(
         &self,
         expr: &SearchExpr,
@@ -460,6 +569,14 @@ impl LocalIndex {
                             && upper.is_none_or(|bound| year <= bound)
                     })
                 });
+                for hit in out.values_mut() {
+                    hit.candidate.matched_field = "year_text".into();
+                    hit.candidate.snippet_query = hit
+                        .candidate
+                        .year
+                        .map(|year| year.to_string())
+                        .unwrap_or_default();
+                }
                 Ok(out)
             }
             SearchExpr::Term { value, field } | SearchExpr::Phrase { value, field } => {
@@ -468,6 +585,10 @@ impl LocalIndex {
                     let year = parse_year(value)?;
                     let mut out = self.universe(same_child);
                     out.retain(|_, hit| hit.candidate.year == Some(year));
+                    for hit in out.values_mut() {
+                        hit.candidate.matched_field = "year_text".into();
+                        hit.candidate.snippet_query = value.clone();
+                    }
                     return Ok(out);
                 }
                 let docs = if field == SearchField::Identifier {
@@ -662,6 +783,7 @@ impl LocalIndex {
 }
 
 type Matches = HashMap<String, Match>;
+#[derive(Clone)]
 struct Match {
     candidate: SearchCandidate,
     best_score: f64,
@@ -718,7 +840,7 @@ pub(crate) fn parse_year(value: &str) -> Result<i64> {
         .filter(|year| (0..=9999).contains(year))
         .ok_or_else(|| invalid("year must be an integer between 0 and 9999"))
 }
-fn validate(expr: &SearchExpr, depth: usize, nodes: &mut usize) -> Result<()> {
+pub(crate) fn validate(expr: &SearchExpr, depth: usize, nodes: &mut usize) -> Result<()> {
     *nodes += 1;
     if depth > 32 || *nodes > 128 {
         return Err(invalid("query exceeds 128 clauses or 32 nesting levels"));

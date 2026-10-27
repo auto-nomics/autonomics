@@ -6,6 +6,8 @@ type ScrollAreaProps = ScrollAreaPrimitive.Root.Props & {
   contentClassName?: string
   scrollOrientation?: "vertical" | "both"
   viewportRef?: React.Ref<HTMLDivElement>
+  viewportLabel?: string
+  viewportTabIndex?: number
   viewportClassName?: string
 }
 
@@ -16,6 +18,8 @@ function ScrollArea({
   scrollOrientation = "vertical",
   viewportRef,
   viewportClassName,
+  viewportLabel,
+  viewportTabIndex,
   ...props
 }: ScrollAreaProps) {
   const supportsHorizontal = scrollOrientation === "both"
@@ -28,6 +32,9 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         ref={viewportRef}
+        data-slot="scroll-area-viewport"
+        aria-label={viewportLabel}
+        tabIndex={viewportTabIndex}
         className={cn("size-full overscroll-contain rounded-[inherit] outline-none", viewportClassName)}
       >
         <ScrollAreaPrimitive.Content

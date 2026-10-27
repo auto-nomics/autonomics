@@ -20,6 +20,15 @@ use turso::{
 /// Search owns a separate read connection. Its long replay/query work cannot
 /// hold the storage actor's connection or delay metadata writes and status.
 pub(crate) enum SearchJob {
+    Export {
+        request: SearchRequestV2,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<bib_types::Article>>>,
+    },
+    Evidence {
+        article_id: String,
+        input: bib_types::SearchEvidenceRequest,
+        reply: tokio::sync::oneshot::Sender<Result<bib_types::SearchEvidencePage>>,
+    },
     V2 {
         request: SearchRequestV2,
         reply: tokio::sync::oneshot::Sender<Result<SearchPageV2>>,
@@ -41,6 +50,12 @@ pub(crate) enum SearchJob {
 impl SearchJob {
     pub fn reject(self) {
         match self {
+            Self::Export { reply, .. } => {
+                let _ = reply.send(Err(Error::ActorStopped));
+            }
+            Self::Evidence { reply, .. } => {
+                let _ = reply.send(Err(Error::ActorStopped));
+            }
             Self::V2 { reply, .. } => {
                 let _ = reply.send(Err(Error::ActorStopped));
             }
@@ -59,6 +74,20 @@ impl SearchJob {
     }
     async fn run(self, core: &BibCore) {
         match self {
+            Self::Export { request, reply } => {
+                if !reply.is_closed() {
+                    let _ = reply.send(core.export_search(request).await);
+                }
+            }
+            Self::Evidence {
+                article_id,
+                input,
+                reply,
+            } => {
+                if !reply.is_closed() {
+                    let _ = reply.send(core.search_evidence(&article_id, input).await);
+                }
+            }
             Self::V2 { request, reply } => {
                 if !reply.is_closed() {
                     let _ = reply.send(core.search_v2(request).await);
@@ -137,6 +166,10 @@ impl BibBase {
     }
     pub async fn rebuild_search_index(&self) -> Result<()> {
         self.call(|reply| BibCommand::RebuildSearchIndex { reply })
+            .await
+    }
+    pub async fn export_search(&self, request: SearchRequestV2) -> Result<Vec<bib_types::Article>> {
+        self.call(|reply| BibCommand::ExportSearch { request, reply })
             .await
     }
     pub async fn search_v2(&self, request: SearchRequestV2) -> Result<SearchPageV2> {
@@ -431,58 +464,27 @@ impl BibCore {
         .map_err(task_error)?
     }
 
-    pub(crate) async fn local_matches_legacy(&self, query: &str) -> Result<Vec<SearchCandidate>> {
+    /// Called inside the caller's read transaction so ranking, scope,
+    /// hydration, and snippets share one source snapshot.
+    pub(crate) async fn local_matches_snapshot(&self, query: &str) -> Result<Vec<SearchCandidate>> {
         if self.search_engine == SearchEngineMode::Legacy {
+            crate::legacy_index::refresh(&self.conn()).await?;
             return self.legacy_candidates(query).await;
         }
-        let terms = unique_query_terms(query);
-        if terms.len() > 128 {
-            return Err(invalid("queries may contain at most 128 distinct terms"));
-        }
-        if !query.trim().is_empty() && terms.is_empty() {
+        // Preserve the old endpoint's empty result for punctuation-only
+        // input, including SQL wildcard characters. V2 reports invalid ASTs.
+        if !query.trim().is_empty() && unique_query_terms(query).is_empty() {
             return Ok(Vec::new());
         }
-        let expression = if terms.is_empty() {
-            None
-        } else {
-            let mut seen = HashSet::new();
-            let clauses = query
-                .split_whitespace()
-                .filter_map(|value| {
-                    let normalized = unique_query_terms(value);
-                    if normalized.is_empty() || !seen.insert(normalized.join(" ")) {
-                        None
-                    } else {
-                        Some(SearchExpr::Term {
-                            value: value.into(),
-                            field: None,
-                        })
-                    }
-                })
-                .collect();
-            Some(SearchExpr::And { clauses })
-        };
-        let conn = self.conn();
-        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
-        let result = async {
-            self.refresh_index_snapshot().await?;
-            let mut hits = self.ranked_local(expression, false).await?;
-            if query.trim().is_empty() {
-                hits.sort_by_cached_key(|hit| (hit.title.to_lowercase(), hit.article_id.clone()));
-            }
-            Ok(hits)
+        let request = validate_request(SearchRequestV2 {
+            query: query.into(),
+            ..Default::default()
+        })?;
+        let (mut hits, _) = self.scoped_search_candidates(&request).await?;
+        if query.trim().is_empty() {
+            sort_candidates(&mut hits, SearchSort::Title);
         }
-        .await;
-        match result {
-            Ok(hits) => {
-                tx.commit().await?;
-                Ok(hits)
-            }
-            Err(error) => {
-                let _ = tx.rollback().await;
-                Err(error)
-            }
-        }
+        Ok(hits)
     }
 
     async fn legacy_candidates(&self, query: &str) -> Result<Vec<SearchCandidate>> {
@@ -560,13 +562,33 @@ impl BibCore {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<SearchHit>> {
-        let ranked = self.local_matches_legacy(query).await?;
-        let ranked = ranked
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .collect::<Vec<_>>();
-        self.render_search_hits(&ranked, query).await
+        let conn = self.conn();
+        let behavior = if self.search_engine == SearchEngineMode::Legacy {
+            TransactionBehavior::Immediate
+        } else {
+            TransactionBehavior::Deferred
+        };
+        let tx = Transaction::new_unchecked(&conn, behavior).await?;
+        let result = async {
+            let ranked = self.local_matches_snapshot(query).await?;
+            let ranked = ranked
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect::<Vec<_>>();
+            self.render_search_hits(&ranked, query).await
+        }
+        .await;
+        match result {
+            Ok(hits) => {
+                tx.commit().await?;
+                Ok(hits)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
     }
 
     pub(crate) async fn render_search_hits(
@@ -638,17 +660,63 @@ impl BibCore {
         }
         Ok(ranked
             .iter()
-            .map(|hit| SearchHit {
-                article_id: hit.article_id.clone(),
-                title: hit.title.clone(),
-                score: hit.score,
-                snippet: snippets
+            .map(|hit| {
+                let snippet = snippets
                     .remove(&hit.doc_id)
-                    .unwrap_or_else(|| hit.title.clone()),
-                anchor_key: Some(hit.anchor_key.clone()),
-                matched_field: Some(hit.matched_field.clone()),
+                    .unwrap_or_else(|| hit.title.clone());
+                let ranges = crate::search_analyzer::highlight_ranges(&hit.snippet_query, &snippet);
+                SearchHit {
+                    article_id: hit.article_id.clone(),
+                    title: hit.title.clone(),
+                    score: hit.score,
+                    snippet,
+                    highlight_ranges: ranges,
+                    anchor_key: Some(hit.anchor_key.clone()),
+                    matched_field: Some(hit.matched_field.clone()),
+                }
             })
             .collect())
+    }
+
+    pub(crate) async fn export_search(
+        &self,
+        mut request: SearchRequestV2,
+    ) -> Result<Vec<bib_types::Article>> {
+        if self.search_engine == SearchEngineMode::Legacy {
+            return Err(invalid(
+                "V2 export is disabled by the legacy engine rollout flag",
+            ));
+        }
+        request = validate_request(request)?;
+        if request.cursor.is_some() {
+            return Err(invalid(
+                "export requires a complete search without a page cursor",
+            ));
+        }
+        request.include_facets = false;
+        request.include_articles = false;
+        let conn = self.conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
+        let result = async {
+            let (mut hits, _) = self.scoped_search_candidates(&request).await?;
+            sort_candidates(&mut hits, request.sort);
+            let ids = hits
+                .into_iter()
+                .map(|hit| hit.article_id)
+                .collect::<Vec<_>>();
+            self.hydrate_article_ids(&ids).await
+        }
+        .await;
+        match result {
+            Ok(articles) => {
+                tx.commit().await?;
+                Ok(articles)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
     }
 
     pub(crate) async fn search_v2(&self, mut request: SearchRequestV2) -> Result<SearchPageV2> {
@@ -657,30 +725,7 @@ impl BibCore {
                 "V2 search is disabled by the legacy engine rollout flag",
             ));
         }
-        if !request.query.trim().is_empty() {
-            if request.expression.is_some() {
-                return Err(invalid("supply either query or expression"));
-            }
-            request.expression = bib_types::parse_search_query(&request.query)
-                .map_err(|e| invalid(e.to_string()))?;
-        }
-        if !(1..=200).contains(&request.page_size) {
-            return Err(invalid("page_size must be between 1 and 200"));
-        }
-        if request.mode != SearchMode::Lexical {
-            return Err(invalid("local search currently supports lexical mode"));
-        }
-        if request.sources.iter().any(|source| source != "local") {
-            return Err(invalid("local search supports only the local source"));
-        }
-        if request.sort == SearchSort::CitationCount {
-            return Err(invalid(
-                "citation-count ordering requires external citation data",
-            ));
-        }
-        if request.scope.unfiled && request.scope.collection_id.is_some() {
-            return Err(invalid("unfiled and collection scope cannot be combined"));
-        }
+        request = validate_request(request)?;
         let conn = self.conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
         let result = self.search_v2_snapshot(request).await;
@@ -696,9 +741,10 @@ impl BibCore {
         }
     }
 
-    async fn search_v2_snapshot(&self, mut request: SearchRequestV2) -> Result<SearchPageV2> {
-        let cursor = request.cursor.take();
-        let query_bytes = serde_json::to_vec(&request)?;
+    pub(crate) async fn scoped_search_candidates(
+        &self,
+        request: &SearchRequestV2,
+    ) -> Result<(Vec<SearchCandidate>, Option<bib_types::SearchFacets>)> {
         self.refresh_index_snapshot().await?;
         let mut hits = self
             .ranked_local(request.expression.clone(), request.scope.require_same_child)
@@ -740,22 +786,22 @@ impl BibCore {
             }
             hits.retain(|hit| !filed.contains(&hit.article_id));
         }
-        match request.sort {
-            SearchSort::Title => {
-                hits.sort_by_cached_key(|hit| (hit.title.to_lowercase(), hit.article_id.clone()))
-            }
-            SearchSort::Newest | SearchSort::Oldest => hits.sort_by(|a, b| {
-                match (a.year, b.year) {
-                    (Some(a), Some(b)) if request.sort == SearchSort::Newest => b.cmp(&a),
-                    (Some(a), Some(b)) => a.cmp(&b),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                }
-                .then_with(|| a.article_id.cmp(&b.article_id))
-            }),
-            _ => {}
-        }
+        let facets = crate::search_filters::apply(
+            self,
+            &mut hits,
+            &request.filters,
+            request.scope.library_id,
+            request.include_facets,
+        )
+        .await?;
+        Ok((hits, facets))
+    }
+
+    async fn search_v2_snapshot(&self, mut request: SearchRequestV2) -> Result<SearchPageV2> {
+        let cursor = request.cursor.take();
+        let query_bytes = serde_json::to_vec(&request)?;
+        let (mut hits, facets) = self.scoped_search_candidates(&request).await?;
+        sort_candidates(&mut hits, request.sort);
         let (revision, token) = {
             let index = self
                 .search_index
@@ -804,15 +850,164 @@ impl BibCore {
         } else {
             None
         };
+        let (articles, associations) = if request.include_articles {
+            let ids = hits[offset..end]
+                .iter()
+                .map(|hit| hit.article_id.clone())
+                .collect::<Vec<_>>();
+            (
+                self.hydrate_article_ids(&ids).await?,
+                self.article_associations(&ids).await?,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let text = positive_text(request.expression.as_ref());
         let hits = self.render_search_hits(&hits[offset..end], &text).await?;
         Ok(SearchPageV2 {
             hits,
+            articles,
+            associations,
             total,
             next_cursor,
             index_generation: generation,
+            facets,
         })
     }
+}
+fn sort_candidates(hits: &mut [SearchCandidate], sort: SearchSort) {
+    match sort {
+        SearchSort::Title => {
+            hits.sort_by_cached_key(|hit| (hit.title.to_lowercase(), hit.article_id.clone()))
+        }
+        SearchSort::Newest | SearchSort::Oldest => hits.sort_by(|a, b| {
+            match (a.year, b.year) {
+                (Some(a), Some(b)) if sort == SearchSort::Newest => b.cmp(&a),
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                _ => std::cmp::Ordering::Equal,
+            }
+            .then_with(|| a.article_id.cmp(&b.article_id))
+        }),
+        _ => {}
+    }
+}
+
+fn apply_default_fields(expr: SearchExpr, fields: &[bib_types::SearchField]) -> Result<SearchExpr> {
+    use bib_types::SearchField;
+    let phrase = matches!(&expr, SearchExpr::Phrase { .. });
+    match expr {
+        SearchExpr::Term { value, field } | SearchExpr::Phrase { value, field }
+            if field.is_none() || field == Some(SearchField::Any) =>
+        {
+            // Preserve positional phrase semantics in each chosen field.
+            let mut clauses = Vec::new();
+            for field in fields {
+                if *field == SearchField::Year && crate::local_index::parse_year(&value).is_err() {
+                    continue;
+                }
+                if clauses.iter().any(|clause| match clause {
+                    SearchExpr::Term {
+                        field: existing, ..
+                    }
+                    | SearchExpr::Phrase {
+                        field: existing, ..
+                    } => *existing == Some(*field),
+                    _ => false,
+                }) {
+                    continue;
+                }
+                clauses.push(if phrase {
+                    SearchExpr::Phrase {
+                        value: value.clone(),
+                        field: Some(*field),
+                    }
+                } else {
+                    SearchExpr::Term {
+                        value: value.clone(),
+                        field: Some(*field),
+                    }
+                });
+            }
+            if clauses.is_empty() {
+                return Err(invalid(
+                    "unfielded text is incompatible with the selected default fields",
+                ));
+            }
+            Ok(if clauses.len() == 1 {
+                clauses.remove(0)
+            } else {
+                SearchExpr::Or { clauses }
+            })
+        }
+        SearchExpr::And { clauses } => Ok(SearchExpr::And {
+            clauses: clauses
+                .into_iter()
+                .map(|c| apply_default_fields(c, fields))
+                .collect::<Result<_>>()?,
+        }),
+        SearchExpr::Or { clauses } => Ok(SearchExpr::Or {
+            clauses: clauses
+                .into_iter()
+                .map(|c| apply_default_fields(c, fields))
+                .collect::<Result<_>>()?,
+        }),
+        SearchExpr::Not { clause } => Ok(SearchExpr::Not {
+            clause: Box::new(apply_default_fields(*clause, fields)?),
+        }),
+        other => Ok(other),
+    }
+}
+
+pub(crate) fn validate_request(mut request: SearchRequestV2) -> Result<SearchRequestV2> {
+    if !request.query.trim().is_empty() {
+        if request.expression.is_some() {
+            return Err(invalid("supply either query or expression"));
+        }
+        request.expression =
+            bib_types::parse_search_query(&request.query).map_err(|e| invalid(e.to_string()))?;
+    }
+    if !(1..=200).contains(&request.page_size) {
+        return Err(invalid("page_size must be between 1 and 200"));
+    }
+    if request.mode != SearchMode::Lexical {
+        return Err(invalid("local search currently supports lexical mode"));
+    }
+    if request.sources.iter().any(|source| source != "local") {
+        return Err(invalid("local search supports only the local source"));
+    }
+    if request.sort == SearchSort::CitationCount {
+        return Err(invalid(
+            "citation-count ordering requires external citation data",
+        ));
+    }
+    crate::search_filters::validate(&request.filters)?;
+    if request.scope.library_id.is_some_and(|id| id <= 0) {
+        return Err(invalid("library_id must be positive"));
+    }
+    if request.scope.unfiled && request.scope.collection_id.is_some() {
+        return Err(invalid("unfiled and collection scope cannot be combined"));
+    }
+    if request.default_fields.len() > 10
+        || request
+            .default_fields
+            .contains(&bib_types::SearchField::Any)
+    {
+        return Err(invalid(
+            "default_fields must contain at most 10 concrete fields",
+        ));
+    }
+    if !request.default_fields.is_empty() {
+        request.expression = request
+            .expression
+            .map(|expr| apply_default_fields(expr, &request.default_fields))
+            .transpose()?;
+    }
+    if let Some(expr) = &request.expression {
+        crate::local_index::validate(expr, 0, &mut 0)?;
+    }
+    Ok(request)
 }
 fn positive_text(expr: Option<&SearchExpr>) -> String {
     fn visit(expr: &SearchExpr, positive: bool, values: &mut Vec<String>) {
@@ -857,6 +1052,28 @@ mod recovery_tests {
             .to_string_lossy()
             .into_owned();
         (directory, path)
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_queued_search_does_not_replay_or_evaluate() {
+        let (_directory, path) = database();
+        let core = BibCore::open(&path).await.unwrap();
+        core.upsert_article(&Article::new("a", "Queued target"))
+            .await
+            .unwrap();
+        core.search_index.lock().unwrap().revision = None;
+        let (reply, receiver) = tokio::sync::oneshot::channel();
+        drop(receiver);
+        SearchJob::V2 {
+            request: SearchRequestV2::default(),
+            reply,
+        }
+        .run(&core)
+        .await;
+        assert!(
+            core.search_index.lock().unwrap().revision.is_none(),
+            "a cancelled queue entry must never touch the index"
+        );
     }
 
     #[tokio::test]

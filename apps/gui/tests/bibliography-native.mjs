@@ -1,0 +1,37 @@
+import '/src/app.css';
+import { mountBibliography } from './bibliography-menu-mount.tsx';
+import { invoke } from '@tauri-apps/api/core';
+const evidence=[];
+const wait=async(test,label)=>{const end=Date.now()+12000;while(Date.now()<end){const value=test();if(value)return value;await new Promise(resolve=>setTimeout(resolve,30));}throw new Error('Timed out: '+label);};
+const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent.trim()===text||node.getAttribute('aria-label')===text);
+const setInput=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};
+const finish=async result=>{await invoke('smoke_done',{result});};
+window.addEventListener('error',event=>void finish({ok:false,error:event.message,evidence}));
+window.addEventListener('unhandledrejection',event=>void finish({ok:false,error:String(event.reason),evidence}));
+try {
+  mountBibliography(document.body);
+  const input=await wait(()=>document.querySelector('input[aria-label="Search bibliography"]'),'search input');
+  await wait(()=>document.querySelector('[data-article-id="native-a"]'),'initial library');
+  setInput(input,'fulltext:"gene editing" AND year:2020..2026');
+  await wait(()=>document.querySelector('mark')?.textContent.includes('gene editing'),'lexical search');evidence.push('native IPC search');
+  (await wait(()=>button('Filters'),'filter button')).click();
+  const year=await wait(()=>document.querySelector('input[aria-label="Filter year from"]'),'year filter');setInput(year,'2021');
+  await wait(()=>new URL(location.href).searchParams.get('bib_search')?.includes('2021'),'persisted scope/filter');
+  (await wait(()=>button('Save current search'),'save action')).click();
+  const name=await wait(()=>document.querySelector('input[aria-label="Search name"]'),'saved search name');setInput(name,'Native living review');
+  (await wait(()=>{const node=button('Save rule');return node&&!node.disabled?node:null;},'enabled save')).click();
+  await wait(()=>button('⌕ Native living review'),'persisted rule');
+  const saved=await invoke('api',{method:'GET',path:'/bib/saved-searches',body:null,requestId:null});
+  if(saved.data.saved_searches[0].request.filters.year_from!==2021)throw new Error('Saved rule lost the year filter');evidence.push('native saved search and filter');
+  document.querySelector('[data-article-id="native-a"] [data-bib-row-primary]').click();
+  (await wait(()=>button('Open evidence'),'evidence object')).click();
+  const reader=await wait(()=>document.querySelector('.zotero-pdf-reader[data-reader-kind="txt"]'),'non-preferred attachment reader');
+  await wait(()=>[...reader.querySelectorAll('button')].some(node=>node.textContent.includes('Match 1')),'located source text');
+  const content=reader.querySelector('.txt-reader-article')?.textContent??reader.textContent;
+  if(!content.includes('second file')||content.includes('Unrelated preferred file.'))throw new Error('Reader opened the preferred file instead of the matching attachment');
+  evidence.push('native binary IPC to matching attachment','source text located');
+  reader.querySelector('[data-action="close"]').click();
+  await wait(()=>!document.querySelector('.zotero-pdf-reader'),'return from reader');
+  if(input.value!=='fulltext:"gene editing" AND year:2020..2026')throw new Error('Returning lost the query');
+  evidence.push('query restored after reading');await finish({ok:true,runtime:'Tauri WebKitGTK',evidence});
+} catch(error) {await finish({ok:false,error:String(error),evidence});}

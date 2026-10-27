@@ -55,6 +55,20 @@ pub(crate) enum BibCommand {
         reply: oneshot::Sender<Result<()>>,
     },
 
+    ListSavedSearches {
+        reply: oneshot::Sender<Result<Vec<bib_types::SavedSearch>>>,
+    },
+    SaveSearch {
+        id: Option<String>,
+        input: bib_types::SaveSearchInput,
+        reply: oneshot::Sender<Result<bib_types::SavedSearch>>,
+    },
+    DeleteSavedSearch {
+        id: String,
+        expected_version: u64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+
     // Articles
     UpsertArticle {
         article: Article,
@@ -94,6 +108,15 @@ pub(crate) enum BibCommand {
     },
     RebuildSearchIndex {
         reply: oneshot::Sender<Result<()>>,
+    },
+    ExportSearch {
+        request: SearchRequestV2,
+        reply: oneshot::Sender<Result<Vec<Article>>>,
+    },
+    SearchEvidence {
+        article_id: String,
+        input: bib_types::SearchEvidenceRequest,
+        reply: oneshot::Sender<Result<bib_types::SearchEvidencePage>>,
     },
     SearchV2 {
         request: SearchRequestV2,
@@ -394,6 +417,19 @@ impl BibCommand {
             Self::ListAllArticles { reply } => {
                 let _ = reply.send(core.list_all_articles().await);
             }
+            Self::ListSavedSearches { reply } => {
+                let _ = reply.send(core.list_saved_searches().await);
+            }
+            Self::SaveSearch { id, input, reply } => {
+                let _ = reply.send(core.save_search(id.as_deref(), input).await);
+            }
+            Self::DeleteSavedSearch {
+                id,
+                expected_version,
+                reply,
+            } => {
+                let _ = reply.send(core.delete_saved_search(&id, expected_version).await);
+            }
             Self::SearchIndexStatus { reply } => {
                 let _ = reply.send(core.search_index_status().await);
             }
@@ -413,6 +449,16 @@ impl BibCommand {
                     index.revision = None;
                 }
                 let _ = reply.send(core.refresh_search_index().await);
+            }
+            Self::ExportSearch { request, reply } => {
+                let _ = reply.send(core.export_search(request).await);
+            }
+            Self::SearchEvidence {
+                article_id,
+                input,
+                reply,
+            } => {
+                let _ = reply.send(core.search_evidence(&article_id, input).await);
             }
             Self::SearchV2 { request, reply } => {
                 let _ = reply.send(core.search_v2(request).await);
@@ -826,6 +872,16 @@ impl BibCommand {
     fn into_search_job(self) -> SearchRoute {
         use crate::search::SearchJob;
         let job = match self {
+            Self::ExportSearch { request, reply } => SearchJob::Export { request, reply },
+            Self::SearchEvidence {
+                article_id,
+                input,
+                reply,
+            } => SearchJob::Evidence {
+                article_id,
+                input,
+                reply,
+            },
             Self::SearchV2 { request, reply } => SearchJob::V2 { request, reply },
             Self::SearchArticles {
                 query,

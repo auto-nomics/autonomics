@@ -78,7 +78,7 @@ try {
     const { mountBibliography } = await import('/tests/bibliography-menu-mount.tsx');
     mountBibliography(document.body);
   });
-  await page.waitForFunction(() => document.querySelectorAll('button[aria-expanded]').length === 2);
+  await page.waitForFunction(() => document.querySelectorAll('button[data-bib-row-primary]').length === 2);
 
   const menuItem = (name) =>
     page.locator('[data-slot=context-menu-content]').last().locator(`[data-slot=context-menu-item]:has-text("${name}")`);

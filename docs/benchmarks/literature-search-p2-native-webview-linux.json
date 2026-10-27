@@ -1,0 +1,16 @@
+{
+  "evidence": [
+    "native IPC search",
+    "native saved search and filter",
+    "native binary IPC to matching attachment",
+    "source text located",
+    "query restored after reading"
+  ],
+  "ok": true,
+  "runtime": "Tauri WebKitGTK",
+  "recorded_at": "2026-10-27T14:00:48.092181+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "command": "npm --prefix apps/gui run test:bib-native",
+  "transport": "actual Tauri IPC + reqwest + in-process API server and isolated database",
+  "scope": "Linux WebKitGTK smoke; macOS/Windows and manual screen reader verification remain release gates"
+}

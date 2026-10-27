@@ -103,3 +103,40 @@ curl -X POST http://127.0.0.1:8765/api/v1/bib/articles/<article-id>/fulltext \
 发布开关 `AUTONOMICS_BIB_SEARCH_ENGINE=tantivy|legacy` 控制新引擎，默认 `tantivy`。设为 `legacy` 并重启后，旧文章/集合查询使用既有倒排词项表；V2 与重建入口返回明确的禁用错误，索引状态报告 `engine: "legacy"`。Rust 调用方也可用 `BibBase::open_with_search_engine` 显式选择引擎。派生索引和事务事件保留，恢复 `tantivy` 后可追平，不需要回退或替换权威数据库。
 
 汉字使用词典分词和逐字位置约束；中文短语必须相邻，复合词内的词可被召回。`IL-6`、`HLA-A*02:01`、`α-synuclein` 等带符号科学词项按相邻词部分处理，`p53` 不匹配 `p530`。索引分析格式升级使用 `.search-v2` 新目录，旧目录保留以便审查和回退。
+
+### P2 搜索工作流扩展（工作区实现）
+
+V2 可选 `include_articles:true`，在同一读取快照中批量加载当前页文献信息；HTTP 响应另有 `attachment_summaries`。`include_facets:true` 返回分页前的分面：tags、creators、publication_types、years、fulltext_status。分面计数按不同父文献计数，忽略本分面自己的筛选，但保留查询、scope 和其他筛选；空缺年份以 `unknown` 桶展示。状态按附件判断，同一篇可能同时出现在 indexed 和 failed 桶；计数之和可能大于父文献总数。
+
+精确筛选使用 `filters`：`tag_ids`、`creator_ids`、`publication_types`（各列表内部 OR、列表之间 AND），以及 `year_from/year_to`、`has_fulltext`、`has_annotations`、`fulltext_status`。`has_fulltext` 表示存在文件附件元数据或非空提取文本，不把 URL-only 链接作为文件；`fulltext_status` 可为 indexed/pending/failed/missing，indexed 表示至少一个附件文本已进入当前检索快照。年份有界时排除缺失年份。每个列表最多 50 个选择；`scope.library_id` 可限制文献库。
+
+为降低连续输入和翻页成本，元数据缓存以索引 revision/token 为水位，按同一数据库快照的 outbox 逐文献失效。数据库恢复、同 revision 不同 token 会清空缓存。不会缓存全文或跳过当前范围/筛选/权限路径。
+
+```json
+{"query":"title:genetics","scope":{"collection_id":"review","include_descendants":true},"filters":{"year_from":2020,"publication_types":["Review"],"has_annotations":true},"sort":"newest","include_facets":true,"include_articles":true,"page_size":50}
+```
+
+| 方法 | 路径 | 语义 |
+| --- | --- | --- |
+| POST | `/api/v1/bib/search/parse` | `{query}`，返回 `{expression}`，与 V2 共用 parser，图形条件树可无损往返 |
+| POST | `/api/v1/bib/search/cancel` | `{request_id}`，返回 202；配合原始请求的 `x-search-request-id`，取消后返回 499 |
+| GET | `/api/v1/bib/saved-searches` | 返回 `saved_searches`，规则持久保存在数据库中 |
+| POST | `/api/v1/bib/saved-searches` | `{name,request}`，返回 201 及 `saved_search`；保存时清除临时 cursor |
+| PUT | `/api/v1/bib/saved-searches/{id}` | `{name,request,expected_version}`，成功后 version 加一；版本冲突返回 409 |
+| DELETE | `/api/v1/bib/saved-searches/{id}?expected_version=N` | 204；不存在为 404、版本冲突为 409；不删除任何文献 |
+| POST | `/api/v1/bib/articles/{id}/search-evidence` | `{search:SearchRequestV2,index_generation?:string}`，按相同查询/scope/filters 检查资格，返回 evidence/total/next_cursor/index_generation |
+
+保存搜索版本为 schema_version 1，保存查询规则而非结果；取出 request 重新执行 `/search/v2` 即可动态获得新增匹配文献。名称要求 1–120 个可打印字符，非法 AST/过滤条件不能持久化。
+
+证据支持独立 cursor 分页，游标与文献、查询、范围、筛选和内容代际绑定。查询结果旧代际传入 `index_generation` 后若数据已改变，返回 400 要求刷新。证据 total 是不同证据对象数，不是词出现次数。仅返回实际满足布尔分支的正向证据，NOT 不生成虚构命中片段。
+
+每个证据携带根 item_key、可选 attachment_key、annotation_key/annotation_id、matched_field、snippet、highlight_ranges、matched_query 和 content_revision。高亮范围是片段内 **Unicode code point 半开区间**，JavaScript 使用 `Array.from(snippet)`，不能直接对字符串按 UTF-16 下标切片。只有已存批注锚点才返回 page；无可靠 PDF/SDT 位置映射时，location_status 为 text_search，调用方打开对应附件并使用 matched_query 定位，不推断页码。metadata 证据在详情中展示。
+
+
+`POST /api/v1/bib/search/export` 接收 `{search:SearchRequestV2,format?:"bibtex"|"ris"|"markdown"|"csl_json"}`。查询、scope、精确筛选、排序和元数据水合在同一读取事务中执行，导出全部匹配记录；不受当前 page_size 或已加载页数限制。带 cursor 的请求返回 400，避免把一次分页误当成完整导出。旧 GET `/export?ids=...` 继续支持显式勾选记录和勾选顺序。
+
+`default_fields` 可为无字段词/短语指定多个具体字段（字段之间 OR），显式 `title:` 等不受影响；最多 10 个字段，不接受 `any`。标题/作者/年份与元数据/笔记快捷范围通过该属性实现。旧本地搜索 API、集合和 Agent/TUI 默认使用相同 parser/AST；显式 legacy 引擎只保留基础词项兼容行为。
+
+取消适用于 V2、证据和完整搜索导出，支持取消先于注册到达；request ID 为 1–128 个 ASCII 字母、数字或 `-_.`。取消会结束等待、丢弃接收端并跳过尚未运行的搜索任务；正在执行的 CPU 索引/查询不会被强制中断。浏览器通过 AbortSignal 和取消 POST，Tauri 通过 request ID 与取消命令中止底层 HTTP 请求。
+
+附件证据带可选 `attachment_hash`。读取 `/articles/{id}/attachments/{attachment_key}/raw?expected_hash=...` 时，hash 与当前原始附件不符返回 409，避免点击旧证据后打开已替换的文件。hash 必须由实际快照返回，调用方不自行猜测。

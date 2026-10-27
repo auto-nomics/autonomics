@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "platform": "linux",
+  "process_model": "posix",
+  "interruption": "SIGKILL",
+  "interrupted_exit_codes": [
+    -9,
+    -9
+  ],
+  "receipts": [
+    {
+      "phase": "seed",
+      "status": {
+        "building": false,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1001,
+        "indexed_revision": 1002,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 1001,
+        "source_revision": 1002,
+        "target_revision": null
+      }
+    },
+    {
+      "phase": "committed_pending",
+      "status": {
+        "building": false,
+        "durable": false,
+        "engine": "legacy",
+        "indexed_documents": 0,
+        "indexed_revision": null,
+        "last_error": null,
+        "pending_articles": 1001,
+        "processed_documents": 0,
+        "source_revision": 2003,
+        "target_revision": null
+      }
+    },
+    {
+      "phase": "building_uncommitted",
+      "status": {
+        "building": true,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1001,
+        "indexed_revision": 1002,
+        "last_error": null,
+        "pending_articles": 1001,
+        "processed_documents": 128,
+        "source_revision": 2003,
+        "target_revision": 2003
+      }
+    },
+    {
+      "anchor_example": "82EB6D76",
+      "deleted": 0,
+      "fresh": 1000,
+      "old": 0,
+      "phase": "verified",
+      "status": {
+        "building": false,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1000,
+        "indexed_revision": 2003,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 1000,
+        "source_revision": 2003,
+        "target_revision": null
+      }
+    },
+    {
+      "phase": "holding_durable_writer",
+      "status": {
+        "building": false,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1000,
+        "indexed_revision": 2003,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 0,
+        "source_revision": 2003,
+        "target_revision": null
+      }
+    },
+    {
+      "phase": "secondary_process_committed",
+      "status": {
+        "building": false,
+        "durable": false,
+        "engine": "tantivy",
+        "indexed_documents": 1001,
+        "indexed_revision": 2004,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 1,
+        "source_revision": 2004,
+        "target_revision": null
+      }
+    },
+    {
+      "phase": "observed_secondary_process",
+      "status": {
+        "building": false,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1001,
+        "indexed_revision": 2004,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 1,
+        "source_revision": 2004,
+        "target_revision": null
+      }
+    },
+    {
+      "anchor_example": "82EB6D76",
+      "deleted": 0,
+      "fresh": 1000,
+      "old": 0,
+      "phase": "verified",
+      "status": {
+        "building": false,
+        "durable": true,
+        "engine": "tantivy",
+        "indexed_documents": 1001,
+        "indexed_revision": 2004,
+        "last_error": null,
+        "pending_articles": 0,
+        "processed_documents": 1001,
+        "source_revision": 2004,
+        "target_revision": null
+      },
+      "case": "offline_backup_restore_without_index"
+    }
+  ],
+  "directory": "/tmp/bib-search-crash-d9fa7cot",
+  "backup_directory": "/tmp/bib-search-offline-backup-_ixe6gm_",
+  "recorded_at_unix": 1793109554.574896,
+  "result": "passed"
+}

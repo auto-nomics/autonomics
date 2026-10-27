@@ -891,6 +891,8 @@ pub struct SearchHit {
     pub score: f64,
     /// Text snippet around the best matching position.
     pub snippet: String,
+    #[serde(default)]
+    pub highlight_ranges: Vec<crate::search::SearchHighlight>,
     /// Zotero item key for the article, attachment, or annotation that matched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor_key: Option<String>,

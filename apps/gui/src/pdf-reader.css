@@ -9,7 +9,11 @@
   --reader-annotation-opacity: 1;
   position: fixed;
   inset: 0;
-  z-index: 160;
+  /* Below the floating agent workspace (z-40) so the chat panel stays
+     usable over the reader; still above view content and the bib
+     drawers (z-35). Reader-internal popups are capped by this stacking
+     context, so they cannot rise above the workspace either. */
+  z-index: 38;
   display: grid;
   grid-template-columns:
     calc(var(--reader-rail-width) + var(--reader-sidebar-width) + var(--reader-resizer-width))

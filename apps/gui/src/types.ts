@@ -174,7 +174,10 @@ export type BibCollection = {
   status?: string;
 };
 
+export type BibAttachment = { key: string; link_mode: number; content_type?: string | null; path?: string | null; title?: string | null; source_url?: string | null; vfs_path?: string | null; original_filename?: string | null; file_size?: number | null; storage_hash?: string | null };
+
 export type BibFullText = {
+  attachment_key?: string | null;
   file_format?: string | null;
   file_size?: number | null;
   source?: string | null;
@@ -207,6 +210,7 @@ export type BibRequest = {
 
 export type BibDetail = {
   article: BibArticle;
+  attachments?: BibAttachment[];
   fulltext: BibFullText | null;
   annotations: BibAnnotation[];
   fulltext_pagination?: {

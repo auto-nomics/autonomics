@@ -17,7 +17,7 @@
 //! | `bib_create_collection`| Create a new collection.                                |
 //! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
 //! | `bib_list_collection`  | List collections or articles within one.                |
-//! | `bib_search_library`   | LIKE search across local library (multi-query).         |
+//! | `bib_search_library`   | Fielded lexical search across local library (multi-query). |
 //! | `bib_get_article`      | Batch metadata plus full-text file references.          |
 //! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
 //! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
@@ -527,7 +527,7 @@ impl ToolFunction for BibListCollectionTool {
 }
 
 // ===========================================================================
-// bib_search_library — LIKE search across local library (multi-query, concurrent)
+// bib_search_library — lexical search across local library (multi-query)
 // ===========================================================================
 
 /// Result of a single query within a multi-query batch.
@@ -546,6 +546,8 @@ struct SearchQueryResult {
                   titles, abstracts, stored full-text content, **and user annotations** \
                   (notes/highlights/comments added via bib_add_note). \
                   Returns relevance-ranked results with snippets. \
+                  Supports field queries (title:, author:, year:, fulltext:), \
+                  quoted phrases, parentheses, and AND/OR/NOT. \
                   \
                   Pass one or more queries — each is run concurrently against the local \
                   database and returns its own result group. Use multiple queries when \
@@ -610,7 +612,7 @@ impl ToolFunction for BibSearchLibraryTool {
 }
 
 impl BibSearchLibraryTool {
-    /// Run a single LIKE query. Never errors — failures land in
+    /// Run a single query through the shared local search service. Failures land in
     /// `SearchQueryResult::error`.
     async fn search_one(&self, query: &str, limit: usize) -> SearchQueryResult {
         let hits = match self.bib.search_articles(query, limit, 0).await {

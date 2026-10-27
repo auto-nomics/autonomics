@@ -377,6 +377,9 @@ impl BibCore {
             .await?;
         }
 
+        crate::saved_searches::ensure(&conn).await?;
+        crate::saved_searches::ensure(&self.conn()).await?;
+
         // Mirror existing legacy rows into Zotero-compatible item tables.
         // This runs after legacy column backfills because it reads
         // extraction provenance from `fulltexts`.
@@ -1032,6 +1035,11 @@ impl BibBase {
 }
 
 pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Result<()> {
+    bump_search_revision(conn, article_id).await
+}
+
+/// Rebuild only when the explicit rollback engine needs its derived terms.
+pub(crate) async fn sync_legacy_search_terms(conn: &Connection, article_id: &str) -> Result<()> {
     conn.execute(
         "DELETE FROM searchTerms WHERE articleID = ?1",
         turso::params![article_id],
@@ -1127,7 +1135,6 @@ pub(crate) async fn sync_search_index(conn: &Connection, article_id: &str) -> Re
         )
         .await?;
     }
-    bump_search_revision(conn, article_id).await?;
     Ok(())
 }
 

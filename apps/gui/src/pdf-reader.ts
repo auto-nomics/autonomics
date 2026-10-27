@@ -1,3 +1,4 @@
+import { annotationPath, structurePath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget } from "./reader-target";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
@@ -122,30 +123,33 @@ export type PdfReaderHandle = {
   close: () => void;
 };
 
-let activeReader: PdfReaderHandle | null = null;
-
 export async function openPdfReader(options: {
   articleId: string;
   title: string;
   article?: BibArticle | null;
+  attachmentKey?: string | null;
+  expectedHash?: string | null;
+  search?: ReaderSearchTarget;
+  sessionToken?: number;
 }): Promise<PdfReaderHandle> {
-  activeReader?.close();
+  const token = options.sessionToken ?? beginReaderSession();
   // Right-click entry points may not know the stored format; sniff the served
   // content type and hand plain text to the TXT reader instead.
-  const raw = await fetchBibFulltextRaw(options.articleId);
+  const raw = await fetchBibFulltextRaw(options.articleId, options.attachmentKey, options.expectedHash);
+  if (!isReaderSession(token)) throw new DOMException("Reader opening superseded", "AbortError");
   if (!/pdf/i.test(raw.contentType)) {
-    return openTxtReader({ ...options, bytes: raw });
+    return openTxtReader({ ...options, bytes: raw, sessionToken: token });
   }
   const reader = await ZoteroStylePdfReader.open(
     options.articleId,
     options.title,
     options.article ?? null,
     raw,
+    options.attachmentKey ?? undefined, options.search, token,
   );
   const handle: PdfReaderHandle = {
     close: () => reader.destroy(),
   };
-  activeReader = handle;
   return handle;
 }
 
@@ -212,10 +216,15 @@ class ZoteroStylePdfReader {
     private readonly articleId: string,
     private readonly title: string,
     private readonly article: BibArticle | null,
+    private readonly sessionToken: number,
+    private readonly attachmentKey?: string,
+    private readonly initialSearch?: ReaderSearchTarget,
   ) {
     this.pdfTheme = this.readTheme();
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
+    this.root.setAttribute("role","dialog");this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
+    this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
     this.root.dataset.pdfTheme = this.pdfTheme;
     this.root.innerHTML = `
       <aside class="reader-sidebar-shell">
@@ -378,11 +387,16 @@ class ZoteroStylePdfReader {
     title: string,
     article: BibArticle | null = null,
     fulltext: { bytes: Uint8Array; contentType: string },
+    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(),
   ): Promise<ZoteroStylePdfReader> {
-    const reader = new ZoteroStylePdfReader(articleId, title, article);
+    const reader = new ZoteroStylePdfReader(articleId, title, article, sessionToken, attachmentKey, initialSearch);
+    if (!registerReaderSession(sessionToken, () => reader.destroy())) {reader.destroy();throw new DOMException("Reader opening superseded", "AbortError");}
     try {
       if (reader.destroyed) return reader;
       await reader.load(fulltext.bytes);
+      if (!isReaderSession(sessionToken) || reader.destroyed) throw new DOMException("Reader closed", "AbortError");
+      reader.root.focus({preventScroll:true});
+      if (initialSearch) await reader.revealSearch(initialSearch);
       return reader;
     } catch (error) {
       reader.destroy();
@@ -510,7 +524,7 @@ class ZoteroStylePdfReader {
         const pdfTop = bounds && view?.viewport
           ? view.viewport.convertToPdfPoint(0, Math.max(0, area.top - bounds.top))[1] : undefined;
         if (!this.readingStructure) {
-          const response = await gatewayRequest("POST", `/bib/articles/${encodeURIComponent(this.articleId)}/fulltext/structured`);
+          const response = await gatewayRequest("POST", structurePath(this.articleId, this.attachmentKey));
           if (this.destroyed) return;
           const structure = response?.structure;
           if (!structure || structure.metadata?.processor?.type !== "pdf" || !Array.isArray(structure.content) || !Array.isArray(structure.catalog?.pages)) {
@@ -529,7 +543,7 @@ class ZoteroStylePdfReader {
         this.readingView.setAnnotations(this.annotations);
         this.readingView.gotoPage(pdfPage, pdfTop);
         try {
-          const saved = JSON.parse(localStorage.getItem(`autonomics.pdf.readingLocation.${this.articleId}`) ?? "null");
+          const saved = JSON.parse(localStorage.getItem(`autonomics.pdf.readingLocation.${readerLocationId(this.articleId, this.attachmentKey)}`) ?? "null");
           if (saved?.enabled && saved.hash === this.readingStructure!.metadata.source.hash && saved.anchor && /^\d+(\.\d+)*$/.test(saved.anchor.ref) && Number.isFinite(saved.anchor.fraction)) {
             this.readingView.restoreAnchor(saved.anchor);
           }
@@ -628,7 +642,7 @@ class ZoteroStylePdfReader {
   private saveReadingLocation() {
     if (!this.readingStructure) return;
     try {
-      localStorage.setItem(`autonomics.pdf.readingLocation.${this.articleId}`, JSON.stringify({
+      localStorage.setItem(`autonomics.pdf.readingLocation.${readerLocationId(this.articleId, this.attachmentKey)}`, JSON.stringify({
         enabled: this.readingEnabled, page: this.currentPage,
         hash: this.readingStructure.metadata.source.hash,
         anchor: this.readingView?.captureAnchor() ?? null,
@@ -970,8 +984,8 @@ class ZoteroStylePdfReader {
     await Promise.all([this.loadThumbnails(), this.loadOutline(), this.loadAnnotations()]);
     await this.refit();
     try {
-      const saved = JSON.parse(localStorage.getItem(`autonomics.pdf.readingLocation.${this.articleId}`) ?? "null");
-      if (saved?.enabled && !this.destroyed) {
+      const saved = JSON.parse(localStorage.getItem(`autonomics.pdf.readingLocation.${readerLocationId(this.articleId, this.attachmentKey)}`) ?? "null");
+      if (!this.initialSearch && saved?.enabled && !this.destroyed) {
         if (Number.isInteger(saved.page)) this.setCurrentPage(Math.max(1, Math.min(this.pageCount, saved.page)), true);
         void this.toggleReadingMode();
       }
@@ -1079,7 +1093,7 @@ class ZoteroStylePdfReader {
     try {
       const response = await gatewayRequest(
         "GET",
-        `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`,
+        annotationPath(this.articleId, this.attachmentKey),
       );
       this.annotations = response.annotations ?? [];
       this.renderAnnotations();
@@ -1407,7 +1421,7 @@ class ZoteroStylePdfReader {
 
   private async saveAnnotation(input: { content: string; kind: string; page: number; rects: PdfAnnotationRect[]; color?: string }): Promise<ReaderAnnotation | null> {
     try {
-      const response = await gatewayRequest("POST", `/bib/articles/${encodeURIComponent(this.articleId)}/annotations`, input);
+      const response = await gatewayRequest("POST", annotationPath(this.articleId, this.attachmentKey), input);
       if (this.destroyed) return null;
       const annotation = response.annotation as ReaderAnnotation;
       // Use the write response immediately instead of waiting for a second
@@ -1527,24 +1541,37 @@ class ZoteroStylePdfReader {
     return text;
   }
 
-  private async searchPdf(term: string) {
-    if (!this.document || !term) {
-      this.searchResults = [];
-      this.renderSearchResults();
-      return;
+  private searchSequence = 0;
+  private async revealSearch(target: ReaderSearchTarget) {
+    if (target.annotationId) {
+      const annotation = this.annotations.find(note => note.id === target.annotationId);
+      if (!annotation) throw new Error("The annotation changed. Refresh search results.");
+      const page = target.page ?? annotation.page;
+      if (page) { if (page < 1 || page > this.pageCount) throw new Error("The evidence page is no longer available. Refresh search results."); await this.gotoPage(page); await this.renderPage(page); }
+      this.selectPane("annotations"); this.setSidebarOpen(true); this.annotationInspector.select(target.annotationId); return;
     }
+    if (target.query) {
+      this.searchInput.value = target.query;this.selectPane("search");this.setSidebarOpen(true);this.searchInput.focus();
+      await this.searchPdf(target.query, true);
+      if (this.searchResults[0] && !this.destroyed) await this.gotoPage(this.searchResults[0].page);
+    }
+  }
+  private async searchPdf(term: string, wordBoundary = false) {
+    const sequence = ++this.searchSequence;
+    if (!this.document || !term) { this.searchResults = []; this.renderSearchResults(); return; }
     this.setStatus(`Searching “${term}”…`);
-    const needle = term.toLowerCase();
-    const results: Array<{ page: number; count: number }> = [];
-    for (let page = 1; page <= this.pageCount; page += 1) {
-      const text = await this.pageText(page);
-      const count = text.split(needle).length - 1;
-      if (count > 0) results.push({ page, count });
-    }
-    this.searchResults = results;
-    this.setStatus(`${results.length.toLocaleString()} pages match`);
-    this.renderSearchResults();
-    this.selectPane("search");
+    const results: Array<{page:number;count:number}> = [];
+    try {
+      for (let page = 1; page <= this.pageCount; page++) {
+        const text = await this.pageText(page);
+        if (this.destroyed || sequence !== this.searchSequence) return;
+        const count = findTextRanges(text, term, wordBoundary).length;
+        if (count) results.push({page,count});
+      }
+    } catch (error) { if (!this.destroyed && sequence === this.searchSequence) this.setStatus(`Search unavailable: ${String(error)}`); return; }
+    if (this.destroyed || sequence !== this.searchSequence) return;
+    this.searchResults = results; this.renderSearchResults(); this.selectPane("search");
+    this.setStatus(results.length ? `${results.length.toLocaleString()} pages match` : "Indexed text could not be located in this file. Refresh the search or try another match.");
   }
 
   private renderSearchResults() {
@@ -1836,13 +1863,14 @@ class ZoteroStylePdfReader {
     if (this.destroyed) return;
     this.saveReadingLocation();
     this.destroyed = true;
+    releaseReaderSession(this.sessionToken);
     this.toast.destroy();
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.readingSaveTimer !== null) clearTimeout(this.readingSaveTimer);
     this.annotationInspector.destroy();
     this.readingView?.destroy();
-    if (this.returnFocus instanceof HTMLElement && this.returnFocus.isConnected) this.returnFocus.focus();
+    restoreReaderFocus(this.returnFocus);
     if (this.relayoutTimer !== null) window.clearTimeout(this.relayoutTimer);
     this.root.removeEventListener("wheel", this.handleWheelZoom);
     document.removeEventListener("keydown", this.handleToolEscape);
@@ -1855,6 +1883,5 @@ class ZoteroStylePdfReader {
     }
     this.document?.destroy().catch(() => undefined);
     this.root.remove();
-    if (activeReader) activeReader = null;
   }
 }

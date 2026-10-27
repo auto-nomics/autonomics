@@ -18,7 +18,10 @@
     "test:reading": "node tests/reading-mode.mjs",
     "test:txt": "node tests/txt-reader.mjs",
     "test:bib-menu": "node tests/bibliography-menu.mjs",
-    "test:collections": "node tests/nested-collections.mjs"
+    "test:collections": "node tests/nested-collections.mjs",
+    "test:bib-search": "node tests/bibliography-search.mjs",
+    "test:bib-workflow": "node tests/bibliography-workflow.mjs",
+    "test:bib-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-bibliography.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

@@ -2063,8 +2063,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_terms_use_item_keys_as_anchors() {
-        let core = crate::bib_base::BibCore::open(":memory:").await.unwrap();
+    async fn on_demand_rollback_search_terms_use_item_keys_as_anchors() {
+        let core = crate::bib_base::BibCore::open_with_search_engine(
+            ":memory:",
+            crate::SearchEngineMode::Legacy,
+        )
+        .await
+        .unwrap();
         let conn = core.conn();
         core.upsert_article(&Article::new("doi:10.1/search", "UniqueTitleWord paper"))
             .await
@@ -2108,6 +2113,13 @@ mod tests {
                 .unwrap()
         };
 
+        assert_eq!(
+            core.search_articles("attachmentanchorterm", 10, 0)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         let mut rows = conn
             .query(
                 "SELECT term, anchorKey, field, articleID FROM searchTerms \

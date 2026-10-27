@@ -154,6 +154,18 @@ pub fn router(shared: BibShared) -> Router {
         .route("/export", get(export))
         .route("/search/external", get(search_external))
         .route("/search/v2", post(search_local_v2))
+        .route("/search/parse", post(parse_search_query))
+        .route("/search/cancel", post(cancel_search_request))
+        .route("/search/export", post(export_search))
+        .route("/articles/{id}/search-evidence", post(search_evidence))
+        .route(
+            "/saved-searches",
+            get(list_saved_searches).post(create_saved_search),
+        )
+        .route(
+            "/saved-searches/{id}",
+            put(update_saved_search).delete(delete_saved_search),
+        )
         .route("/search/status", get(search_index_status))
         .route("/search/rebuild", post(rebuild_search_index))
         .with_state(Arc::new(shared))
@@ -239,31 +251,177 @@ async fn attachment_summary_map(
         .collect())
 }
 
-async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
-    Ok(Json(serde_json::to_value(shared.bib.search_index_status().await.map_err(internal)?).map_err(internal)?))
+fn search_error(failure: bib_base::Error) -> (StatusCode, Json<ApiError>) {
+    let status = match &failure {
+        bib_base::Error::InvalidSearchQuery(_) => StatusCode::BAD_REQUEST,
+        bib_base::Error::SearchConflict(_) => StatusCode::CONFLICT,
+        bib_base::Error::SearchCancelled => StatusCode::from_u16(499).expect("valid status"),
+        bib_base::Error::NotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error(status, failure.to_string())
 }
-async fn rebuild_search_index(State(shared): State<Arc<BibShared>>) -> Result<(StatusCode,Json<Value>),(StatusCode,Json<ApiError>)> {
-    shared.bib.request_search_rebuild().await.map_err(|failure| {
-        let status=if matches!(&failure,bib_base::Error::InvalidSearchQuery(_)) { StatusCode::BAD_REQUEST } else { StatusCode::INTERNAL_SERVER_ERROR };
-        error(status,failure.to_string())
-    })?;
-    let status=shared.bib.search_index_status().await.map_err(internal)?;
-    Ok((StatusCode::ACCEPTED,Json(serde_json::to_value(status).map_err(internal)?)))
+async fn list_saved_searches(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    Ok(Json(
+        json!({"saved_searches":shared.bib.list_saved_searches().await.map_err(search_error)?}),
+    ))
+}
+async fn create_saved_search(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<bib_types::SaveSearchInput>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    let rule = shared
+        .bib
+        .save_search(None, input)
+        .await
+        .map_err(search_error)?;
+    Ok((StatusCode::CREATED, Json(json!({"saved_search":rule}))))
+}
+async fn update_saved_search(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Json(input): Json<bib_types::SaveSearchInput>,
+) -> ApiResult {
+    let rule = shared
+        .bib
+        .save_search(Some(&id), input)
+        .await
+        .map_err(search_error)?;
+    Ok(Json(json!({"saved_search":rule})))
+}
+#[derive(Deserialize)]
+struct DeleteSavedSearchQuery {
+    expected_version: u64,
+}
+async fn delete_saved_search(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    Query(query): Query<DeleteSavedSearchQuery>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    shared
+        .bib
+        .delete_saved_search(&id, query.expected_version)
+        .await
+        .map_err(search_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn search_evidence(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(input): Json<bib_types::SearchEvidenceRequest>,
+) -> ApiResult {
+    let page = cancellable_search(&shared, &headers, shared.bib.search_evidence(&id, input))
+        .await
+        .map_err(search_error)?;
+    Ok(Json(serde_json::to_value(page).map_err(internal)?))
+}
+
+#[derive(Deserialize)]
+struct SearchExportInput {
+    search: SearchRequestV2,
+    format: Option<String>,
+}
+async fn export_search(
+    State(shared): State<Arc<BibShared>>,
+    headers: HeaderMap,
+    Json(input): Json<SearchExportInput>,
+) -> ApiResult {
+    let format = match input.format.as_deref().unwrap_or("bibtex") {
+        "bibtex" => ExportFormat::Bibtex,
+        "ris" => ExportFormat::Ris,
+        "markdown" => ExportFormat::Markdown,
+        "csl_json" => ExportFormat::CslJson,
+        _ => return Err(error(StatusCode::BAD_REQUEST, "unsupported export format")),
+    };
+    let articles = cancellable_search(&shared, &headers, shared.bib.export_search(input.search))
+        .await
+        .map_err(search_error)?;
+    Ok(Json(
+        json!({"format":format.extension(),"count":articles.len(),"export":bib_base::render_all(&articles,format)}),
+    ))
+}
+
+#[derive(Deserialize)]
+struct ParseSearchInput {
+    query: String,
+}
+async fn parse_search_query(Json(input): Json<ParseSearchInput>) -> ApiResult {
+    let expression = bib_types::parse_search_query(&input.query)
+        .map_err(|e| error(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(json!({"expression":expression})))
+}
+
+#[derive(Deserialize)]
+struct CancelSearchInput {
+    request_id: String,
+}
+async fn cancel_search_request(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<CancelSearchInput>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    shared
+        .search_cancellations
+        .cancel(&input.request_id)
+        .map_err(search_error)?;
+    Ok(StatusCode::ACCEPTED)
+}
+async fn cancellable_search<T>(
+    shared: &BibShared,
+    headers: &HeaderMap,
+    future: impl std::future::Future<Output = bib_base::Result<T>>,
+) -> bib_base::Result<T> {
+    let Some(id) = headers.get("x-search-request-id") else {
+        return future.await;
+    };
+    let id = id
+        .to_str()
+        .map_err(|_| bib_base::Error::InvalidSearchQuery("invalid request ID".into()))?;
+    let mut guard = shared.search_cancellations.register(id)?;
+    tokio::select! {biased; _=guard.cancelled()=>Err(bib_base::Error::SearchCancelled),result=future=>result}
+}
+
+async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    Ok(Json(
+        serde_json::to_value(shared.bib.search_index_status().await.map_err(internal)?)
+            .map_err(internal)?,
+    ))
+}
+async fn rebuild_search_index(
+    State(shared): State<Arc<BibShared>>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    shared
+        .bib
+        .request_search_rebuild()
+        .await
+        .map_err(|failure| {
+            let status = if matches!(&failure, bib_base::Error::InvalidSearchQuery(_)) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            error(status, failure.to_string())
+        })?;
+    let status = shared.bib.search_index_status().await.map_err(internal)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::to_value(status).map_err(internal)?),
+    ))
 }
 
 async fn search_local_v2(
     State(shared): State<Arc<BibShared>>,
+    headers: HeaderMap,
     Json(request): Json<SearchRequestV2>,
 ) -> ApiResult {
-    let page = shared.bib.search_v2(request).await.map_err(|failure| {
-        let status = match &failure {
-            bib_base::Error::InvalidSearchQuery(_) => StatusCode::BAD_REQUEST,
-            bib_base::Error::NotFound(_) => StatusCode::NOT_FOUND,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        error(status, failure.to_string())
-    })?;
-    Ok(Json(serde_json::to_value(page).map_err(internal)?))
+    let page = cancellable_search(&shared, &headers, shared.bib.search_v2(request))
+        .await
+        .map_err(search_error)?;
+    let summaries = attachment_summary_map(&shared, &page.articles).await?;
+    let mut payload = serde_json::to_value(page).map_err(internal)?;
+    payload["attachment_summaries"] = serde_json::to_value(summaries).map_err(internal)?;
+    Ok(Json(payload))
 }
 
 async fn list_articles(
@@ -627,8 +785,10 @@ async fn get_article(
     });
     let fulltext = fulltext_page.map(|page| page.fulltext);
 
+    let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
     Ok(Json(json!({
         "article": article,
+        "attachments":attachments,
         "fulltext": fulltext,
         "fulltext_pagination": pagination,
         "annotations": annotations,
@@ -996,9 +1156,14 @@ async fn get_attachment(
     Ok(Json(json!({ "attachment": attachment })))
 }
 
+#[derive(Default, Deserialize)]
+struct AttachmentDownloadQuery {
+    expected_hash: Option<String>,
+}
 async fn download_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
+    Query(query): Query<AttachmentDownloadQuery>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
     if let Some(ft) = shared
         .bib
@@ -1016,6 +1181,16 @@ async fn download_attachment(
         .await
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "attachment disappeared"))?;
+    if query
+        .expected_hash
+        .as_ref()
+        .is_some_and(|expected| attachment.storage_hash.as_ref() != Some(expected))
+    {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "attachment content changed; refresh search results",
+        ));
+    }
     let virtual_path = vfs_virtual_path(
         attachment
             .vfs_path
@@ -2545,5 +2720,46 @@ async fn delete_attachment_figures(
         if let Err(failure) = storage.delete_object(&path).await {
             tracing::warn!(path = %path, error = %failure, "failed to remove attachment figure");
         }
+    }
+}
+
+#[cfg(test)]
+mod search_cancellation_tests {
+    use super::*;
+    #[tokio::test]
+    async fn cancelled_request_drops_its_pending_reply_future() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let shared = Arc::new(BibShared::open_in_memory().await.unwrap());
+        let registry = shared.search_cancellations.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let observe = dropped.clone();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let job = tokio::spawn(async move {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-search-request-id", "waiting".parse().unwrap());
+            cancellable_search(&shared, &headers, async move {
+                let _drop = Dropped(dropped);
+                let _ = started.send(());
+                std::future::pending::<bib_base::Result<()>>().await
+            })
+            .await
+        });
+        ready.await.unwrap();
+        registry.cancel("waiting").unwrap();
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), job)
+                .await
+                .unwrap()
+                .unwrap(),
+            Err(bib_base::Error::SearchCancelled)
+        ));
+        assert!(observe.load(Ordering::SeqCst));
+        assert!(registry.register("waiting").is_ok());
     }
 }

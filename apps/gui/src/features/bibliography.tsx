@@ -40,6 +40,17 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { SearchAssist, ColumnsPicker, readResultColumns, useQueryHistory } from "./search-assist";
+import { readSearchLocation, writeSearchLocation } from "./search-location";
+import { VirtualArticleList } from "./virtual-article-list";
+import { AdvancedSearchBuilder } from "./advanced-search-builder";
+import { SavedSearches } from "./saved-searches";
+import { SearchFiltersPanel } from "./search-filters";
+import { SearchEvidencePanel } from "./search-evidence";
+import { SearchIndexStatus } from "./search-index-status";
+import { useBibSearch } from "./use-bib-search";
+import { SearchSnippet } from "./search-snippet";
+import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort } from "./bib-search-model";
 
 type BibAuthor = NonNullable<BibArticle["authors"]>[number];
 
@@ -56,6 +67,7 @@ type AttachmentEntry = {
   caption: string;
   kind: "pdf" | "text" | "link" | "notes";
   format?: string | null;
+  attachmentKey?: string | null;
   href?: string;
   onClick?: () => void;
 };
@@ -148,10 +160,17 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
   const entries: AttachmentEntry[] = [];
   const fullText = detail?.fulltext;
 
-  if (fullText) {
+  if (detail?.attachments?.length) {
+    for (const attachment of detail.attachments) {
+      const format = /pdf/i.test(attachment.content_type ?? "") || /\.pdf$/i.test(attachment.original_filename ?? "") ? "pdf" : "txt";
+      if (attachment.link_mode === 3 && attachment.source_url) entries.push({key:attachment.key,kind:"link",label:attachment.title || "Linked file",caption:attachment.source_url,href:attachment.source_url});
+      else entries.push({key:attachment.key,attachmentKey:attachment.key,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
+    }
+  } else if (fullText) {
     const format = fullText.file_format?.toLowerCase() ?? null;
     entries.push({
       key: "fulltext",
+      attachmentKey: fullText.attachment_key,
       kind: format === "txt" ? "text" : "pdf",
       format,
       label: attachmentFileName(fullText.file_path),
@@ -315,17 +334,52 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
 }
 
 export function BibliographyView() {
+  const [initial] = useState(readSearchLocation);
+  const {history,record:recordHistory,clear:clearHistory}=useQueryHistory();
+  const recordHistoryRef=useRef(recordHistory);recordHistoryRef.current=recordHistory;
+  const [columns,setColumns]=useState(readResultColumns);
+  const [showSnippets,setShowSnippets]=useState(()=>{try{return localStorage.getItem("autonomics.bib.snippets")!=="false";}catch{return true;}});
+  const [wideColumns,setWideColumns]=useState(()=>window.matchMedia("(min-width:768px)").matches);
+  useEffect(()=>{const media=window.matchMedia("(min-width:768px)");const update=()=>setWideColumns(media.matches);media.addEventListener("change",update);return()=>media.removeEventListener("change",update);},[]);
+  useEffect(()=>{try{localStorage.setItem("autonomics.bib.columns.v1",JSON.stringify(columns));localStorage.setItem("autonomics.bib.snippets",String(showSnippets));}catch{/* Optional display preferences. */}},[columns,showSnippets]);
+  const [locationError, setLocationError] = useState(initial.error);
   const [collections, setCollections] = useState<BibCollection[]>([]);
   const [articles, setArticles] = useState<BibArticle[]>([]);
   const [attachmentSummaries, setAttachmentSummaries] = useState<Record<string, AttachmentSummary>>({});
   const [total, setTotal] = useState(0);
-  const [queryDraft, setQueryDraft] = useState("");
-  const [query, setQuery] = useState("");
-  const [selectedCollection, setSelectedCollection] = useState<string | null>(null);
-  const [includeDescendants, setIncludeDescendants] = useState(() => { try { return localStorage.getItem("autonomics.collections.recursive") === "true"; } catch { return false; } });
+  const [queryDraft, setQueryDraft] = useState(initial.request.expression ? formatExpression(initial.request.expression) : initial.request.query ?? "");
+  const [query, setQuery] = useState(initial.request.expression ? formatExpression(initial.request.expression) : initial.request.query ?? "");
+  const [expression, setExpression] = useState<SearchExpr | null>(initial.request.expression ?? null);
+  const [defaultFields, setDefaultFields] = useState<SearchField[]>(initial.request.default_fields ?? []);
+  const [sameChild, setSameChild] = useState(initial.request.scope?.require_same_child ?? false);
+  const [libraryId, setLibraryId] = useState<number | null>(initial.request.scope?.library_id ?? null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(hasFilters(initial.request.filters ?? {}));
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(initial.savedId);
+  const [indexEngine, setIndexEngine] = useState("unknown");
+  const [updatesPending, setUpdatesPending] = useState(false);
+  const [indexGeneration, setIndexGeneration] = useState("");
+  const [filters, setFilters] = useState<SearchFilters>(initial.request.filters ?? {});
+  const [sort, setSort] = useState<SearchSort>(initial.request.sort ?? "relevance");
+  const [facets, setFacets] = useState<SearchFacets | null>(null);
+  const [searchHits, setSearchHits] = useState<Record<string, SearchHit>>({});
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const { searchPage, libraryMetadata, invalidateMetadata } = useBibSearch();
+  const listAbort = useRef<AbortController | null>(null);
+  const detailAbort = useRef<AbortController | null>(null);
+  const detailSequence = useRef(0);
+  const composing = useRef(false);
+  const [isComposing, setIsComposing] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchActive = Boolean(query.trim()) || Boolean(expression) || hasFilters(filters) || sort !== "relevance" || defaultFields.length > 0 || sameChild || filtersOpen || libraryId !== null || Boolean(locationError);
+  const [selectedCollection, setSelectedCollection] = useState<string | null>(initial.request.scope?.unfiled ? "@unfiled" : initial.request.scope?.collection_id ?? null);
+  const [includeDescendants, setIncludeDescendants] = useState(() => { if (initial.request.scope?.include_descendants !== undefined) return initial.request.scope.include_descendants; try { return localStorage.getItem("autonomics.collections.recursive") === "true"; } catch { return false; } });
   const [associations, setAssociations] = useState<Array<{ collection_id: string; article_id: string }>>([]);
   const [libraryTotal, setLibraryTotal] = useState(0);
   const [selectedArticle, setSelectedArticle] = useState<string | null>(null);
+  const selectionRef=useRef(selectedArticle);selectionRef.current=selectedArticle;
+  const [resultContext,setResultContext]=useState("");
+  const lastResultContext=useRef("");
   const [attachmentsOpen, setAttachmentsOpen] = useState(true);
   const [detail, setDetail] = useState<BibDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -341,36 +395,82 @@ export function BibliographyView() {
   const requestSequence = useRef(0);
 
   const articleLoaderRef = useRef<HTMLDivElement | null>(null);
+  const resultsViewport = useRef<HTMLDivElement | null>(null);
+  const buttonColumns=["24px","minmax(0,1fr)",...(wideColumns&&columns.creator?["160px"]:[]),...(columns.year?["56px"]:[]),...(wideColumns&&columns.journal?["160px"]:[]),...(columns.files?[wideColumns?"80px":"56px"]:[])].join(" ");
+  const scopeLabel = selectedCollection === "@unfiled" ? "Unfiled" : selectedCollection ? collectionPath(collections, selectedCollection) : "All references";
+  const currentRequest = useMemo<SearchRequest>(() => ({
+    query: expression ? "" : query, expression, default_fields: defaultFields, filters, sort,
+    scope: { library_id: libraryId, collection_id: selectedCollection && selectedCollection !== "@unfiled" ? selectedCollection : null, unfiled: selectedCollection === "@unfiled", include_descendants: includeDescendants, require_same_child: sameChild },
+  }), [query, expression, defaultFields, filters, sort, libraryId, selectedCollection, includeDescendants, sameChild]);
+  const commitQuery = (text = queryDraft) => { if (text !== query) {setExpression(null);setQuery(text);} else void loadLibrary(query); };
+  const clearSearch = () => {setLocationError("");setFilters({});setSort("relevance");setDefaultFields([]);setExpression(null);setSameChild(false);setQuery("");setQueryDraft("");setActiveSavedId(null);setFiltersOpen(false);setLibraryId(null);};
+  const restoreRequest = (request: SearchRequest, savedId: string | null) => {
+    setLocationError("");
+    setQueryDraft(request.expression ? formatExpression(request.expression) : request.query ?? "");
+    setQuery(request.expression ? formatExpression(request.expression) : request.query ?? "");
+    setExpression(request.expression ?? null);setFilters(request.filters ?? {});setSort(request.sort ?? "relevance");setDefaultFields(request.default_fields ?? []);
+    setSelectedCollection(request.scope?.unfiled ? "@unfiled" : request.scope?.collection_id ?? null);
+    setIncludeDescendants(request.scope?.include_descendants ?? false);setSameChild(request.scope?.require_same_child ?? false);setLibraryId(request.scope?.library_id ?? null);setActiveSavedId(savedId);setLibraryOpen(false);
+  };
+
+
+  const applySavedSearch = (rule: SavedSearch) => restoreRequest(rule.request, rule.id);
+  useEffect(() => {if (!locationError) writeSearchLocation(currentRequest, activeSavedId);}, [currentRequest, activeSavedId, locationError]);
+  useEffect(() => {const restore = () => {const state=readSearchLocation();if(state.error)setLocationError(state.error);else restoreRequest(state.request,state.savedId);};window.addEventListener("popstate",restore);return()=>window.removeEventListener("popstate",restore);}, []);
 
   const loadLibrary = useCallback(async (
     nextQuery = "",
-    options: { append?: boolean; offset?: number } = {},
+    options: { append?: boolean; offset?: number; cursor?: string | null } = {},
   ) => {
+    if (locationError) {setError(locationError);return;}
     const append = options.append ?? false;
     const offset = options.offset ?? 0;
     const requestId = ++requestSequence.current;
+    const selectionVersion=detailSequence.current;
+    const context=JSON.stringify({...currentRequest,query:expression ? "" : nextQuery});
+    listAbort.current?.abort();
+    const abort = new AbortController();
+    listAbort.current = abort;
     setLoading(true);
     setError(null);
     try {
       const base = selectedCollection === "@unfiled" ? "/bib/articles/unfiled"
         : selectedCollection ? `/bib/collections/${encodeURIComponent(selectedCollection)}/articles` : "/bib/articles";
-      const [collectionResponse, health] = await Promise.all([
-        gatewayRequest("GET", "/bib/collections?include_deleted=true&view=summary"),
-        gatewayRequest("GET", "/bib/health"),
-      ]);
+      const advanced = Boolean(expression) || hasFilters(filters) || sort !== "relevance" || defaultFields.length > 0 || sameChild || filtersOpen || libraryId !== null;
+      const useV2 = advanced || (indexEngine !== "legacy" && Boolean(nextQuery.trim()));
+      const pagePromise = useV2
+        ? searchPage({ ...currentRequest, query: expression ? "" : nextQuery, cursor: append ? options.cursor : null }, abort.signal)
+        : gatewayRequest("GET", `${base}?query=${encodeURIComponent(nextQuery)}&include_descendants=${includeDescendants}&limit=50&offset=${offset}`, undefined, { signal: abort.signal });
+      const [metadataResult, pageResult] = await Promise.allSettled([libraryMetadata(), pagePromise]);
       if (requestId !== requestSequence.current) return;
-      const nextCollections: BibCollection[] = collectionResponse.collections ?? [];
+      if (metadataResult.status === "rejected") throw metadataResult.reason;
+      const metadata = metadataResult.value;
+      const nextCollections = metadata.collections;
       if (selectedCollection && selectedCollection !== "@unfiled" && !nextCollections.some(c => c.id === selectedCollection && !c.deleted)) {
         setCollections(nextCollections);
         setSelectedCollection(null); setSelectedArticle(null); setDetail(null); setArticles([]);
         return;
       }
-      const articleResponse = await gatewayRequest("GET", `${base}?query=${encodeURIComponent(nextQuery)}&include_descendants=${includeDescendants}&limit=500&offset=${offset}`);
+      if (pageResult.status === "rejected") throw pageResult.reason;
+      const articleResponse = pageResult.value;
+      setSearchHits(current => {
+        const hits = Object.fromEntries((articleResponse.hits ?? []).map((hit: SearchHit) => [hit.article_id, hit]));
+        return append ? { ...current, ...hits } : hits;
+      });
+      setFacets(articleResponse.facets ?? null);
+      setNextCursor(articleResponse.next_cursor ?? null);
+      setIndexGeneration(articleResponse.index_generation ?? "");
+      setUpdatesPending(false);
+      recordHistoryRef.current(nextQuery);
       const nextArticles: BibArticle[] = articleResponse.articles ?? [];
       const nextSummaries = articleResponse.attachment_summaries ?? {};
+      if (!append && context!==lastResultContext.current && detailSequence.current===selectionVersion && selectionRef.current && !nextArticles.some(article=>article.id===selectionRef.current)) {
+        detailSequence.current++;detailAbort.current?.abort();setSelectedArticle(null);setDetail(null);setDetailLoading(false);
+      }
+      lastResultContext.current=context;setResultContext(context);
       if (requestId !== requestSequence.current) return;
-      setCollections(collectionResponse.collections ?? []);
-      setLibraryTotal(health.article_count ?? articleResponse.total ?? 0);
+      setCollections(metadata.collections);
+      setLibraryTotal(metadata.total);
       setAssociations(current => append ? [...current, ...(articleResponse.associations ?? [])] : articleResponse.associations ?? []);
       setArticles((current) => append ? [...current, ...nextArticles] : nextArticles);
       setAttachmentSummaries((current) => append
@@ -378,41 +478,57 @@ export function BibliographyView() {
         : nextSummaries);
       setTotal(articleResponse.total ?? (articleResponse.articles ?? []).length);
       setArticleOffset(offset + nextArticles.length);
-      setHasMoreArticles(offset + nextArticles.length < (articleResponse.total ?? 0));
+      setHasMoreArticles(useV2 ? Boolean(articleResponse.next_cursor) : offset + nextArticles.length < (articleResponse.total ?? 0));
     } catch (cause) {
-      if (requestId !== requestSequence.current) return;
+      if (requestId !== requestSequence.current || abort.signal.aborted) return;
       setError(String(cause));
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [selectedCollection, includeDescendants]);
+  }, [selectedCollection, includeDescendants, filters, sort, expression, defaultFields, sameChild, filtersOpen, libraryId, indexEngine, currentRequest, locationError, searchPage, libraryMetadata]);
+
+  useEffect(() => {
+    if (isComposing) return;
+    const timer = window.setTimeout(() => { if (!composing.current && queryDraft !== query) { setExpression(null); setQuery(queryDraft); } }, 250);
+    return () => window.clearTimeout(timer);
+  }, [queryDraft, query, isComposing]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (document.querySelector(".zotero-pdf-reader,.zotero-txt-reader,dialog[open]")) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); searchInputRef.current?.focus(); searchInputRef.current?.select(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); listAbort.current?.abort(); detailAbort.current?.abort(); };
+  }, []);
 
   useEffect(() => {
     void loadLibrary(query);
   }, [loadLibrary, query]);
 
   useEffect(() => {
-    const refresh = () => void loadLibrary(query);
+    const refresh = () => { invalidateMetadata(); void loadLibrary(query); };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
-  }, [loadLibrary, query]);
+  }, [loadLibrary, query, invalidateMetadata]);
 
   useEffect(() => { try { localStorage.setItem("autonomics.collections.recursive", String(includeDescendants)); } catch { /* preference storage may be unavailable */ } }, [includeDescendants]);
 
   const latestReload=useRef<()=>void>(()=>{});
-  latestReload.current=()=>void loadLibrary(query);
+  latestReload.current=()=>{invalidateMetadata();void loadLibrary(query);};
   useEffect(()=>watchBibCollections(()=>latestReload.current()),[]);
 
   const loadMoreArticles = useCallback(() => {
     if (loading || !hasMoreArticles) return;
-    void loadLibrary(query, { append: true, offset: articleOffset });
-  }, [articleOffset, hasMoreArticles, loadLibrary, loading, query]);
+    void loadLibrary(query, { append: true, offset: articleOffset, cursor: nextCursor });
+  }, [articleOffset, hasMoreArticles, loadLibrary, loading, query, nextCursor]);
 
+  const latestLoadMore = useRef(loadMoreArticles);
+  latestLoadMore.current = loadMoreArticles;
   useEffect(() => {
     const node = articleLoaderRef.current;
     if (!node || !hasMoreArticles || loading) return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) loadMoreArticles();
+      if (entries.some((entry) => entry.isIntersecting)) latestLoadMore.current();
     }, { rootMargin: "400px" });
     observer.observe(node);
     return () => observer.disconnect();
@@ -436,30 +552,39 @@ export function BibliographyView() {
   };
 
   const selectArticle = useCallback((articleId: string | null) => {
+    const requestId = ++detailSequence.current;
+    detailAbort.current?.abort();
+    const abort = new AbortController();
+    detailAbort.current = abort;
     setSelectedArticle(articleId);
     setAttachmentsOpen(true);
     setDetail(null);
-    if (!articleId) return;
+    if (!articleId) { setDetailLoading(false); return; }
     if (!window.matchMedia("(min-width: 1280px)").matches) setDetailsOpen(true);
     setDetailLoading(true);
-    void gatewayRequest("GET", `/bib/articles/${encodeURIComponent(articleId)}`)
-      .then((response) => setDetail(response as BibDetail))
-      .catch((cause) => setError(String(cause)))
-      .finally(() => setDetailLoading(false));
+    void gatewayRequest("GET", `/bib/articles/${encodeURIComponent(articleId)}`, undefined, { signal: abort.signal })
+      .then((response) => { if (requestId === detailSequence.current) setDetail(response as BibDetail); })
+      .catch((cause) => { if (requestId === detailSequence.current && !abort.signal.aborted) setError(String(cause)); })
+      .finally(() => { if (requestId === detailSequence.current) setDetailLoading(false); });
   }, []);
 
   const selectCollection = (collectionId: string | null) => {
     if (collectionId === selectedCollection) return;
     requestSequence.current++;
+    detailSequence.current++;
+    detailAbort.current?.abort();
+    setDetailLoading(false);
     setSelectedCollection(collectionId);
     setArticles([]);
     setSelectedArticle(null);
     setDetail(null);
     setLibraryOpen(false);
+    setActiveSavedId(null);
   };
 
   const collectionAction = async (action: CollectionAction) => {
     const response = await gatewayRequest(action.method, action.path, action.body);
+    invalidateMetadata();
     if (response.deleted_ids?.includes(selectedCollection)) {
       const deleted = new Set<string>(response.deleted_ids);
       let parent = collections.find(c => c.id === selectedCollection)?.parent_id ?? null;
@@ -507,6 +632,8 @@ export function BibliographyView() {
       });
       setQueryDraft("");
       setQuery("");
+      setExpression(null);
+      invalidateMetadata();
       await loadLibrary("");
       if (response.article?.id) selectArticle(response.article.id);
     } catch (cause) {
@@ -520,7 +647,7 @@ export function BibliographyView() {
     setBusy("export");
     setError(null);
     try {
-      const response = await gatewayRequest("GET", `/bib/export?format=bibtex&query=${encodeURIComponent(query)}${selectedCollection === "@unfiled" ? "&unfiled=true" : ""}${checkedIds.length ? `&ids=${encodeURIComponent(checkedIds.join(","))}` : ""}${!checkedIds.length && selectedCollection && selectedCollection !== "@unfiled" ? `&collection_id=${encodeURIComponent(selectedCollection)}&include_descendants=${includeDescendants}` : ""}`);
+      const response = searchActive && !checkedIds.length ? await gatewayRequest("POST", "/bib/search/export", {format:"bibtex", search:currentRequest}) : await gatewayRequest("GET", `/bib/export?format=bibtex&query=${encodeURIComponent(query)}${selectedCollection === "@unfiled" ? "&unfiled=true" : ""}${checkedIds.length ? `&ids=${encodeURIComponent(checkedIds.join(","))}` : ""}${!checkedIds.length && selectedCollection && selectedCollection !== "@unfiled" ? `&collection_id=${encodeURIComponent(selectedCollection)}&include_descendants=${includeDescendants}` : ""}`);
       await saveTextFile("autonomics.bib", response.export ?? "");
     } catch (cause) {
       setError(String(cause));
@@ -535,21 +662,34 @@ export function BibliographyView() {
   };
 
   const readerRef = useRef<{ close: () => void } | null>(null);
-  const openReaderFor = (article: BibArticle, format?: string | null) => {
+  const openReaderFor = (article: BibArticle, format?: string | null, attachmentKey?: string | null, search?: import("@/reader-target").ReaderSearchTarget, expectedHash?: string | null) => {
     readerRef.current?.close();
     readerRef.current = null;
     const openReader = format === "txt" ? openTxtReader : openPdfReader;
-    void openReader({ articleId: article.id, title: article.title, article })
+    void openReader({ articleId: article.id, title: article.title, article, attachmentKey, search, expectedHash })
       .then((handle) => { readerRef.current = handle; })
-      .catch((cause) => setError(String(cause)));
+      .catch((cause) => {if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(String(cause));});
   };
-  const readFulltext = (format: string | null | undefined) => {
+  const openEvidence = async (evidence: SearchEvidence) => {
     if (!selected) return;
-    openReaderFor(selected, format);
+    try {
+      await gatewayRequest("POST", `/bib/articles/${encodeURIComponent(selected.id)}/search-evidence`, {search:{...currentRequest,cursor:null,page_size:1},index_generation:evidence.content_revision});
+      if (!evidence.attachment_key) {
+        const note = evidence.annotation_id ? document.getElementById(`bib-note-${evidence.annotation_id}`) : null;
+        note?.scrollIntoView({block:"nearest"});note?.focus();return;
+      }
+      const first=evidence.highlight_ranges[0];
+      const query=first ? Array.from(evidence.snippet).slice(first.start,first.end).join("") : evidence.matched_query;
+      openReaderFor(selected,null,evidence.attachment_key,{query,page:evidence.page,annotationId:evidence.annotation_id},evidence.attachment_hash);
+    } catch (failure) {setError(String(failure));}
+  };
+  const readFulltext = (format: string | null | undefined, attachmentKey?: string | null) => {
+    if (!selected) return;
+    openReaderFor(selected, format, attachmentKey);
   };
   const withReader = (entry: AttachmentEntry): AttachmentEntry =>
     entry.kind === "pdf" || entry.kind === "text"
-      ? { ...entry, onClick: () => readFulltext(entry.format) }
+      ? { ...entry, onClick: () => readFulltext(entry.format, entry.attachmentKey) }
       : entry;
 
   const patchSummary = (articleId: string, patch: (summary: AttachmentSummary) => AttachmentSummary) => {
@@ -612,6 +752,7 @@ export function BibliographyView() {
         setSelectedArticle(null);
         setDetail(null);
       }
+      invalidateMetadata();
       await loadLibrary(query);
     } catch (cause) {
       setError(String(cause));
@@ -622,6 +763,7 @@ export function BibliographyView() {
 
   return (
     <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 xl:grid-cols-[216px_minmax(0,1fr)_336px] xl:grid-rows-1">
+      {advancedOpen && <AdvancedSearchBuilder query={queryDraft} expression={queryDraft === query ? expression : null} onClose={() => setAdvancedOpen(false)} onApply={(expr,text) => {setExpression(expr);setQuery(text);setQueryDraft(text);setAdvancedOpen(false);}} />}
       {(libraryOpen || detailsOpen) && (
         <button
           type="button"
@@ -636,7 +778,7 @@ export function BibliographyView() {
       <aside
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card",
-          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:left-0 max-xl:z-40 max-xl:w-[min(88vw,300px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
+          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:left-0 max-xl:z-[35] max-xl:w-[min(88vw,300px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
           libraryOpen ? "max-xl:translate-x-0" : "max-xl:-translate-x-full",
         )}
       >
@@ -657,6 +799,8 @@ export function BibliographyView() {
         </div>
         <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5">
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
+          <SavedSearches request={queryDraft !== query ? {...currentRequest,query:queryDraft,expression:null} : currentRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy"} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
+          <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
           <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
         </ScrollArea>
       </aside>
@@ -676,25 +820,32 @@ export function BibliographyView() {
             className="relative min-w-0 flex-1"
             onSubmit={(event) => {
               event.preventDefault();
-                setQuery(queryDraft);
+              if (!composing.current) commitQuery();
 
             }}
           >
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={searchInputRef}
+              aria-label="Search bibliography"
               value={queryDraft}
+              onCompositionStart={() => { composing.current = true; setIsComposing(true); }}
+              onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); setQueryDraft(event.currentTarget.value); }}
               placeholder={`Search ${total.toLocaleString()} items`}
               className="h-7 pl-8 text-[13px]"
-              onChange={(event) => setQueryDraft(event.target.value)}
+              onChange={(event) => {setLocationError("");setQueryDraft(event.target.value);}}
               onKeyDown={(event) => {
-                if (event.key === "Enter") {
+                if (event.key === "ArrowDown" && !isComposing && !loading && articles.length) {event.preventDefault();resultsViewport.current?.scrollTo({top:0});selectArticle(articles[0].id);requestAnimationFrame(()=>resultsViewport.current?.querySelector<HTMLButtonElement>("[data-bib-row-primary]")?.focus());}
+                if (event.key === "Escape") { setQueryDraft(""); setQuery(""); setExpression(null); }
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) {
                   event.preventDefault();
-                  setQuery(queryDraft);
+                  commitQuery();
 
                 }
               }}
             />
           </form>
+          <Button size="xs" variant="ghost" disabled={indexEngine === "legacy"} onClick={() => setAdvancedOpen(true)}>Advanced</Button>
           <Button size="icon-sm" variant="ghost" aria-label="Import article" title="Import article" onClick={() => void importArticle()} disabled={busy === "import"}>
             <Plus />
           </Button>
@@ -710,12 +861,32 @@ export function BibliographyView() {
           <Button size="icon-sm" variant="ghost" aria-label="Upload full text" title="Upload full text" onClick={() => void uploadFulltext()} disabled={!selected || busy === "upload"}>
             <Upload />
           </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title="Export BibTeX" onClick={() => void exportLibrary()} disabled={busy === "export"}>
+          <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title="Export BibTeX" onClick={() => void exportLibrary()} disabled={loading || busy === "export"}>
             <Download />
           </Button>
         </div>
 
-        <div className="grid h-8 shrink-0 grid-cols-[24px_24px_minmax(0,1fr)_56px] items-center border-b bg-muted/60 px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase md:grid-cols-[24px_24px_minmax(0,1fr)_168px_80px]">
+        <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
+          <span className="min-w-0 truncate text-muted-foreground">{scopeLabel}{selectedCollection && includeDescendants ? " · including subcollections" : ""}</span>
+          <select aria-label="Quick search fields" title="Default fields for words without an explicit field" className="max-w-44 rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={Object.keys(quickFields).find(key => JSON.stringify(quickFields[key]) === JSON.stringify(defaultFields)) ?? "custom"} onChange={event => setDefaultFields(quickFields[event.target.value] ?? [])}><option value="all">Everything</option><option value="title">Title, year, author</option><option value="metadata">Metadata and notes</option><option value="custom" disabled>Custom fields</option></select>
+          <Button size="xs" variant={filtersOpen ? "secondary" : "ghost"} disabled={indexEngine === "legacy"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>Filters</Button>
+          <label className="flex items-center gap-1" title="Positive conditions must match the same evidence object"><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />Same attachment</label>
+          <SearchAssist history={history} onClear={clearHistory} onPick={text=>{setQueryDraft(text);commitQuery(text);searchInputRef.current?.focus();}} />
+          <ColumnsPicker columns={columns} onChange={setColumns} snippets={showSnippets} onSnippets={setShowSnippets} />
+          <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} article${total === 1 ? "" : "s"}`}</span>
+          <select aria-label="Search sort" disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">Relevance</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select>
+          {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>Clear search</Button>}
+        </div>
+        {filtersOpen && <SearchFiltersPanel value={filters} facets={facets} onChange={setFilters} />}
+        {updatesPending && <div className="flex items-center justify-between border-b px-2 py-1 text-xs">Library updated<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Refresh results</Button></div>}
+        {facets && !filtersOpen && <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
+          <select aria-label="Exact tag filter" value={filters.tag_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,tag_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All tags</option>{facets.tags.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
+          <select aria-label="Exact creator filter" value={filters.creator_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,creator_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All authors</option>{facets.creators.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_fulltext === true} onChange={event => setFilters(current => ({...current,has_fulltext:event.target.checked ? true : null}))}/>Has full text</label>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_annotations === true} onChange={event => setFilters(current => ({...current,has_annotations:event.target.checked ? true : null}))}/>Has notes</label>
+        </div>}
+        {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Retry</Button></div>}
+        <div style={{gridTemplateColumns:`24px ${buttonColumns}`}} className="grid h-8 shrink-0 items-center border-b bg-muted/60 px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           <Checkbox
             aria-label="Select all visible articles"
             checked={allVisibleChecked}
@@ -724,12 +895,14 @@ export function BibliographyView() {
           />
           <span />
           <span>Title{checkedIds.length ? ` (${checkedIds.length} selected)` : ""}</span>
-          <span className="hidden md:block">Creator</span>
-          <span className="text-center">Files</span>
+          {wideColumns && columns.creator && <span>Creator</span>}
+          {columns.year && <span>Year</span>}
+          {wideColumns && columns.journal && <span>Journal</span>}
+          {columns.files && <span className="text-center">Files</span>}
         </div>
 
-        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6">
-          {loading && (
+        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
+          {loading && !visibleArticles.length && (
             <div className="space-y-px">
               {Array.from({ length: 10 }).map((_, index) => (
                 <div key={index} className="h-9 animate-pulse border-b bg-muted/30" />
@@ -737,7 +910,7 @@ export function BibliographyView() {
             </div>
           )}
 
-          {!loading && visibleArticles.map((article) => {
+          <VirtualArticleList articles={visibleArticles} total={total} viewport={resultsViewport} contextKey={JSON.stringify({request:currentRequest,snippets:showSnippets})} estimatedHeight={showSnippets && Boolean(query.trim() || expression) ? 76 : 37} selectedId={selectedArticle} onNavigate={selectArticle} onToggle={id => toggleChecked(id, !checkedIds.includes(id))}>{(article) => {
             const isSelected = article.id === selectedArticle;
             const summary = article.id === selected?.id
               ? {
@@ -753,8 +926,9 @@ export function BibliographyView() {
               <ContextMenu key={article.id}>
                 <ContextMenuTrigger render={<div className="border-b border-border/60" />}>
                   <div
+                    style={{gridTemplateColumns:"24px minmax(0,1fr)"}}
                     className={cn(
-                      "grid grid-cols-[24px_24px_minmax(0,1fr)_56px] items-center md:grid-cols-[24px_24px_minmax(0,1fr)_168px_80px]",
+                      "grid items-center",
                       (isSelected || checkedIds.includes(article.id)) && "bg-accent",
                     )}
                   >
@@ -767,13 +941,14 @@ export function BibliographyView() {
                     </span>
                     <button
                       type="button"
+                      data-bib-row-primary
+                      tabIndex={isSelected || (!selectedArticle && visibleArticles[0]?.id === article.id) ? 0 : -1}
                       draggable
                       onDragStart={event => { event.dataTransfer.setData("application/x-autonomics-article", article.id); event.dataTransfer.effectAllowed = "copy"; }}
                       aria-expanded={isSelected && attachmentsOpen}
                       onClick={() => isSelected ? setAttachmentsOpen(!attachmentsOpen) : selectArticle(article.id)}
-                      className={cn(
-                        "col-span-3 grid h-9 w-full grid-cols-[24px_minmax(0,1fr)_56px] items-center px-2 text-left transition-colors hover:bg-accent/70 md:col-span-4 md:grid-cols-[24px_minmax(0,1fr)_168px_80px]",
-                      )}
+                      style={{gridColumn:"2",gridTemplateColumns:buttonColumns}}
+                      className="grid h-9 w-full items-center px-2 text-left transition-colors hover:bg-accent/70"
                     >
                       <span className="flex items-center justify-center">
                         {isSelected && attachmentsOpen ? (
@@ -783,15 +958,18 @@ export function BibliographyView() {
                         )}
                       </span>
                       <span className="min-w-0 truncate pr-3 text-[13px]">{article.title}</span>
-                      <span className="hidden min-w-0 truncate pr-3 text-[13px] text-muted-foreground md:block">
-                        {creatorDisplay(article)}
-                      </span>
-                      <span className="flex items-center justify-center text-muted-foreground">
-                        <AttachmentTypeIcons summary={summary} />
-                      </span>
+                      {wideColumns && columns.creator && <span className="min-w-0 truncate pr-3 text-[13px] text-muted-foreground">{creatorDisplay(article)}</span>}
+                      {columns.year && <span className="text-xs text-muted-foreground">{article.year ?? "—"}</span>}
+                      {wideColumns && columns.journal && <span className="min-w-0 truncate pr-3 text-xs text-muted-foreground">{article.journal ?? "—"}</span>}
+                      {columns.files && <span className="flex items-center justify-center text-muted-foreground"><AttachmentTypeIcons summary={summary} /></span>}
                     </button>
                   </div>
 
+                  {showSnippets && Boolean(query.trim() || expression) && searchHits[article.id] && <div className="px-9 pb-2 text-xs text-muted-foreground">
+                    <span className="mr-2 font-medium">{searchHits[article.id].matched_field}</span>
+                    <SearchSnippet text={searchHits[article.id].snippet} ranges={searchHits[article.id].highlight_ranges} />
+                    <Button size="xs" variant="ghost" onClick={() => selectArticle(article.id)}>View evidence</Button>
+                  </div>}
                   {isSelected && attachmentsOpen && (
                     <div className="bg-muted/25">
                       {detailLoading && (
@@ -840,10 +1018,10 @@ export function BibliographyView() {
                 </ContextMenuContent>
               </ContextMenu>
             );
-          })}
+          }}</VirtualArticleList>
 
           {!loading && !visibleArticles.length && (
-            <div className="grid h-full place-items-center text-sm text-muted-foreground">No matching articles</div>
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">{error ? "Search could not run. Correct the query or retry." : "No matching articles"}</div>
           )}
           {!loading && hasMoreArticles && (
             <div ref={articleLoaderRef} className="p-3 text-center">
@@ -858,7 +1036,7 @@ export function BibliographyView() {
       <aside
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card",
-          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:right-0 max-xl:z-40 max-xl:w-[min(94vw,360px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
+          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:right-0 max-xl:z-[35] max-xl:w-[min(94vw,360px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
           detailsOpen ? "max-xl:translate-x-0" : "max-xl:translate-x-full",
         )}
       >
@@ -891,6 +1069,7 @@ export function BibliographyView() {
             <div className="grid h-full place-items-center text-sm text-muted-foreground">Select an item</div>
           ) : (
             <div className="space-y-3">
+              {searchActive && indexGeneration && resultContext===JSON.stringify(currentRequest) && articles.some(article=>article.id===selected.id) && <SearchEvidencePanel articleId={selected.id} request={currentRequest} generation={indexGeneration} onOpen={evidence => void openEvidence(evidence)} />}
               <Section title="Attachment Info" count={attachments.length}>
                 {!detailLoading && attachments.length ? (
                   <div className="space-y-0.5">
@@ -959,7 +1138,7 @@ export function BibliographyView() {
                 {activeDetail?.annotations.length ? (
                   <div className="space-y-2">
                     {activeDetail.annotations.map((note) => (
-                      <article key={note.id} className="rounded-md border p-2">
+                      <article id={`bib-note-${note.id}`} tabIndex={-1} key={note.id} className="rounded-md border p-2">
                         <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                           <StickyNote className="size-3" />
                           {note.kind || "Note"}
@@ -981,7 +1160,7 @@ export function BibliographyView() {
             <Button
               size="xs"
               variant="ghost"
-              onClick={() => readFulltext(activeDetail?.fulltext?.file_format)}
+              onClick={() => readFulltext(activeDetail?.fulltext?.file_format, activeDetail?.fulltext?.attachment_key)}
               disabled={!activeDetail?.fulltext}
             >
               <FileText />
