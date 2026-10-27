@@ -70,6 +70,24 @@ pub(crate) enum BibCommand {
     },
 
     // Articles
+    DiscoveryProvenance {
+        id: String,
+        offset: usize,
+        limit: usize,
+        reply: oneshot::Sender<Result<bib_types::discovery::DiscoveryProvenancePage>>,
+    },
+    PreviewDiscoveryImport {
+        records: Vec<bib_types::discovery::DiscoveryImportRecord>,
+        library: Option<i64>,
+        collection: Option<String>,
+        reply: oneshot::Sender<Result<bib_types::discovery::DiscoveryImportPreview>>,
+    },
+    ImportDiscovery {
+        records: Vec<bib_types::discovery::DiscoveryImportRecord>,
+        library: Option<i64>,
+        collection: Option<String>,
+        reply: oneshot::Sender<Result<Vec<bib_types::discovery::DiscoveryImportOutcome>>>,
+    },
     UpsertArticle {
         article: Article,
         reply: oneshot::Sender<Result<()>>,
@@ -395,6 +413,33 @@ impl BibCommand {
             }
             Self::UpsertArticle { article, reply } => {
                 let _ = reply.send(core.upsert_article(&article).await);
+            }
+            Self::DiscoveryProvenance {
+                id,
+                offset,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(core.discovery_provenance(&id, offset, limit).await);
+            }
+            Self::PreviewDiscoveryImport {
+                records,
+                library,
+                collection,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.preview_discovery_import(records, library, collection)
+                        .await,
+                );
+            }
+            Self::ImportDiscovery {
+                records,
+                library,
+                collection,
+                reply,
+            } => {
+                let _ = reply.send(core.import_discovery(records, library, collection).await);
             }
             Self::UpsertArticles { articles, reply } => {
                 let _ = reply.send(core.upsert_articles(&articles).await);

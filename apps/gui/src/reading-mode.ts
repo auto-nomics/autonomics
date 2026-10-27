@@ -227,7 +227,7 @@ export class ReadingModeView {
 
   private annotationRange(annotation: Annotation): Range | null {
     const exact = annotation.rects?.find(rect => rect.text_range)?.text_range;
-    if (exact?.source_hash === this.structure.metadata.source.hash) {
+    if (exact && exact.source_hash === this.structure.metadata.source.hash) {
       const range = this.range(exact);
       if (range && normalizeQuote(range.toString()) === exact.quote) return range;
     }

@@ -19,7 +19,7 @@
 //! - `authors` maps to `au:`.
 //! - `journal` maps to `jr:` (journal reference).
 //! - `publication_types`, `mesh`, `affiliation` are not directly supported
-//!   by arXiv and fall back to `all:` search.
+//!   by arXiv and return a parameter error rather than a broader `all:` search.
 //! - `year_range` maps to a `submittedDate` date-range filter.
 //!
 //! ## Example
@@ -38,7 +38,7 @@
 //! assert_eq!(
 //!     term,
 //!     r#"(all:transformer AND all:attention) AND ti:"neural network" "#.to_string()
-//!         + r#"AND submittedDate:[202001010000+TO+202412312359]"#
+//!         + r#"AND submittedDate:[202001010000 TO 202412312359]"#
 //! );
 //! ```
 
@@ -55,7 +55,7 @@ use crate::error::{ArxivError, Result};
 /// Translate a [`StructuredSearch`] into an arXiv `search_query` string.
 ///
 /// Returns [`ArxivError::Param`] if the query is empty or the year range is
-/// inverted.
+/// inverted, or a requested field cannot be represented by arXiv.
 pub fn to_arxiv(sq: &StructuredSearch) -> Result<String> {
     if let Some(yr) = &sq.year_range {
         if yr.from > yr.to {
@@ -83,20 +83,16 @@ pub fn to_arxiv(sq: &StructuredSearch) -> Result<String> {
         clauses.push(group(&t, "jr", BoolOp::Or));
     }
 
-    // Fields not natively supported by arXiv fall back to `all:`.
-    if let Some(t) = filtered(&sq.publication_types) {
-        clauses.push(group(&t, "all", BoolOp::Or));
-    }
-    if let Some(t) = filtered(&sq.mesh) {
-        clauses.push(group(&t, "all", BoolOp::Or));
-    }
-    if let Some(t) = filtered(&sq.affiliation) {
-        clauses.push(group(&t, "all", BoolOp::Or));
+    if filtered(&sq.publication_types).is_some()
+        || filtered(&sq.mesh).is_some()
+        || filtered(&sq.affiliation).is_some()
+    {
+        return Err(ArxivError::Param("arXiv does not support structured publication_types, MeSH or affiliation; use a native query for supported source fields".into()));
     }
 
     if let Some(yr) = &sq.year_range {
         clauses.push(format!(
-            "submittedDate:[{:04}{:02}010000+TO+{:04}{:02}312359]",
+            "submittedDate:[{:04}{:02}010000 TO {:04}{:02}312359]",
             yr.from, 1, yr.to, 12
         ));
     }
@@ -119,7 +115,12 @@ fn group(terms: &[String], prefix: &str, op: BoolOp) -> String {
         .iter()
         .map(|t| format!("{prefix}:{}", quote_term(t)))
         .collect();
-    let joined = tagged.join(&format!(" {} ", op.keyword()));
+    let operator = if op == BoolOp::Not {
+        "ANDNOT"
+    } else {
+        op.keyword()
+    };
+    let joined = tagged.join(&format!(" {operator} "));
     if tagged.len() > 1 {
         format!("({joined})")
     } else {
@@ -220,6 +221,12 @@ mod tests {
         };
         // NOT has no visible effect with a single term; we still emit the term.
         assert_eq!(to_arxiv(&sq).unwrap(), "all:cancer");
+        let multiple = StructuredSearch {
+            keywords: kw(&["cancer", "mice"]),
+            keywords_op: Some(BoolOp::Not),
+            ..Default::default()
+        };
+        assert_eq!(to_arxiv(&multiple).unwrap(), "(all:cancer ANDNOT all:mice)");
     }
 
     // ----- translation: multi-field join --------------------------------
@@ -262,12 +269,12 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_fields_fall_back_to_all() {
+    fn unsupported_fields_are_not_broadened_into_all_fields() {
         let sq = StructuredSearch {
             mesh: kw(&["Genetics"]),
             ..Default::default()
         };
-        assert_eq!(to_arxiv(&sq).unwrap(), "all:Genetics");
+        assert!(matches!(to_arxiv(&sq), Err(ArxivError::Param(_))));
     }
 
     // ----- year range ---------------------------------------------------
@@ -283,7 +290,7 @@ mod tests {
             ..Default::default()
         };
         let result = to_arxiv(&sq).unwrap();
-        assert!(result.contains("submittedDate:[202001010000+TO+202412312359]"));
+        assert!(result.contains("submittedDate:[202001010000 TO 202412312359]"));
     }
 
     #[test]
@@ -298,7 +305,7 @@ mod tests {
         assert!(
             to_arxiv(&sq)
                 .unwrap()
-                .contains("submittedDate:[202401010000+TO+202412312359]")
+                .contains("submittedDate:[202401010000 TO 202412312359]")
         );
     }
 

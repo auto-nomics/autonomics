@@ -1,23 +1,11 @@
 //! Semantic Scholar-specific translation of the shared [`StructuredSearch`]
 //! model.
 //!
-//! Unlike Europe PMC, the S2 paper search API does not support field-prefixed
-//! query syntax. Instead:
-//!
-//! - `keywords`, `title`, and `authors` are combined into the plain-text
-//!   `query` parameter.
-//! - `journal` maps to the `venue` filter.
-//! - `publication_types` maps to the `publicationTypes` filter.
-//! - `year_range` maps to the `year` filter.
-//! - `affiliation` and `mesh` are not natively supported by S2 search, so
-//!   they are folded into the text query as additional terms.
-//!
-//! ## Translation rules
-//!
-//! - Each text field's terms are joined with the field's boolean operator.
-//! - Between fields the join is always a space (implicit AND in S2).
-//! - Filters (`venue`, `publicationTypes`, `year`) are returned as
-//!   [`S2Filter`] for the caller to pass as query params.
+//! Keywords use the bulk endpoint's Boolean grammar; venue, type and years
+//! remain metadata filters. Title-only, author, MeSH and affiliation constraints
+//! cannot be expressed by this endpoint and are rejected, never folded into
+//! title/abstract text. Use discovery's explicit approximate mode or native API
+//! calls when broader text matching is intended.
 
 pub use bib_types::query::{BoolOp, StructuredSearch, YearRange};
 
@@ -39,6 +27,11 @@ pub struct S2QueryParts {
 /// inverted.
 pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
     if let Some(yr) = &sq.year_range {
+        if yr.from == 0 || yr.to > 9999 {
+            return Err(S2Error::Param(
+                "publication years must be between 1 and 9999".into(),
+            ));
+        }
         if yr.from > yr.to {
             return Err(S2Error::Param(format!(
                 "year_range inverted: from ({}) > to ({})",
@@ -47,54 +40,45 @@ pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
         }
     }
 
+    for (name, values) in [
+        ("title", &sq.title),
+        ("author", &sq.authors),
+        ("MeSH", &sq.mesh),
+        ("affiliation", &sq.affiliation),
+    ] {
+        if filtered(values).is_some() {
+            return Err(S2Error::Param(format!(
+                "Semantic Scholar cannot preserve a {name} constraint in bulk search; use explicit discovery approximation or another source"
+            )));
+        }
+    }
     let mut terms: Vec<String> = Vec::new();
-
-    // keywords → bare query terms
-    if let Some(t) = filtered(&sq.keywords) {
-        let joined = join_terms(&t, sq.keywords_op.unwrap_or_default());
-        if !joined.is_empty() {
-            terms.push(joined);
+    if let Some(values) = filtered(&sq.keywords) {
+        let op = sq.keywords_op.unwrap_or_default();
+        if op == BoolOp::Not && values.len() < 2 {
+            return Err(S2Error::Param(
+                "exclusions require a positive keyword anchor".into(),
+            ));
         }
+        let values = values
+            .iter()
+            .map(|value| quote_term(value))
+            .collect::<Result<Vec<_>>>()?;
+        terms.push(match op {
+            BoolOp::And => values.join(" + "),
+            BoolOp::Or => values.join(" | "),
+            BoolOp::Not => values.join(" -"),
+        });
     }
-    // title → also bare terms (S2 matches title+abstract)
-    if let Some(t) = filtered(&sq.title) {
-        let joined = join_terms(&t, BoolOp::Or);
-        if !joined.is_empty() {
-            terms.push(joined);
-        }
-    }
-    // authors → bare terms (S2 search includes author names)
-    if let Some(t) = filtered(&sq.authors) {
-        let joined = join_terms(&t, BoolOp::Or);
-        if !joined.is_empty() {
-            terms.push(joined);
-        }
-    }
-    // mesh → S2 doesn't support MeSH in search; add as query terms
-    if let Some(t) = filtered(&sq.mesh) {
-        let joined = join_terms(&t, BoolOp::Or);
-        if !joined.is_empty() {
-            terms.push(joined);
-        }
-    }
-    // affiliation → S2 doesn't support affiliation filter; add as query terms
-    if let Some(t) = filtered(&sq.affiliation) {
-        let joined = join_terms(&t, BoolOp::Or);
-        if !joined.is_empty() {
-            terms.push(joined);
-        }
-    }
-
     if terms.is_empty()
-        && sq.journal.is_none()
-        && sq.publication_types.is_none()
+        && filtered(&sq.journal).is_none()
+        && filtered(&sq.publication_types).is_none()
         && sq.year_range.is_none()
     {
         return Err(S2Error::Param(
-            "structured search is empty: populate at least one field".into(),
+            "structured search is empty: populate a supported field".into(),
         ));
     }
-
     let query = terms.join(" ");
 
     let mut filter = PaperSearchFilter::default();
@@ -123,8 +107,8 @@ pub fn to_s2(sq: &StructuredSearch) -> Result<S2QueryParts> {
 
 /// Whether this query consists solely of keyword terms.
 ///
-/// The bulk-search endpoint supports Boolean query syntax but not the relevance
-/// endpoint's field filters, so this lets callers select the correct endpoint.
+/// Retained for compatibility; the bulk endpoint also supports metadata filters.
+/// Boolean translations must always use bulk, even when this returns false.
 pub fn is_keywords_only(sq: &StructuredSearch) -> bool {
     sq.keywords.is_some()
         && sq.title.is_none()
@@ -134,18 +118,6 @@ pub fn is_keywords_only(sq: &StructuredSearch) -> bool {
         && sq.publication_types.is_none()
         && sq.affiliation.is_none()
         && sq.year_range.is_none()
-}
-
-/// Join terms with the given boolean operator. Terms with spaces are
-/// phrase-quoted.
-fn join_terms(terms: &[String], op: BoolOp) -> String {
-    let quoted: Vec<String> = terms.iter().map(|t| quote_term(t)).collect();
-    let sep = match op {
-        BoolOp::And => " ",
-        BoolOp::Or => " | ",
-        BoolOp::Not => " -",
-    };
-    quoted.join(sep)
 }
 
 /// Return a trimmed copy of the field's terms, dropping empties.
@@ -164,13 +136,26 @@ fn filtered(opt: &Option<Vec<String>>) -> Option<Vec<String>> {
 }
 
 /// Quote a term if it contains whitespace.
-fn quote_term(s: &str) -> String {
+fn quote_term(s: &str) -> Result<String> {
     let trimmed = s.trim();
-    if trimmed.chars().any(|c| c.is_whitespace()) {
-        format!("\"{trimmed}\"")
-    } else {
-        trimmed.to_string()
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || matches!(ch, '"' | '\\' | '*' | '~' | '?'))
+    {
+        return Err(S2Error::Param(
+            "keyword contains source syntax; use native API explicitly".into(),
+        ));
     }
+    Ok(
+        if trimmed
+            .chars()
+            .any(|ch| !ch.is_alphanumeric() && ch != '_' && ch != '.')
+        {
+            format!("\"{trimmed}\"")
+        } else {
+            trimmed.into()
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -285,14 +270,42 @@ mod tests {
     }
 
     #[test]
-    fn multiple_text_fields_joined() {
+    fn unsupported_author_is_not_folded_into_text() {
         let sq = StructuredSearch {
             keywords: kw(&["cancer"]),
             authors: kw(&["Smith"]),
             ..Default::default()
         };
-        let parts = to_s2(&sq).unwrap();
-        assert_eq!(parts.query, "cancer Smith");
+        assert!(matches!(to_s2(&sq), Err(S2Error::Param(_))));
+    }
+
+    #[test]
+    fn unsupported_fields_empty_vectors_and_single_not_never_widen_search() {
+        for name in ["title", "mesh", "affiliation"] {
+            let mut sq = StructuredSearch {
+                keywords: kw(&["gene"]),
+                ..Default::default()
+            };
+            match name {
+                "title" => sq.title = kw(&["special"]),
+                "mesh" => sq.mesh = kw(&["Asthma"]),
+                _ => sq.affiliation = kw(&["Lab"]),
+            }
+            assert!(matches!(to_s2(&sq), Err(S2Error::Param(_))));
+        }
+        let mut sq = StructuredSearch {
+            keywords: kw(&[" "]),
+            journal: Some(vec![]),
+            ..Default::default()
+        };
+        assert!(to_s2(&sq).is_err());
+        sq.keywords = kw(&["mice"]);
+        sq.keywords_op = Some(BoolOp::Not);
+        assert!(to_s2(&sq).is_err());
+        sq.keywords = kw(&["gene", "mice"]);
+        assert_eq!(to_s2(&sq).unwrap().query, "gene -mice");
+        sq.keywords = kw(&["gene*", "mice"]);
+        assert!(to_s2(&sq).is_err());
     }
 
     #[test]

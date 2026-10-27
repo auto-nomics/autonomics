@@ -180,6 +180,9 @@ async fn api_request(
             .bearer_auth(token.unwrap_or_default());
         if let Some(id) = request_id.as_deref() {
             request = request.header("x-search-request-id", id);
+            if method.eq_ignore_ascii_case("POST") && normalized_path == "bib/search/sessions" {
+                request = request.header("x-discovery-session-id", id);
+            }
         }
         // Structured PDF extraction runs the local Zotero layout models. Keep the
         // normal API deadline short while allowing a first Reading Mode conversion.
@@ -564,6 +567,34 @@ mod search_transport_tests {
         *state.base.write().unwrap() = format!("http://{addr}/api/v1");
         *state.token.write().unwrap() = Some("fixture-token".into());
         state
+    }
+    #[tokio::test]
+    async fn discovery_creation_forwards_client_known_session_id() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = state(listener.local_addr().unwrap());
+        let session_id = "88f1c823-35ab-45e8-a283-545919c2f619";
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let head = request_head(&mut stream).await;
+            assert!(head.starts_with("POST /api/v1/bib/search/sessions HTTP/1.1"));
+            assert!(
+                head.to_ascii_lowercase()
+                    .contains(&format!("x-discovery-session-id: {session_id}"))
+            );
+            let body = "{\"session\":{\"id\":\"88f1c823-35ab-45e8-a283-545919c2f619\"}}";
+            stream.write_all(format!("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let result = api_request(
+            &state,
+            "POST".into(),
+            "/bib/search/sessions".into(),
+            Some(serde_json::json!({"query":"gene"})),
+            Some(session_id.into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.data["session"]["id"], session_id);
+        server.await.unwrap();
     }
     #[tokio::test]
     async fn native_search_cancellation_drops_the_real_http_connection() {

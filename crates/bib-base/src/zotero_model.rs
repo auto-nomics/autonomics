@@ -1303,6 +1303,13 @@ async fn article_id_for_attachment(
 }
 
 pub(crate) async fn ensure_article_item(conn: &Connection, article_id: &str) -> Result<i64> {
+    ensure_article_item_in_library(conn, article_id, DEFAULT_LIBRARY_ID).await
+}
+pub(crate) async fn ensure_article_item_in_library(
+    conn: &Connection,
+    article_id: &str,
+    library_id: i64,
+) -> Result<i64> {
     let mut rows = conn
         .query(
             "SELECT itemID FROM articleItems WHERE article_id = ?1",
@@ -1334,7 +1341,7 @@ pub(crate) async fn ensure_article_item(conn: &Connection, article_id: &str) -> 
         .await?;
     }
 
-    let item_id = insert_item(conn, ITEM_TYPE_JOURNAL_ARTICLE).await?;
+    let item_id = insert_item_in_library(conn, ITEM_TYPE_JOURNAL_ARTICLE, library_id).await?;
     conn.execute(
         "INSERT INTO articleItems (article_id, itemID) VALUES (?1, ?2) \
          ON CONFLICT(article_id) DO UPDATE SET itemID = excluded.itemID",
@@ -1744,13 +1751,20 @@ fn parse_json_strings(value: &str) -> Vec<String> {
 }
 
 async fn insert_item(conn: &Connection, item_type_id: i64) -> Result<i64> {
+    insert_item_in_library(conn, item_type_id, DEFAULT_LIBRARY_ID).await
+}
+async fn insert_item_in_library(
+    conn: &Connection,
+    item_type_id: i64,
+    library_id: i64,
+) -> Result<i64> {
     let now = Utc::now().to_rfc3339();
     for _ in 0..16 {
         let key = new_item_key();
         let mut rows = conn
             .query(
                 "SELECT 1 FROM items WHERE libraryID = ?1 AND key = ?2",
-                turso::params![DEFAULT_LIBRARY_ID, key.clone()],
+                turso::params![library_id, key.clone()],
             )
             .await?;
         let key_exists = rows.next().await?.is_some();
@@ -1763,14 +1777,7 @@ async fn insert_item(conn: &Connection, item_type_id: i64) -> Result<i64> {
             "INSERT INTO items \
                 (itemTypeID, dateAdded, dateModified, clientDateModified, libraryID, key) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            turso::params![
-                item_type_id,
-                now.clone(),
-                now.clone(),
-                now,
-                DEFAULT_LIBRARY_ID,
-                key
-            ],
+            turso::params![item_type_id, now.clone(), now.clone(), now, library_id, key],
         )
         .await?;
         return last_insert_id(conn).await;

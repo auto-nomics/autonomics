@@ -110,7 +110,7 @@ fn decode_collection(row: &turso::Row) -> Result<Collection> {
     Ok(col)
 }
 
-async fn stored_collection(conn: &turso::Connection, id: &str) -> Result<Collection> {
+pub(crate) async fn stored_collection(conn: &turso::Connection, id: &str) -> Result<Collection> {
     let mut rows = conn
         .query(
             format!("{COLLECTION_SELECT} WHERE c.id=?1"),
@@ -830,6 +830,12 @@ impl BibCore {
     }
 
     pub(crate) async fn hydrate_article_ids(&self, ids: &[String]) -> Result<Vec<Article>> {
+        Self::hydrate_article_ids_on(&self.conn(), ids).await
+    }
+    pub(crate) async fn hydrate_article_ids_on(
+        conn: &turso::Connection,
+        ids: &[String],
+    ) -> Result<Vec<Article>> {
         let associations = ids
             .iter()
             .map(|id| CollectionArticle {
@@ -843,18 +849,23 @@ impl BibCore {
                 added_at: None,
             })
             .collect::<Vec<_>>();
-        self.hydrate_associations(&associations).await
+        Self::hydrate_associations_on(conn, &associations).await
     }
 
     async fn hydrate_associations(
         &self,
         associations: &[CollectionArticle],
     ) -> Result<Vec<Article>> {
+        Self::hydrate_associations_on(&self.conn(), associations).await
+    }
+    async fn hydrate_associations_on(
+        conn: &turso::Connection,
+        associations: &[CollectionArticle],
+    ) -> Result<Vec<Article>> {
         if associations.is_empty() {
             return Ok(Vec::new());
         }
 
-        let conn = self.conn();
         let mut articles_by_id = std::collections::HashMap::new();
         for ids in associations.chunks(400) {
             let placeholders = (1..=ids.len())

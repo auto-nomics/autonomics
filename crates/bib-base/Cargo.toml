@@ -60,6 +60,6 @@ workspace = true
 e2e = []
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
 # Test-only: constructing a `NodeCtx` needs a DataFusion runtime env.
 datafusion.workspace = true

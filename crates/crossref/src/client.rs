@@ -1,6 +1,10 @@
 //! Async HTTP client for the Crossref REST API.
 
 use reqwest::Client;
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use crate::error::{CrossrefError, Result};
 use crate::types::*;
@@ -12,9 +16,42 @@ fn env_endpoint(env: &str, fallback: &str) -> String {
 /// Base URL for all Crossref REST API requests.
 const BASE_URL: &str = "https://api.crossref.org";
 
-/// Resolve the Crossref endpoint override from the environment.
-fn base_url() -> String {
-    env_endpoint("ENDPOINT_CROSSREF_URL", BASE_URL)
+/// Most recent endpoint-specific rate advertised by the provider.
+#[derive(Debug, Clone)]
+pub struct ObservedRateLimit {
+    pub request_type: String,
+    pub requests: u32,
+    pub interval_seconds: f64,
+    pub concurrency_limit: Option<u32>,
+}
+#[derive(Debug)]
+struct Pace {
+    last: [Option<Instant>; 2],
+    intervals: [Duration; 2],
+    cooldown: Option<Instant>,
+    blocked: bool,
+}
+#[derive(Debug)]
+struct SharedPace {
+    gate: tokio::sync::Mutex<Pace>,
+    observations: Mutex<[Option<ObservedRateLimit>; 2]>,
+}
+impl SharedPace {
+    fn new(polite: bool) -> Self {
+        Self {
+            gate: tokio::sync::Mutex::new(Pace {
+                last: [None, None],
+                intervals: if polite {
+                    [Duration::from_millis(334), Duration::from_millis(100)]
+                } else {
+                    [Duration::from_secs(1), Duration::from_millis(200)]
+                },
+                cooldown: None,
+                blocked: false,
+            }),
+            observations: Mutex::new([None, None]),
+        }
+    }
 }
 
 // ===========================================================================
@@ -24,12 +61,13 @@ fn base_url() -> String {
 /// Builder for [`CrossrefClient`].
 ///
 /// Created via [`CrossrefClient::builder()`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CrossrefClientBuilder {
     mailto: Option<String>,
     bearer_token: Option<String>,
     user_agent: Option<String>,
     client: Option<Client>,
+    base_url: String,
 }
 
 impl Default for CrossrefClientBuilder {
@@ -46,6 +84,7 @@ impl CrossrefClientBuilder {
             bearer_token: None,
             user_agent: None,
             client: None,
+            base_url: env_endpoint("ENDPOINT_CROSSREF_URL", BASE_URL),
         }
     }
 
@@ -79,26 +118,32 @@ impl CrossrefClientBuilder {
         self.client = Some(client);
         self
     }
+    /// Set this instance's endpoint, without mutating process environment.
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into().trim_end_matches('/').to_owned();
+        self
+    }
 
     /// Build the [`CrossrefClient`].
     pub fn build(self) -> CrossrefClient {
         let ua = self.user_agent.unwrap_or_else(|| {
             "crossref-rs-sdk/0.1 (+https://github.com/wjixiang/autonomics)".to_string()
         });
-        let builder = if let Some(c) = self.client {
-            return CrossrefClient {
-                client: c,
-                mailto: self.mailto,
-                bearer_token: self.bearer_token,
-            };
-        } else {
-            Client::builder().user_agent(ua)
-        };
-        let client = builder.build().expect("reqwest client builder");
+        let mailto = self.mailto.filter(|value| !value.trim().is_empty());
+        let bearer_token = self.bearer_token.filter(|value| !value.trim().is_empty());
+        let client = self.client.unwrap_or_else(|| {
+            Client::builder()
+                .user_agent(ua)
+                .connect_timeout(Duration::from_secs(10))
+                .build()
+                .expect("reqwest client builder")
+        });
         CrossrefClient {
             client,
-            mailto: self.mailto,
-            bearer_token: self.bearer_token,
+            pace: Arc::new(SharedPace::new(mailto.is_some())),
+            mailto,
+            bearer_token,
+            base_url: self.base_url,
         }
     }
 }
@@ -148,11 +193,29 @@ impl CrossrefClientBuilder {
 ///     .mailto("researcher@example.org")
 ///     .build();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CrossrefClient {
     client: Client,
     mailto: Option<String>,
     bearer_token: Option<String>,
+    base_url: String,
+    pace: Arc<SharedPace>,
+}
+impl std::fmt::Debug for CrossrefClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrossrefClient")
+            .field("polite_contact_configured", &self.mailto.is_some())
+            .field("api_token_configured", &self.bearer_token.is_some())
+            .finish_non_exhaustive()
+    }
+}
+impl std::fmt::Debug for CrossrefClientBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrossrefClientBuilder")
+            .field("polite_contact_configured", &self.mailto.is_some())
+            .field("api_token_configured", &self.bearer_token.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for CrossrefClient {
@@ -162,6 +225,19 @@ impl Default for CrossrefClient {
 }
 
 impl CrossrefClient {
+    pub fn has_api_token(&self) -> bool {
+        self.bearer_token.is_some()
+    }
+    pub fn observed_rate_limits(&self) -> Vec<ObservedRateLimit> {
+        self.pace
+            .observations
+            .lock()
+            .unwrap()
+            .iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
     /// Create a builder for customising the client.
     pub fn builder() -> CrossrefClientBuilder {
         CrossrefClientBuilder::new()
@@ -187,22 +263,154 @@ impl CrossrefClient {
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
-        let url = build_url(&base_url(), path, params, self.mailto.as_deref());
+        let url = build_url(&self.base_url, path, params, self.mailto.as_deref());
+        if url.len() > 8192 {
+            return Err(CrossrefError::Param(
+                "Crossref request URL exceeds 8192 bytes; shorten the source query".into(),
+            ));
+        }
+        let list = path.ends_with("/works") || path.trim_matches('/').split('/').count() == 1;
+        let kind = usize::from(!list);
+        // A single shared connection is conservative for every pool and
+        // includes calls made through cloned clients outside discovery.
+        let mut pace = self.pace.gate.lock().await;
+        if pace.blocked {
+            return Err(CrossrefError::RateLimited {
+                retry_after_seconds: Some(u64::MAX),
+            });
+        }
+        let wait_for_rate = pace.last[kind]
+            .map(|at| pace.intervals[kind].saturating_sub(at.elapsed()))
+            .unwrap_or_default();
+        let wait_for_cooldown = pace
+            .cooldown
+            .map(|at| at.saturating_duration_since(Instant::now()))
+            .unwrap_or_default();
+        tokio::time::sleep(wait_for_rate.max(wait_for_cooldown)).await;
+        pace.last[kind] = Some(Instant::now());
         let req = {
-            let r = self.client.get(&url);
+            let r = self.client.get(&url).timeout(Duration::from_secs(90));
             if let Some(ref token) = self.bearer_token {
                 r.header("Crossref-Plus-API-Token", format!("Bearer {token}"))
             } else {
                 r
             }
         };
-        let resp = req.send().await?;
+        let mut resp = req.send().await?;
         let status = resp.status().as_u16();
-        let body = resp.text().await?;
-        if !(200..300).contains(&status) {
-            return Err(CrossrefError::Status { status, body });
+        let headers = resp.headers();
+        let advertised_type = headers
+            .get("x-rate-limit-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(if list { "list" } else { "singleton" });
+        let advertised_kind = match advertised_type {
+            "list" | "array" => 0,
+            "singleton" | "single" => 1,
+            _ => kind,
+        };
+        if let Some((requests, seconds)) = headers
+            .get("x-rate-limit-limit")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .zip(
+                headers
+                    .get("x-rate-limit-interval")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.trim_end_matches('s').parse::<f64>().ok())
+                    .filter(|value| value.is_finite() && *value > 0.0 && *value <= 86400.0),
+            )
+        {
+            pace.intervals[advertised_kind] =
+                Duration::from_secs_f64((seconds / f64::from(requests)).max(0.001));
+            self.pace.observations.lock().unwrap()[advertised_kind] = Some(ObservedRateLimit {
+                request_type: if advertised_kind == 0 {
+                    "list"
+                } else {
+                    "singleton"
+                }
+                .into(),
+                requests,
+                interval_seconds: seconds,
+                concurrency_limit: headers
+                    .get("x-concurrency-limit")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok()),
+            });
         }
-        serde_json::from_str(&body).map_err(Into::into)
+        if status == 429 {
+            let retry_after_seconds = headers
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|value| {
+                    value.trim().parse().ok().or_else(|| {
+                        httpdate::parse_http_date(value).ok().map(|at| {
+                            let delay = at
+                                .duration_since(std::time::SystemTime::now())
+                                .unwrap_or_default();
+                            delay
+                                .as_secs()
+                                .saturating_add(u64::from(delay.subsec_nanos() > 0))
+                        })
+                    })
+                });
+            if let Some(seconds) = retry_after_seconds {
+                pace.cooldown = Instant::now().checked_add(Duration::from_secs(seconds));
+                pace.blocked = pace.cooldown.is_none();
+            }
+            return Err(CrossrefError::RateLimited {
+                retry_after_seconds,
+            });
+        }
+        let success = (200..300).contains(&status);
+        let limit = if success { 16 * 1024 * 1024 } else { 64 * 1024 };
+        let oversized = || {
+            if success {
+                CrossrefError::ResponseTooLarge
+            } else {
+                CrossrefError::Status {
+                    status,
+                    body: "response body omitted (size limit)".into(),
+                }
+            }
+        };
+        if resp
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(oversized());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = resp.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err(oversized());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if !(200..300).contains(&status) {
+            return Err(CrossrefError::Status {
+                status,
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+            });
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if value.get("status").and_then(|v| v.as_str()) != Some("ok")
+            || value.get("message").is_none_or(serde_json::Value::is_null)
+        {
+            return Err(CrossrefError::InvalidResponse(
+                "missing successful response envelope".into(),
+            ));
+        }
+        if path.ends_with("/works")
+            && (value.get("message-type").and_then(|v| v.as_str()) != Some("work-list")
+                || value["message"]["total-results"].as_u64().is_none()
+                || !value["message"]["items"].is_array())
+        {
+            return Err(CrossrefError::InvalidResponse(
+                "missing work-list counts or records".into(),
+            ));
+        }
+        serde_json::from_value(value).map_err(Into::into)
     }
 
     // ===================================================================
@@ -450,7 +658,7 @@ impl WorksQuery {
         for (field, value) in &self.field_queries {
             // Field queries have dynamic param names (query.author, etc.)
             // so we encode them inline.
-            params.push(("__fq", format!("{field}={}", urlencode(value))));
+            params.push(("__fq", format!("{}={}", urlencode(field), urlencode(value))));
         }
         if !self.filters.is_empty() {
             let joined = self

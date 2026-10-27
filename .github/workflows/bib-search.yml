@@ -7,6 +7,11 @@ on:
       - 'crates/bib-base/**'
       - 'crates/bib-types/**'
       - 'crates/api-server/**'
+      - 'crates/openalex/**'
+      - 'crates/eutils/**'
+      - 'crates/arxiv/**'
+      - 'crates/crossref/**'
+      - 'crates/semantic-scholar/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'scripts/qualify_bib_search_recovery.py'
@@ -17,6 +22,11 @@ on:
       - 'crates/bib-base/**'
       - 'crates/bib-types/**'
       - 'crates/api-server/**'
+      - 'crates/openalex/**'
+      - 'crates/eutils/**'
+      - 'crates/arxiv/**'
+      - 'crates/crossref/**'
+      - 'crates/semantic-scholar/**'
       - 'Cargo.lock'
       - 'Cargo.toml'
       - 'scripts/qualify_bib_search_recovery.py'
@@ -61,6 +71,13 @@ jobs:
       - run: cargo test -p bib-base --locked --test search_v2 --test search_workflow
       - run: cargo test -p bib-base --locked --lib search::recovery_tests
       - run: cargo test -p bib-base --locked --lib legacy_index::tests
+      - run: cargo test -p bib-base --locked --lib discovery_
+      - run: cargo test -p bib-base --locked --test discovery_sources
+      - run: cargo test -p bib-base --locked --test discovery_s2
+      - run: cargo test -p arxiv --locked
+      - run: cargo test -p crossref --locked
+      - run: cargo test -p semantic-scholar --locked
+      - run: cargo test -p api-server --locked --test discovery
       - run: cargo test -p api-server --locked --test api bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress
       - run: cargo build -p bib-base --locked --example search_recovery_probe
       - name: Interrupt and restore isolated processes

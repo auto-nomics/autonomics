@@ -17,14 +17,11 @@ const GRAPH_BASE: &str = "https://api.semanticscholar.org/graph/v1";
 /// Base URL for the Semantic Scholar Recommendations API.
 const RECO_BASE: &str = "https://api.semanticscholar.org/recommendations/v1";
 
-/// Resolve the S2 Graph endpoint override from the environment.
-fn graph_base() -> String {
-    env_endpoint("ENDPOINT_S2_GRAPH_URL", GRAPH_BASE)
-}
-
-/// Resolve the S2 Recommendations endpoint override from the environment.
-fn reco_base() -> String {
-    env_endpoint("ENDPOINT_S2_RECO_URL", RECO_BASE)
+#[derive(Debug, Default)]
+struct Pace {
+    last: Option<Instant>,
+    cooldown: Option<Instant>,
+    blocked: bool,
 }
 
 // ===========================================================================
@@ -61,11 +58,23 @@ fn reco_base() -> String {
 ///
 /// let client = S2Client::new();
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct S2Client {
     client: Client,
     api_key: Option<String>,
-    last_request: Arc<Mutex<Option<Instant>>>,
+    pace: Arc<Mutex<Pace>>,
+    graph_base: String,
+    reco_base: String,
+    max_retries: u32,
+}
+
+impl std::fmt::Debug for S2Client {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S2Client")
+            .field("api_key_configured", &self.has_api_key())
+            .field("max_retries", &self.max_retries)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for S2Client {
@@ -77,21 +86,21 @@ impl Default for S2Client {
 impl S2Client {
     /// Create a new client with default settings (no API key).
     pub fn new() -> Self {
-        Self {
-            client: Client::builder()
+        Self::with_client(
+            Client::builder()
                 .user_agent("semantic-scholar-rs-sdk/0.1 (+https://www.semanticscholar.org)")
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(90))
                 .build()
                 .expect("reqwest client builder"),
-            api_key: None,
-            last_request: Arc::new(Mutex::new(None)),
-        }
+        )
     }
 
     /// Provide an API key for higher rate limits.
     ///
     /// The key is sent as the `x-api-key` header on every request.
     pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
-        self.api_key = Some(key.into());
+        self.api_key = Some(key.into()).filter(|key| !key.trim().is_empty());
         self
     }
 
@@ -100,89 +109,96 @@ impl S2Client {
         Self {
             client,
             api_key: None,
-            last_request: Arc::new(Mutex::new(None)),
+            pace: Arc::new(Mutex::new(Pace::default())),
+            graph_base: env_endpoint("ENDPOINT_S2_GRAPH_URL", GRAPH_BASE),
+            reco_base: env_endpoint("ENDPOINT_S2_RECO_URL", RECO_BASE),
+            max_retries: 5,
         }
+    }
+
+    /// Override this instance's Graph endpoint without process environment mutation.
+    pub fn with_graph_base_url(mut self, url: impl Into<String>) -> Self {
+        self.graph_base = url.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// Override this instance's Recommendations endpoint.
+    pub fn with_reco_base_url(mut self, url: impl Into<String>) -> Self {
+        self.reco_base = url.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// Set automatic 429 retries. Use zero when an outer session owns its budget.
+    /// Clones retain the shared pacing and cooldown even with different policies.
+    pub fn with_max_retries(mut self, retries: u32) -> Self {
+        self.max_retries = retries.min(5);
+        self
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        self.api_key.is_some()
     }
 
     // -----------------------------------------------------------------------
     // Core request helpers
     // -----------------------------------------------------------------------
 
-    /// Maximum number of retries on HTTP 429.
-    const MAX_RETRIES: u32 = 5;
-
-    /// Initial backoff delay for 429 retries (milliseconds).
-    const INITIAL_BACKOFF_MS: u64 = 2000;
-
-    /// Serialize request starts across all clones of this client.
-    async fn enforce_rate_limit(&self) {
-        const INTERVAL: Duration = Duration::from_millis(1050);
-        let delay = {
-            let mut last = self.last_request.lock().await;
-            let now = Instant::now();
-            match *last {
-                None => {
-                    *last = Some(now);
-                    None
-                }
-                Some(previous) => {
-                    let next = previous.checked_add(INTERVAL).unwrap_or(now);
-                    *last = Some(next);
-                    Some(next.saturating_duration_since(now)).filter(|delay| !delay.is_zero())
-                }
+    /// Conservative request starts shared across clones. Waiting/cancelled calls
+    /// do not reserve future timestamps or accumulate idle burst credits.
+    async fn enforce_rate_limit(&self) -> Result<()> {
+        loop {
+            let mut pace = self.pace.lock().await;
+            if pace.blocked {
+                return Err(S2Error::RateLimited {
+                    retry_after_seconds: Some(u64::MAX),
+                });
             }
-        };
-        if let Some(delay) = delay {
+            let rate = pace
+                .last
+                .map(|at| Duration::from_millis(1050).saturating_sub(at.elapsed()))
+                .unwrap_or_default();
+            let cooldown = pace
+                .cooldown
+                .map(|at| at.saturating_duration_since(Instant::now()))
+                .unwrap_or_default();
+            let delay = rate.max(cooldown);
+            if delay.is_zero() {
+                pace.last = Some(Instant::now());
+                return Ok(());
+            }
+            drop(pace);
             tokio::time::sleep(delay).await;
         }
     }
 
-    fn retry_after_ms(resp: &reqwest::Response) -> Option<u64> {
-        let seconds = resp
+    fn retry_after(resp: &reqwest::Response) -> Option<u64> {
+        let value = resp
             .headers()
             .get(reqwest::header::RETRY_AFTER)?
             .to_str()
-            .ok()?
-            .parse::<u64>()
             .ok()?;
-        Some(seconds.saturating_mul(1000).min(30_000))
+        value.trim().parse().ok().or_else(|| {
+            httpdate::parse_http_date(value).ok().map(|at| {
+                let delay = at
+                    .duration_since(std::time::SystemTime::now())
+                    .unwrap_or_default();
+                delay
+                    .as_secs()
+                    .saturating_add(u64::from(delay.subsec_nanos() > 0))
+            })
+        })
     }
 
-    /// Execute a GET request that returns JSON, with automatic retry on 429.
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         base: &str,
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
-        let url = build_url(base, path, params);
-        let mut backoff = Self::INITIAL_BACKOFF_MS;
-        for attempt in 0..=Self::MAX_RETRIES {
-            self.enforce_rate_limit().await;
-            let mut req = self.client.get(&url);
-            if let Some(ref key) = self.api_key {
-                req = req.header("x-api-key", key);
-            }
-            let resp = req.send().await?;
-            let status = resp.status().as_u16();
-            let retry_after = Self::retry_after_ms(&resp);
-            let body = resp.text().await?;
-            if status == 429 && attempt < Self::MAX_RETRIES {
-                let wait_ms = retry_after.unwrap_or(backoff).max(backoff).min(30_000);
-                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-                backoff = backoff.saturating_mul(2);
-                continue;
-            }
-            if !(200..300).contains(&status) {
-                return Err(S2Error::Status { status, body });
-            }
-            return serde_json::from_str(&body).map_err(Into::into);
-        }
-        unreachable!()
+        self.request_json(reqwest::Method::GET, base, path, params, None)
+            .await
     }
 
-    /// Execute a POST request with a JSON body that returns JSON, with
-    /// automatic retry on 429.
     async fn post_json<T: serde::de::DeserializeOwned>(
         &self,
         base: &str,
@@ -190,31 +206,122 @@ impl S2Client {
         params: &[(&str, String)],
         body: &impl serde::Serialize,
     ) -> Result<T> {
+        self.request_json(
+            reqwest::Method::POST,
+            base,
+            path,
+            params,
+            Some(&serde_json::to_value(body)?),
+        )
+        .await
+    }
+
+    async fn request_json<T: serde::de::DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        base: &str,
+        path: &str,
+        params: &[(&str, String)],
+        body: Option<&serde_json::Value>,
+    ) -> Result<T> {
         let url = build_url(base, path, params);
-        let mut backoff = Self::INITIAL_BACKOFF_MS;
-        for attempt in 0..=Self::MAX_RETRIES {
-            self.enforce_rate_limit().await;
-            let mut req = self.client.post(&url).json(body);
-            if let Some(ref key) = self.api_key {
+        if url.len() > 8192 {
+            return Err(S2Error::Param("request URL exceeds 8192 bytes".into()));
+        }
+        for attempt in 0..=self.max_retries {
+            self.enforce_rate_limit().await?;
+            let mut req = self.client.request(method.clone(), &url);
+            if let Some(key) = &self.api_key {
                 req = req.header("x-api-key", key);
             }
-            let resp = req.send().await?;
-            let status = resp.status().as_u16();
-            let retry_after = Self::retry_after_ms(&resp);
-            let body_text = resp.text().await?;
-            if status == 429 && attempt < Self::MAX_RETRIES {
-                let wait_ms = retry_after.unwrap_or(backoff).max(backoff).min(30_000);
-                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
-                backoff = backoff.saturating_mul(2);
-                continue;
+            if let Some(body) = body {
+                req = req.json(body);
             }
-            if !(200..300).contains(&status) {
-                return Err(S2Error::Status {
-                    status,
-                    body: body_text,
+            let mut resp = req.send().await?;
+            let status = resp.status().as_u16();
+            if status == 429 {
+                let retry_after_seconds = Self::retry_after(&resp);
+                let seconds = retry_after_seconds.unwrap_or((2u64 << attempt).min(30));
+                let mut pace = self.pace.lock().await;
+                if let Some(until) = Instant::now().checked_add(Duration::from_secs(seconds)) {
+                    pace.cooldown = Some(pace.cooldown.map_or(until, |old| old.max(until)));
+                } else {
+                    pace.blocked = true;
+                }
+                drop(pace);
+                // Drop the response before retrying; never wait for an untrusted 429 body.
+                drop(resp);
+                if attempt < self.max_retries {
+                    continue;
+                }
+                return Err(S2Error::RateLimited {
+                    retry_after_seconds,
                 });
             }
-            return serde_json::from_str(&body_text).map_err(Into::into);
+            let success = (200..300).contains(&status);
+            let limit = if success { 16 * 1024 * 1024 } else { 64 * 1024 };
+            let oversized = || {
+                if success {
+                    S2Error::ResponseTooLarge
+                } else {
+                    S2Error::Status {
+                        status,
+                        body: "response body omitted (size limit)".into(),
+                    }
+                }
+            };
+            if resp
+                .content_length()
+                .is_some_and(|length| length > limit as u64)
+            {
+                return Err(oversized());
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = resp.chunk().await? {
+                if bytes.len().saturating_add(chunk.len()) > limit {
+                    return Err(oversized());
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            if !success {
+                return Err(S2Error::Status {
+                    status,
+                    body: String::from_utf8_lossy(&bytes).into_owned(),
+                });
+            }
+            let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+            let invalid =
+                || S2Error::InvalidResponse("missing metadata records or response envelope".into());
+            if value.get("error").is_some_and(|error| !error.is_null()) {
+                return Err(invalid());
+            }
+            if path == "/paper/search" || path == "/paper/search/bulk" {
+                if value["total"].as_u64().is_none() || !value["data"].is_array() {
+                    return Err(invalid());
+                }
+                if path == "/paper/search"
+                    && (value["offset"].as_u64().is_none()
+                        || value
+                            .get("next")
+                            .is_some_and(|v| !v.is_null() && v.as_u64().is_none()))
+                {
+                    return Err(invalid());
+                }
+                if path.ends_with("/bulk")
+                    && value
+                        .get("token")
+                        .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(str::is_empty))
+                {
+                    return Err(invalid());
+                }
+            } else if path.starts_with("/paper/")
+                && path[7..].split('/').count() == 1
+                && !matches!(path, "/paper/autocomplete" | "/paper/batch")
+                && value["paperId"].as_str().is_none_or(str::is_empty)
+            {
+                return Err(invalid());
+            }
+            return serde_json::from_value(value).map_err(Into::into);
         }
         unreachable!()
     }
@@ -245,7 +352,8 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), "/paper/search", &params).await
+        self.get_json(&self.graph_base, "/paper/search", &params)
+            .await
     }
 
     /// Relevance search with full filter support.
@@ -269,25 +377,9 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        if let Some(ref y) = filter.year {
-            params.push(("year", y.clone()));
-        }
-        if let Some(ref v) = filter.venue {
-            params.push(("venue", v.clone()));
-        }
-        if let Some(ref fos) = filter.fields_of_study {
-            params.push(("fieldsOfStudy", fos.clone()));
-        }
-        if let Some(ref pt) = filter.publication_types {
-            params.push(("publicationTypes", pt.clone()));
-        }
-        if filter.open_access_pdf {
-            params.push(("openAccessPdf", String::new()));
-        }
-        if let Some(mc) = filter.min_citation_count {
-            params.push(("minCitationCount", mc.to_string()));
-        }
-        self.get_json(&graph_base(), "/paper/search", &params).await
+        params.extend(filter.to_params());
+        self.get_json(&self.graph_base, "/paper/search", &params)
+            .await
     }
 
     /// Bulk search with boolean query syntax and continuation token.
@@ -302,7 +394,25 @@ impl S2Client {
         fields: Option<&str>,
         sort: Option<&str>,
     ) -> Result<PaperBulkResponse> {
-        let mut params: Vec<(&str, String)> = vec![("query", query.to_owned())];
+        self.search_paper_bulk_filtered(query, token, fields, sort, &PaperSearchFilter::default())
+            .await
+    }
+
+    /// Bulk retrieval with the same documented metadata filters as relevance
+    /// search. The provider returns up to 1000 records; it has no page-size
+    /// parameter. Applications must buffer a batch when exposing smaller pages.
+    pub async fn search_paper_bulk_filtered(
+        &self,
+        query: &str,
+        token: Option<&str>,
+        fields: Option<&str>,
+        sort: Option<&str>,
+        filter: &PaperSearchFilter,
+    ) -> Result<PaperBulkResponse> {
+        let mut params: Vec<(&str, String)> = filter.to_params();
+        if !query.is_empty() {
+            params.push(("query", query.to_owned()));
+        }
         if let Some(t) = token {
             params.push(("token", t.to_owned()));
         }
@@ -314,7 +424,7 @@ impl S2Client {
         if let Some(s) = sort {
             params.push(("sort", s.to_owned()));
         }
-        self.get_json(&graph_base(), "/paper/search/bulk", &params)
+        self.get_json(&self.graph_base, "/paper/search/bulk", &params)
             .await
     }
 
@@ -335,7 +445,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), &path, &params).await
+        self.get_json(&self.graph_base, &path, &params).await
     }
 
     /// Get details for multiple papers (up to 500) in a single request.
@@ -351,7 +461,7 @@ impl S2Client {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
         let body = serde_json::json!({ "ids": ids });
-        self.post_json(&graph_base(), "/paper/batch", &params, &body)
+        self.post_json(&self.graph_base, "/paper/batch", &params, &body)
             .await
     }
 
@@ -377,7 +487,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_CITATION_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), &path, &params).await
+        self.get_json(&self.graph_base, &path, &params).await
     }
 
     /// Get papers referenced by this paper.
@@ -398,7 +508,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_CITATION_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), &path, &params).await
+        self.get_json(&self.graph_base, &path, &params).await
     }
 
     // ===================================================================
@@ -408,7 +518,7 @@ impl S2Client {
     /// Suggest paper query completions for interactive search.
     pub async fn autocomplete(&self, query: &str) -> Result<serde_json::Value> {
         let params: Vec<(&str, String)> = vec![("query", query.to_owned())];
-        self.get_json(&graph_base(), "/paper/autocomplete", &params)
+        self.get_json(&self.graph_base, "/paper/autocomplete", &params)
             .await
     }
 
@@ -434,7 +544,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_AUTHOR_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), "/author/search", &params)
+        self.get_json(&self.graph_base, "/author/search", &params)
             .await
     }
 
@@ -447,7 +557,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_AUTHOR_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), &path, &params).await
+        self.get_json(&self.graph_base, &path, &params).await
     }
 
     /// Get papers by a specific author.
@@ -468,7 +578,7 @@ impl S2Client {
         } else {
             params.push(("fields", AUTHOR_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(&graph_base(), &path, &params).await
+        self.get_json(&self.graph_base, &path, &params).await
     }
 
     // ===================================================================
@@ -489,7 +599,7 @@ impl S2Client {
         } else {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
-        self.get_json(&reco_base(), &path, &params).await
+        self.get_json(&self.reco_base, &path, &params).await
     }
 }
 
@@ -502,6 +612,8 @@ impl S2Client {
 pub struct PaperSearchFilter {
     /// Year range, e.g. `"2020-2023"`, `"2019"`, `"2010-"`.
     pub year: Option<String>,
+    /// Inclusive date or year interval, e.g. `"2020-01:2023-12"`.
+    pub publication_date_or_year: Option<String>,
     /// Venue filter (comma-separated for OR).
     pub venue: Option<String>,
     /// Fields of study (comma-separated for OR).
@@ -512,6 +624,30 @@ pub struct PaperSearchFilter {
     pub open_access_pdf: bool,
     /// Minimum citation count.
     pub min_citation_count: Option<i32>,
+}
+
+impl PaperSearchFilter {
+    fn to_params(&self) -> Vec<(&'static str, String)> {
+        let mut params = Vec::new();
+        for (key, value) in [
+            ("year", &self.year),
+            ("publicationDateOrYear", &self.publication_date_or_year),
+            ("venue", &self.venue),
+            ("fieldsOfStudy", &self.fields_of_study),
+            ("publicationTypes", &self.publication_types),
+        ] {
+            if let Some(value) = value {
+                params.push((key, value.clone()));
+            }
+        }
+        if self.open_access_pdf {
+            params.push(("openAccessPdf", String::new()));
+        }
+        if let Some(count) = self.min_citation_count {
+            params.push(("minCitationCount", count.to_string()));
+        }
+        params
+    }
 }
 
 // ===========================================================================

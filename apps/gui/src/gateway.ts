@@ -71,17 +71,21 @@ async function tauriInvoke<T>(command: string, args?: unknown): Promise<T> {
   return core.invoke<T>(command, args as any);
 }
 
-function requestId(): string {
+export function newGatewayRequestId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return Array.from(crypto.getRandomValues(new Uint32Array(4)), value => value.toString(16).padStart(8,"0")).join("");
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 export async function gatewayRequest(
-  method: string, path: string, body?: unknown, options: { signal?: AbortSignal } = {},
+  method: string, path: string, body?: unknown, options: { signal?: AbortSignal; requestId?: string } = {},
 ): Promise<any> {
   const signal = options.signal;
   signal?.throwIfAborted();
-  const id = signal ? requestId() : undefined;
+  const id = options.requestId ?? (signal ? newGatewayRequestId() : undefined);
   const search = /^\/bib\/(search\/(v2|export)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
+  const discoveryCreate = method.toUpperCase() === "POST" && path === "/bib/search/sessions";
   const cancel = () => {
     if (!id) return;
     if (isTauri) void tauriInvoke("cancel_api_request", {requestId:id}).catch(() => {});
@@ -95,7 +99,7 @@ export async function gatewayRequest(
     }
     const response = await fetch(webApiPath(path), {
       method, signal, credentials:"same-origin",
-      headers:{...(body===undefined?{}:{"Content-Type":"application/json"}),...(id&&search?{"x-search-request-id":id}:{})},
+      headers:{...(body===undefined?{}:{"Content-Type":"application/json"}),...(id&&search?{"x-search-request-id":id}:{}),...(id&&discoveryCreate?{"x-discovery-session-id":id}:{})},
       body:body===undefined?undefined:JSON.stringify(body),
     });
     const text = await response.text();

@@ -16,8 +16,7 @@
 //! | Container title | `query.container-title` | `query.container-title=Nature` |
 //! | Affiliation     | `query.affiliation`     | `query.affiliation=Harvard`|
 //!
-//! Crossref does NOT have MeSH or publication-type field queries — those map
-//! to filters instead.
+//! Crossref has no equivalent MeSH constraint. Publication types use filters.
 //!
 //! ## Translation rules
 //!
@@ -27,8 +26,7 @@
 //! - `authors` → `query.author`.
 //! - `journal` → `query.container-title`.
 //! - `affiliation` → `query.affiliation`.
-//! - `mesh` → no Crossref equivalent (silently dropped; could use
-//!   `category-name` filter if needed).
+//! - `mesh` → explicit unsupported-parameter error; never discarded.
 //! - `publication_types` → `type` filter.
 //! - `year_range` → `from-pub-date` / `until-pub-date` filters.
 
@@ -41,12 +39,22 @@ use crate::error::{CrossrefError, Result};
 /// Translate a [`StructuredSearch`] into a [`WorksQuery`] for the
 /// `/works` endpoint.
 pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
+    if filtered(&sq.mesh).is_some() {
+        return Err(CrossrefError::Param(
+            "Crossref cannot preserve a MeSH constraint".into(),
+        ));
+    }
     if let Some(yr) = &sq.year_range {
         if yr.from > yr.to {
             return Err(CrossrefError::Param(format!(
                 "year_range inverted: from ({}) > to ({})",
                 yr.from, yr.to
             )));
+        }
+        if yr.from == 0 || yr.to > 9999 {
+            return Err(CrossrefError::Param(
+                "Crossref publication years must be between 1 and 9999".into(),
+            ));
         }
     }
 
@@ -55,7 +63,7 @@ pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
     // keywords → free-form query (all fields)
     if let Some(t) = filtered(&sq.keywords) {
         let op = sq.keywords_op.unwrap_or_default();
-        if t.len() > 1 && matches!(op, BoolOp::And | BoolOp::Not) {
+        if matches!(op, BoolOp::Not) || (t.len() > 1 && matches!(op, BoolOp::And)) {
             return Err(CrossrefError::Param(format!(
                 "Crossref works search does not support strict keywords_op={}; use OR/loose recall or another source",
                 op.keyword()
@@ -98,13 +106,7 @@ pub fn to_crossref_works_query(sq: &StructuredSearch) -> Result<WorksQuery> {
     }
 
     // Check that at least one constraint was set.
-    let is_empty = sq.keywords.is_none()
-        && sq.title.is_none()
-        && sq.authors.is_none()
-        && sq.journal.is_none()
-        && sq.affiliation.is_none()
-        && sq.publication_types.is_none()
-        && sq.year_range.is_none();
+    let is_empty = q.query.is_none() && q.field_queries.is_empty() && q.filters.is_empty();
     if is_empty {
         return Err(CrossrefError::Param(
             "structured search is empty: populate at least one field".into(),
@@ -295,6 +297,47 @@ mod tests {
         let sq = StructuredSearch::default();
         let err = to_crossref_works_query(&sq).unwrap_err();
         assert!(matches!(err, CrossrefError::Param(_)));
+    }
+
+    #[test]
+    fn unsupported_mesh_and_empty_vectors_never_become_unconstrained_queries() {
+        let mut sq = StructuredSearch {
+            keywords: Some(vec!["gene".into()]),
+            mesh: Some(vec!["Asthma".into()]),
+            ..Default::default()
+        };
+        assert!(matches!(
+            to_crossref_works_query(&sq),
+            Err(CrossrefError::Param(_))
+        ));
+        sq.mesh = None;
+        sq.keywords = Some(vec!["  ".into()]);
+        sq.title = Some(vec![]);
+        assert!(matches!(
+            to_crossref_works_query(&sq),
+            Err(CrossrefError::Param(_))
+        ));
+    }
+
+    #[test]
+    fn single_exclusion_and_invalid_years_are_rejected() {
+        let mut sq = StructuredSearch {
+            keywords: Some(vec!["mice".into()]),
+            keywords_op: Some(BoolOp::Not),
+            ..Default::default()
+        };
+        assert!(matches!(
+            to_crossref_works_query(&sq),
+            Err(CrossrefError::Param(_))
+        ));
+        sq.keywords_op = None;
+        for (from, to) in [(0, 2020), (2020, 10000)] {
+            sq.year_range = Some(YearRange { from, to });
+            assert!(matches!(
+                to_crossref_works_query(&sq),
+                Err(CrossrefError::Param(_))
+            ));
+        }
     }
 
     #[test]

@@ -37,27 +37,92 @@ pub fn parse_feed(xml: &str) -> Result<SearchResponse> {
     let mut start_index: u64 = 0;
     let mut items_per_page: u64 = 0;
     let mut entries: Vec<ArxivEntry> = Vec::new();
+    let mut feed_seen = false;
+    let mut feed_closed = false;
+    let mut metadata = [false; 3];
+    let mut depth = 0usize;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 let local = local_name(e.name().into_inner());
+                if feed_closed || (!feed_seen && local != "feed") {
+                    return Err(ArxivError::Xml("expected an Atom feed root".into()));
+                }
+                depth += 1;
                 match local {
-                    "entry" => {
+                    "feed" => {
+                        if feed_seen {
+                            return Err(ArxivError::Xml("duplicate Atom feed root".into()));
+                        }
+                        let name = std::str::from_utf8(e.name().into_inner())
+                            .map_err(|_| ArxivError::Xml("invalid feed name".into()))?;
+                        let xmlns = name.split_once(':').map_or_else(
+                            || "xmlns".to_owned(),
+                            |(prefix, _)| format!("xmlns:{prefix}"),
+                        );
+                        let mut atom_namespace = false;
+                        for attribute in e.attributes() {
+                            let attribute = attribute
+                                .map_err(|_| ArxivError::Xml("invalid feed namespace".into()))?;
+                            if attribute.key.as_ref() == xmlns.as_bytes() {
+                                atom_namespace = attribute
+                                    .decode_and_unescape_value(reader.decoder())
+                                    .is_ok_and(|value| value == "http://www.w3.org/2005/Atom");
+                            }
+                        }
+                        if !atom_namespace {
+                            return Err(ArxivError::Xml("expected Atom namespace".into()));
+                        }
+                        feed_seen = true;
+                    }
+                    "entry" if depth == 2 => {
                         let entry = parse_entry(&mut reader)?;
                         entries.push(entry);
+                        depth -= 1;
                     }
-                    "totalResults" => {
+                    "totalResults" if depth == 2 => {
+                        if metadata[0] {
+                            return Err(ArxivError::Xml("duplicate totalResults".into()));
+                        }
                         total_results = read_text_u64(&mut reader)?;
+                        metadata[0] = true;
+                        depth -= 1;
                     }
-                    "startIndex" => {
+                    "startIndex" if depth == 2 => {
+                        if metadata[1] {
+                            return Err(ArxivError::Xml("duplicate startIndex".into()));
+                        }
                         start_index = read_text_u64(&mut reader)?;
+                        metadata[1] = true;
+                        depth -= 1;
                     }
-                    "itemsPerPage" => {
+                    "itemsPerPage" if depth == 2 => {
+                        if metadata[2] {
+                            return Err(ArxivError::Xml("duplicate itemsPerPage".into()));
+                        }
                         items_per_page = read_text_u64(&mut reader)?;
+                        metadata[2] = true;
+                        depth -= 1;
                     }
                     _ => {}
                 }
+            }
+            Ok(Event::End(e)) => {
+                if depth == 1 && local_name(e.name().into_inner()) == "feed" {
+                    feed_closed = true;
+                }
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| ArxivError::Xml("unexpected closing element".into()))?;
+            }
+            Ok(Event::Text(text)) if !feed_seen || feed_closed => {
+                if !text.decode().is_ok_and(|text| text.trim().is_empty()) {
+                    return Err(ArxivError::Xml("text outside Atom feed".into()));
+                }
+            }
+            Ok(Event::Empty(_)) if !feed_seen || feed_closed => {
+                return Err(ArxivError::Xml("unexpected root element".into()));
             }
             Ok(Event::Eof) => break,
             Err(e) => {
@@ -66,6 +131,19 @@ pub fn parse_feed(xml: &str) -> Result<SearchResponse> {
             _ => {}
         }
         buf.clear();
+    }
+
+    if !feed_seen
+        || !feed_closed
+        || depth != 0
+        || (!metadata.iter().all(|seen| *seen)
+            && !entries
+                .iter()
+                .any(|entry| entry.arxiv_id.starts_with("api/errors")))
+    {
+        return Err(ArxivError::Xml(
+            "incomplete Atom feed or missing pagination metadata".into(),
+        ));
     }
 
     Ok(SearchResponse {

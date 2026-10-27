@@ -3,6 +3,10 @@ use thiserror::Error;
 /// Errors produced by the arXiv API client.
 #[derive(Debug, Error)]
 pub enum ArxivError {
+    #[error("API rate limit reached (retry after {retry_after_seconds:?} seconds)")]
+    RateLimited { retry_after_seconds: Option<u64> },
+    #[error("arXiv response exceeds the supported size limit")]
+    ResponseTooLarge,
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 

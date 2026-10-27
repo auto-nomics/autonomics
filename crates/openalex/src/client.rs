@@ -10,6 +10,19 @@ use reqwest::Client;
 use crate::error::{OpenAlexError, Result};
 use crate::types::*;
 
+/// Respect both delta-seconds and HTTP-date Retry-After forms.
+fn retry_after(response: &reqwest::Response) -> Option<u64> {
+    let value = response.headers().get("retry-after")?.to_str().ok()?;
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(seconds);
+    }
+    let until = httpdate::parse_http_date(value).ok()?;
+    let duration = until
+        .duration_since(std::time::SystemTime::now())
+        .unwrap_or_default();
+    Some(duration.as_secs() + u64::from(duration.subsec_nanos() > 0))
+}
+
 fn env_endpoint(env: &str, fallback: &str) -> String {
     std::env::var(env).unwrap_or_else(|_| fallback.to_string())
 }
@@ -31,6 +44,8 @@ pub struct ListParams {
     pub filter: Option<String>,
     /// Full-text search query.
     pub search: Option<String>,
+    /// Scoped/exact works searches; multiple scopes combine with AND.
+    pub scoped_search: std::collections::BTreeMap<String, String>,
     /// Sort expression, e.g. `"cited_by_count:desc"`.
     pub sort: Option<String>,
     /// Results per page (1–100, default 25).
@@ -65,6 +80,30 @@ impl ListParams {
     pub fn with_search(mut self, search: impl Into<String>) -> Self {
         self.search = Some(search.into());
         self
+    }
+
+    /// Set a supported scoped or exact works search parameter.
+    pub fn with_scoped_search(mut self, parameter: &str, query: impl Into<String>) -> Result<Self> {
+        if ![
+            "search",
+            "search.exact",
+            "search.title",
+            "search.title.exact",
+            "search.title_and_abstract",
+            "search.title_and_abstract.exact",
+        ]
+        .contains(&parameter)
+        {
+            return Err(OpenAlexError::Param(
+                "unsupported scoped search parameter".into(),
+            ));
+        }
+        if parameter == "search" {
+            self.search = Some(query.into());
+        } else {
+            self.scoped_search.insert(parameter.into(), query.into());
+        }
+        Ok(self)
     }
 
     /// Set the sort expression.
@@ -111,7 +150,7 @@ impl ListParams {
     }
 
     /// Render into `(key, value)` pairs suitable for URL encoding.
-    fn to_query_pairs(&self) -> Vec<(&'static str, String)> {
+    fn to_query_pairs(&self) -> Vec<(&str, String)> {
         let mut pairs = Vec::new();
         if let Some(ref v) = self.filter {
             pairs.push(("filter", v.clone()));
@@ -119,6 +158,11 @@ impl ListParams {
         if let Some(ref v) = self.search {
             pairs.push(("search", v.clone()));
         }
+        pairs.extend(
+            self.scoped_search
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone())),
+        );
         if let Some(ref v) = self.sort {
             pairs.push(("sort", v.clone()));
         }
@@ -195,9 +239,24 @@ pub struct OpenAlexClient {
     client: Client,
     base_url: String,
     api_key: Option<String>,
+    last_request: std::sync::Arc<tokio::sync::Mutex<Option<std::time::Instant>>>,
+    quota: std::sync::Arc<std::sync::RwLock<Option<bib_types::discovery::SourceQuota>>>,
 }
 
 impl OpenAlexClient {
+    /// Last observed server budget, never an inferred remaining balance.
+    pub fn quota(&self) -> Option<bib_types::discovery::SourceQuota> {
+        self.quota
+            .read()
+            .expect("quota state lock poisoned")
+            .clone()
+    }
+    /// Cursor continuation beyond the first page requires an API key.
+    pub fn has_api_key(&self) -> bool {
+        self.api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty())
+    }
     /// Create a new client.
     ///
     /// Pass `Some("your-key")` to use a premium API key, or `None` for the
@@ -210,7 +269,11 @@ impl OpenAlexClient {
         Self {
             client,
             base_url: base_url(),
-            api_key: api_key.map(|s| s.to_string()),
+            api_key: api_key
+                .filter(|key| !key.trim().is_empty())
+                .map(|s| s.to_string()),
+            last_request: Default::default(),
+            quota: Default::default(),
         }
     }
 
@@ -219,7 +282,11 @@ impl OpenAlexClient {
         Self {
             client,
             base_url: base_url(),
-            api_key: api_key.map(|s| s.to_string()),
+            api_key: api_key
+                .filter(|key| !key.trim().is_empty())
+                .map(|s| s.to_string()),
+            last_request: Default::default(),
+            quota: Default::default(),
         }
     }
 
@@ -239,10 +306,72 @@ impl OpenAlexClient {
         path: &str,
         params: &[(&str, String)],
     ) -> Result<T> {
+        // Clones reserve starts on one shared limiter. Complex Boolean
+        // requests have a lower upstream rate than ordinary queries.
+        let operators = params
+            .iter()
+            .map(|(_, value)| {
+                value
+                    .split_whitespace()
+                    .filter(|word| matches!(*word, "AND" | "OR" | "NOT"))
+                    .count()
+            })
+            .sum::<usize>();
+        let millis = match (self.has_api_key(), operators > 5) {
+            (false, true) => 1000,
+            (true, true) => 200,
+            (false, false) => 100,
+            (true, false) => 34,
+        };
+        let start = {
+            let mut last = self.last_request.lock().await;
+            let now = std::time::Instant::now();
+            let start = last
+                .and_then(|last| last.checked_add(std::time::Duration::from_millis(millis)))
+                .unwrap_or(now)
+                .max(now);
+            *last = Some(start);
+            start
+        };
+        tokio::time::sleep(start.saturating_duration_since(std::time::Instant::now())).await;
         let url = self.build_url(path, params);
+        if url.len() > 4094 {
+            return Err(OpenAlexError::Param(
+                "OpenAlex request URL exceeds 4094 bytes; narrow or split the query".into(),
+            ));
+        }
         let resp = self.client.get(&url).send().await?;
         let status = resp.status().as_u16();
+        let number = |key: &str| {
+            resp.headers()
+                .get(key)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        };
+        *self.quota.write().expect("quota state lock poisoned") =
+            Some(bib_types::discovery::SourceQuota {
+                limit: number("x-ratelimit-limit"),
+                remaining: number("x-ratelimit-remaining"),
+                reset_unix_seconds: resp
+                    .headers()
+                    .get("x-ratelimit-reset")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok()),
+                observed_at_unix_seconds: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                last_http_status: status,
+            });
+        let retry_after_seconds = retry_after(&resp);
         let body = resp.text().await?;
+        if status == 429 {
+            return Err(OpenAlexError::RateLimited {
+                retry_after_seconds,
+                body,
+            });
+        }
         if status == 404 {
             return Err(OpenAlexError::NotFound(body));
         }

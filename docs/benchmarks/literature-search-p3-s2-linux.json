@@ -1,0 +1,105 @@
+{
+  "qualified_at": "2026-10-27T19:40:33.468610+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "scope": "Semantic Scholar SDK and discovery planner, bounded bulk batch cache and protocol adapters, deterministic local HTTP and actual Linux Tauri WebKitGTK; no live upstream qualification",
+  "commands": [
+    "cargo test -p semantic-scholar --locked --offline",
+    "cargo test -p bib-base --lib discovery_ --locked --offline",
+    "cargo test -p bib-base --test discovery_sources --test discovery_s2 -p api-server --test discovery --locked --offline",
+    "cargo clippy -p semantic-scholar --all-targets --locked --offline -- -D warnings",
+    "cargo clippy -p bib-base -p api-server --lib --locked --offline -- -D warnings",
+    "cargo clippy -p bib-base --test discovery_s2 --test discovery_sources --locked --offline -- -D warnings",
+    "cargo clippy -p autonomics-gui --example discovery_native_smoke --locked --offline -- -D warnings",
+    "cargo build -p autonomics-gui --example discovery_native_smoke --locked --offline",
+    "node tests/native-discovery.mjs",
+    "npm run test:bib-discovery",
+    "npm run build"
+  ],
+  "sdk_test_results": [
+    {
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 21
+    },
+    {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_core_test_results": [
+    {
+      "passed": 49,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_api_and_http_results": [
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "checks": {
+    "sdk_all_targets_clippy": "passed",
+    "backend_library_clippy": "passed",
+    "http_tests_clippy": "passed",
+    "native_example_clippy": "passed",
+    "targeted_rustfmt": "passed",
+    "gui_build": "passed",
+    "browser_and_native_bridge": "passed",
+    "actual_native_workflow": "passed"
+  },
+  "actual_native_receipt": "literature-search-p3-s2-native-webview-linux.json",
+  "limits": {
+    "batch_cache_entries_per_source": 32,
+    "batch_cache_serialized_bytes_per_source": 33554432,
+    "batch_cache_age_seconds": 1800,
+    "bulk_upstream_batch_max": 1000,
+    "relevance_result_window": 1000,
+    "bulk_result_window": 10000000
+  },
+  "additional_contracts": [
+    "bulk batches split without invented provider limit",
+    "evicted batch refetch validates upstream metadata independently of local creation times",
+    "changed batches expire continuation",
+    "source ordering is distinct from obtained-candidate ordering",
+    "known IDs validate returned identity",
+    "versioned arXiv identifiers are not silently substituted",
+    "upstream abstract JSON field retained",
+    "legacy Boolean queries with metadata use bulk and reject unsupported fields"
+  ],
+  "limitations": [
+    "21 S2 live tests ignored",
+    "release qualification for macOS/Windows and manual screen readers remains pending",
+    "real-library relevance and live upstream/end-to-end performance not measured by these fixtures",
+    "S2 batch cache is separate from session retained-candidate accounting; its byte budget is not process RSS",
+    "broader backend all-target Clippy has the recorded pre-existing stored_files.rs baseline lint"
+  ],
+  "additional_compatibility_check": {
+    "command": "cargo test -p semantic-scholar -p bib-base -p api-server --locked --offline",
+    "test": "types::tests::abstract_uses_upstream_key_and_reads_previous_sdk_serialization",
+    "result": "passed"
+  }
+}

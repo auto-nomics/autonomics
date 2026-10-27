@@ -6,6 +6,7 @@
 //! mounted without changing startup behavior.
 
 pub mod bib;
+mod discovery;
 pub mod server;
 
 pub use server::{

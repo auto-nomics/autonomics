@@ -3,6 +3,12 @@ use thiserror::Error;
 /// Errors produced by the Crossref client.
 #[derive(Debug, Error)]
 pub enum CrossrefError {
+    #[error("API rate limit reached (retry after {retry_after_seconds:?} seconds)")]
+    RateLimited { retry_after_seconds: Option<u64> },
+    #[error("Crossref response exceeds the supported size limit")]
+    ResponseTooLarge,
+    #[error("invalid Crossref response: {0}")]
+    InvalidResponse(String),
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 

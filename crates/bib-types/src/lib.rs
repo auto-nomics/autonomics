@@ -13,6 +13,7 @@
 //! `eutils` can depend on `bib-types` without pulling in storage code.
 
 pub mod convert;
+pub mod discovery;
 pub mod evidence;
 pub mod query;
 pub mod search;

@@ -366,6 +366,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "api-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bib-base",
  "bib-types",
@@ -746,6 +747,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bib-types",
+ "httpdate",
  "quick-xml 0.39.4",
  "reqwest 0.13.5",
  "schemars 1.2.2",
@@ -1009,11 +1011,15 @@ name = "autonomics-gui"
 version = "0.1.0"
 dependencies = [
  "api-server",
+ "arxiv",
+ "async-trait",
  "base64 0.22.1",
  "bib-base",
  "bib-types",
+ "crossref",
  "futures-util",
  "reqwest 0.12.28",
+ "semantic-scholar",
  "serde",
  "serde_json",
  "tauri",
@@ -2728,6 +2734,7 @@ dependencies = [
  "bib-types",
  "dag-core",
  "datafusion",
+ "httpdate",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "serde",
@@ -4687,6 +4694,7 @@ dependencies = [
  "bib-types",
  "dag-core",
  "datafusion",
+ "httpdate",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "serde",
@@ -9775,6 +9783,7 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "bib-types",
+ "httpdate",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "serde",
@@ -12494,6 +12503,7 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "bib-types",
+ "httpdate",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "serde",

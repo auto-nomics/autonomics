@@ -1,0 +1,281 @@
+{
+  "qualified_at": "2026-10-27T20:09:56.105626+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "phase": "P3",
+  "status": "implemented_and_locally_qualified",
+  "baseline_commit": "871890fe23a151dc3e7f0a945c1beb934faab691",
+  "scope": "Five-source discovery planning and sessions, bounded continuation and cancellation, conservative fusion and durable import/provenance, GUI and isolated phase frontend bundle; not production release qualification",
+  "commands": [
+    "cargo test -p semantic-scholar -p bib-base -p api-server --locked --offline",
+    "cargo test -p bib-base --locked --offline --lib zotero_extract::tests::zotero_process -- --ignored",
+    "cargo test -p api-server --locked --offline --test api bib_zotero_migrates_flattened_text_on_reading_mode_open -- --ignored",
+    "cargo test -p autonomics-gui --bin autonomics-gui --locked --offline search_transport_tests",
+    "cargo clippy -p arxiv -p crossref -p semantic-scholar -p eutils -p openalex --all-targets --locked --offline -- -D warnings",
+    "npm run test:bib-search",
+    "npm run test:bib-workflow",
+    "npm run test:bib-discovery",
+    "npm run build",
+    "cargo build -p autonomics-gui --example discovery_native_smoke --locked --offline",
+    "node tests/native-discovery.mjs"
+  ],
+  "rust_test_groups": [
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 22,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 158,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 21
+    },
+    {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "rust_passed": 319,
+  "explicit_extractor_tests": [
+    {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "native_http_tests": [
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "checks": {
+    "five_source_sdk_all_targets_clippy": "passed",
+    "backend_library_clippy": "passed; see Crossref/S2 qualification receipts",
+    "source_http_targets_clippy": "passed; see S2 qualification receipt",
+    "native_example_clippy": "passed; see S2 qualification receipt",
+    "gui_search_and_reading": "passed",
+    "discovery_browser_native_bridge_1001_candidates": "passed",
+    "isolated_frontend_build": "passed",
+    "isolated_browser_native_bridge_workflows": "passed",
+    "isolated_actual_linux_tauri": "passed",
+    "phase_rust_format": "passed in affected crates; pre-existing unrelated workspace diffs listed below"
+  },
+  "gui_large_candidate_cases": [
+    "1001 obtained candidates paginated in 100-row API pages",
+    "End navigation reaches last obtained candidate",
+    "fewer than 60 list rows mounted",
+    "stale sequence append rejected without discarding displayed rows",
+    "refresh then continue with no duplicate rows"
+  ],
+  "requirements_evidence": {
+    "source_capabilities_and_real_paging": [
+      "literature-search-p3-arxiv-linux.json",
+      "literature-search-p3-crossref-linux.json",
+      "literature-search-p3-s2-linux.json",
+      "discovery_sources integration tests for PubMed/OpenAlex"
+    ],
+    "independent_partial_delivery_budget_retry_cancel": "discovery_sessions unit tests and discovery API tests",
+    "strong_id_merge_versions_and_provenance": "discovery_merge and discovery_import unit/API tests",
+    "durable_idempotent_import_and_fulltext_queue": "discovery_import/discovery_acquisition and discovery API tests",
+    "gui_native_workflow": "isolated actual Linux Tauri and browser/native-bridge workflows",
+    "import_capacity_performance": [
+      "literature-search-p3-10k-import-release.json",
+      "literature-search-p3-100k-import-release.json"
+    ]
+  },
+  "frontend_artifacts": [
+    {
+      "path": "crates/gateway/gui-dist/assets/gui.css",
+      "sha256": "1b55e9d2bd9eb10855cd8696b0afee16777b4eceb50be4f1d44e28f8b754b580",
+      "bytes": 98323
+    },
+    {
+      "path": "crates/gateway/gui-dist/assets/gui.js",
+      "sha256": "226cd156d0cb7c0e8c1b9f96284b2e1f02e617b1d97939285c5791ce407e51ec",
+      "bytes": 1204967
+    },
+    {
+      "path": "crates/gateway/gui-dist/assets/gui.mjs",
+      "sha256": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36",
+      "bytes": 1375838
+    },
+    {
+      "path": "crates/gateway/gui-dist/index.html",
+      "sha256": "f1929b6c8a54fd6ab9cac6076c787ffbeffbc7b958d20aa97aba9586de72cf1a",
+      "bytes": 527
+    }
+  ],
+  "qualified_source_blobs": {
+    ".github/workflows/bib-search.yml": "8dd33339685826be2dfd628f7d2e1bc88c345d50",
+    ".github/workflows/ci.yml": "db222d109bd9b94c4e316da5d1c893be82c9a58e",
+    "apps/gui/src-tauri/Cargo.toml": "b12a174e907358dbcc6ae9eb8e46b987dbaf5461",
+    "apps/gui/src-tauri/examples/discovery_native_smoke.rs": "19436433424d82f66e9f12512ad66f3c8478c0ec",
+    "apps/gui/src-tauri/src/gateway.rs": "b4dec578d9938ccb9064b28a4134387726c545bd",
+    "apps/gui/src/features/bibliography.tsx": "52333112941cc6e6d2854af6a0e2f7377211534e",
+    "apps/gui/src/features/discovery-model.ts": "b7c34c5ad5b712f2ee0d1950c8eb613f6503636c",
+    "apps/gui/src/features/discovery-provenance.tsx": "c5271258005dfc67c805d4f8d423eb0644a5cbf7",
+    "apps/gui/src/features/discovery-view.tsx": "b23179effbc3692e179650a9d75200f5e36adcf0",
+    "apps/gui/src/features/use-discovery-presence.ts": "05b3e8a78017cca7fa9cb3bb6221fe2f02a22805",
+    "apps/gui/src/features/use-discovery.ts": "56461ea362fdeb54a338141db1aa3b886b1fdaf5",
+    "apps/gui/src/gateway.ts": "42e09da00666df8c7f5ee9184c9501083eca740b",
+    "apps/gui/src/reading-mode.ts": "899f15e8b5e1312c9e9f4e05b1c1cba04242b0c2",
+    "apps/gui/tests/discovery-native.mjs": "e9b442f0facba9c00a3870acf2f66412736025cc",
+    "apps/gui/tests/discovery-workflow.mjs": "4e331137f8a7262a792f905b681853fbdcd3688b",
+    "apps/gui/tests/native-discovery.mjs": "45809b5cec78be45a30da688d4db50b225fb69a0",
+    "crates/api-server/Cargo.toml": "81b92e69f183022d9539b3184b8eeb8ce6827b42",
+    "crates/api-server/src/bib.rs": "4a4777923b375963558789813542e579440eb7a9",
+    "crates/api-server/src/discovery.rs": "2e891d30a93e334542b0db688a5a5a8d42200027",
+    "crates/api-server/src/lib.rs": "6c7d4ea12cfee459078efe4f5d50330bcceb9531",
+    "crates/api-server/tests/discovery.rs": "84e521edd82f3d7c469462519a17db910a3f308b",
+    "crates/arxiv/Cargo.toml": "56c7b465ffa22204eb90b881c269d4632ec4e358",
+    "crates/arxiv/src/client.rs": "298e94ef503e0b01609f9beaf4b20225cc7d3956",
+    "crates/arxiv/src/convert.rs": "8661a2f2e838bd2c180dce3de4e83f8f60581a67",
+    "crates/arxiv/src/error.rs": "a71c94a45e44d9421dca98a9430b999e86d78315",
+    "crates/arxiv/src/query.rs": "c083e145f0d51c5514ddf0dcff0b5fc60db8cda1",
+    "crates/arxiv/src/types.rs": "071546871a30708a72f8d69abf439bb859061b0f",
+    "crates/bib-base/Cargo.toml": "bc229a2e878d2bd7a881c9264aa0122bdb3a0d18",
+    "crates/bib-base/examples/discovery_import_benchmark.rs": "c6008aa30a3e1f1ba14a7b675f9c97f2d3359d6f",
+    "crates/bib-base/src/actor.rs": "dfd49ff63bec81d8b4793babc193417fdaddccec",
+    "crates/bib-base/src/bib_base.rs": "1c1fad3179d29a3172a25fd58595133c81acb07d",
+    "crates/bib-base/src/collections.rs": "43b2073cd58ac89f00b3ccbade8efba103c08f77",
+    "crates/bib-base/src/discovery_acquisition.rs": "2b9afadf107574a7ac8058c13bc63cf30e35e8b1",
+    "crates/bib-base/src/discovery_arxiv.rs": "9a38e8b774514e3030b44c3ec84426069a75a325",
+    "crates/bib-base/src/discovery_crossref.rs": "29b72ec14d1e5b9f929e1a42793837027070bc5a",
+    "crates/bib-base/src/discovery_import.rs": "acaaf9ea1faf5ddfa03717cde011e2f40141e117",
+    "crates/bib-base/src/discovery_merge.rs": "f39b834486f1023ce511d8a4eb301152997652ba",
+    "crates/bib-base/src/discovery_plan.rs": "38e3102927299728f887ebb85ade8013626de490",
+    "crates/bib-base/src/discovery_s2.rs": "4eb9e49c3f46bfcb36930c46e514bc8752288200",
+    "crates/bib-base/src/discovery_sessions.rs": "6f956e6ec4c5a931cae53ea9ae55b11d987c527a",
+    "crates/bib-base/src/discovery_sources.rs": "f233876d18234dd2b45c5b3b826ebec957fa5ea8",
+    "crates/bib-base/src/extraction.rs": "5dd7a2eca00ce2d451c9f2715ee6c7aa78c4184f",
+    "crates/bib-base/src/lib.rs": "f8ac197b85eafbb64deba6f22ee07803e30ac4a1",
+    "crates/bib-base/src/oa_fetch.rs": "a9015d1a3c5d13337738dde8218e254dfa32901f",
+    "crates/bib-base/src/query.rs": "9e93a9d0871c3c11cc199b081b46febe13b71571",
+    "crates/bib-base/src/shared.rs": "3db6c1b68ba184827d04a27b0ed7762e45f630a4",
+    "crates/bib-base/src/zotero_model.rs": "f487cc72b42c387e2f9300a7a13e3985e318903c",
+    "crates/bib-base/tests/discovery_s2.rs": "a3eb4ead4a6d8a92b70c27d1bec421e5d3733a51",
+    "crates/bib-base/tests/discovery_sources.rs": "820a599b5611862d5f324fd64d10f74bba008433",
+    "crates/bib-types/src/discovery.rs": "6974b649b527e7699b76bb43f96e334f1297bcd4",
+    "crates/bib-types/src/lib.rs": "d953a47efd54754caec204cbcc9c653e841ee912",
+    "crates/crossref/Cargo.toml": "3681ff57b2140a8eaffc1f63043fea35956ae248",
+    "crates/crossref/src/client.rs": "bc1368bfd9fd80179c0e024b84cbdca3ede8d30c",
+    "crates/crossref/src/error.rs": "bbf81a75af73d64641919cdca4277daae094d8f0",
+    "crates/crossref/src/query.rs": "22f65b926edd8b6ad5df045e09afdab5e53bc720",
+    "crates/crossref/tests/http_contract.rs": "a86ef2094c4ff2fdfa4ed995e2e7c424a10e392b",
+    "crates/eutils/Cargo.toml": "3b37b5016bf881427320cac40843c7eaee6c5b24",
+    "crates/eutils/src/client.rs": "2e818eebc82489881c9846b33918d305b1e77201",
+    "crates/eutils/src/error.rs": "ef2d69a7433920ce53bf782fa883ff170bf2e05e",
+    "crates/openalex/Cargo.toml": "601050f0f3f5bca33c3440ecd50b8dac6d36e813",
+    "crates/openalex/src/client.rs": "63c1161b95753ef34a5c4fc19e483310f69ce7d6",
+    "crates/openalex/src/error.rs": "97a3370696f168c12e5418466338ca16637867c8",
+    "crates/openalex/src/query.rs": "6d404df287e42cb32e365baf14d830b602c33a41",
+    "crates/semantic-scholar/Cargo.toml": "534c771c48d1170fcb1bdca158eba7d5a8429dbf",
+    "crates/semantic-scholar/src/client.rs": "fc8314ba702d36a36d57522844951d23cbbbd120",
+    "crates/semantic-scholar/src/error.rs": "035f715312d8a13a18b8c9d5e93a28e85697674b",
+    "crates/semantic-scholar/src/query.rs": "aa3caf514b7e6a97b5d16fe1de91dbeb29918c91",
+    "crates/semantic-scholar/src/types.rs": "6f4f43bc42fb884487f3ffaefe5363fca5366101",
+    "crates/semantic-scholar/tests/http_contract.rs": "6fcab2a1cc86ea9277d75bad2a4a50b3faa3ebc0"
+  },
+  "limitations": [
+    "21 S2 live tests ignored in the full Rust run; other sources live network qualification is also not claimed",
+    "lit_search_e2e feature disabled in this deterministic regression run",
+    "3 default-ignored Node extraction cases passed separately",
+    "macOS/Windows actual runtime and manual screen reader qualification remain release gates",
+    "real-library relevance/live upstream/end-to-end performance not proven by synthetic or local fixtures",
+    "broader backend all-target Clippy retains the recorded pre-existing stored_files.rs lint",
+    "cargo fmt --all --check reports pre-existing formatting differences in unchanged crates/gateway/src/server/auth.rs, server/router.rs and tests/integration.rs; affected search crates were checked separately",
+    "independent Agent/reader workspace edits and their generated assets excluded from this phase snapshot"
+  ]
+}

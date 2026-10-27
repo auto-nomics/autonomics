@@ -44,8 +44,8 @@ fn openalex_client_from_env() -> Arc<openalex::OpenAlexClient> {
     Arc::new(openalex::OpenAlexClient::new(key.as_deref()))
 }
 
-/// Build a [`crossref::CrossrefClient`] using the `CROSSREF_MAILTO`
-/// environment variable (optional; absent ⇒ default pool).
+/// Build a [`crossref::CrossrefClient`] with optional `CROSSREF_MAILTO`
+/// and `CROSSREF_PLUS_API_TOKEN` configuration.
 fn crossref_client_from_env() -> Arc<crossref::CrossrefClient> {
     let mailto = std::env::var("CROSSREF_MAILTO")
         .ok()
@@ -53,6 +53,13 @@ fn crossref_client_from_env() -> Arc<crossref::CrossrefClient> {
     let builder = crossref::CrossrefClient::builder();
     let builder = match mailto {
         Some(email) => builder.mailto(email),
+        None => builder,
+    };
+    let builder = match std::env::var("CROSSREF_PLUS_API_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+    {
+        Some(token) => builder.bearer_token(token),
         None => builder,
     };
     Arc::new(builder.build())
@@ -76,6 +83,8 @@ fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
 /// (`Arc`-backed).
 #[derive(Clone)]
 pub struct BibShared {
+    pub discovery_acquisitions: crate::discovery_acquisition::DiscoveryAcquisitions,
+    pub discovery_sessions: crate::discovery_sessions::DiscoverySessions,
     pub search_cancellations: Arc<crate::search_cancellation::SearchCancellationRegistry>,
     /// Storage handle for the bibliography library (articles, collections,
     /// fulltexts, annotations, …).
@@ -179,6 +188,8 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            discovery_acquisitions: Default::default(),
+            discovery_sessions: Default::default(),
             search_cancellations: Default::default(),
             bib,
             file_storage: None,
@@ -224,6 +235,8 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            discovery_acquisitions: Default::default(),
+            discovery_sessions: Default::default(),
             search_cancellations: Default::default(),
             bib,
             file_storage: None,

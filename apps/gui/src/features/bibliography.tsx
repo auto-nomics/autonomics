@@ -50,6 +50,8 @@ import { SearchEvidencePanel } from "./search-evidence";
 import { SearchIndexStatus } from "./search-index-status";
 import { useBibSearch } from "./use-bib-search";
 import { SearchSnippet } from "./search-snippet";
+import { DiscoveryView } from "./discovery-view";
+import { DiscoveryProvenance } from "./discovery-provenance";
 import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort } from "./bib-search-model";
 
 type BibAuthor = NonNullable<BibArticle["authors"]>[number];
@@ -334,6 +336,19 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
 }
 
 export function BibliographyView() {
+  const [workspace, setWorkspace] = useState<"library" | "discover">("library");
+  const [discoveryMounted, setDiscoveryMounted] = useState(false);
+  return <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <nav aria-label="Bibliography workspace" className="flex gap-1">
+      <Button size="sm" variant={workspace === "library" ? "secondary" : "ghost"} aria-current={workspace === "library" ? "page" : undefined} onClick={() => setWorkspace("library")}>Library</Button>
+      <Button size="sm" variant={workspace === "discover" ? "secondary" : "ghost"} aria-current={workspace === "discover" ? "page" : undefined} onClick={() => { setDiscoveryMounted(true); setWorkspace("discover"); }}>Discover</Button>
+    </nav>
+    <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView /></div>
+    {discoveryMounted && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
+  </div>;
+}
+
+function LibraryView() {
   const [initial] = useState(readSearchLocation);
   const {history,record:recordHistory,clear:clearHistory}=useQueryHistory();
   const recordHistoryRef=useRef(recordHistory);recordHistoryRef.current=recordHistory;
@@ -494,6 +509,7 @@ export function BibliographyView() {
   }, [queryDraft, query, isComposing]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (!searchInputRef.current?.getClientRects().length) return;
       if (document.querySelector(".zotero-pdf-reader,.zotero-txt-reader,dialog[open]")) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") { event.preventDefault(); searchInputRef.current?.focus(); searchInputRef.current?.select(); }
     };
@@ -1112,6 +1128,7 @@ export function BibliographyView() {
                   <MetadataRow label="Record" value={selected.id} />
                 </MetadataTable>
               </Section>
+              <DiscoveryProvenance key={selected.id} articleId={selected.id} />
 
               <Section title="Collections" count={associations.filter(a => a.article_id === selected.id).length}>
                 <div className="space-y-2">

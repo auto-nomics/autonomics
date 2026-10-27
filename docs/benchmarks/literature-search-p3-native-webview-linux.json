@@ -1,0 +1,14 @@
+{
+  "evidence": [
+    "actual native IPC create, events and first-source delivery",
+    "source-version selection, preview and transactional import",
+    "target library presence after import",
+    "library change notification, session deletion and durable provenance GUI",
+    "actual native arxiv SDK HTTP/Atom query and per-source draft preservation"
+  ],
+  "ok": true,
+  "runtime": "Tauri WebKitGTK",
+  "qualified_at": "2026-10-27T17:54:04.496541+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "scope": "Actual Linux Tauri WebKitGTK, native IPC and authenticated local API/storage. PubMed/OpenAlex use deterministic providers; arXiv uses the actual SDK against a local HTTP/Atom fixture. No live upstream relevance/performance claim."
+}

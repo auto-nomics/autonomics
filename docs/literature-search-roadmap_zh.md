@@ -1,6 +1,6 @@
 # 文献检索引擎与 GUI 优化实施方案
 
-日期：2026-10-27。依据当前工作区源码、已落盘的基准收据和官方产品资料更新。基线为已提交的 P0（`01452ed`）及 P1 检索实现；实现、测试代码和基准收据的存在不等于已通过生产发布验收。执行目标为按 P0–P5 自主实现，每阶段一个提交。
+日期：2026-10-28。本方案保留原始设计与阶段记录；P0–P3 的实现和本地验收已完成，最新状态以末尾执行记录与资格收据为准。跨平台、人工可访问性和真实库质量分别作为发布门槛，不能用本地测试替代。执行目标为按 P0–P5 自主实现，每阶段一个提交。
 
 ## 1. 建议与产品目标
 
@@ -266,14 +266,14 @@ P5 优先引文列表、相似文献、可复现快照导出与订阅增量去�
 ### 当前执行记录
 
 - P0：`01452ed`；P1：`032a685`（本地实现与 Linux 验收，跨平台实际 CI 仍为发布门槛）。
-- P2 本地实现与 Linux 自动化验收完成，准备形成阶段提交。已新增精确筛选与分面、批量页元数据、版本化动态保存搜索 CRUD、快照校验的多对象证据接口、Unicode 高亮区间和相应集成/API 测试。分面元数据按 outbox 增量失效，覆盖修改、删除和提取状态转换；混合附件的失败状态不会被可用附件掩盖。
+- P2 本地实现与 Linux 自动化验收完成，阶段提交为 `871890f`。已新增精确筛选与分面、批量页元数据、版本化动态保存搜索 CRUD、快照校验的多对象证据接口、Unicode 高亮区间和相应集成/API 测试。分面元数据按 outbox 增量失效，覆盖修改、删除和提取状态转换；混合附件的失败状态不会被可用附件掩盖。
 - GUI 工作区已经实现完整过滤、高级构建器、保存规则、虚拟列表、证据阅读入口、URL/返回状态、索引状态及搜索快照导出，均应按“待阶段验收的实现”处理，不重复安排为从零开发。Tauri 已有底层 HTTP 取消及作用域附件读取实现与单元测试；Linux 实际 Tauri WebKitGTK 已通过检索/筛选/保存/第二附件定位/返回闭环，收据见 `benchmarks/literature-search-p2-native-webview-linux.json`；macOS/Windows 实际执行仍为发布门槛。
 
 - P2 分面性能诊断见 [P2 基准](benchmarks/literature-search-p2.md)：100k 纯 NOT 带分面热 P95 从约 1372ms 降至最终复测 202.37ms，首次加载约 1025.77ms；标题+年份 P95 为 286.13ms，尚非 GUI 端到端结果。
 
 ## 10. 本次代码审查后的下一步计划
 
-本节按代码审查形成，并随实现更新。P0/P1 已提交，P2 本地验收完成、准备提交；其他 GUI Agent/workspace 改动不属于本计划。下列收口项中，查询语义、Linux 原生闭环和双写退出已有实现/回归，最终阶段验证已通过，跨平台与人工发布门槛单独保留。
+本节按代码审查形成，并随实现更新。P0/P1/P2 已提交，P2 为 `871890f`；其他 GUI Agent/workspace 改动不属于本计划。下列收口项中，查询语义、Linux 原生闭环和双写退出已有实现/回归，最终阶段验证已通过，跨平台与人工发布门槛单独保留。
 
 ### 10.1 第一优先级：验收并交付现有 P2
 
@@ -315,3 +315,32 @@ P4 比较多语言 embedding、段落分块和有限候选重排；记录模型/
 - 浏览器搜索完整工作流、基础搜索、PDF/TXT、文献菜单与集合树回归通过；实际 Linux Tauri WebView 完成检索/过滤/保存/第二附件证据定位/返回闭环。
 - 最终 10k/100k release 基准更新到 JSON；现代源写入停止旧词项双写后，真实进程 SIGKILL、中断重放、多进程与备份恢复资格再次通过。
 - 原始记录见 `benchmarks/literature-search-p2-validation-linux.json`、`literature-search-p2-process-recovery-linux.json` 与原生 WebView 收据。macOS/Windows 实际运行、人工屏幕阅读器和真实库相关性/端到端性能仍为发布门槛，不能由本机自动化代替。后续进入 P3，完整 P0–P5 目标仍未完成。
+
+
+### P3 当前实现进展（尚未形成阶段提交）
+
+- 新增 `bib-types::discovery` 契约和 `bib-base::discovery_plan`：复用本地 AST，原生查询绑定单一来源，限制可公开参数，源计划保留实际参数及绑定页大小的指纹。DOI URL/前缀会规范化为标识符查询。无法表达的跨字段布尔、开放获取或文献类型条件明确返回 unsupported，不静默删除。
+- PubMed 分页以一次 ESearch 创建 History，再按其 WebEnv/query_key 读取后续窗口；保留 QueryTranslation 和源总数。超过 E-utilities 10000 条窗口明确提示限制，不假装全量完成。OpenAlex 使用原始 provider cursor；匿名第一页允许返回，继续分页缺 key 时返回 auth_required。
+- SDK 保留 HTTP 429 的 Retry-After（秒数和 HTTP 日期），适配层区分认证、限流、查询错误、响应损坏、超时和真实零结果。公开失败消息和执行参数不泄露请求中的 API key。OpenAlex clone 共用请求起始限流器。
+- 旧 OpenAlex StructuredSearch 的关键词 OR/NOT 已改为原生布尔语法；作者/机构使用对应字段，MeSH 和未经 ID 解析的期刊条件不再被替换为宽泛正文检索。bioRxiv 的关键词搜索明确报告 unsupported。
+- 已通过 5 项规划单元测试、4 项隔离真实 HTTP 契约测试、96 项 OpenAlex/Eutils SDK 单元测试与相关库严格 Clippy。这些证明底层规划和分页，不表示联邦工作区已经可用。
+- 已新增 `discovery_sessions` 和 HTTP 路由：有界会话、逐源独立交付、长轮询事件、排队/冷却在内的预算、自动重试和单源重试/分页、取消及 epoch 防迟到覆盖、TTL 回收和共享缓存预算。客户端指定 UUID 支持创建幂等及提前关闭，避免取消创建响应后留下孤立检索。
+- 已新增保守强 ID 合并：保留原始来源/排名/查询指纹/获取时间，传递标识符桥接可合并已有候选，旧候选 ID 仍可解析；冲突 DOI、预印本/正式版只建版本关系，仅标题相似提示疑似重复。候选 RRF 与各源 total 分开，默认保留首次取得顺序；分源排名展示相应来源版本。
+- OpenAlex 暴露最近观察的上游额度（未知为 null）、状态码与观察时间，运行时另报告并发槽位和冷却。凭据是否配置不等于认证已通过。
+- 本次会话/合并/规划单元测试 20 项、源 HTTP 契约 4 项、鉴权及生命周期 API 测试 2 项通过，严格相关库 Clippy 通过。三平台资格 workflow 已加入这些用例，不能将已配置视为已执行。
+- 库内匹配与导入已实现：候选指纹防止来源增量到达后误用旧预览，可选择具体来源版本；强 ID 与持久化来源别名用于匹配，保留已有元数据、集合角色和笔记，歧义匹配要求人工审查。每项独立事务，真正的数据库约束失败会回滚该项；跨连接并发重复导入不重复创建文献。预印本/正式版关联与完整检索来源独立持久化，会话关闭或数据库重开后仍可追溯。
+- 可选全文获取已接入有界后台任务：元数据导入前预留容量，缺 VFS 或队列满时明确失败；复用现有 PMC PDF/VFS/提取链路，进度逐项可查，取消跳过排队项。任务进度保存在进程内，不声称重启自动续传；已落盘附件和来源记录持久化。浏览器及 Tauri 的创建请求均支持客户端已知 UUID。
+- 新增 8 项存储导入测试及 3 项后台队列测试；含归并、规划、会话共 32 项测试通过，API 的 5 项鉴权/生命周期/指纹/持久化来源/全文复用/入队前检查测试通过。扩展 Rust 回归共 276 项通过（其后新增的第 5 项 API 用例另行通过）；包含本地 V2、集合、原生模型、恢复和跨连接导入。相关库严格 Clippy 与原生端所有 target 的严格 Clippy 通过；扩大到后端所有 target 时发现原有 `stored_files.rs` 的 `items_after_test_module` lint，本阶段未把它记为通过。
+- 发现 GUI 已有独立状态、显式搜索、源能力/进度/失败/查询详情、原生参数、共享高级条件、来源/排序切换、虚拟列表、保守增量刷新、版本选择、批量导入预览与逐项结果、全文任务进度。文献库详情可按需读取持久化导入来源。客户端在发起创建前生成 UUID，包含不支持 `crypto.randomUUID` 的浏览器回退；切换查询/卸载时关闭会话。
+- 浏览器及模拟原生桥接的发现流程通过，覆盖首源先返回、稳定选择、过期指纹拒绝、来源版本导入、工作区状态保留、窄窗口布局与快捷键。原生传输另有 3 项真实本地 HTTP 测试通过。实际 Linux Tauri WebKitGTK 通过“发现—逐源事件—选版本—预览—事务导入—库内刷新—关闭会话—查看持久化来源”，收据见 [P3 原生验证](benchmarks/literature-search-p3-native-webview-linux.json)。来源使用确定性 fixture；不是上游线上质量、相关性或性能验收。前端构建及 P2 搜索/完整工作流回归通过。
+- 新增 10k/100k 合成库 release 导入基准：100 项预览 P95 约 52/574ms，幂等重复导入 P95 约 68/622ms；100k 单项预览 P95 约 557ms，反映每批全库标识符扫描的固定成本。验证规范化匹配、已有元数据保留和无重复变化；[完整基准与范围说明](benchmarks/literature-search-p3.md)。GUI 对已取得候选分批检查库内状态，未知/失败不显示成“未入库”。
+- arXiv 已接入发现会话：字段、正向布尔和直接 AND 排除、保留版本的精确 ID、原生 `search_query/id_list`、真实 offset 续页。出版年份不替换成提交日期，类型/OA 不静默忽略；新旧排序明确指首次提交。源总数变化使 offset 失效，30000 条窗口限制有独立提示。共享 SDK 串行连接并限制至少三秒的请求起始间隔，保留 Retry-After；完整 Atom/分页校验与正文上限防止错误页伪装成零结果，显式版本查询拒绝收录其他版本。
+- arXiv SDK 旧扁平查询的 MeSH/机构/类型条件不再降级为 all；NOT 使用 ANDNOT，日期参数中的空格交由 URL/form 编码。通用网关拒绝将出版年份当提交年份，专业用户可用原生日期。GUI 原生模式按来源单选并各自保留草稿，展示明确的上游认证要求。
+- 本轮 38 项 arXiv SDK 单元测试、5 项 doctest、36 项 discovery 单元测试、11 项来源 HTTP 契约及 5 项发现 API 用例通过；8 项 SDK 在线用例未运行。浏览器/模拟桥接验证 arXiv 原生参数和草稿切换；实际 Linux Tauri WebKitGTK 跑通原生参数经网关、真实 arXiv SDK、受控 HTTP/Atom 端点到结果的完整路径。SDK/后端库/原生端严格 Clippy 与前端构建通过。证据范围见 [arXiv 资格记录](benchmarks/literature-search-p3-arxiv-linux.json)，不代替线上上游质量或其他操作系统验收。
+- Crossref 已接入发现会话：精确 DOI/出版年份/类型条件与显式近似文本分开，原生参数白名单、真实 provider cursor、查询/页大小绑定、重复 raw cursor、短页终止和静态脱敏错误均有受控 HTTP 验收。跨字段 OR 不转成交集，DOI OR 分组可与其他条件求交；NOT、OA 和不支持的类型不静默丢弃。共享 SDK 按当前公共/polite 的 list/singleton 速率启动，遵循响应头、串行占用连接到正文结束，保留 Retry-After 秒数/日期及共享冷却，限制正文和游标大小。旧 StructuredSearch 的 MeSH、空数组及单项 NOT 也不再变成更宽的查询；合并器识别 Crossref/S2 的期刊类型拼写，保留预印本与正式版关系。
+- 本轮 Crossref SDK 的 22 项单元测试、6 项本地 HTTP 契约、3 项 doctest，发现核心 42 项、来源 HTTP 19 项和发现 API 5 项通过；7 项 Crossref 在线测试未运行。SDK 所有 target、后端库、来源 HTTP target 和原生 example 的严格 Clippy 通过，目标 Rust 文件格式检查、GUI 构建和浏览器/模拟桥接回归通过。实际 Linux WebKitGTK 通过 Crossref SDK 本地 HTTP、25+1 条真实游标续页、虚拟列表末尾行、匹配说明及原生草稿保留；新增回归修复历史 batch 重放触发过早更新提示，以及新查询保留失效来源筛选的问题。容量失败保留候选和单源重试/分页复用会话也有 GUI 用例。证据见 [Crossref 资格记录](benchmarks/literature-search-p3-crossref-linux.json)，不等于真实上游质量或跨平台发布验收。
+- Semantic Scholar 已接入三种发现端点：严格 bulk 布尔检索、显式近似 relevance 与精确 ID lookup。区分源排序和已取得候选排序；bulk 不冒充相关性排名，relevance 明示 1000 条窗口。不折叠作者/MeSH/机构为正文词，不用 public-PDF 条件替换通用 OA，也不替换明确的 arXiv 版本。真实 provider token 与有界批次缓存支持 1–100 条小页，淘汰后重取并比对原始元数据指纹；变化使续页过期，本地转换时钟不影响指纹。执行信息保留批次实际抓取时间。共享 SDK 修复空闲额度积累、保留完整冷却、限制正文与 URL、隐藏配置凭据；发现会话统一管理重试。SDK 的 abstract JSON 映射也已修复。
+- 本轮 S2 SDK 22 项单元（含旧摘要序列化兼容）、7 项 HTTP 契约、2 项 doctest，发现核心 49 项、发现 API 5 项、来源 HTTP 28 项通过；21 项在线用例忽略。SDK 所有 target、后端库、两个来源 HTTP target 和原生 example 严格 Clippy，目标 Rust 格式检查、GUI 构建及浏览器/模拟桥接回归通过。实际 WebKitGTK 经真实 SDK/本地 HTTP 取得上游批次后，在测试端点关闭的情况下读取 25+5 条，验证虚拟末尾行、源原生草稿与匹配说明。证据见 [S2 资格记录](benchmarks/literature-search-p3-s2-linux.json)。
+- P3 本地功能与阶段验收已完成：PubMed/OpenAlex/arXiv/Crossref/S2 的能力规划、逐源会话、分页/取消/预算、保守归并、持久化来源、幂等导入与发现 GUI 均有证据。完整后端/SDK 回归 319 项通过；原先忽略的 3 项 Zotero 提取/API 用例在满足环境条件后另行通过，原生传输 3 项通过。五源 SDK 所有 target 严格 Clippy 通过；后端库、来源 HTTP target 与原生 example 严格检查沿用本轮资格记录。浏览器/模拟桥接验证 1001 个已取得候选的分页、End 键导航、虚拟化与过期快照拒绝；库内搜索/阅读回归通过。独立暂存源码构建及其 GUI/实际 Linux Tauri 流程通过，前端产物随 P3 提交。完整范围见 [阶段收口记录](benchmarks/literature-search-p3-stage-linux.json)。真实库质量、跨平台和人工可访问性仍为既定发布门槛；未宣称线上上游或生产发布全部验收。
+
+P3 接入依据：OpenAlex [搜索](https://help.openalex.org/api/searching/)、[过滤](https://help.openalex.org/api/filtering/)、[认证](https://help.openalex.org/api/authentication/)；NCBI [E-utilities 参数与 History](https://www.ncbi.nlm.nih.gov/books/NBK25499/?report=printable) 和 [PubMed 检索帮助](https://pubmed.ncbi.nlm.nih.gov/help/)；arXiv [API 手册](https://info.arxiv.org/help/api/user-manual.html)和[请求限制](https://info.arxiv.org/help/api/tou.html)。实际运行预算和上游变化仍通过独立契约/资格测试验收。

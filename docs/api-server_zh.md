@@ -140,3 +140,55 @@ V2 可选 `include_articles:true`，在同一读取快照中批量加载当前�
 取消适用于 V2、证据和完整搜索导出，支持取消先于注册到达；request ID 为 1–128 个 ASCII 字母、数字或 `-_.`。取消会结束等待、丢弃接收端并跳过尚未运行的搜索任务；正在执行的 CPU 索引/查询不会被强制中断。浏览器通过 AbortSignal 和取消 POST，Tauri 通过 request ID 与取消命令中止底层 HTTP 请求。
 
 附件证据带可选 `attachment_hash`。读取 `/articles/{id}/attachments/{attachment_key}/raw?expected_hash=...` 时，hash 与当前原始附件不符返回 409，避免点击旧证据后打开已替换的文件。hash 必须由实际快照返回，调用方不自行猜测。
+
+### P3 外部检索会话（已实现并通过本地阶段验收）
+
+会话、库内匹配、导入、全文后台任务和独立发现 GUI 已实现。事件使用经过同一鉴权的 JSON 长轮询，浏览器与 Tauri 均复用现有 gateway HTTP 传输，不依赖仅浏览器可用的 EventSource。
+
+当前发现适配器包括 PubMed、OpenAlex、arXiv、Crossref、Semantic Scholar（`semantic_scholar`）。`/search/sources` 的 `authentication` 表示上游认证要求（`none/optional/required/required_for_continuation/unknown`），与本系统 HTTP 鉴权分开；`credentials_configured` 只表示已配置，不代表已验证有效。arXiv 无需 key，PubMed/Crossref/S2 的 key 可选，OpenAlex 的后续游标页需要 key。
+
+arXiv 支持元数据字段、正向条件和直接 AND 排除、精确 arXiv ID（保留版本）及原生 `search_query/id_list`；不把出版年份、类型或 OA 条件替换成其他含义的筛选。提交日期使用原生 `submittedDate`。Newest/Oldest 在该源按首次提交时间排序。服务端保存 offset，发现总数变化时返回逐源 `cursor_expired`；offset 本身不能保证上游结果快照。上游窗口最多 30000 条，本地会话缓存预算也可能更早停止继续获取。每个共享 arXiv 客户端串行连接、请求开始间隔至少 3 秒；HTTP 正文有 16 MiB 上限，长查询使用 POST form。HTTP 200 错误 Atom、损坏 XML、错误页和错版本记录分别报告失败，不伪装成零结果。
+
+Crossref 支持精确 DOI、出版年份和可映射的类型条件；单个 DOI 使用 singleton 端点，DOI OR 分组可与年份等条件求交，矛盾的 DOI 条件明确拒绝。文本需要 `allow_approximate: true` 或显式原生查询，保留 `approximate_text` 提示：该源不保证严格词项/短语匹配，标题转为范围更广的 `query.bibliographic`。跨字段 OR、NOT、OA、review/clinical_trial 等无法保真的条件不丢弃，报告 unsupported。原生参数白名单为 `doi/query/query.bibliographic/query.author/query.container-title/query.affiliation/filter`，单独 DOI 不能与其他参数混用；凭据、分页及已弃用 `query.title` 不接受。无文本时默认相关性排序降级为出版时间降序并说明。真实 provider cursor 与取得数量绑定保存，允许 raw cursor 重复；短页结束，不声称外部快照稳定。超过支持大小的游标返回明确错误。
+
+共享 Crossref SDK clone 串行连接并按端点类型限速：未观察响应头时，公共 list/singleton 默认分别为 1/5 次每秒，配置联系邮箱的 polite pool 为 3/10；随后遵循 `x-rate-limit-*` 观测值，保留 `Retry-After` 秒数/HTTP 日期及共享冷却。成功正文上限 16 MiB，错误正文上限 64 KiB；错误封装、缺失列表计数/记录等不会被当成零结果。后端配置使用可选 `CROSSREF_MAILTO` 和 `CROSSREF_PLUS_API_TOKEN`，不进入公开执行参数与发现错误。速率依据 [2026 年 7 月官方调整](https://community.crossref.org/t/refining-rest-api-limits-for-improved-stability-and-reliability/16137)，额度余额未知时不作推断。
+
+Semantic Scholar 分为三个执行端点：`bulk` 保留支持的布尔/短语与元数据条件，没有源相关性排序，默认按 paper ID；`relevance` 使用普通文本匹配、最多取得前 1000 条；`lookup` 精确获取单个 DOI、PMID、未指定版本的 arXiv ID、S2 hash 或 CorpusId，并核对响应身份。显式 arXiv 版本不替换为其他版本。普通查询默认使用 bulk；开启 `allow_approximate` 后，可表达为正向文本提示且未指定其他源排序的查询使用 relevance。排除条件仍使用 bulk，不能因近似匹配被删除。标题/摘要单字段限制不能严格执行时必须显式同意扩大范围，并返回说明；作者名、MeSH 等不折成正文词。独立纯否定分支、元数据 OR 与正文的不可分发组合或过大布尔展开明确 unsupported。
+
+S2 的元数据支持年份、venue 和可映射类型；通用 OA 条件不能替换成更窄的 public-PDF 条件。原生参数白名单为 `endpoint/query/paper_id/year/publicationDateOrYear/venue/publicationTypes/fieldsOfStudy/openAccessPdf/minCitationCount`（仍受通用参数个数上限限制）。`endpoint` 是适配层的 bulk/relevance/lookup 路由选择，不发送为上游参数；lookup 仅接受 paper_id，openAccessPdf 必须为空字符串的 presence flag。分页、fields 和凭据不能覆盖，token/offset 由服务端保存。`sort` 使用请求字段：bulk 可按出版日期或引用量排序，relevance 不支持这些源排序。
+
+上游 bulk 没有页大小参数。S2 适配器将最多 1000 条的上游批次拆成请求的 1–100 条小页，每个 S2Source 实例最多保留 32 个批次、32 MiB 序列化条目预算，30 分钟后按需淘汰；这不是进程 RSS 上限，也不属于会话 128 MiB 候选预算。淘汰后续页可重取原批次并比对上游元数据指纹，变化则返回 cursor_expired；指纹不含本地转换时钟。`executed_parameters` 的 batch_offset/page_size 为本地拆页信息，batch_fetched_at 为实际取得该上游批次的时间，避免把缓存读取误认为刚抓取的源数据。源总数为估计值，provider token 决定是否续页；上游 bulk 最多 10000000 条，本地会话预算可能更早结束。响应记录重复/损坏、无效计数、重复 token 和错误对象都不当成零结果。
+
+共享 S2 SDK 请求起始间隔至少 1050ms，不累积空闲额度，也不为等待中的取消操作预占未来时间；保留完整 Retry-After 秒数/日期和共享冷却。发现适配关闭 SDK 内部重试，由会话统一调度预算。默认连接/请求超时为 10/90 秒，外层查询预算可更早取消；自定义 reqwest 客户端的超时保留。成功/错误正文上限分别为 16 MiB/64 KiB，公开发现错误及 SDK Debug 不含配置的 S2_API_KEY。协议依据 [Academic Graph API](https://api.semanticscholar.org/api-docs/graph) 和 [官方教程](https://webflow.semanticscholar.org/product/api/tutorial)，本地资格记录不代表线上供应商始终可用。
+
+| 方法 | 路径（均在 `/api/v1/bib` 下） | 语义 |
+| --- | --- | --- |
+| GET | `/search/sources` | 源能力、凭据是否配置、最近观察的上游预算以及并发槽位/冷却状态；未知预算为 null，不推断余额 |
+| POST | `/search/sessions` | 创建后立即返回 201 `{session}`，各来源独立执行；可带 `x-discovery-session-id: UUID` |
+| GET | `/search/sessions/{id}` | 会话快照、逐源状态/总数/计划/实际执行参数/查询翻译，及已取得的去重候选数 |
+| GET | `/search/sessions/{id}/events?after=N&wait_ms=20000` | 最多等待 25 秒；返回 sequence、events、reset_required。事件过旧时必须取新快照，不静默跳过 |
+| GET | `/search/sessions/{id}/results?offset=0&limit=50` | 按候选分页（limit 1–100）；order 支持 first_seen/relevance/newest/source_rank，source 可限制来源 |
+| GET | `/search/sessions/{id}/candidates/{candidate}` | 完整源记录、字段冲突、版本关系、疑似重复及候选 RRF；合并前的旧候选 ID 可解析到当前根 |
+| POST | `/search/sessions/{id}/sources/{source}/next` | 使用服务端保存的原生游标继续该源，其他源不重跑 |
+| POST | `/search/sessions/{id}/sources/{source}/retry` | 重试失败/已取消的单源；同源已有操作时返回 409 |
+| POST | `/search/sessions/{id}/cancel` | `{source?:string}`，取消指定源或全部源，保留已经取得的结果 |
+| DELETE | `/search/sessions/{id}` | 幂等关闭并释放缓存；有效 UUID 即使尚未创建也返回 204，登记有界提前取消记录 |
+| POST | `/search/sessions/{id}/import/preview` | 校验候选指纹和来源选择，返回库内已有项、版本关系、字段差异、目标库/集合及可写状态；不写入 |
+| POST | `/search/sessions/{id}/import` | 按项事务导入，返回 imported/already_present/failed；可选创建全文获取任务 |
+| GET | `/articles/{id}/discovery-provenance?offset=0&limit=20` | 持久化来源、实际执行查询与导入所选版本，独立于检索会话有效期 |
+| GET | `/search/acquisitions/{id}` | 全文任务及逐项 queued/running/available/unavailable/failed/cancelled 状态 |
+| POST | `/search/acquisitions/{id}/cancel` | 取消尚未开始的全文获取；已运行的文件导入完成后停止后续项 |
+
+创建请求使用 `DiscoveryRequest`：query、expression、native 三者择一，也允许只提供 filters；sources 默认 PubMed/OpenAlex，page_size 默认 25、上限 100。`source_timeout_ms` 默认 20000，`deadline_ms` 默认 30000（范围均为 100–120000），预算包括排队、冷却和自动重试。原始请求和每个源的实际计划分别保留。未知条件/不支持操作不能静默降级成宽查询。
+
+`allow_approximate` 默认 false；显式开启后只允许有说明的来源文本近似匹配，不放弃精确标识符、筛选或排除条件。GUI 普通查询提供对应选择，原生模式使用所选单源的原始语义，并分别保存各源草稿。
+
+GUI 的 Source order 控制发给供应商的排序，改变后提交新查询；结果区的 First obtained / Combined source rank / Newest obtained / Source rank 仅排列已取得候选，不能用本地候选重排冒充已按该顺序检索整个上游数据源。
+
+客户端应先生成 UUID，再发起带该 ID 的创建请求；同 ID、同请求不会重复执行，不同请求返回 409。即使创建响应被中断，DELETE 该 ID 仍能阻止迟到的创建。提前取消记录保留 60 秒、最多 1024 条。默认最多 32 个会话，TTL 为 30 分钟；保留 256 条事件、每会话最多 10000 条源贡献，所有会话合计最多 50000 条及 128 MiB 序列化贡献预算。预算不是 RSS 承诺。失效会话查询返回 404；容量不足返回 429 或逐源 capacity，已有结果不丢弃。
+
+默认结果按首次取得顺序稳定展示；RRF 仅融合已取得候选的源内排名。跨源 total 分开报告，`obtained_candidates` 不是全网去重总数。结果请求可携带 `sequence`，与当前快照不同返回 409，避免去重合并期间 offset 漏项。DOI/PMID 等强身份可合并，冲突 DOI、预印本/正式版或仅标题相似只产生关系/审查提示；所有源贡献保留，较晚到达者不直接覆盖已有字段。
+
+导入请求的 `selections` 为 1–100 项 `{candidate_id,expected_fingerprint,record_index?:0}`，可带 `library_id`、`collection_id`、`fetch_fulltext:false`。较晚来源改变候选后，旧指纹返回 409，要求重新确认预览。导入已有项保留其元数据、集合角色和笔记，只添加缺少的集合成员关系及审计来源；多个已有项同时匹配时返回逐项失败，要求先人工审查。预印本与正式版分别保存并建立可追溯关联；一次失败不回滚同批已成功的其他项。每条持久化 provenance 最多 2 MiB，查询包含所有来源贡献、所选来源、原始请求、源计划和实际查询参数，不保存密钥。
+
+`fetch_fulltext:true` 在写元数据前检查 VFS 配置和队列容量；缺文件存储返回 503，队列满返回 429。成功响应的 `acquisition` 为任务快照或 null（没有可获取的成功项）。后台复用现有 PMC PDF/VFS/附件提取链路，已有 PDF 优先复用；`available` 只说明原始附件可用，提取/索引另由附件状态报告。全进程最多 16 个活动任务、2 个同时获取，每项最长 120 秒、整个任务预算 15 分钟。取消不会删除元数据或已保存附件。进度为进程内状态，重启不自动重放；完成后保留最多 30 分钟，最多保留 64 个任务，容量回收时较旧完成任务可能提前失效。删除检索会话不取消全文任务，也不删除已存来源。所有这些接口均继承鉴权并返回 `Cache-Control: no-store`。

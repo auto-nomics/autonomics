@@ -3,6 +3,11 @@ use thiserror::Error;
 /// Errors produced by the E-utilities client.
 #[derive(Debug, Error)]
 pub enum EutilsError {
+    #[error("API rate limit reached (retry after {retry_after_seconds:?} seconds)")]
+    RateLimited {
+        retry_after_seconds: Option<u64>,
+        body: String,
+    },
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 

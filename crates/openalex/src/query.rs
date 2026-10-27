@@ -39,21 +39,19 @@ pub fn to_openalex_filter(sq: &StructuredSearch) -> Result<String> {
         clauses.push(pipe_join("title.search", &t));
     }
 
-    // authors → author.display_name.search:"name" (use authorships.author.display_name.search)
+    // Search the actual name-as-published byline, not an unsupported entity field.
     if let Some(t) = filtered(&sq.authors) {
-        clauses.push(pipe_join("author.display_name.search", &t));
+        clauses.push(pipe_join("raw_author_name.search", &t));
     }
 
-    // mesh → concepts.wikidata or just title/abstract search; OpenAlex doesn't have
-    // a direct MeSH filter but it does index MeSH via `concepts.id`.
-    // We use `fulltext.search` as a fallback.
-    if let Some(t) = filtered(&sq.mesh) {
-        clauses.push(pipe_join("fulltext.search", &t));
+    if filtered(&sq.mesh).is_some() {
+        return Err(OpenAlexError::Param("MeSH conditions cannot be translated to OpenAlex text search without changing their meaning".into()));
     }
 
-    // journal → primary_location.source.display_name.search
-    if let Some(t) = filtered(&sq.journal) {
-        clauses.push(pipe_join("primary_location.source.display_name.search", &t));
+    if filtered(&sq.journal).is_some() {
+        return Err(OpenAlexError::Param(
+            "journal names require source-ID resolution before filtering OpenAlex works".into(),
+        ));
     }
 
     // publication_types → type
@@ -62,9 +60,9 @@ pub fn to_openalex_filter(sq: &StructuredSearch) -> Result<String> {
         clauses.push(pipe_join("type", &lower));
     }
 
-    // affiliation → fulltext.search
+    // Affiliation is a dedicated byline field, not the article's topic text.
     if let Some(t) = filtered(&sq.affiliation) {
-        clauses.push(pipe_join("fulltext.search", &t));
+        clauses.push(pipe_join("raw_affiliation_strings.search", &t));
     }
 
     // year range → from_publication_date / to_publication_date
@@ -73,7 +71,7 @@ pub fn to_openalex_filter(sq: &StructuredSearch) -> Result<String> {
         clauses.push(format!("to_publication_date:{}-12-31", yr.to));
     }
 
-    if clauses.is_empty() && sq.keywords.is_none() {
+    if clauses.is_empty() && filtered(&sq.keywords).is_none() {
         return Err(OpenAlexError::Param(
             "structured search is empty: populate at least one field".into(),
         ));
@@ -84,22 +82,17 @@ pub fn to_openalex_filter(sq: &StructuredSearch) -> Result<String> {
 
 /// Extract the keywords portion of a [`StructuredSearch`] as a search query.
 ///
-/// OpenAlex search treats whitespace as AND and `|` as OR. Returns `None` if
+/// OpenAlex text search uses uppercase Boolean operators. `|` is a filter
+/// value operator, and a minus sign does not exclude text. Returns `None` if
 /// keywords are absent.
 pub fn keywords_search(sq: &StructuredSearch) -> Option<String> {
     let terms = filtered(&sq.keywords)?;
     let op = sq.keywords_op.unwrap_or_default();
     let quoted: Vec<String> = terms.iter().map(|t| quote_term(t)).collect();
     Some(match op {
-        BoolOp::Or => quoted.join("|"),
-        BoolOp::And => quoted.join(" "),
-        BoolOp::Not => {
-            let mut query = quoted;
-            for term in query.iter_mut().skip(1) {
-                *term = format!("-{term}");
-            }
-            query.join(" ")
-        }
+        BoolOp::Or => quoted.join(" OR "),
+        BoolOp::And => quoted.join(" AND "),
+        BoolOp::Not => quoted.join(" NOT "),
     })
 }
 
@@ -131,11 +124,12 @@ fn filtered(opt: &Option<Vec<String>>) -> Option<Vec<String>> {
 /// Wrap a term in double quotes iff it contains whitespace or special chars.
 fn quote_term(s: &str) -> String {
     let trimmed = s.trim();
-    let needs_quotes = trimmed
-        .chars()
-        .any(|c| c.is_whitespace() || c == '"' || c == ':' || c == '|');
+    let needs_quotes = ["AND", "OR", "NOT"].contains(&trimmed)
+        || trimmed.chars().any(|c| {
+            c.is_whitespace() || matches!(c, '"' | ':' | '|' | '(' | ')' | '*' | '?' | '~' | '\\')
+        });
     if needs_quotes {
-        let escaped = trimmed.replace('"', "\\\"");
+        let escaped = trimmed.replace('\\', "\\\\").replace('"', "\\\"");
         format!("\"{escaped}\"")
     } else {
         trimmed.to_string()
@@ -182,7 +176,7 @@ mod tests {
             ..Default::default()
         };
         let f = to_openalex_filter(&sq).unwrap();
-        assert!(f.contains("author.display_name.search:Smith|Jones"));
+        assert!(f.contains("raw_author_name.search:Smith|Jones"));
     }
 
     #[test]
@@ -210,23 +204,23 @@ mod tests {
     }
 
     #[test]
-    fn keywords_search_and_is_space_joined() {
+    fn keywords_search_and_is_explicit() {
         let sq = StructuredSearch {
             keywords: kw(&["p53", "cancer"]),
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
-        assert_eq!(keywords_search(&sq).unwrap(), "p53 cancer");
+        assert_eq!(keywords_search(&sq).unwrap(), "p53 AND cancer");
     }
 
     #[test]
-    fn keywords_search_or_uses_pipe() {
+    fn keywords_search_or_uses_boolean_operator() {
         let sq = StructuredSearch {
             keywords: kw(&["p53", "cancer"]),
             keywords_op: Some(BoolOp::Or),
             ..Default::default()
         };
-        assert_eq!(keywords_search(&sq).unwrap(), "p53|cancer");
+        assert_eq!(keywords_search(&sq).unwrap(), "p53 OR cancer");
     }
 
     #[test]
@@ -236,7 +230,10 @@ mod tests {
             keywords_op: Some(BoolOp::And),
             ..Default::default()
         };
-        assert_eq!(keywords_search(&sq).unwrap(), "\"lung cancer\" biomarker");
+        assert_eq!(
+            keywords_search(&sq).unwrap(),
+            "\"lung cancer\" AND biomarker"
+        );
     }
 
     #[test]
@@ -257,5 +254,48 @@ mod tests {
         };
         let err = to_openalex_filter(&sq).unwrap_err();
         assert!(format!("{err}").contains("inverted"));
+    }
+
+    #[test]
+    fn keyword_not_and_reserved_literals_have_native_boolean_meaning() {
+        let sq = StructuredSearch {
+            keywords: kw(&["asthma", "mice", "review"]),
+            keywords_op: Some(BoolOp::Not),
+            ..Default::default()
+        };
+        assert_eq!(keywords_search(&sq).unwrap(), "asthma NOT mice NOT review");
+        let sq = StructuredSearch {
+            keywords: kw(&["OR", "(cancer)"]),
+            ..Default::default()
+        };
+        assert_eq!(keywords_search(&sq).unwrap(), "\"OR\" OR \"(cancer)\"");
+    }
+
+    #[test]
+    fn unsupported_metadata_is_not_silently_replaced_with_topic_search() {
+        for sq in [
+            StructuredSearch {
+                mesh: kw(&["Neoplasms"]),
+                ..Default::default()
+            },
+            StructuredSearch {
+                journal: kw(&["Nature"]),
+                ..Default::default()
+            },
+            StructuredSearch {
+                keywords: kw(&[" "]),
+                ..Default::default()
+            },
+        ] {
+            assert!(to_openalex_filter(&sq).is_err());
+        }
+        let sq = StructuredSearch {
+            affiliation: kw(&["Cambridge"]),
+            ..Default::default()
+        };
+        assert_eq!(
+            to_openalex_filter(&sq).unwrap(),
+            "raw_affiliation_strings.search:Cambridge"
+        );
     }
 }

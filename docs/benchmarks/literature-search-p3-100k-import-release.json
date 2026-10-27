@@ -1,0 +1,63 @@
+{
+  "arch": "x86_64",
+  "checks": [
+    "normalized DOI lookup matches exact local ids",
+    "mixed new/existing preview",
+    "existing metadata preserved",
+    "idempotent repeat has no changes",
+    "article count unchanged"
+  ],
+  "fixture_copy_ms": 511.756643,
+  "fixture_directory": "/tmp/bib-bench-100000-5a498535-a031-4375-a9aa-bc81930b4355",
+  "hundred_existing_first_audit_import_ms": 626.848365,
+  "hundred_existing_idempotent_import": {
+    "max_ms": 637.060525,
+    "p50_ms": 578.442834,
+    "p95_ms": 621.5984559999999,
+    "samples": 20
+  },
+  "library_articles": 100000,
+  "limitations": [
+    "synthetic local actor benchmark, not HTTP/GUI latency or real-library relevance",
+    "warm operating-system cache; copying and initial index build excluded",
+    "identifier normalization scans current library once per batch; this is not an O(1) normalized-id lookup index"
+  ],
+  "memory": {
+    "peak_rss_kib": 462176,
+    "rss_kib": 194356
+  },
+  "os": "linux",
+  "preview": [
+    {
+      "case": "one_existing",
+      "timing": {
+        "max_ms": 582.428798,
+        "p50_ms": 524.1847680000001,
+        "p95_ms": 557.3132790000001,
+        "samples": 20
+      }
+    },
+    {
+      "case": "hundred_existing",
+      "timing": {
+        "max_ms": 587.08376,
+        "p50_ms": 542.414502,
+        "p95_ms": 574.0633670000001,
+        "samples": 20
+      }
+    },
+    {
+      "case": "hundred_half_new",
+      "timing": {
+        "max_ms": 619.427145,
+        "p50_ms": 536.548416,
+        "p95_ms": 584.918842,
+        "samples": 20
+      }
+    }
+  ],
+  "private_copy_directory": "/tmp/discovery-import-bench-689f3e10-9621-4e8c-862f-ed47b5ff893d",
+  "profile": "release",
+  "qualified_at": "2026-10-27T16:51:01.067584679+00:00",
+  "schema_version": 1
+}

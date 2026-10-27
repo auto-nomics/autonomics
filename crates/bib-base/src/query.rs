@@ -69,6 +69,36 @@ pub trait LiteratureSource: Send + Sync {
     /// Human-readable identifier (e.g. `"pubmed"`, `"arxiv"`).
     fn name(&self) -> &'static str;
 
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_sources::unavailable(self.name())
+    }
+
+    fn plan_discovery(
+        &self,
+        _request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        Err(bib_types::discovery::SourceFailure::new(
+            bib_types::discovery::SourceFailureKind::Unsupported,
+            format!("{} does not support paged discovery", self.name()),
+            false,
+        ))
+    }
+
+    async fn discovery_page(
+        &self,
+        _plan: &bib_types::discovery::SourcePlan,
+        _cursor: Option<&str>,
+        _page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        Err(bib_types::discovery::SourceFailure::new(
+            bib_types::discovery::SourceFailureKind::Unsupported,
+            format!("{} does not support paged discovery", self.name()),
+            false,
+        ))
+    }
+
     /// Search for articles matching the structured query.
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch>;
 
@@ -97,7 +127,7 @@ pub trait LiteratureSource: Send + Sync {
 
 /// [`LiteratureSource`] backed by NCBI E-utilities (PubMed).
 pub struct PubmedSource {
-    client: Arc<eutils::EutilsClient>,
+    pub(crate) client: Arc<eutils::EutilsClient>,
 }
 
 impl PubmedSource {
@@ -110,6 +140,26 @@ impl PubmedSource {
 impl LiteratureSource for PubmedSource {
     fn name(&self) -> &'static str {
         "pubmed"
+    }
+
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_sources::pubmed_capabilities(&self.client)
+    }
+    fn plan_discovery(
+        &self,
+        request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_plan::plan(self.name(), request)
+    }
+    async fn discovery_page(
+        &self,
+        plan: &bib_types::discovery::SourcePlan,
+        cursor: Option<&str>,
+        page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_sources::pubmed_page(&self.client, plan, cursor, page_size).await
     }
 
     fn supports(&self, kind: IdKind) -> bool {
@@ -247,7 +297,7 @@ impl LiteratureSource for PubmedSource {
 
 /// [`LiteratureSource`] backed by the arXiv API.
 pub struct ArxivSource {
-    client: Arc<arxiv::ArxivClient>,
+    pub(crate) client: Arc<arxiv::ArxivClient>,
 }
 
 impl ArxivSource {
@@ -262,6 +312,26 @@ impl LiteratureSource for ArxivSource {
         "arxiv"
     }
 
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_arxiv::capabilities()
+    }
+    fn plan_discovery(
+        &self,
+        request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_plan::plan(self.name(), request)
+    }
+    async fn discovery_page(
+        &self,
+        plan: &bib_types::discovery::SourcePlan,
+        cursor: Option<&str>,
+        page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_arxiv::page(&self.client, plan, cursor, page_size).await
+    }
+
     fn supports(&self, kind: IdKind) -> bool {
         matches!(kind, IdKind::Arxiv)
     }
@@ -269,10 +339,13 @@ impl LiteratureSource for ArxivSource {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let term = arxiv::query::to_arxiv(query)
             .map_err(|e| Error::Unknown(format!("arxiv query translation: {e}")))?;
+        if query.year_range.is_some() {
+            return Err(Error::InvalidSearchQuery("arXiv has submission-date filters, not publication-year filters; use native discovery search_query with submittedDate".into()));
+        }
 
         let resp = self
             .client
-            .search(&arxiv::types::SearchRequest::new(term).max_results(limit as u32))
+            .search(&arxiv::types::SearchRequest::new(term).max_results(limit.min(2000) as u32))
             .await
             .map_err(|e| Error::Unknown(format!("arxiv search: {e}")))?;
 
@@ -400,12 +473,10 @@ impl LiteratureSource for BiorxivSource {
 
     async fn search(&self, _query: &StructuredSearch, _limit: usize) -> Result<SourceBatch> {
         // The bioRxiv public API has no keyword-search endpoint.
-        Ok(SourceBatch {
-            source: self.name().into(),
-            total: 0,
-            articles: vec![],
-            error: None,
-        })
+        Ok(SourceBatch::failure(
+            self.name(),
+            "unsupported: bioRxiv provides identifier fetch, not keyword search".into(),
+        ))
     }
 
     async fn fetch(&self, id: &Identifier) -> Result<Option<Article>> {
@@ -567,7 +638,7 @@ fn str_field(v: &serde_json::Value, key: &str) -> String {
 /// registered as standalone agent tools via
 /// [`bib_extended_registrations`](crate::bib_extended_registrations).
 pub struct OpenAlexSource {
-    client: Arc<openalex::OpenAlexClient>,
+    pub(crate) client: Arc<openalex::OpenAlexClient>,
 }
 
 impl OpenAlexSource {
@@ -582,6 +653,26 @@ impl LiteratureSource for OpenAlexSource {
         "openalex"
     }
 
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_sources::openalex_capabilities(&self.client)
+    }
+    fn plan_discovery(
+        &self,
+        request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_plan::plan(self.name(), request)
+    }
+    async fn discovery_page(
+        &self,
+        plan: &bib_types::discovery::SourcePlan,
+        cursor: Option<&str>,
+        page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_sources::openalex_page(&self.client, plan, cursor, page_size).await
+    }
+
     fn supports(&self, kind: IdKind) -> bool {
         matches!(kind, IdKind::OpenAlex | IdKind::Doi | IdKind::Pmid)
     }
@@ -589,7 +680,7 @@ impl LiteratureSource for OpenAlexSource {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let filter = openalex::query::to_openalex_filter(query)
             .map_err(|e| Error::Unknown(format!("openalex query translation: {e}")))?;
-        let mut params = openalex::ListParams::new().with_per_page((limit as u32).clamp(1, 200));
+        let mut params = openalex::ListParams::new().with_per_page((limit as u32).clamp(1, 100));
         if !filter.is_empty() {
             params = params.with_filter(filter);
         }
@@ -643,7 +734,7 @@ impl LiteratureSource for OpenAlexSource {
 /// (the type catalogue) are registered as standalone agent tools via
 /// [`bib_extended_registrations`](crate::bib_extended_registrations).
 pub struct CrossrefSource {
-    client: Arc<crossref::CrossrefClient>,
+    pub(crate) client: Arc<crossref::CrossrefClient>,
 }
 
 impl CrossrefSource {
@@ -656,6 +747,25 @@ impl CrossrefSource {
 impl LiteratureSource for CrossrefSource {
     fn name(&self) -> &'static str {
         "crossref"
+    }
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_crossref::capabilities(&self.client)
+    }
+    fn plan_discovery(
+        &self,
+        request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_plan::plan(self.name(), request)
+    }
+    async fn discovery_page(
+        &self,
+        plan: &bib_types::discovery::SourcePlan,
+        cursor: Option<&str>,
+        page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_crossref::page(&self.client, plan, cursor, page_size).await
     }
 
     fn supports(&self, kind: IdKind) -> bool {
@@ -717,12 +827,16 @@ impl LiteratureSource for CrossrefSource {
 /// standalone agent tools via
 /// [`bib_extended_registrations`](crate::bib_extended_registrations).
 pub struct S2Source {
-    client: Arc<semantic_scholar::S2Client>,
+    pub(crate) client: Arc<semantic_scholar::S2Client>,
+    pub(crate) cache: crate::discovery_s2::BulkCache,
 }
 
 impl S2Source {
     pub fn new(client: Arc<semantic_scholar::S2Client>) -> Self {
-        Self { client }
+        Self {
+            client,
+            cache: Default::default(),
+        }
     }
 }
 
@@ -730,6 +844,26 @@ impl S2Source {
 impl LiteratureSource for S2Source {
     fn name(&self) -> &'static str {
         "semantic_scholar"
+    }
+
+    fn discovery_capabilities(&self) -> bib_types::discovery::SourceCapabilities {
+        crate::discovery_s2::capabilities(&self.client)
+    }
+    fn plan_discovery(
+        &self,
+        request: &bib_types::discovery::DiscoveryRequest,
+    ) -> std::result::Result<bib_types::discovery::SourcePlan, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_plan::plan(self.name(), request)
+    }
+    async fn discovery_page(
+        &self,
+        plan: &bib_types::discovery::SourcePlan,
+        cursor: Option<&str>,
+        page_size: u16,
+    ) -> std::result::Result<bib_types::discovery::SourcePage, bib_types::discovery::SourceFailure>
+    {
+        crate::discovery_s2::page(self, plan, cursor, page_size).await
     }
 
     fn supports(&self, kind: IdKind) -> bool {
@@ -742,27 +876,12 @@ impl LiteratureSource for S2Source {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let parts = semantic_scholar::query::to_s2(query)
             .map_err(|e| Error::Unknown(format!("s2 query translation: {e}")))?;
-        let (total, papers) = if semantic_scholar::query::is_keywords_only(query) {
-            let resp = self
-                .client
-                .search_paper_bulk(&parts.query, None, None, None)
-                .await
-                .map_err(|e| Error::Unknown(format!("s2 bulk search: {e}")))?;
-            (resp.total.max(0) as usize, resp.data)
-        } else {
-            let resp = self
-                .client
-                .search_paper_filtered(
-                    &parts.query,
-                    (limit as u32).clamp(1, 100),
-                    0,
-                    &parts.filter,
-                    None,
-                )
-                .await
-                .map_err(|e| Error::Unknown(format!("s2 search: {e}")))?;
-            (resp.total.max(0) as usize, resp.data)
-        };
+        let response = self
+            .client
+            .search_paper_bulk_filtered(&parts.query, None, None, None, &parts.filter)
+            .await
+            .map_err(|error| Error::Unknown(format!("s2 bulk search: {error}")))?;
+        let (total, papers) = (response.total.max(0) as usize, response.data);
         let articles: Vec<Article> = papers
             .iter()
             .take(limit)
@@ -815,7 +934,7 @@ impl LiteratureSource for S2Source {
 ///     .with_source(Arc::new(ArxivSource::new(Arc::new(arxiv::ArxivClient::new()))));
 /// ```
 pub struct LiteratureGateway {
-    sources: Vec<Arc<dyn LiteratureSource>>,
+    pub(crate) sources: Vec<Arc<dyn LiteratureSource>>,
 }
 
 impl LiteratureGateway {

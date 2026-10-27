@@ -18,7 +18,10 @@ pub async fn fetch_fulltext_stored(shared: &BibShared, article: &Article) -> Opt
         }
     }
 }
-async fn fetch_pdf(shared: &BibShared, article: &Article) -> crate::Result<Option<FullText>> {
+pub(crate) async fn fetch_pdf(
+    shared: &BibShared,
+    article: &Article,
+) -> crate::Result<Option<FullText>> {
     if shared.file_storage.is_none() {
         return Ok(None);
     }
@@ -30,7 +33,7 @@ async fn fetch_pdf(shared: &BibShared, article: &Article) -> crate::Result<Optio
             managed_fulltext::materialize_legacy(shared, ft).await?;
         }
     }
-    let Some(pmcid) = resolve_pmc_id(&shared.europe_pmc, article).await else {
+    let Some(pmcid) = resolve_pmc_id(&shared.europe_pmc, article).await? else {
         return Ok(None);
     };
     // Repeated fetches reuse a previously imported OA PDF, even when another
@@ -64,14 +67,20 @@ async fn fetch_pdf(shared: &BibShared, article: &Article) -> crate::Result<Optio
     Ok(Some(ft))
 }
 
-async fn resolve_pmc_id(client: &EuropePmcClient, article: &Article) -> Option<String> {
+async fn resolve_pmc_id(
+    client: &EuropePmcClient,
+    article: &Article,
+) -> crate::Result<Option<String>> {
     if let Some(id) = article.identifier(IdKind::Pmc) {
-        return pmc_pdf::normalize_pmc_id(id);
+        return Ok(pmc_pdf::normalize_pmc_id(id));
     }
     let query = if let Some(id) = article.pmid() {
         format!("PMID:{id}")
     } else {
-        format!("DOI:{}", article.doi()?)
+        let Some(doi) = article.doi() else {
+            return Ok(None);
+        };
+        format!("DOI:{doi}")
     };
     let response = client
         .search(
@@ -80,16 +89,16 @@ async fn resolve_pmc_id(client: &EuropePmcClient, article: &Article) -> Option<S
                 .page_size(10),
         )
         .await
-        .ok()?;
+        .map_err(|error| crate::Error::Unknown(format!("Europe PMC resolution failed: {error}")))?;
     for result in response.result_list.results {
         if let Some(pmcid) = result.pmcid.as_deref().and_then(pmc_pdf::normalize_pmc_id) {
-            return Some(pmcid);
+            return Ok(Some(pmcid));
         }
         if result.source == "PMC" {
             if let Some(pmcid) = pmc_pdf::normalize_pmc_id(&result.id) {
-                return Some(pmcid);
+                return Ok(Some(pmcid));
             }
         }
     }
-    None
+    Ok(None)
 }

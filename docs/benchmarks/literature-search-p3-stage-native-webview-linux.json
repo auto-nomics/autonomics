@@ -1,0 +1,13 @@
+{
+  "evidence": [
+    "actual native IPC create, events and first-source delivery",
+    "source-version selection, preview and transactional import",
+    "target library presence after import",
+    "library change notification, session deletion and durable provenance GUI",
+    "actual native arxiv SDK HTTP/Atom query and per-source draft preservation",
+    "actual native Crossref SDK HTTP metadata query, matching notice, cursor continuation, virtual results and source draft preservation",
+    "actual native S2 SDK HTTP Boolean query with year filter; 25+5 buffered results after the upstream fixture closed; virtual last row and source drafts"
+  ],
+  "ok": true,
+  "runtime": "Tauri WebKitGTK"
+}

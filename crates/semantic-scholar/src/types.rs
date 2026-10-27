@@ -44,7 +44,7 @@ pub struct Paper {
     pub external_ids: Option<ExternalIds>,
 
     /// Paper abstract.
-    #[serde(default)]
+    #[serde(default, rename = "abstract", alias = "abstract_text")]
     pub abstract_text: Option<String>,
 
     /// Total number of papers referenced by this paper.
@@ -387,3 +387,19 @@ pub const DEFAULT_CITATION_FIELDS: &str = "paperId,title,abstract,year,venue,aut
 /// Default fields requested for author search and details.
 pub const DEFAULT_AUTHOR_FIELDS: &str =
     "authorId,name,url,affiliations,homepage,paperCount,citationCount,hIndex";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn abstract_uses_upstream_key_and_reads_previous_sdk_serialization() {
+        for key in ["abstract", "abstract_text"] {
+            let paper: Paper =
+                serde_json::from_value(serde_json::json!({"paperId":"id",key:"Evidence"})).unwrap();
+            assert_eq!(paper.abstract_text.as_deref(), Some("Evidence"));
+            let output = serde_json::to_value(paper).unwrap();
+            assert_eq!(output["abstract"], "Evidence");
+            assert!(output.get("abstract_text").is_none());
+        }
+    }
+}

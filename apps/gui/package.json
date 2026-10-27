@@ -20,6 +20,8 @@
     "test:bib-menu": "node tests/bibliography-menu.mjs",
     "test:collections": "node tests/nested-collections.mjs",
     "test:bib-search": "node tests/bibliography-search.mjs",
+    "test:bib-discovery": "node tests/discovery-workflow.mjs",
+    "test:bib-discovery-native": "cargo build -p autonomics-gui --example discovery_native_smoke --locked && node tests/native-discovery.mjs",
     "test:bib-workflow": "node tests/bibliography-workflow.mjs",
     "test:bib-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-bibliography.mjs"
   },

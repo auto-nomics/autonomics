@@ -24,6 +24,10 @@ tracing.workspace = true
 workspace = true
 
 [dev-dependencies]
+arxiv = { path = "../../../crates/arxiv" }
+crossref = { path = "../../../crates/crossref" }
+semantic-scholar = { path = "../../../crates/semantic-scholar" }
+async-trait.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
 api-server = { path = "../../../crates/api-server" }
 bib-base = { path = "../../../crates/bib-base" }

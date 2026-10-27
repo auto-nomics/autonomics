@@ -379,6 +379,8 @@ impl BibCore {
 
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;
+        crate::discovery_import::ensure(&conn).await?;
+        crate::discovery_import::ensure(&self.conn()).await?;
 
         // Mirror existing legacy rows into Zotero-compatible item tables.
         // This runs after legacy column backfills because it reads

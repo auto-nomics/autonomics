@@ -61,6 +61,8 @@ pub struct SearchRequest {
     ///
     /// Example: `"au:Hinton AND ti:neural network"`.
     pub search_query: String,
+    /// Optional arXiv IDs intersected with the query, retaining version suffixes.
+    pub id_list: Option<String>,
 
     /// Maximum number of results to return (default 10, max 2000 per page).
     pub max_results: Option<u32>,
@@ -80,11 +82,17 @@ impl SearchRequest {
     pub fn new(search_query: impl Into<String>) -> Self {
         Self {
             search_query: search_query.into(),
+            id_list: None,
             max_results: None,
             start: None,
             sort_by: None,
             sort_order: None,
         }
+    }
+
+    pub fn id_list(mut self, ids: impl Into<String>) -> Self {
+        self.id_list = Some(ids.into());
+        self
     }
 
     /// Set the maximum number of results to return.

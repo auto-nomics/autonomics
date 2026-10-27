@@ -1,0 +1,83 @@
+{
+  "qualified_at": "2026-10-27T18:48:39.958638+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "scope": "Crossref discovery adapter and SDK, deterministic local HTTP, actual Linux Tauri WebKitGTK; no live upstream or real-library relevance qualification",
+  "commands": [
+    "cargo test -p crossref --locked --offline",
+    "cargo test -p bib-base --lib discovery_ --locked --offline",
+    "cargo test -p bib-base --test discovery_sources -p api-server --test discovery --locked --offline",
+    "cargo clippy -p crossref --all-targets --locked --offline -- -D warnings",
+    "cargo clippy -p bib-base -p api-server --lib --locked --offline -- -D warnings",
+    "cargo clippy -p bib-base --test discovery_sources --locked --offline -- -D warnings",
+    "cargo clippy -p autonomics-gui --example discovery_native_smoke --locked --offline -- -D warnings",
+    "cargo build -p autonomics-gui --example discovery_native_smoke --locked --offline",
+    "npm run test:bib-discovery",
+    "node tests/native-discovery.mjs",
+    "npm run build"
+  ],
+  "sdk_test_results": [
+    {
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 7
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_core_test_results": [
+    {
+      "passed": 42,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_api_and_http_results": [
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "checks": {
+    "sdk_all_targets_clippy": "passed",
+    "backend_library_clippy": "passed",
+    "http_test_clippy": "passed",
+    "native_example_clippy": "passed",
+    "targeted_rustfmt": "passed",
+    "gui_build": "passed",
+    "browser_and_native_bridge": "passed",
+    "actual_native_workflow": "passed"
+  },
+  "actual_native_receipt": "literature-search-p3-crossref-native-webview-linux.json",
+  "additional_gui_regressions": [
+    "removed result source filter resets for new searches",
+    "historical batch replay cannot announce new results due to a newer source_started event",
+    "capacity failure preserves obtained candidates",
+    "source pagination and failed-source retry reuse the current session"
+  ],
+  "limitations": [
+    "7 Crossref live tests ignored",
+    "Semantic Scholar discovery adapter not yet implemented; P3 remains incomplete",
+    "macOS/Windows and manual screen reader qualification remain release gates",
+    "broader backend all-target Clippy retains the recorded pre-existing stored_files.rs lint",
+    "synthetic benchmark receipts are not real-library relevance or live HTTP/GUI performance measurements"
+  ]
+}

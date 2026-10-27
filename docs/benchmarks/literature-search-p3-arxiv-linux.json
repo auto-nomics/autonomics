@@ -1,0 +1,74 @@
+{
+  "qualified_at": "2026-10-27T17:54:04.499889+00:00",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "scope": "arXiv discovery adapter, deterministic local HTTP/Atom and actual SDK; no live upstream qualification",
+  "commands": [
+    "cargo test -p arxiv --locked",
+    "cargo test -p bib-base --lib discovery_ --locked",
+    "cargo test -p bib-base --test discovery_sources -p api-server --test discovery --locked",
+    "cargo clippy -p arxiv --all-targets --locked -- -D warnings",
+    "cargo clippy -p bib-base -p api-server --lib --locked -- -D warnings",
+    "cargo clippy -p autonomics-gui --all-targets --locked -- -D warnings",
+    "cargo clippy -p autonomics-gui --example discovery_native_smoke --locked -- -D warnings",
+    "npm run build",
+    "npm run test:bib-discovery",
+    "cargo build -p autonomics-gui --example discovery_native_smoke --locked",
+    "node tests/native-discovery.mjs"
+  ],
+  "sdk_test_results": [
+    {
+      "passed": 38,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 3
+    },
+    {
+      "passed": 0,
+      "failed": 0,
+      "ignored": 5
+    },
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_core_test_results": [
+    {
+      "passed": 36,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "discovery_api_and_http_results": [
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "checks": {
+    "sdk_clippy": "passed",
+    "backend_library_clippy": "passed",
+    "native_all_targets_clippy": "passed",
+    "native_sdk_example_clippy": "passed",
+    "gui_build": "passed",
+    "browser_and_native_bridge": "passed"
+  },
+  "actual_native_receipt": "literature-search-p3-native-webview-linux.json",
+  "limitations": [
+    "8 arXiv live network tests ignored",
+    "macOS and Windows workflows configured but not executed here",
+    "Crossref and Semantic Scholar discovery adapters not yet implemented",
+    "broader backend all-target Clippy has the previously recorded stored_files.rs baseline lint"
+  ]
+}

@@ -8,6 +8,19 @@ use tokio::sync::Mutex;
 use crate::error::{EutilsError, Result};
 use crate::types::*;
 
+/// Respect both delta-seconds and HTTP-date Retry-After forms.
+fn retry_after(response: &reqwest::Response) -> Option<u64> {
+    let value = response.headers().get("retry-after")?.to_str().ok()?;
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(seconds);
+    }
+    let until = httpdate::parse_http_date(value).ok()?;
+    let duration = until
+        .duration_since(std::time::SystemTime::now())
+        .unwrap_or_default();
+    Some(duration.as_secs() + u64::from(duration.subsec_nanos() > 0))
+}
+
 fn env_endpoint(env: &str, fallback: &str) -> String {
     std::env::var(env).unwrap_or_else(|_| fallback.to_string())
 }
@@ -48,6 +61,7 @@ pub struct EutilsClient {
     email: String,
     api_key: Option<String>,
     last_request: std::sync::Arc<Mutex<Option<Instant>>>,
+    base_url: Option<String>,
 }
 
 impl EutilsClient {
@@ -63,7 +77,24 @@ impl EutilsClient {
             email: email.to_owned(),
             api_key: api_key.map(str::to_owned),
             last_request: std::sync::Arc::new(Mutex::new(None)),
+            base_url: None,
         }
+    }
+
+    /// Override the endpoint on this client without changing process globals.
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = Some(url.into().trim_end_matches('/').to_owned());
+        self
+    }
+
+    fn endpoint(&self) -> String {
+        self.base_url.clone().unwrap_or_else(base_url)
+    }
+
+    pub fn has_api_key(&self) -> bool {
+        self.api_key
+            .as_ref()
+            .is_some_and(|key| !key.trim().is_empty())
     }
 
     /// Create a client using default tool/email values read from environment
@@ -129,10 +160,17 @@ impl EutilsClient {
         let mut p = params;
         self.inject_common(&mut p);
 
-        let url = format!("{}/{endpoint}", base_url());
+        let url = format!("{}/{endpoint}", self.endpoint());
         let resp = self.client.get(&url).query(&p).send().await?;
         let status = resp.status().as_u16();
+        let retry_after_seconds = retry_after(&resp);
         let body = resp.text().await?;
+        if status == 429 {
+            return Err(EutilsError::RateLimited {
+                retry_after_seconds,
+                body,
+            });
+        }
 
         if !(200..300).contains(&status) {
             return Err(EutilsError::Status { status, body });
@@ -146,10 +184,17 @@ impl EutilsClient {
         let mut p = params;
         self.inject_common(&mut p);
 
-        let url = format!("{}/{endpoint}", base_url());
+        let url = format!("{}/{endpoint}", self.endpoint());
         let resp = self.client.get(&url).query(&p).send().await?;
         let status = resp.status().as_u16();
+        let retry_after_seconds = retry_after(&resp);
         let body = resp.text().await?;
+        if status == 429 {
+            return Err(EutilsError::RateLimited {
+                retry_after_seconds,
+                body,
+            });
+        }
 
         if !(200..300).contains(&status) {
             return Err(EutilsError::Status { status, body });
@@ -167,10 +212,17 @@ impl EutilsClient {
             p.insert("api_key", key.clone());
         }
 
-        let url = format!("{}/{endpoint}", base_url());
+        let url = format!("{}/{endpoint}", self.endpoint());
         let resp = self.client.post(&url).form(&p).send().await?;
         let status = resp.status().as_u16();
+        let retry_after_seconds = retry_after(&resp);
         let body = resp.text().await?;
+        if status == 429 {
+            return Err(EutilsError::RateLimited {
+                retry_after_seconds,
+                body,
+            });
+        }
 
         if !(200..300).contains(&status) {
             return Err(EutilsError::Status { status, body });
@@ -188,10 +240,17 @@ impl EutilsClient {
             p.insert("api_key", key.clone());
         }
 
-        let url = format!("{}/{endpoint}", base_url());
+        let url = format!("{}/{endpoint}", self.endpoint());
         let resp = self.client.post(&url).form(&p).send().await?;
         let status = resp.status().as_u16();
+        let retry_after_seconds = retry_after(&resp);
         let body = resp.text().await?;
+        if status == 429 {
+            return Err(EutilsError::RateLimited {
+                retry_after_seconds,
+                body,
+            });
+        }
 
         if !(200..300).contains(&status) {
             return Err(EutilsError::Status { status, body });
