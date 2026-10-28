@@ -1,0 +1,3 @@
+# Isolated benchmark environment; production bibliography has no Python dependency.
+numpy==2.5.4
+pyarrow==26.0.0

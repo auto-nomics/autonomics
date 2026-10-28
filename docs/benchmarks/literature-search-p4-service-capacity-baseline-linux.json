@@ -1,0 +1,220 @@
+{
+  "schema": "bib-semantic-service-capacity-runner-v1",
+  "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+  "controlled_http_model_fixture": true,
+  "worker_sha256": "9221e6cbd840539980d4b7576e7fb14a63e1879c8319552e1f451c968a55edec",
+  "source_sha256": {
+    "crates/bib-base/examples/semantic_service_benchmark.rs": "653ecabfe40126870b35a8c5b8f9fab7ebe12789aaa7917a90578cd603cebe24",
+    "scripts/benchmark_bib_semantic_service.py": "be682f67a85086a6079a393a04ec64b212f2c66c71d72c30f44e16de00d9b3f2",
+    "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+    "crates/bib-base/src/hybrid_search.rs": "ac0903e4efc2ee440520bb03eb70820f80c72426a6966bd0fdf2e6146cd564f4",
+    "crates/bib-base/src/semantic_service.rs": "168381315bf5dc712ad60905289b1108cbef5bb16ac2bf325365ca1c6782f12a",
+    "crates/bib-base/src/search.rs": "7cab34421cfd79a8b61290c25da5024442b1f31360292912647c8fff3ff33931"
+  },
+  "runs": {
+    "10000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 180672,
+        "rss_kib": 173024
+      },
+      "controlled_http_model_fixture": true,
+      "count": 10000,
+      "dimensions": 1024,
+      "final_memory": {
+        "peak_rss_kib": 316480,
+        "rss_kib": 316480
+      },
+      "four_clients": {
+        "max_ms": 295.77592000000004,
+        "p50_ms": 278.94655800000004,
+        "p95_ms": 289.709696,
+        "samples": 20
+      },
+      "four_clients_wall_ms": 1407.390729,
+      "hybrid_config_transition_conflicts": 0,
+      "hybrid_during_rebuild": {
+        "max_ms": 88.42981499999999,
+        "p50_ms": 77.24055,
+        "p95_ms": 88.42981499999999,
+        "samples": 10
+      },
+      "import_ms": 4019.5108590000004,
+      "initial_conflict_polls": 0,
+      "initial_ready_ms": 8923.569819,
+      "lexical_during_index_updates": {
+        "max_ms": 19.696638,
+        "p50_ms": 10.192144,
+        "p95_ms": 19.696638,
+        "samples": 10
+      },
+      "lexical_during_rebuild": {
+        "max_ms": 1.8951790000000002,
+        "p50_ms": 1.706421,
+        "p95_ms": 1.8951790000000002,
+        "samples": 10
+      },
+      "limitations": [
+        "Production BibBase service/actor path with local bounded model HTTP fixture; not HTTP API or GUI end-to-end",
+        "No actual model inference speed or relevance claim",
+        "First observed queries follow initial indexing, not OS-cold cache",
+        "One title/abstract chunk per article",
+        "Single host measurements; concurrent samples include queueing"
+      ],
+      "rebuild_ms": 816.3370570000001,
+      "rebuild_progress": {
+        "cached_chunks": 10000,
+        "embedded_chunks": 0,
+        "processed_articles": 10000,
+        "processed_chunks": 10000,
+        "stage": "complete",
+        "target_articles": 10000,
+        "target_revision": 10011
+      },
+      "relevance_evaluation": false,
+      "schema": "bib-semantic-service-capacity-v1",
+      "single_client": {
+        "one_percent": {
+          "first_observed_ms": 51.885589,
+          "hot": {
+            "max_ms": 55.607463,
+            "p50_ms": 49.727011000000005,
+            "p95_ms": 53.454066000000005,
+            "samples": 30
+          }
+        },
+        "wide": {
+          "first_observed_ms": 185.30770099999998,
+          "hot": {
+            "max_ms": 76.46073200000001,
+            "p50_ms": 70.320078,
+            "p95_ms": 74.870548,
+            "samples": 30
+          }
+        }
+      },
+      "update_catchup_ms": 631.1108439999999,
+      "update_conflict_polls": 0,
+      "vector_store_files": {
+        "library.db.semantic-v1": 57647104,
+        "library.db.semantic-v1-tshm": 86016,
+        "library.db.semantic-v1-wal": 8969272
+      },
+      "vector_store_total_bytes": 66702392,
+      "writes_during_index_updates": {
+        "max_ms": 2.921724,
+        "p50_ms": 1.298881,
+        "p95_ms": 2.921724,
+        "samples": 10
+      },
+      "fixture_requests": {
+        "embed_requests": 717,
+        "embedded_inputs": 10092,
+        "tag_requests": 1436
+      },
+      "wall_seconds": 19.815279732996714
+    },
+    "100000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 690892,
+        "rss_kib": 690892
+      },
+      "controlled_http_model_fixture": true,
+      "count": 100000,
+      "dimensions": 1024,
+      "final_memory": {
+        "peak_rss_kib": 1453392,
+        "rss_kib": 1453392
+      },
+      "four_clients": {
+        "max_ms": 3373.975173,
+        "p50_ms": 3320.5557959999996,
+        "p95_ms": 3358.611253,
+        "samples": 20
+      },
+      "four_clients_wall_ms": 16627.5921,
+      "hybrid_config_transition_conflicts": 0,
+      "hybrid_during_rebuild": {
+        "max_ms": 948.5226329999999,
+        "p50_ms": 924.877521,
+        "p95_ms": 948.5226329999999,
+        "samples": 10
+      },
+      "import_ms": 41947.569495,
+      "initial_conflict_polls": 0,
+      "initial_ready_ms": 101137.47954500001,
+      "lexical_during_index_updates": {
+        "max_ms": 21.393347,
+        "p50_ms": 13.841035,
+        "p95_ms": 21.393347,
+        "samples": 10
+      },
+      "lexical_during_rebuild": {
+        "max_ms": 8.212532,
+        "p50_ms": 5.598014,
+        "p95_ms": 8.212532,
+        "samples": 10
+      },
+      "limitations": [
+        "Production BibBase service/actor path with local bounded model HTTP fixture; not HTTP API or GUI end-to-end",
+        "No actual model inference speed or relevance claim",
+        "First observed queries follow initial indexing, not OS-cold cache",
+        "One title/abstract chunk per article",
+        "Single host measurements; concurrent samples include queueing"
+      ],
+      "rebuild_ms": 9432.070563,
+      "rebuild_progress": {
+        "cached_chunks": 100000,
+        "embedded_chunks": 0,
+        "processed_articles": 100000,
+        "processed_chunks": 100000,
+        "stage": "complete",
+        "target_articles": 100000,
+        "target_revision": 100011
+      },
+      "relevance_evaluation": false,
+      "schema": "bib-semantic-service-capacity-v1",
+      "single_client": {
+        "one_percent": {
+          "first_observed_ms": 559.167588,
+          "hot": {
+            "max_ms": 584.67689,
+            "p50_ms": 559.1655030000001,
+            "p95_ms": 581.22481,
+            "samples": 30
+          }
+        },
+        "wide": {
+          "first_observed_ms": 1743.115701,
+          "hot": {
+            "max_ms": 879.246734,
+            "p50_ms": 829.715644,
+            "p95_ms": 866.236952,
+            "samples": 30
+          }
+        }
+      },
+      "update_catchup_ms": 1275.2473639999998,
+      "update_conflict_polls": 0,
+      "vector_store_files": {
+        "library.db.semantic-v1": 579903488,
+        "library.db.semantic-v1-tshm": 3444736,
+        "library.db.semantic-v1-wal": 698455392
+      },
+      "vector_store_total_bytes": 1281803616,
+      "writes_during_index_updates": {
+        "max_ms": 2.6756699999999998,
+        "p50_ms": 0.7447060000000001,
+        "p95_ms": 2.6756699999999998,
+        "samples": 10
+      },
+      "fixture_requests": {
+        "embed_requests": 6342,
+        "embedded_inputs": 100092,
+        "tag_requests": 12686
+      },
+      "wall_seconds": 214.7640117520059
+    }
+  }
+}

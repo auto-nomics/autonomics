@@ -1,0 +1,32 @@
+{
+  "schema": "bib-p4-frozen-candidate-v1",
+  "frozen_at_utc": "2026-10-27T20:50:44.846567+00:00",
+  "status": "diagnostic candidate; not production hybrid",
+  "selected_on": "official SciFact train, 809 queries",
+  "acceptance_not_yet_evaluated_at_freeze": true,
+  "model": "Qwen3-Embedding-0.6B Q8_0 Ollama",
+  "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  "dimensions": 1024,
+  "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+  "document_preprocessing": "title + newline + complete abstract; no truncation",
+  "chunk_codepoints": 0,
+  "rerank": null,
+  "inference_options": {},
+  "dense_weight": 4,
+  "rrf_constant": 10,
+  "depth": 100,
+  "parameters_sha256": "42ee274ed2aaaf25b42077250044b47cb7360f9e5695dcdf3460844364eea956",
+  "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+  "tuning_lexical_sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69",
+  "tuning_dense_sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629",
+  "source_sha256": {
+    "crates/bib-base/examples/search_relevance.rs": "633dd5ab79b750e0c645a60759af7e7ea6d1d3b12762effe17d217b235649545",
+    "scripts/benchmark_bib_embeddings.py": "2afc1d9546fc2c732943305a8bf712e81cbbbb6115b705da6d5f2b260664eba5",
+    "scripts/evaluate_bib_relevance.py": "af4d7667227a989748c3b340400d914a8db0a8706ec51f7b8f7ab0b17a27be5b",
+    "scripts/fuse_bib_relevance.py": "28ee5a50f3aff45175b280023a6722540b3dbee11a62e9591da93e0af739cfce"
+  },
+  "limitations": [
+    "English claim retrieval only; Chinese and real-library acceptance remain open",
+    "No production index, hard-filter, GUI or ANN qualification implied"
+  ]
+}

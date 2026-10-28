@@ -134,6 +134,7 @@ pub enum SearchEngineMode {
 pub struct BibBase {
     pub(crate) tx: mpsc::Sender<BibCommand>,
     pub(crate) changes: tokio::sync::watch::Sender<u64>,
+    pub(crate) semantic: Option<crate::semantic_service::SemanticService>,
 }
 
 /// Implementation core owned by the storage actor.
@@ -149,6 +150,7 @@ pub(crate) struct BibCore {
     pub(crate) search_index: std::sync::Arc<std::sync::Mutex<crate::local_index::LocalIndex>>,
     pub(crate) search_progress: std::sync::Arc<std::sync::Mutex<crate::local_index::IndexProgress>>,
     pub(crate) search_context: Option<Box<BibCore>>,
+    pub(crate) semantic: Option<crate::semantic_service::SemanticService>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -258,9 +260,24 @@ impl BibCore {
             search_index: std::sync::Arc::new(std::sync::Mutex::new(search_index)),
             search_progress,
             search_context: None,
+            semantic: None,
         };
         base.migrate().await?;
         if engine == SearchEngineMode::Tantivy {
+            let vector_path = if path == ":memory:" {
+                path.to_owned()
+            } else {
+                format!("{path}.semantic-v1")
+            };
+            base.semantic = Some(
+                crate::semantic_service::SemanticService::open(
+                    db.connect()?,
+                    db.connect()?,
+                    db.connect()?,
+                    vector_path,
+                )
+                .await?,
+            );
             let reader = db.connect()?;
             if path != ":memory:" {
                 reader.pragma_update("busy_timeout", 5000).await?;
@@ -272,6 +289,7 @@ impl BibCore {
                 search_index: base.search_index.clone(),
                 search_progress: base.search_progress.clone(),
                 search_context: None,
+                semantic: base.semantic.clone(),
             }));
         }
         Ok(base)

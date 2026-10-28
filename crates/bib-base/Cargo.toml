@@ -8,11 +8,13 @@ description = "Bibliography management: Turso storage + unified literature query
 
 [dependencies]
 bib-types = { path = "../bib-types" }
+text-embedding = { path = "../text-embedding" }
 turso.workspace = true
 tantivy = "=0.26.2"
+ahash = { version = "=0.8.12", default-features = false, features = ["runtime-rng"] }
 jieba-rs = "=0.11.0"
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 chrono = { workspace = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["process"] }

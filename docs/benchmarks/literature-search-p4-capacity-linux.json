@@ -1,0 +1,219 @@
+{
+  "schema": "bib-p4-capacity-qualification-v1",
+  "status": "Synthetic index qualification after immutable vector sharing; P4 in progress",
+  "environment": {
+    "date": "2026-10-28",
+    "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+    "logical_cpus": 24,
+    "mem_total_kib": "65643140",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "binary_sha256": "3c1bcbbf999b1476044708d8251fc0d6312e055530e84bdecebeb664fce991b4",
+    "source_sha256": {
+      "crates/bib-base/examples/semantic_capacity_benchmark.rs": "a039ae8774119ffbd4781c94923a9c673b2c8dfd1764d911a380820df6552e1a",
+      "crates/bib-base/src/semantic_index.rs": "06507a98a51571120ca4ff2722f04d30d71b423cfbe46ccef61355f2854f43f1"
+    }
+  },
+  "runs": {
+    "10000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 198504,
+        "rss_kib": 198504
+      },
+      "count": 10000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 208772,
+        "rss_kib": 189384
+      },
+      "final_memory": {
+        "peak_rss_kib": 208772,
+        "rss_kib": 187248
+      },
+      "idle_ms": 0.39312800000000003,
+      "idle_snapshot_reused": true,
+      "import_ms": 4073.5939940000003,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 10000,
+        "embedded_chunks": 10000,
+        "rebuilt": true,
+        "total_chunks": 10000
+      },
+      "initial_ms": 873.041912,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "metadata_ms": 136.012463,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 10000,
+          "first_observed_ms": 9.155395,
+          "hot": {
+            "max_ms": 10.104800000000001,
+            "p50_ms": 8.907645,
+            "p95_ms": 9.29462,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 100,
+          "first_observed_ms": 0.197667,
+          "hot": {
+            "max_ms": 0.18259799999999998,
+            "p50_ms": 0.17496,
+            "p95_ms": 0.180921,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 88.13818900000001,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 58003456,
+        "vectors.db-tshm": 86016,
+        "vectors.db-wal": 5294232
+      },
+      "vector_store_total_bytes": 63383704
+    },
+    "100000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 667680,
+        "rss_kib": 667680
+      },
+      "count": 100000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 790216,
+        "rss_kib": 790216
+      },
+      "final_memory": {
+        "peak_rss_kib": 787372,
+        "rss_kib": 657508
+      },
+      "idle_ms": 0.42488,
+      "idle_snapshot_reused": true,
+      "import_ms": 42123.297024,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 100000,
+        "embedded_chunks": 100000,
+        "rebuilt": true,
+        "total_chunks": 100000
+      },
+      "initial_ms": 9518.388385,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "metadata_ms": 1977.9625219999998,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 100000,
+          "first_observed_ms": 117.303878,
+          "hot": {
+            "max_ms": 123.920334,
+            "p50_ms": 120.449387,
+            "p95_ms": 123.139519,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 1000,
+          "first_observed_ms": 2.792997,
+          "hot": {
+            "max_ms": 2.114084,
+            "p50_ms": 1.901006,
+            "p95_ms": 2.041377,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 1367.878671,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 580599808,
+        "vectors.db-tshm": 1806336,
+        "vectors.db-wal": 339170792
+      },
+      "vector_store_total_bytes": 921576936
+    }
+  },
+  "log_sha256": {
+    "10000": "5b9082471b7e18c9d97831d947f69e3b1413d8b513a4a725e2b6cb33c49733b6",
+    "100000": "82309de79ee70576585bcee624111a8b8c96196e7ee902c757167404499ee98a"
+  },
+  "validation": {
+    "backend_libraries": {
+      "passed": 195,
+      "ignored": 2
+    },
+    "integration": {
+      "passed": 48,
+      "ignored": 1
+    },
+    "semantic_subset": {
+      "passed": 36,
+      "included_in_library_count": true
+    },
+    "strict_clippy": true
+  },
+  "validation_log_sha256": {
+    "libraries": "d40bc51b996034446b9e571560fa55dc07f20a6d7524662849bc5ab0a688f471",
+    "integration": "7d5b454789d15d1aeb80cb3de1aff8cef226ecb5b2731da6cbe0de8a047a2642",
+    "clippy": "99ef7b8c22b425fdbfe7ef526bfe85c523adc932d21b3781446fea4ad17dde82"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "06507a98a51571120ca4ff2722f04d30d71b423cfbe46ccef61355f2854f43f1",
+    "crates/bib-base/src/semantic_index/tests.rs": "450382f9941696ab3b30985a73de20cbd583678c4e87cf4f52f717359ca579fd",
+    "crates/bib-base/examples/semantic_capacity_benchmark.rs": "a039ae8774119ffbd4781c94923a9c673b2c8dfd1764d911a380820df6552e1a"
+  },
+  "limitations": [
+    "Synthetic vectors measure storage and ranking, not model relevance or embedding latency",
+    "Single observed metadata update per size, not a maintenance latency percentile",
+    "100k metadata update still copies unchanged bindings; published-readers memory reduced but write amplification remains",
+    "Warm-cache, single rank worker; no OS-cold, HTTP/GUI or concurrent SLO claim",
+    "Multiple fulltext blocks per article, continuous source writes and higher-revision backup divergence remain pending"
+  ]
+}

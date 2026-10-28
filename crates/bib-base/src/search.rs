@@ -22,15 +22,18 @@ use turso::{
 pub(crate) enum SearchJob {
     Export {
         request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         reply: tokio::sync::oneshot::Sender<Result<Vec<bib_types::Article>>>,
     },
     Evidence {
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         article_id: String,
         input: bib_types::SearchEvidenceRequest,
         reply: tokio::sync::oneshot::Sender<Result<bib_types::SearchEvidencePage>>,
     },
     V2 {
         request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         reply: tokio::sync::oneshot::Sender<Result<SearchPageV2>>,
     },
     Legacy {
@@ -74,23 +77,35 @@ impl SearchJob {
     }
     async fn run(self, core: &BibCore) {
         match self {
-            Self::Export { request, reply } => {
+            Self::Export {
+                request,
+                prepared,
+                reply,
+            } => {
                 if !reply.is_closed() {
-                    let _ = reply.send(core.export_search(request).await);
+                    let _ = reply.send(core.export_search_prepared(request, prepared).await);
                 }
             }
             Self::Evidence {
+                prepared,
                 article_id,
                 input,
                 reply,
             } => {
                 if !reply.is_closed() {
-                    let _ = reply.send(core.search_evidence(&article_id, input).await);
+                    let _ = reply.send(
+                        core.search_evidence_prepared(&article_id, input, prepared)
+                            .await,
+                    );
                 }
             }
-            Self::V2 { request, reply } => {
+            Self::V2 {
+                request,
+                prepared,
+                reply,
+            } => {
                 if !reply.is_closed() {
-                    let _ = reply.send(core.search_v2(request).await);
+                    let _ = reply.send(core.search_v2_prepared(request, prepared).await);
                 }
             }
             Self::Legacy {
@@ -155,6 +170,23 @@ fn task_error(error: tokio::task::JoinError) -> Error {
 }
 
 impl BibBase {
+    pub(crate) async fn prepare_search(
+        &self,
+        request: &SearchRequestV2,
+    ) -> Result<Option<crate::semantic_service::PreparedSemanticQuery>> {
+        let request = validate_request(request.clone())?;
+        if request.mode == SearchMode::Lexical {
+            return Ok(None);
+        }
+        let service = self
+            .semantic
+            .as_ref()
+            .ok_or_else(|| invalid("semantic search requires the Tantivy engine"))?;
+        service
+            .prepare(request.semantic_query.as_deref().expect("validated topic"))
+            .await
+            .map(Some)
+    }
     pub async fn search_index_status(&self) -> Result<bib_types::SearchIndexStatus> {
         self.call(|reply| BibCommand::SearchIndexStatus { reply })
             .await
@@ -169,12 +201,22 @@ impl BibBase {
             .await
     }
     pub async fn export_search(&self, request: SearchRequestV2) -> Result<Vec<bib_types::Article>> {
-        self.call(|reply| BibCommand::ExportSearch { request, reply })
-            .await
+        let prepared = self.prepare_search(&request).await?;
+        self.call(|reply| BibCommand::ExportSearch {
+            request,
+            prepared,
+            reply,
+        })
+        .await
     }
     pub async fn search_v2(&self, request: SearchRequestV2) -> Result<SearchPageV2> {
-        self.call(|reply| BibCommand::SearchV2 { request, reply })
-            .await
+        let prepared = self.prepare_search(&request).await?;
+        self.call(|reply| BibCommand::SearchV2 {
+            request,
+            prepared,
+            reply,
+        })
+        .await
     }
 }
 
@@ -270,12 +312,16 @@ impl BibCore {
     }
 
     async fn refresh_index_snapshot(&self) -> Result<()> {
-        let (indexed, indexed_token) = {
+        let (indexed, indexed_token, source_checked) = {
             let index = self
                 .search_index
                 .lock()
                 .map_err(|_| Error::Unknown("search worker lock poisoned".into()))?;
-            (index.revision, index.commit_token.clone())
+            (
+                index.revision,
+                index.commit_token.clone(),
+                index.source_checked,
+            )
         };
         let conn = self.conn();
         let mut rows = conn
@@ -304,11 +350,19 @@ impl BibCore {
             .get::<String>(0)?;
         drop(rows);
         if indexed == Some(revision) && indexed_token.as_deref() == Some(&commit_token) {
+            self.search_index
+                .lock()
+                .map_err(|_| Error::Unknown("search worker lock poisoned".into()))?
+                .source_checked = true;
             return Ok(());
         }
         // Counters can repeat after a point-in-time restore. A fresh mutation
         // token distinguishes divergent histories at the same revision.
-        let rebuild = indexed.is_none_or(|indexed| indexed >= revision) || indexed_token.is_none();
+        // A freshly opened sidecar cannot establish ancestry of a changed
+        // source, even when the restored database has a higher revision.
+        let rebuild = !source_checked
+            || indexed.is_none_or(|indexed| indexed >= revision)
+            || indexed_token.is_none();
         let mut articles = Vec::new();
         if !rebuild {
             let mut rows = conn
@@ -448,7 +502,7 @@ impl BibCore {
         .map_err(task_error)?
     }
 
-    async fn ranked_local(
+    pub(crate) async fn ranked_local(
         &self,
         expression: Option<SearchExpr>,
         same_child: bool,
@@ -459,6 +513,23 @@ impl BibCore {
                 .lock()
                 .map_err(|_| Error::Unknown("search worker lock poisoned".into()))?
                 .search(expression.as_ref(), same_child)
+        })
+        .await
+        .map_err(task_error)?
+    }
+
+    pub(crate) async fn ranked_local_in(
+        &self,
+        expression: SearchExpr,
+        allowed: std::sync::Arc<HashSet<String>>,
+        limit: usize,
+    ) -> Result<Vec<SearchCandidate>> {
+        let index = self.search_index.clone();
+        tokio::task::spawn_blocking(move || {
+            index
+                .lock()
+                .map_err(|_| Error::Unknown("search worker lock poisoned".into()))?
+                .search_top_in(&expression, &allowed, limit)
         })
         .await
         .map_err(task_error)?
@@ -678,9 +749,10 @@ impl BibCore {
             .collect())
     }
 
-    pub(crate) async fn export_search(
+    pub(crate) async fn export_search_prepared(
         &self,
         mut request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
     ) -> Result<Vec<bib_types::Article>> {
         if self.search_engine == SearchEngineMode::Legacy {
             return Err(invalid(
@@ -698,13 +770,20 @@ impl BibCore {
         let conn = self.conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
         let result = async {
-            let (mut hits, _) = self.scoped_search_candidates(&request).await?;
+            let mut hits = self
+                .evaluate_search(&request, prepared.as_ref())
+                .await?
+                .hits;
             sort_candidates(&mut hits, request.sort);
             let ids = hits
                 .into_iter()
                 .map(|hit| hit.article_id)
                 .collect::<Vec<_>>();
-            self.hydrate_article_ids(&ids).await
+            let articles = self.hydrate_article_ids(&ids).await?;
+            if let Some(prepared) = &prepared {
+                self.validate_semantic_configuration(prepared).await?;
+            }
+            Ok::<_, Error>(articles)
         }
         .await;
         match result {
@@ -719,7 +798,15 @@ impl BibCore {
         }
     }
 
-    pub(crate) async fn search_v2(&self, mut request: SearchRequestV2) -> Result<SearchPageV2> {
+    #[cfg(test)]
+    pub(crate) async fn search_v2(&self, request: SearchRequestV2) -> Result<SearchPageV2> {
+        self.search_v2_prepared(request, None).await
+    }
+    pub(crate) async fn search_v2_prepared(
+        &self,
+        mut request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
+    ) -> Result<SearchPageV2> {
         if self.search_engine == SearchEngineMode::Legacy {
             return Err(invalid(
                 "V2 search is disabled by the legacy engine rollout flag",
@@ -728,7 +815,7 @@ impl BibCore {
         request = validate_request(request)?;
         let conn = self.conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
-        let result = self.search_v2_snapshot(request).await;
+        let result = self.search_v2_snapshot(request, prepared.as_ref()).await;
         match result {
             Ok(page) => {
                 tx.commit().await?;
@@ -797,10 +884,16 @@ impl BibCore {
         Ok((hits, facets))
     }
 
-    async fn search_v2_snapshot(&self, mut request: SearchRequestV2) -> Result<SearchPageV2> {
+    async fn search_v2_snapshot(
+        &self,
+        mut request: SearchRequestV2,
+        prepared: Option<&crate::semantic_service::PreparedSemanticQuery>,
+    ) -> Result<SearchPageV2> {
         let cursor = request.cursor.take();
         let query_bytes = serde_json::to_vec(&request)?;
-        let (mut hits, facets) = self.scoped_search_candidates(&request).await?;
+        let mut evaluation = self.evaluate_search(&request, prepared).await?;
+        let mut hits = std::mem::take(&mut evaluation.hits);
+        let facets = evaluation.facets;
         sort_candidates(&mut hits, request.sort);
         let (revision, token) = {
             let index = self
@@ -812,7 +905,7 @@ impl BibCore {
                 index.commit_token.clone().unwrap_or_default(),
             )
         };
-        let generation = format!("tantivy-v2:{revision}:{token}");
+        let generation = crate::hybrid_search::generation(revision, &token, prepared);
         let mut digest = Sha256::new();
         digest.update(query_bytes);
         digest.update(generation.as_bytes());
@@ -863,15 +956,26 @@ impl BibCore {
             (Vec::new(), Vec::new())
         };
         let text = positive_text(request.expression.as_ref());
-        let hits = self.render_search_hits(&hits[offset..end], &text).await?;
+        let mut rendered = self.render_search_hits(&hits[offset..end], &text).await?;
+        self.render_semantic_page(
+            &hits[offset..end],
+            &mut rendered,
+            &mut evaluation.retrieval,
+            &evaluation.semantic_chunks,
+        )
+        .await?;
+        if let Some(prepared) = prepared {
+            self.validate_semantic_configuration(prepared).await?;
+        }
         Ok(SearchPageV2 {
-            hits,
+            hits: rendered,
             articles,
             associations,
             total,
             next_cursor,
             index_generation: generation,
             facets,
+            retrieval: evaluation.retrieval,
         })
     }
 }
@@ -971,8 +1075,23 @@ pub(crate) fn validate_request(mut request: SearchRequestV2) -> Result<SearchReq
     if !(1..=200).contains(&request.page_size) {
         return Err(invalid("page_size must be between 1 and 200"));
     }
-    if request.mode != SearchMode::Lexical {
-        return Err(invalid("local search currently supports lexical mode"));
+    request.semantic_query = request
+        .semantic_query
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
+    match request.mode {
+        SearchMode::Lexical if request.semantic_query.is_some() => {
+            return Err(invalid("semantic_query requires hybrid mode"));
+        }
+        SearchMode::Hybrid => {
+            crate::hybrid_search::topic_expression(
+                request
+                    .semantic_query
+                    .as_deref()
+                    .ok_or_else(|| invalid("hybrid mode requires semantic_query"))?,
+            )?;
+        }
+        _ => {}
     }
     if request.sources.iter().any(|source| source != "local") {
         return Err(invalid("local search supports only the local source"));
@@ -1066,6 +1185,7 @@ mod recovery_tests {
         drop(receiver);
         SearchJob::V2 {
             request: SearchRequestV2::default(),
+            prepared: None,
             reply,
         }
         .run(&core)
@@ -1074,6 +1194,46 @@ mod recovery_tests {
             core.search_index.lock().unwrap().revision.is_none(),
             "a cancelled queue entry must never touch the index"
         );
+    }
+
+    #[tokio::test]
+    async fn higher_revision_backup_rechecks_lexical_projection_after_reopen() {
+        let (_directory, path) = database();
+        {
+            let core = BibCore::open(&path).await.unwrap();
+            core.upsert_article(&Article::new("a", "Alpha oldmarker"))
+                .await
+                .unwrap();
+            core.upsert_article(&Article::new("b", "Beta oldmarker"))
+                .await
+                .unwrap();
+            core.refresh_search_index().await.unwrap();
+            core.upsert_article(&Article::new("b", "Restoredbranch evidence"))
+                .await
+                .unwrap();
+            core.upsert_article(&Article::new("a", "Latestalpha evidence"))
+                .await
+                .unwrap();
+            core.write_conn()
+                .execute("UPDATE searchOutbox SET revision=1 WHERE articleID='b'", ())
+                .await
+                .unwrap();
+        }
+        let reopened = BibCore::open(&path).await.unwrap();
+        let matches = reopened
+            .search_articles("restoredbranch", 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].article_id, "b");
+        assert!(
+            reopened
+                .search_articles("oldmarker", 10, 0)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(reopened.search_index.lock().unwrap().source_checked);
     }
 
     #[tokio::test]

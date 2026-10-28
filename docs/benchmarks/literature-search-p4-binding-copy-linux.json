@@ -1,0 +1,249 @@
+{
+  "schema": "bib-semantic-binding-copy-qualification-v1",
+  "status": "binding_copy_qualified;full_service_failed_during_publication",
+  "original_failure": {
+    "directory": "target/bib-p4-validation/attachment-100k-key-index-resume-20261028",
+    "terminal_error": "database is locked",
+    "initial_ready_chunks": 700000,
+    "root_cause": "not yet proven"
+  },
+  "closed_copy_inspection": {
+    "directory": "target/bib-p4-validation/semantic-binding-profile-20261028",
+    "published_revision": 500031,
+    "staging_revision": 500071,
+    "published_bindings": 700000,
+    "staging_bindings": 0,
+    "actual_turso_plan": "SEARCH semanticbindings USING INDEX sqlite_autoindex_semanticbindings_1 (generation=?)",
+    "sample_copy": {
+      "rows": 4096,
+      "elapsed_ms": 1526.588123,
+      "build": "debug",
+      "claim": "unpublished copy only; not full service or latency qualification"
+    },
+    "monolithic_reproduction": {
+      "rows_requested": 700000,
+      "elapsed_ms": 128204.91392,
+      "error": "Busy: database is locked",
+      "artifact": "target/bib-p4-validation/semantic-binding-profile-20261028/monolithic-reproduction.json"
+    },
+    "bounded_copy_plan_unhinted": "SEARCH semanticbindings USING INDEX semanticbindings_article (generation=?)",
+    "unhinted_bounded_run": {
+      "status": "deliberately_stopped_after_plan_diagnosis",
+      "committed_rows": 43008,
+      "elapsed_ms_last_page": 156070.420333,
+      "read_only_diagnostic_during_run": "Turso EXPLAIN + generation counts; not an isolated latency sample"
+    }
+  },
+  "change": {
+    "binding_copy_page_limit": 2048,
+    "paging": "chunkID keyset, immutable source generation",
+    "fencing": "source revision/token checked between pages; staging lease renewed inside each committed page",
+    "publication": "existing final source/provider/head/count checks unchanged",
+    "observability": "staging/copying_bindings phases; durable benchmark stages and partial latency samples; convergence error includes actual service status",
+    "copy_index": "existing v1 primary key sqlite_autoindex_semanticBindings_1 explicitly selected for generation and chunkID range"
+  },
+  "targeted_tests": {
+    "passed": 27,
+    "failed": 0,
+    "ignored": 0,
+    "scope": "semantic_index library tests only",
+    "new_fault_injection": "2051 rows; failure at second page; audit proves 2048 first-page commits; old head and reader remain intact; cleanup, retry and reopen verified",
+    "first_attempt": "new test expected a non-immune vector but retained an immune abstract; fixture corrected; failed log retained"
+  },
+  "strict_clippy": {
+    "passed": true,
+    "scope": "bib-base library/new probe and api-server attachment example"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "62fa1e3d58b369c574eea019ae96e38ccc10ea0396cc0a0af69bf170b8add0a2",
+    "crates/bib-base/src/semantic_index/tests.rs": "5fed712e424cb774a3557cb8ab6e2154a94660e943ce1f5cbb9b198c4d8a5ce3",
+    "crates/bib-base/examples/semantic_binding_probe.rs": "8c33320c2ddcf790a0ca933a57a834b251e46a86e13745791f1dee66a518816d",
+    "crates/api-server/examples/semantic_attachment_benchmark.rs": "c6bd903a3d0877a20e4dc7afe3c7806062daabd3be01e39071619ab1791f7257"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p4-binding-pages-qualified-tests.log": "4a1819404a121dacdc18c69694a1b578ae3dff18ef33ed9665d28b2f04c6d7eb",
+    "target/bib-p4-validation/p4-binding-pages-clippy.log": "12fdb1e27da1334ea9a3baec419c4134b8821930466e4f310192b0da16cf4f81",
+    "target/bib-p4-validation/p4-binding-observability-check.log": "cb4ed2455a6154425c81ac3eb7c873e0897a8c061544cbe6079e2eddfb08129b",
+    "target/bib-p4-validation/p4-binding-pages-isolated-tests.log": "0f0cb5d1b63ffb7ca847be396402aba404a9bef838581496a25b434406029267",
+    "target/bib-p4-validation/p4-binding-pages-indexed-isolated-tests.log": "3d88b79a7009d8b507f41e1b1e7c520ca4db3c37b5c1abfdf92a6b2a0dc13073",
+    "target/bib-p4-validation/p4-binding-pages-indexed-isolated-clippy.log": "c0598ae56fbd2a64dade880739e70bd9a0c909c385bfd3c3a2a07b3070a094b7",
+    "target/bib-p4-validation/semantic-binding-profile-20261028/turso-700000.jsonl": "28752a3732a64e0c3d3eafe45709186e6ea42e41a05b5eef0e76e95563c93bfb",
+    "target/bib-p4-validation/semantic-binding-profile-20261028/turso-range-plans.jsonl": "0c1ed87147579537430a6e6526d6b7a1d41143ce8e18bca392cd35ba517eee28",
+    "target/bib-p4-validation/semantic-binding-profile-20261028/turso-indexed-paged-700000.jsonl": "7a22c12fecace5bce827189adfa3d13c4ac155ad873cbd44d8cfad12866d5bed",
+    "target/bib-p4-validation/semantic-binding-profile-20261028/indexed-copy-verification.json": "77329f13d02bbeaaf5de4a6f538a81539180f27747fd76f3d9712b2dc3aaf148",
+    "target/bib-p4-validation/semantic-binding-profile-20261028/verify_bindings.py": "7db0b79ac362335e6beab76cb490635f3194f5a8ae66825cb0a96924107df001",
+    "target/bib-p4-validation/attachment-binding-pages-pilot-20261028/receipt.json": "e872fe426485e35d44b81cded1d38d394f929a4978bafbedf78c5474dc17d5e6",
+    "target/bib-p4-validation/attachment-binding-pages-pilot-20261028/100/receipt.json": "afa08202220336015e7c97ec24602da29c2271e752b00d718ed7df6f8d1abc42"
+  },
+  "isolated_candidate": "target/bib-p4-validation/isolated-p4-binding-pages-candidate-20261028",
+  "isolated_tests": {
+    "full_before_index_hint": {
+      "passed": 354,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p4-binding-pages-isolated-tests.log"
+    },
+    "targeted_after_index_hint": {
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p4-binding-pages-indexed-isolated-tests.log"
+    }
+  },
+  "large_monolithic_copy": {
+    "status": "failed_reproduced_busy",
+    "timeout_seconds": 1800,
+    "directory": "target/bib-p4-validation/semantic-binding-profile-20261028",
+    "mutates_only_owned_copy": true
+  },
+  "limitations": [
+    "Original 100k run did not pass; no claim that this change fixes its unproven lock root cause",
+    "Full 100k service write/delete/replacement/recovery requalification remains necessary",
+    "Debug copy measurements on a shared host are not production capacity or latency claims",
+    "Full-run publishing stage contains head swap, old-generation deletion and vector GC; exact stalled SQL there is not directly observed, although independent cascading deletion reproduces Busy"
+  ],
+  "isolated_strict_clippy": {
+    "passed": true,
+    "all_targets": true,
+    "log": "target/bib-p4-validation/p4-binding-pages-indexed-isolated-clippy.log"
+  },
+  "large_indexed_paged_copy": {
+    "status": "passed",
+    "rows": 700000,
+    "page_size": 2048,
+    "elapsed_ms": 398925.668369,
+    "build": "debug",
+    "directory": "target/bib-p4-validation/semantic-binding-profile-20261028",
+    "content_verification": {
+      "schema": "semantic-binding-content-verification-v1",
+      "engine": "Python SQLite read-only on closed owned copy",
+      "sqlite_version": "3.53.2",
+      "old": "e758ad95-894e-42b5-8490-ebe87f14960e",
+      "new": "binding-probe-90c1648c-7f5f-495d-a223-d8a71c3962fd",
+      "source": {
+        "rows": 700000,
+        "sha256": "c01784c6ac691cf50a2bfc07edffe2cd1a0648d68407c3167e39062871228831",
+        "seconds": 5.50226701599604
+      },
+      "target": {
+        "rows": 700000,
+        "sha256": "c01784c6ac691cf50a2bfc07edffe2cd1a0648d68407c3167e39062871228831",
+        "seconds": 2.5972769369982416
+      },
+      "published_head_unchanged": true,
+      "equal": true
+    },
+    "limitations": [
+      "Shared host with concurrent builds and fixture copying; timing is not a controlled comparison or production latency result",
+      "Unpublished sidecar copy; not a substitute for full HTTP service update/delete/replacement validation"
+    ]
+  },
+  "sealed_worker": "target/bib-p4-validation/p4-binding-pages-worker-20261028/receipt.json",
+  "pilot": {
+    "status": "passed",
+    "count": 100,
+    "wall_seconds": 21.51195483400079,
+    "receipt": "target/bib-p4-validation/attachment-binding-pages-pilot-20261028/receipt.json",
+    "service_fixture_receipt": "target/bib-p4-validation/attachment-binding-pages-pilot-20261028/100/receipt.json"
+  },
+  "full_service_requalification": {
+    "status": "failed",
+    "count": 100000,
+    "directory": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028",
+    "resume_from": "target/bib-p4-validation/attachment-100k-recover-20261028",
+    "sealed_worker_receipt": "target/bib-p4-validation/p4-binding-pages-worker-20261028/receipt.json",
+    "observed_progress": {
+      "stage": "publishing",
+      "target_revision": 500071,
+      "processed_articles": 1,
+      "embedded_chunks": 7,
+      "indexed_revision": 500031,
+      "last_error": "search conflict from preceding write-race attempt; still indexing"
+    },
+    "initial_ready_ms": 1531929.04897,
+    "note": "Full service run failed; query and initial-ready metrics are partial measurements, not a successful capacity qualification",
+    "debug_attach_attempt": {
+      "tool": "gdb",
+      "status": "OS ptrace denied",
+      "log": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028/publishing-gdb.log",
+      "benchmark_not_paused": true
+    },
+    "partial_query_measurements": {
+      "four_clients": {
+        "latency": {
+          "max_ms": 6535.4302210000005,
+          "p50_ms": 5665.509056,
+          "p95_ms": 6479.767423,
+          "samples": 20
+        },
+        "wall_ms": 29183.22162
+      },
+      "memory": {
+        "peak_rss_kib": 4070308,
+        "rss_kib": 3927320
+      },
+      "single_client": {
+        "one_percent": {
+          "first_observed_ms": 355.04713999999996,
+          "hot": {
+            "max_ms": 352.252948,
+            "p50_ms": 317.203773,
+            "p95_ms": 346.031929,
+            "samples": 30
+          }
+        },
+        "wide": {
+          "first_observed_ms": 13059.739759,
+          "hot": {
+            "max_ms": 1701.921061,
+            "p50_ms": 1450.819047,
+            "p95_ms": 1580.003875,
+            "samples": 30
+          }
+        }
+      }
+    },
+    "terminal": {
+      "error": "database is locked",
+      "stage": "publishing",
+      "target_revision": 500071,
+      "indexed_revision": 500031,
+      "processed_articles": 1,
+      "embedded_chunks": 7,
+      "wall_seconds": 3321.328651703996,
+      "receipt": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028/receipt.json",
+      "receipt_sha256": "f96ce5e1b6fe9a4805598387f21aab190c16b51d017eba13ab890861d36556b8"
+    }
+  },
+  "progress_display_fix": {
+    "source": "crates/bib-base/src/semantic_service.rs",
+    "problem": "retry retained Failed phase during new staging/copying stages when a prior ready snapshot existed",
+    "change": "staging/copying report Indexing; idle planning preserves Ready",
+    "tests_passed": 1,
+    "log": "target/bib-p4-validation/p4-binding-copy-progress-tests.log",
+    "not_in_running_sealed_worker": true,
+    "source_sha256": {
+      "crates/bib-base/src/semantic_service.rs": "b82c17b9cdc14d5b6ce5944498ed36b42d5cb2a5fb3252eb644b60edc8c07517",
+      "crates/bib-base/src/semantic_service/tests.rs": "ea2c069d6266895dbd0c7780fba1e2ab1791145d204f67c6f95d06ca3c6de2a3"
+    }
+  },
+  "unpublished_delete_diagnostic": {
+    "status": "failed_reproduced_busy",
+    "directory": "target/bib-p4-validation/semantic-binding-profile-20261028",
+    "generation": "binding-probe-90c1648c-7f5f-495d-a223-d8a71c3962fd",
+    "original_failure_fixture_unchanged": true,
+    "warning": "This intentionally deletes only an unreferenced probe-created generation in the owned diagnostic copy",
+    "log": "target/bib-p4-validation/semantic-binding-profile-20261028/turso-delete-700000.jsonl",
+    "build_log": "target/bib-p4-validation/semantic-binding-delete-probe-build.log",
+    "elapsed_ms": 159182.704104,
+    "error": "Busy: database is locked",
+    "scope": "One DELETE of an unreferenced probe generation with 700000 cascading binding rows inside an immediate transaction; original fixture and its published head unchanged",
+    "log_sha256": "e246fb3dbe9621fe80f865fdd20fcb71f903a387b689c7f7efd66cf384871944",
+    "next_action": "Separate atomic publication from bounded retired-generation and vector cleanup; preserve failed-batch reuse and published-head protection"
+  },
+  "later_diagnostic_source_sha256": {
+    "crates/bib-base/examples/semantic_binding_probe.rs": "5771fd5d3cb31667a5224035306e44f098fba3575176b621f546303ead70d179"
+  },
+  "latest_full_100000_qualification": "docs/benchmarks/literature-search-p4-bounded-cleanup-linux.json",
+  "latest_full_100000_status": "functional_run_passed;see_latest_receipt_for_scope_and_latency_limitations"
+}

@@ -38,7 +38,10 @@ pub mod vector_map;
 pub use error::{Error, Result};
 pub use input::EmbeddingInput;
 pub use output::EmbeddingOutput;
-pub use provider::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OllamaEmbedder, TextEmbedder};
+pub use provider::{
+    Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM, OllamaEmbedder, OllamaInferenceOptions,
+    PinnedOllamaEmbedder, TextEmbedder,
+};
 pub use service::remote_embedding_service::{
     DEFAULT_BASE_URL, DEFAULT_BATCH_SIZE, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS, EmbeddingConfig,
     RemoteEmbeddingService,

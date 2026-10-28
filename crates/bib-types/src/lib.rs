@@ -26,8 +26,8 @@ pub use query::{BoolOp, StructuredSearch, YearRange};
 pub use search::{
     SaveSearchInput, SavedSearch, SearchEvidence, SearchEvidencePage, SearchEvidenceRequest,
     SearchExpr, SearchFacetValue, SearchFacets, SearchField, SearchFilters, SearchFulltextStatus,
-    SearchHighlight, SearchIndexStatus, SearchMode, SearchPageV2, SearchRequestV2, SearchScope,
-    SearchSort,
+    SearchHighlight, SearchIndexStatus, SearchMode, SearchPageV2, SearchRecall, SearchRequestV2,
+    SearchRetrieval, SearchScope, SearchSort, SemanticSearchEvidence,
 };
 pub use types::{
     AddedBy, Annotation, AnnotationKind, AnnotationRect, AnnotationTextRange, AnnotationUpdate,

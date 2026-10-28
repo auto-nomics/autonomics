@@ -196,6 +196,22 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Semantic Zotero SDT sidecar. Attachment scope prevents preferred-file changes
+/// from reusing another PDF's paragraphs or annotation coordinates.
+pub fn structured_object_path(article_id: &str, attachment_key: Option<&str>) -> String {
+    match attachment_key {
+        Some(key) => format!(
+            "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.sdt.json",
+            encode_component(article_id),
+            encode_component(key),
+        ),
+        None => format!(
+            "{VFS_PREFIX}/literature/{}/extracted/fulltext.sdt.json",
+            encode_component(article_id),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,21 +283,5 @@ mod tests {
         // captured by design (dedup keeps it harmless); the bare marker
         // followed by a space yields nothing.
         assert_eq!(refs, ["aaa.jpg", "bbb.png", "ccc.jpg", "ddd.jpg"]);
-    }
-}
-
-/// Semantic Zotero SDT sidecar. Attachment scope prevents preferred-file changes
-/// from reusing another PDF's paragraphs or annotation coordinates.
-pub fn structured_object_path(article_id: &str, attachment_key: Option<&str>) -> String {
-    match attachment_key {
-        Some(key) => format!(
-            "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.sdt.json",
-            encode_component(article_id),
-            encode_component(key),
-        ),
-        None => format!(
-            "{VFS_PREFIX}/literature/{}/extracted/fulltext.sdt.json",
-            encode_component(article_id),
-        ),
     }
 }

@@ -1,0 +1,763 @@
+{
+  "schema": "bib-p4-relevance-qualification-v1",
+  "recorded_at_utc": "2026-10-27T20:52:57.532944+00:00",
+  "basis_commit": "222a37d18f5f199b32288a7b409a21c526be2b40",
+  "stage_status": "P4 in progress; no stage commit",
+  "production_hybrid": false,
+  "dataset": {
+    "schema": "bib-relevance-dataset-v1",
+    "dataset": "BEIR SciFact",
+    "language": "en",
+    "corpus_revision": "b3b5335604bf5ee3c4447671af975ea25143d4f5",
+    "qrels_revision": "2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029",
+    "declared_license": "cc-by-sa-4.0 (Hugging Face dataset card)",
+    "dataset_card": "https://huggingface.co/datasets/BeIR/scifact",
+    "original_dataset": "https://github.com/allenai/scifact",
+    "splits": {
+      "train": 809,
+      "test": 300
+    },
+    "tuning_split": "train",
+    "acceptance_split": "test",
+    "limitations": [
+      "scientific claim retrieval, not known-ID, GUI, or full-text evidence evaluation",
+      "English only; no Chinese relevance judgments implied",
+      "published qrels are incomplete judgments, not exhaustive relevance",
+      "official split independence does not imply absence from model pretraining"
+    ],
+    "sources": {
+      "corpus.parquet": {
+        "url": "https://huggingface.co/datasets/BeIR/scifact/resolve/b3b5335604bf5ee3c4447671af975ea25143d4f5/corpus/corpus-00000-of-00001.parquet",
+        "sha256": "243324b35f03d82bd6d98a5f575966876e86cad7ce16e5333a35b1b793dc4f45"
+      },
+      "queries.parquet": {
+        "url": "https://huggingface.co/datasets/BeIR/scifact/resolve/b3b5335604bf5ee3c4447671af975ea25143d4f5/queries/queries-00000-of-00001.parquet",
+        "sha256": "1c37956c5dc8b810b60302323c24d1a9e79e26411ba8f5ad9d0888642e2a9034"
+      },
+      "train.tsv": {
+        "url": "https://huggingface.co/datasets/BeIR/scifact-qrels/resolve/2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029/train.tsv",
+        "sha256": "a53f2114831916c096b6c37d9e54da68cef4efdcdbd5ed46533601af972acf1d"
+      },
+      "test.tsv": {
+        "url": "https://huggingface.co/datasets/BeIR/scifact-qrels/resolve/2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029/test.tsv",
+        "sha256": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c"
+      }
+    },
+    "generated_sha256": {
+      "corpus.jsonl": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries.jsonl": "9ebc8e626e81c3089db4c6eef0f7caefa7b39b97b169fc0cc717c9aaaa473ef8",
+      "queries-train.jsonl": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "queries-test.jsonl": "4816c9c7ab1e5600e77f44f9ddc99910791231808dfa118620f714d7c5d2b861",
+      "qrels/train.tsv": "a53f2114831916c096b6c37d9e54da68cef4efdcdbd5ed46533601af972acf1d",
+      "qrels/test.tsv": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c"
+    },
+    "conversion": {
+      "pyarrow_version": "26.0.0",
+      "json": "UTF-8, sorted keys, source row order"
+    }
+  },
+  "train": {
+    "lexical-and-train": {
+      "mean": {
+        "ndcg_at_10": 0.024721878862793572,
+        "mrr_at_10": 0.024721878862793572,
+        "recall_at_50": 0.024721878862793572,
+        "recall_at_100": 0.024721878862793572,
+        "zero_hits": 0.9740420271940667
+      },
+      "queries": 809,
+      "run_sha256": "bced29a86cf3e8da94a845ecbb7763bda9858030c2ff98fc32fe79b9effa1552"
+    },
+    "lexical-or-train": {
+      "mean": {
+        "ndcg_at_10": 0.5839258053567938,
+        "mrr_at_10": 0.5550527792493182,
+        "recall_at_50": 0.8282035434693037,
+        "recall_at_100": 0.8753605274000824,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69"
+    },
+    "qwen-whole-train": {
+      "mean": {
+        "ndcg_at_10": 0.7423649430075517,
+        "mrr_at_10": 0.7150651401887496,
+        "recall_at_50": 0.9328388957560775,
+        "recall_at_100": 0.9616810877626699,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629"
+    },
+    "qwen-chunk2000-train": {
+      "mean": {
+        "ndcg_at_10": 0.7458775211811574,
+        "mrr_at_10": 0.7200884886298978,
+        "recall_at_50": 0.9303667078697981,
+        "recall_at_100": 0.9616810877626699,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "9f455d0199c88770144f274270498e6fd54436e495d82867d8920c4f397b6e45",
+      "baseline": {
+        "sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629",
+        "mean": {
+          "ndcg_at_10": 0.7423649430075517,
+          "mrr_at_10": 0.7150651401887496,
+          "recall_at_50": 0.9328388957560775,
+          "recall_at_100": 0.9616810877626699,
+          "zero_hits": 0
+        }
+      },
+      "comparison": {
+        "ndcg_at_10_absolute_delta": 0.0035125781736056274,
+        "ndcg_at_10_relative_delta": 0.00473160567008334,
+        "paired_bootstrap_95_percent_interval": [
+          -0.0009434360505960297,
+          0.008458231664757888
+        ],
+        "improved_queries": 24,
+        "regressed_queries": 23,
+        "unchanged_queries": 762,
+        "bootstrap_seed": 20261028,
+        "bootstrap_samples": 2000
+      }
+    },
+    "qwen-whole-rrf-train": {
+      "mean": {
+        "ndcg_at_10": 0.744480215661366,
+        "mrr_at_10": 0.715234367335727,
+        "recall_at_50": 0.9433456942727647,
+        "recall_at_100": 0.9647713226205191,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "52ddea487d1a4eff9dfc1cc6588448d903fca7147b6f5a8d395bde32e4fb1c83",
+      "baseline": {
+        "sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69",
+        "mean": {
+          "ndcg_at_10": 0.5839258053567938,
+          "mrr_at_10": 0.5550527792493182,
+          "recall_at_50": 0.8282035434693037,
+          "recall_at_100": 0.8753605274000824,
+          "zero_hits": 0
+        }
+      },
+      "comparison": {
+        "ndcg_at_10_absolute_delta": 0.16055441030457218,
+        "ndcg_at_10_relative_delta": 0.274956867519272,
+        "paired_bootstrap_95_percent_interval": [
+          0.13798118639294737,
+          0.18341914641881257
+        ],
+        "improved_queries": 298,
+        "regressed_queries": 63,
+        "unchanged_queries": 448,
+        "bootstrap_seed": 20261028,
+        "bootstrap_samples": 2000
+      }
+    },
+    "bge-whole-8192-train": {
+      "mean": {
+        "ndcg_at_10": 0.7119576759429685,
+        "mrr_at_10": 0.6831783310769713,
+        "recall_at_50": 0.9159456118665018,
+        "recall_at_100": 0.9414915533580552,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "936cd48a589fa7a4ad8db94c19de511eef5f55caf6047c1e8f140452ed585356",
+      "baseline": {
+        "sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629",
+        "mean": {
+          "ndcg_at_10": 0.7423649430075517,
+          "mrr_at_10": 0.7150651401887496,
+          "recall_at_50": 0.9328388957560775,
+          "recall_at_100": 0.9616810877626699,
+          "zero_hits": 0
+        }
+      },
+      "comparison": {
+        "ndcg_at_10_absolute_delta": -0.03040726706458324,
+        "ndcg_at_10_relative_delta": -0.0409599986515984,
+        "paired_bootstrap_95_percent_interval": [
+          -0.049542856384291845,
+          -0.012117910868330488
+        ],
+        "improved_queries": 115,
+        "regressed_queries": 173,
+        "unchanged_queries": 521,
+        "bootstrap_seed": 20261028,
+        "bootstrap_samples": 2000
+      }
+    },
+    "bge-whole-rrf-train": {
+      "mean": {
+        "ndcg_at_10": 0.7191082914519269,
+        "mrr_at_10": 0.6887642984676359,
+        "recall_at_50": 0.9235681911825299,
+        "recall_at_100": 0.9499381953028431,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "0fd963c78e480ea40b2e5d40860afe4613a4ce4ef8a88fb256763ca8590450b4",
+      "baseline": {
+        "sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69",
+        "mean": {
+          "ndcg_at_10": 0.5839258053567938,
+          "mrr_at_10": 0.5550527792493182,
+          "recall_at_50": 0.8282035434693037,
+          "recall_at_100": 0.8753605274000824,
+          "zero_hits": 0
+        }
+      },
+      "comparison": {
+        "ndcg_at_10_absolute_delta": 0.13518248609513311,
+        "ndcg_at_10_relative_delta": 0.2315062716101973,
+        "paired_bootstrap_95_percent_interval": [
+          0.1138077269314386,
+          0.15715380346334548
+        ],
+        "improved_queries": 276,
+        "regressed_queries": 82,
+        "unchanged_queries": 451,
+        "bootstrap_seed": 20261028,
+        "bootstrap_samples": 2000
+      }
+    },
+    "qwen-rrf-rerank20-train": {
+      "mean": {
+        "ndcg_at_10": 0.7423649430075517,
+        "mrr_at_10": 0.7150651401887496,
+        "recall_at_50": 0.9433456942727647,
+        "recall_at_100": 0.9647713226205191,
+        "zero_hits": 0
+      },
+      "queries": 809,
+      "run_sha256": "cdd14167f7a31de9a873b4f577abdc2b53c8e27b0269c680f53e50862f6d1e70",
+      "baseline": {
+        "sha256": "52ddea487d1a4eff9dfc1cc6588448d903fca7147b6f5a8d395bde32e4fb1c83",
+        "mean": {
+          "ndcg_at_10": 0.744480215661366,
+          "mrr_at_10": 0.715234367335727,
+          "recall_at_50": 0.9433456942727647,
+          "recall_at_100": 0.9647713226205191,
+          "zero_hits": 0
+        }
+      },
+      "comparison": {
+        "ndcg_at_10_absolute_delta": -0.002115272653814228,
+        "ndcg_at_10_relative_delta": -0.0028412745017476464,
+        "paired_bootstrap_95_percent_interval": [
+          -0.008802266263513702,
+          0.004589576741684643
+        ],
+        "improved_queries": 58,
+        "regressed_queries": 85,
+        "unchanged_queries": 666,
+        "bootstrap_seed": 20261028,
+        "bootstrap_samples": 2000
+      }
+    }
+  },
+  "test": {
+    "mean": {
+      "ndcg_at_10": 0.7126324543211622,
+      "mrr_at_10": 0.6732010582010582,
+      "recall_at_50": 0.93,
+      "recall_at_100": 0.95,
+      "zero_hits": 0
+    },
+    "schema": "bib-relevance-v1",
+    "split": "test",
+    "queries": 300,
+    "corpus_documents": 5183,
+    "run_sha256": "93cd575bb635189f167aa06b1dc831bb27828245002fe59f665b64d83097ac38",
+    "dataset_sha256": {
+      "corpus.jsonl": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries.jsonl": "9ebc8e626e81c3089db4c6eef0f7caefa7b39b97b169fc0cc717c9aaaa473ef8",
+      "qrels/train.tsv": "a53f2114831916c096b6c37d9e54da68cef4efdcdbd5ed46533601af972acf1d",
+      "qrels/test.tsv": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c"
+    },
+    "relevance_scope": "relative to published qrels; unjudged documents count as nonrelevant",
+    "gain": "linear qrels grade (trec_eval ndcg_cut)",
+    "ties": "explicit run order; equal numeric scores are not reordered",
+    "baseline": {
+      "sha256": "86908589197f9a49af64a4d049f21825b4a9627fe338171017269fc68251bca1",
+      "mean": {
+        "ndcg_at_10": 0.5687314513019794,
+        "mrr_at_10": 0.5420224867724868,
+        "recall_at_50": 0.8233888888888888,
+        "recall_at_100": 0.8658888888888889,
+        "zero_hits": 0
+      }
+    },
+    "comparison": {
+      "ndcg_at_10_absolute_delta": 0.1439010030191827,
+      "ndcg_at_10_relative_delta": 0.253021004359359,
+      "paired_bootstrap_95_percent_interval": [
+        0.10794228965569597,
+        0.18087856539794075
+      ],
+      "improved_queries": 110,
+      "regressed_queries": 33,
+      "unchanged_queries": 157,
+      "bootstrap_seed": 20261028,
+      "bootstrap_samples": 2000
+    }
+  },
+  "test_dense": {
+    "mean": {
+      "ndcg_at_10": 0.7026171254770244,
+      "mrr_at_10": 0.6633267195767196,
+      "recall_at_50": 0.9133333333333333,
+      "recall_at_100": 0.9466666666666667,
+      "zero_hits": 0
+    },
+    "queries": 300,
+    "run_sha256": "59d16550b96fd7da6ec9dde52ce5f1a321f61c254264d114d958cd8704b1e1be"
+  },
+  "frozen_candidate": {
+    "path": "docs/benchmarks/literature-search-p4-frozen-candidate.json",
+    "sha256": "4001f33ce80597636dac79aab48e5f60e76f451cd6d171aa285149bc3a7bc9ca",
+    "parameters": {
+      "schema": "bib-rrf-experiment-v1",
+      "selected_on": "train",
+      "selection_metric": "ndcg_at_10",
+      "depth": 100,
+      "dense_weight": 4,
+      "rrf_constant": 10,
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "tuning_qrels_sha256": "a53f2114831916c096b6c37d9e54da68cef4efdcdbd5ed46533601af972acf1d",
+      "tuning_lexical_sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69",
+      "tuning_dense_sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629",
+      "grid": [
+        {
+          "dense_weight": 0.25,
+          "rrf_constant": 10,
+          "mean": {
+            "ndcg_at_10": 0.6202449177451715,
+            "mrr_at_10": 0.5893401612808288,
+            "recall_at_50": 0.8939019365471775,
+            "recall_at_100": 0.9406674907292955,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 0.5,
+          "rrf_constant": 10,
+          "mean": {
+            "ndcg_at_10": 0.6560331431280588,
+            "mrr_at_10": 0.6219857947299233,
+            "recall_at_50": 0.9264524103831892,
+            "recall_at_100": 0.9487021013597033,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 1,
+          "rrf_constant": 10,
+          "mean": {
+            "ndcg_at_10": 0.7043812243458115,
+            "mrr_at_10": 0.6656017619243825,
+            "recall_at_50": 0.9338689740420272,
+            "recall_at_100": 0.9612690564482901,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 2,
+          "rrf_constant": 10,
+          "mean": {
+            "ndcg_at_10": 0.7324215033412628,
+            "mrr_at_10": 0.6984818608118979,
+            "recall_at_50": 0.9412855377008653,
+            "recall_at_100": 0.9668314791924186,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 4,
+          "rrf_constant": 10,
+          "mean": {
+            "ndcg_at_10": 0.744480215661366,
+            "mrr_at_10": 0.715234367335727,
+            "recall_at_50": 0.9433456942727647,
+            "recall_at_100": 0.9647713226205191,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 0.25,
+          "rrf_constant": 30,
+          "mean": {
+            "ndcg_at_10": 0.6340875427204554,
+            "mrr_at_10": 0.6048094845684463,
+            "recall_at_50": 0.8636176349402555,
+            "recall_at_100": 0.9044087350638649,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 0.5,
+          "rrf_constant": 30,
+          "mean": {
+            "ndcg_at_10": 0.6579723416568559,
+            "mrr_at_10": 0.6247709302097436,
+            "recall_at_50": 0.9062628759785744,
+            "recall_at_100": 0.9456118665018541,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 1,
+          "rrf_constant": 30,
+          "mean": {
+            "ndcg_at_10": 0.6932481528401305,
+            "mrr_at_10": 0.6559793591932035,
+            "recall_at_50": 0.9375772558714462,
+            "recall_at_100": 0.9612690564482901,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 2,
+          "rrf_constant": 30,
+          "mean": {
+            "ndcg_at_10": 0.720110206875219,
+            "mrr_at_10": 0.6840897051033021,
+            "recall_at_50": 0.9437577255871447,
+            "recall_at_100": 0.9660074165636588,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 4,
+          "rrf_constant": 30,
+          "mean": {
+            "ndcg_at_10": 0.7336930595096208,
+            "mrr_at_10": 0.700124590421253,
+            "recall_at_50": 0.9433456942727647,
+            "recall_at_100": 0.9616810877626699,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 0.25,
+          "rrf_constant": 60,
+          "mean": {
+            "ndcg_at_10": 0.640665188240666,
+            "mrr_at_10": 0.6089969980575667,
+            "recall_at_50": 0.8648537288833952,
+            "recall_at_100": 0.8753605274000824,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 0.5,
+          "rrf_constant": 60,
+          "mean": {
+            "ndcg_at_10": 0.6648979049632778,
+            "mrr_at_10": 0.6287646908784115,
+            "recall_at_50": 0.8710341985990935,
+            "recall_at_100": 0.9406674907292955,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 1,
+          "rrf_constant": 60,
+          "mean": {
+            "ndcg_at_10": 0.6891264023044001,
+            "mrr_at_10": 0.6521219612690564,
+            "recall_at_50": 0.9363411619283065,
+            "recall_at_100": 0.9612690564482901,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 2,
+          "rrf_constant": 60,
+          "mean": {
+            "ndcg_at_10": 0.7138307693245199,
+            "mrr_at_10": 0.6789697255086624,
+            "recall_at_50": 0.9449938195302843,
+            "recall_at_100": 0.9647713226205191,
+            "zero_hits": 0
+          }
+        },
+        {
+          "dense_weight": 4,
+          "rrf_constant": 60,
+          "mean": {
+            "ndcg_at_10": 0.7235484544316212,
+            "mrr_at_10": 0.6871485470991033,
+            "recall_at_50": 0.9433456942727647,
+            "recall_at_100": 0.9616810877626699,
+            "zero_hits": 0
+          }
+        }
+      ],
+      "production_hybrid": false
+    }
+  },
+  "dense_run_receipts": {
+    "qwen-whole-train": {
+      "schema": "bib-dense-diagnostic-v1",
+      "production_hybrid": false,
+      "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "model_alias": "bib-p4-qwen3-embedding-ac6da0dfba84:latest",
+      "dimensions": 1024,
+      "documents": 5183,
+      "chunks": 5183,
+      "queries": 809,
+      "chunk_codepoints": 0,
+      "overlap_codepoints": 0,
+      "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+      "truncate": false,
+      "aggregation": "max chunk cosine per article",
+      "embedding_wall_seconds": 222.61936113100091,
+      "cosine_p50_ms": 0.39352400199277326,
+      "cosine_p95_ms": 0.4374309995910152,
+      "matrix_bytes": 21229568,
+      "privacy": "public benchmark texts to loopback Ollama only; cache contains derived vectors",
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "run_sha256": "ac9b484f0ff7c2300aa910a1cc9ffdbfbd33c4fef2b09ecd1040e6337bcec629",
+      "numpy_version": "2.5.4",
+      "embedding_service_seconds": 220.88064718907845,
+      "new_embeddings": 5990,
+      "cached_embeddings": 2
+    },
+    "qwen-chunk2000-train": {
+      "schema": "bib-dense-diagnostic-v1",
+      "production_hybrid": false,
+      "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "model_alias": "bib-p4-qwen3-embedding-ac6da0dfba84:latest",
+      "dimensions": 1024,
+      "documents": 5183,
+      "chunks": 5748,
+      "queries": 809,
+      "chunk_codepoints": 2000,
+      "overlap_codepoints": 200,
+      "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+      "truncate": false,
+      "aggregation": "max chunk cosine per article",
+      "embedding_wall_seconds": 46.06617787100549,
+      "cosine_p50_ms": 0.45129299542168155,
+      "cosine_p95_ms": 0.5000607969122939,
+      "matrix_bytes": 23543808,
+      "privacy": "public benchmark texts to loopback Ollama only; cache contains derived vectors",
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "run_sha256": "9f455d0199c88770144f274270498e6fd54436e495d82867d8920c4f397b6e45",
+      "numpy_version": "2.5.4",
+      "embedding_service_seconds": 44.869040550074715,
+      "new_embeddings": 1100,
+      "cached_embeddings": 5457
+    },
+    "bge-whole-8192-train": {
+      "schema": "bib-dense-diagnostic-v1",
+      "production_hybrid": false,
+      "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+      "model_alias": "bib-p4-bge-m3-daec91ffb5dd:latest",
+      "dimensions": 1024,
+      "documents": 5183,
+      "chunks": 5183,
+      "queries": 809,
+      "chunk_codepoints": 0,
+      "overlap_codepoints": 0,
+      "query_instruction": "",
+      "truncate": false,
+      "inference_options": {
+        "num_ctx": 8192,
+        "num_batch": 8192
+      },
+      "aggregation": "max chunk cosine per article",
+      "embedding_wall_seconds": 89.25568494100298,
+      "cosine_p50_ms": 0.36594799894373864,
+      "cosine_p95_ms": 0.38855799648445094,
+      "matrix_bytes": 21229568,
+      "privacy": "public benchmark texts to loopback Ollama only; cache contains derived vectors",
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "run_sha256": "936cd48a589fa7a4ad8db94c19de511eef5f55caf6047c1e8f140452ed585356",
+      "numpy_version": "2.5.4",
+      "embedding_service_seconds": 87.1330490270193,
+      "new_embeddings": 5990,
+      "cached_embeddings": 2
+    },
+    "qwen-rrf-rerank20-train": {
+      "schema": "bib-dense-diagnostic-v1",
+      "production_hybrid": false,
+      "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "model_alias": "bib-p4-qwen3-embedding-ac6da0dfba84:latest",
+      "dimensions": 1024,
+      "documents": 5183,
+      "chunks": 5183,
+      "queries": 809,
+      "chunk_codepoints": 0,
+      "overlap_codepoints": 0,
+      "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+      "truncate": false,
+      "inference_options": {},
+      "aggregation": "max chunk cosine per article",
+      "rerank_input_sha256": "52ddea487d1a4eff9dfc1cc6588448d903fca7147b6f5a8d395bde32e4fb1c83",
+      "rerank_depth": 20,
+      "rerank_method": "same bi-encoder exact cosine; not a cross-encoder",
+      "run_score": "reciprocal final rank (shortlist cosine order, tail unchanged)",
+      "embedding_wall_seconds": 0.06424541999876965,
+      "cosine_p50_ms": 0.04226099554216489,
+      "cosine_p95_ms": 0.04689840134233235,
+      "matrix_bytes": 21229568,
+      "privacy": "public benchmark texts to loopback Ollama only; cache contains derived vectors",
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "run_sha256": "cdd14167f7a31de9a873b4f577abdc2b53c8e27b0269c680f53e50862f6d1e70",
+      "numpy_version": "2.5.4",
+      "embedding_service_seconds": 0,
+      "new_embeddings": 0,
+      "cached_embeddings": 5992
+    },
+    "qwen-whole-test": {
+      "schema": "bib-dense-diagnostic-v1",
+      "production_hybrid": false,
+      "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+      "model_alias": "bib-p4-qwen3-embedding-ac6da0dfba84:latest",
+      "dimensions": 1024,
+      "documents": 5183,
+      "chunks": 5183,
+      "queries": 300,
+      "chunk_codepoints": 0,
+      "overlap_codepoints": 0,
+      "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+      "truncate": false,
+      "inference_options": {},
+      "aggregation": "max chunk cosine per article",
+      "rerank_input_sha256": null,
+      "rerank_depth": null,
+      "rerank_method": null,
+      "run_score": "cosine",
+      "embedding_wall_seconds": 4.012921264999022,
+      "cosine_p50_ms": 0.37545300074270926,
+      "cosine_p95_ms": 0.5718463500670623,
+      "matrix_bytes": 21229568,
+      "privacy": "public benchmark texts to loopback Ollama only; cache contains derived vectors",
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "queries_sha256": "4816c9c7ab1e5600e77f44f9ddc99910791231808dfa118620f714d7c5d2b861",
+      "run_sha256": "59d16550b96fd7da6ec9dde52ce5f1a321f61c254264d114d958cd8704b1e1be",
+      "numpy_version": "2.5.4",
+      "embedding_service_seconds": 3.8526093299878994,
+      "new_embeddings": 298,
+      "cached_embeddings": 5185
+    }
+  },
+  "lexical_run_receipts": {
+    "and_train": {
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "documents": 5183,
+      "index_ms": 2481.922525,
+      "operator": "and",
+      "output_sha256": "bced29a86cf3e8da94a845ecbb7763bda9858030c2ff98fc32fe79b9effa1552",
+      "page_size": 100,
+      "queries": 809,
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "query_p50_ms": 15.808434,
+      "query_p95_ms": 29.300946,
+      "release": true,
+      "schema": "bib-lexical-relevance-v1"
+    },
+    "or_train": {
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "documents": 5183,
+      "index_ms": 2438.030501,
+      "operator": "or",
+      "output_sha256": "d5aa5cc4cde878a5b280bfea5964a53081c67bbf6d5adc6204167e64eca69a69",
+      "page_size": 100,
+      "queries": 809,
+      "queries_sha256": "35ae1832729e9939c5eb7f6d2819ca752a4cad43489d531723d6612ac42f98ca",
+      "query_p50_ms": 23.650156,
+      "query_p95_ms": 44.739760000000004,
+      "release": true,
+      "schema": "bib-lexical-relevance-v1"
+    },
+    "or_test": {
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "documents": 5183,
+      "index_ms": 3525.374126,
+      "operator": "or",
+      "output_sha256": "86908589197f9a49af64a4d049f21825b4a9627fe338171017269fc68251bca1",
+      "page_size": 100,
+      "queries": 300,
+      "queries_sha256": "4816c9c7ab1e5600e77f44f9ddc99910791231808dfa118620f714d7c5d2b861",
+      "query_p50_ms": 26.984517,
+      "query_p95_ms": 56.759423000000005,
+      "release": true,
+      "schema": "bib-lexical-relevance-v1"
+    }
+  },
+  "bge_distribution": {
+    "official_manifest_sha256": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+    "gguf_sha256": "daec91ffb5dd0c27411bd71f29932917c49cf529a641d0168496c3a501e3062c",
+    "gguf_bytes": 1157671200,
+    "license_sha256": "a406579cd136771c705c521db86ca7d60a6f3de7c9b5460e6193a2df27861bde",
+    "declared_license": "MIT",
+    "imported_manifest_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+    "recovery": "Official registry download, verified blob upload, isolated model create; original source tags and service network checks preserved",
+    "failed_default_run": "413 on long abstract; no metrics or partial-query score calculated",
+    "successful_options": {
+      "num_ctx": 8192,
+      "num_batch": 8192
+    }
+  },
+  "verification": {
+    "text_embedding_tests": {
+      "passed": 34,
+      "failed": 0,
+      "ignored": 0
+    },
+    "python_metrics_rrf_tests": {
+      "passed": 8,
+      "failed": 0
+    },
+    "clippy": [
+      "cargo clippy -p text-embedding --all-targets --locked --offline -- -D warnings",
+      "cargo clippy -p bib-base --example search_relevance --locked --offline -- -D warnings"
+    ],
+    "real_pinned_probe": {
+      "qwen": {
+        "vectors": 2,
+        "dimensions": 1024,
+        "cosine": 0.8137785792350769
+      },
+      "bge": {
+        "vectors": 2,
+        "dimensions": 1024,
+        "cosine": 0.8570138216018677
+      },
+      "relevance_evaluation": false
+    }
+  },
+  "execution_notes": {
+    "lexical": "production actor, projection, Tantivy, aggregation and V2 output; release",
+    "dense": "actual installed Ollama models, exact cosine diagnostics in numpy, OPENBLAS_NUM_THREADS=2",
+    "training_dense_script_sha256": "ea236cdf0e107957b74580abb5c4e578bd35b6f79b8f14f34c698a37dc739c7d",
+    "acceptance_source_sha256": {
+      "crates/bib-base/examples/search_relevance.rs": "633dd5ab79b750e0c645a60759af7e7ea6d1d3b12762effe17d217b235649545",
+      "scripts/benchmark_bib_embeddings.py": "2afc1d9546fc2c732943305a8bf712e81cbbbb6115b705da6d5f2b260664eba5",
+      "scripts/evaluate_bib_relevance.py": "af4d7667227a989748c3b340400d914a8db0a8706ec51f7b8f7ab0b17a27be5b",
+      "scripts/fuse_bib_relevance.py": "28ee5a50f3aff45175b280023a6722540b3dbee11a62e9591da93e0af739cfce"
+    },
+    "script_evolution": "Context/batch options and optional shortlist rerank added after initial Qwen train runs; default no-options whole-document inference unchanged. Acceptance uses frozen source hashes.",
+    "timings": "observed experiments; cache and inference settings differ, no controlled model-speed claim",
+    "resource_fingerprint_saved": false
+  },
+  "limitations": [
+    "English scientific-claim retrieval only; Chinese domain judgments pending",
+    "Public qrels are incomplete; recall is judgment-relative",
+    "No production semantic index, scope/Boolean/ID preservation, GUI, end-to-end latency, ANN, recovery or platform qualification implied",
+    "No cross-encoder reranker evaluated; same-bi-encoder top20 rerank did not improve train",
+    "Held-out set now evaluated once with frozen candidate; future parameter selection must not reuse it as independent acceptance"
+  ]
+}

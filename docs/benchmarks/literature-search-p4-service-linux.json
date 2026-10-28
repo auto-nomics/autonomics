@@ -1,0 +1,205 @@
+{
+  "schema": "bib-p4-service-qualification-v1",
+  "date": "2026-10-28",
+  "platform": "Linux",
+  "stage": "P4 work in progress; no stage commit",
+  "scope": "Persistent vector layer, BibBase background configuration/indexing, query preparation and configuration HTTP API; production hybrid and GUI not integrated",
+  "validation": [
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base --lib --locked --offline",
+      "passed": 178,
+      "ignored": 2,
+      "failed": 0
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base --test search_v2 --test search_workflow -p api-server --test api --locked --offline",
+      "targets": {
+        "api": {
+          "passed": 23,
+          "ignored": 1
+        },
+        "search_v2": {
+          "passed": 12,
+          "ignored": 0
+        },
+        "search_workflow": {
+          "passed": 12,
+          "ignored": 0
+        }
+      },
+      "failed": 0
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base -p api-server --lib --locked --offline -- -D warnings",
+      "passed": true
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base --example semantic_service_probe --example semantic_index_probe --locked --offline -- -D warnings",
+      "passed": true
+    }
+  ],
+  "real_model_probe": {
+    "content_replacement": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "20b089d7-e710-48dd-a964-875742d1b47c",
+      "generation": "e8789c8d-a189-4a97-b766-bcb1a7ed2ac0",
+      "indexed_chunks": 32,
+      "indexed_revision": 35,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "deletion": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "20b089d7-e710-48dd-a964-875742d1b47c",
+      "generation": "4ef09ec2-4c22-4ee6-ad2c-fbfd53fc88d1",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "disable_persisted": true,
+    "initial": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "20b089d7-e710-48dd-a964-875742d1b47c",
+      "generation": "4e4fe597-bf2a-4305-9c18-47cbd428cf14",
+      "indexed_chunks": 32,
+      "indexed_revision": 33,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "initial_ms": 3490.6807940000003,
+    "lexical_during_enable_ms": 13.10549,
+    "metadata_update": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "20b089d7-e710-48dd-a964-875742d1b47c",
+      "generation": "775a614a-76ae-4897-b3d8-e3261db352c4",
+      "indexed_chunks": 32,
+      "indexed_revision": 34,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "production_hybrid_search_integrated": false,
+    "relevance_evaluation": false,
+    "restart": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "20b089d7-e710-48dd-a964-875742d1b47c",
+      "generation": "4ef09ec2-4c22-4ee6-ad2c-fbfd53fc88d1",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "schema": "bib-semantic-service-probe-v1",
+    "vector_store_files": {
+      "library.db.semantic-v1": 4096,
+      "library.db.semantic-v1-tshm": 86016,
+      "library.db.semantic-v1-wal": 758112
+    },
+    "vector_store_total_bytes": 848224
+  },
+  "probe_command": "CARGO_BUILD_JOBS=2 cargo run -p bib-base --example semantic_service_probe --release --locked --offline -- CORPUS_JSONL FRESH_DIRECTORY qwen3-embedding:0.6b ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "d34afbe67d96f34627f63dcd094fd6627c046c814256a8bed8e90f3809a4680b",
+    "crates/bib-base/src/semantic_index/tests.rs": "9fc69502e43c7f2c2248a0b2f8fd117d5a58e6cd030b909aa3fbaba410103f68",
+    "crates/bib-base/src/semantic_service.rs": "2b82d275f5e30cc31a260e479c4961f22b88fd32b4cf459e8870645396fef94a",
+    "crates/bib-base/src/semantic_service/tests.rs": "50b9715765957d18535f04ac74dc64cedd86ff6ca6c49c1145bcda0201635de6",
+    "crates/bib-base/src/bib_base.rs": "91110b2d5e4d114cc9b4060abf7661de42153e343247eb320a0375633c040e9f",
+    "crates/bib-base/src/actor.rs": "e549e781f0ac5341e663ea7b8e700fbe4282c07e891e428df46ce9a6351d40ff",
+    "crates/api-server/src/bib.rs": "6583be5c9da1288dc4a2e939bd24262d797f3f59db2d996c3bb6d9e5cb756f24",
+    "crates/api-server/tests/api.rs": "5391915558b540573d65fb22a13dec1b10e087b50dfe6a2f777f8d47ee5b9e20",
+    "crates/bib-base/examples/semantic_service_probe.rs": "6a177ce9be9e7f5202ef0f7e9767305bbd3d0b9509bc8c75b8b61d5261d6a950"
+  },
+  "limitations": [
+    "32 public SciFact documents in the real service lifecycle probe; deterministic providers in structural tests",
+    "Single local observation of startup and concurrent lexical request, not a latency benchmark or cold-cache claim",
+    "No Chinese relevance, GUI, ANN, 100k vector capacity, process-kill service recovery, full-text mapping or cross-platform acceptance implied",
+    "HTTP bearer protection follows the existing configured authentication policy; tests explicitly enable a token",
+    "Detailed per-batch progress and index repair/rebuild remain pending"
+  ]
+}

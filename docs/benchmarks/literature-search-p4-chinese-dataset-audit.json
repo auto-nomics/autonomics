@@ -1,0 +1,31 @@
+{
+  "schema": "bib-p4-chinese-dataset-audit-v1",
+  "date": "2026-10-28",
+  "tool": "hf CLI; pinned README downloads only",
+  "quality_score_computed": false,
+  "datasets": [
+    {
+      "id": "C-MTEB/CovidRetrieval",
+      "revision": "1271c7809071a13532e05f25fb53511ffce77117",
+      "source": "https://huggingface.co/datasets/C-MTEB/CovidRetrieval/blob/1271c7809071a13532e05f25fb53511ffce77117/README.md",
+      "info_sha256": "69ca9b1ade80a26d514c7066207b343a822254afce69f99a055a72fbe8a18078",
+      "card_sha256": "03e2ff18295c1ca8634ab1c159ec3fd776aa0d92898e71b024d3e1ab69f2f9b9",
+      "card_license_metadata": null,
+      "card_has_license_text": false,
+      "accepted_as_chinese_paper_retrieval_gate": false,
+      "reason": "Dataset viewer examples are COVID-related policy/news, not research-paper judgments"
+    },
+    {
+      "id": "C-MTEB/MedicalRetrieval",
+      "revision": "2039188fb5800a9803ba5048df7b76e6fb151fc6",
+      "source": "https://huggingface.co/datasets/C-MTEB/MedicalRetrieval/blob/2039188fb5800a9803ba5048df7b76e6fb151fc6/README.md",
+      "info_sha256": "515f6ffbd888e07d112c7b0862fea5c436560f9b76b5a8003e8fff08db87193b",
+      "card_sha256": "8dbffeeb930f7242ceaaf790e0624f0e35f552d86ec7679735ebd5a89af7ebb3",
+      "card_license_metadata": null,
+      "card_has_license_text": false,
+      "accepted_as_chinese_paper_retrieval_gate": false,
+      "reason": "Dataset viewer examples are medical QA/web answers"
+    }
+  ],
+  "conclusion": "These sources can motivate separately labeled transfer diagnostics after provenance review; they do not satisfy Chinese research-paper relevance acceptance. No gold judgments or language-quality scores are fabricated."
+}

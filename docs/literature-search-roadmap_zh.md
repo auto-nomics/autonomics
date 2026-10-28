@@ -1,8 +1,25 @@
 # 文献检索引擎与 GUI 优化实施方案
 
-日期：2026-10-28。本方案保留原始设计与阶段记录；P0–P3 的实现和本地验收已完成，最新状态以末尾执行记录与资格收据为准。跨平台、人工可访问性和真实库质量分别作为发布门槛，不能用本地测试替代。执行目标为按 P0–P5 自主实现，每阶段一个提交。
+P4 精确排序补充（2026-10-28）：借用 Top-K 和最多 4 线程的逐块扫描已验证，保持块内 f64 累加与并列规则。冻结 release 合成测量中，100k 篇/700k 块/1024 维宽范围排序 P95 约 629→340ms，中位数约 515→240ms，所比结果/评分逐位一致；窄范围存在波动，完整分布如实保留。这里只测排序，不能代替端到端性能或持续写入验收。最终源码索引/API、单 CPU 回退与严格 Clippy 已通过，先前并行版本另有 419 项回归。见 [精确排序资格](benchmarks/literature-search-p4-exact-rank-linux.json)及[交付核对](literature-search-delivery-audit_zh.md)。
+
+P5 原生验证补充（2026-10-28）：实际 Linux Tauri/WebKitGTK 的引文/被引、两种推荐范围、精确 ID 重新获取后导入、不可变快照及系统保存对话框导出、订阅检查/目标集合导入/编辑/暂停恢复/额度、切换工作区与显式取消、页面重载均通过，严格 Clippy 通过。来源使用独立本地 fixture，未将其当作公网来源或打包应用资格；最终阶段隔离和其余门槛仍待完成。见 [原生资格](benchmarks/literature-search-p5-native-linux.json)。
+
+当前执行（2026-10-28）：有界清理版本的独立构建/360 项后端及严格 Clippy、浏览器/模拟桥接、真实 Qwen 功能复核均通过。100k 篇/200k 附件/700k 块完整功能运行成功结束，含写入收敛、非首选附件原始字节与证据、删除/替换及旧游标失效，最终修订 500073、700k 块、无错误。共享主机宽查询热 P95 约 3.25 秒、四客户端约 9.04 秒；40 次写入是短突发，不能当作长期可用性验收。性能、最终原生/恢复与阶段隔离仍需收口，P4/P5 均未提交。见 [有界清理资格](benchmarks/literature-search-p4-bounded-cleanup-linux.json)。
+
+P5 当前增量：自动调度、持久额度等待、执行历史和 API 已实现；50 项后端专项及 4 项 HTTP 用例通过（含独立连接资源恢复）；严格 Clippy 通过，Crossref 兼容性修改前的合并工作树完整后端回归 461 项通过，0 失败、0 忽略（含 3 项文档用例）；阶段隔离资格仍需收口。订阅 GUI 已接入并通过浏览器/模拟桥接、标识核验、引文/发现回归、类型检查和 GUI 构建，见 [GUI 资格](benchmarks/literature-search-p5-subscriptions-gui-linux.json)。Crossref offset/游标兼容性与失效游标后台重放已验证，83 项专项及公开 Crossref 小范围请求通过；修改后的完整后端回归 468 项通过、0 失败、0 忽略，见 [来源资格](benchmarks/literature-search-p5-source-compat-linux.json)。真实 SIGKILL 接管、旧进程恢复后的请求隔离、关闭数据库家族备份恢复和跨进程额度等待验证均通过，见 [进程恢复资格](benchmarks/literature-search-p5-subscription-recovery-linux.json)。实际原生 GUI 已通过，见文首原生资格；其余来源范围及最终阶段隔离回归仍待完成，调度/API 见 [资格记录](benchmarks/literature-search-p5-scheduler-linux.json)。
+上一轮状态（2026-10-28）：P0–P3 已提交，P4/P5 均未提交。全量 NeuCLIRTech 中文独立评价已完成：395,927 篇、110 查询，冻结 Qwen 配置的 nDCG@20 为 0.446672，词法为 0.300555，相对提高 48.62%；18 查询退化，混合后端单次查询 P95 约 4.95 秒，不能作为普遍质量或性能承诺。详见 [中文质量收据](benchmarks/literature-search-p4-neuclir-hybrid-linux.json)。最新 100k 附件恢复运行已终止：200k 附件导入/验证完成，700k 块初次就绪约 873.9 秒，但后续验证报 `database is locked`，未通过完整容量验收，确切失败操作仍在定位。P4 分批复制版本的隔离后端 354 项通过；索引选择修正后的 27 项专项回归及严格 Clippy 通过。P5 引文探索、确认导入和不可变搜索快照已接入并分别测试；订阅已有独立持久规则、租约、页面原子存储与窗口规划，调度/API/GUI 尚未实现，见 [订阅设计](literature-search-p5-subscriptions-design_zh.md)。后文旧轮次记录保留历史语境，当前状态以文首记录为准。
+
+锁错误排查：独立副本中，原单条 SQL 复制 700k 绑定约 128.2 秒后复现相同 Busy 错误。现已改为每批 2,048 条、修订检查、续租和原子提交，并明确使用现有主键索引；Turso 默认给有界范围复制选择文章索引，会每批扫描整代。实际 700k 分批复制已完成，全部绑定内容 SHA-256 一致且旧发布头不变；调试构建耗时约 398.9 秒，期间存在其他构建/文件复制，不作生产性能或受控提速结论。100 篇端到端验证通过，100k 完整服务复测已终止：初始索引、宽/窄/四客户端测量和增量绑定复制完成，但持续写入后的发布阶段再次报 `database is locked`；初次 700k 块就绪约 1,531.9 秒，宽查询热 P95 约 1.58 秒，四客户端约 6.48 秒，均是共享主机观测且尚无完整成功收据。独立副本中，700k 绑定的未引用旧代级联删除也在约 159.2 秒后复现 Busy；真实发布阶段仍需细分定位，有界旧代/向量清理及该规模性能仍待处理，不能宣布容量通过。见 [故障与修复资格](benchmarks/literature-search-p4-binding-copy-linux.json)。
+
+日期：2026-10-28。P4 长任务继续运行，P5 先并行开发未接线的独立快照存储/导出原型；两阶段仍各自验收与提交。本方案保留原始设计与阶段记录；P0–P3 的实现和本地验收已完成，最新状态以末尾执行记录与资格收据为准。跨平台、人工可访问性和真实库质量分别作为发布门槛，不能用本地测试替代。执行目标为按 P0–P5 自主实现，每阶段一个提交。
+
+P4 正在实现：真实 Qwen/BGE-M3、分块、有限重排与冻结 RRF 的英文候选实验已完成；300 条独立 test 的 nDCG@10 相对生产词法 OR 提高 25.30%。该分数只涵盖诊断检索。另已接通持久增量向量、配置/后台服务、V2 查询/证据/导出及 GUI 主题检索、配置和规则恢复；主链路测试、32 篇真实探针、浏览器/模拟桥接与实际 Linux Qwen WebView 各有独立收据。重建/修复/暂停/恢复与 SIGKILL 接管已验证；完整容量/恢复与中文真实质量尚未完成，P4 尚未提交。见 [P4 评价与收据](benchmarks/literature-search-p4.md)、[实施细化](literature-search-p4-design_zh.md)。前半部能力表保留原始 P0–P2 审查状态，后续状态以本段、执行记录与资格收据为准。
 
 ## 1. 建议与产品目标
+
+资源阶段补充：已接入持久预算、占用显示、稳定等待及预算调整后的修复续算，真实 Qwen 验证 16 个已提交向量保留、仅补算 4 个，暂停状态也保留；长设置页固定标题和保存操作。当前 349 项全量后端/可选提取测试通过，严格 Clippy、实际 Linux 原生与隔离 GUI 构建通过，见 [资源记录](benchmarks/literature-search-p4-resource-limits-linux.json)。磁盘额度为协作检查，不是 OS 硬配额。多附件规模、持续写入、长时间批次和中文质量仍待完成，P4 保持未提交。
+
+最新执行补充：10k/100k 真实 HTTP 和浏览器容量、ext4 文件缓存建议清理后的启动观察、300 条英文词法排名回归，以及排除其他修改的 GUI 生产构建已有资格记录，见 [P4 新增验收](benchmarks/literature-search-p4.md#http浏览器与磁盘启动复核)。后续分批读取已将 100k 磁盘配置至就绪单次约 16.1→5.94 秒、进程至首结果约 20.5→10.6 秒；热 HTTP P95 仍约 415ms，峰值 RSS 增加约 31MiB，见 [启动对照](benchmarks/literature-search-p4-startup-linux.json)。真实 BGE 长摘要及 Qwen/Linux 原生高级配置亦已验证，不能代替大规模全文或质量验收。人工判断候选池与导出工具已完成，但没有真实中文等级。P4 仍在进行，P5 排期不变；最新工作依赖见 [下一阶段计划](literature-search-next-plan_zh.md)。
 
 把“顶级检索”定义为四项可验证的能力：**找得准、覆盖全、知道为什么命中、点一下到达原文**。产品应同时服务三类任务：
 
@@ -344,3 +361,17 @@ P4 比较多语言 embedding、段落分块和有限候选重排；记录模型/
 - P3 本地功能与阶段验收已完成：PubMed/OpenAlex/arXiv/Crossref/S2 的能力规划、逐源会话、分页/取消/预算、保守归并、持久化来源、幂等导入与发现 GUI 均有证据。完整后端/SDK 回归 319 项通过；原先忽略的 3 项 Zotero 提取/API 用例在满足环境条件后另行通过，原生传输 3 项通过。五源 SDK 所有 target 严格 Clippy 通过；后端库、来源 HTTP target 与原生 example 严格检查沿用本轮资格记录。浏览器/模拟桥接验证 1001 个已取得候选的分页、End 键导航、虚拟化与过期快照拒绝；库内搜索/阅读回归通过。独立暂存源码构建及其 GUI/实际 Linux Tauri 流程通过，前端产物随 P3 提交。完整范围见 [阶段收口记录](benchmarks/literature-search-p3-stage-linux.json)。真实库质量、跨平台和人工可访问性仍为既定发布门槛；未宣称线上上游或生产发布全部验收。
 
 P3 接入依据：OpenAlex [搜索](https://help.openalex.org/api/searching/)、[过滤](https://help.openalex.org/api/filtering/)、[认证](https://help.openalex.org/api/authentication/)；NCBI [E-utilities 参数与 History](https://www.ncbi.nlm.nih.gov/books/NBK25499/?report=printable) 和 [PubMed 检索帮助](https://pubmed.ncbi.nlm.nih.gov/help/)；arXiv [API 手册](https://info.arxiv.org/help/api/user-manual.html)和[请求限制](https://info.arxiv.org/help/api/tou.html)。实际运行预算和上游变化仍通过独立契约/资格测试验收。
+
+维护增量验证（2026-10-28）：重建复用有效向量，隔离修复损坏派生库，暂停/恢复跨重启持久化；进程 SIGKILL 后按所有权租约接管并复用已提交批次。HTTP、浏览器/模拟桥接与真实 Qwen/Linux WebView 均覆盖维护入口，详见 [维护记录](benchmarks/literature-search-p4-maintenance-linux.json)。10k/100k 内部合成容量已有 [收据](benchmarks/literature-search-p4-capacity-linux.json)；并发/端到端容量、真实长批次压力与完整恢复矩阵仍待验证；英文参数继续冻结，中文人工判断及其他平台另行验收。
+
+最新容量/恢复复核：[查询优化收据](benchmarks/literature-search-p4-query-optimization-linux.json)记录 252 项回归、真实 Qwen 与 Linux 原生 GUI、强杀恢复，以及受控模型 fixture 的 10k/100k 服务测量。100k 宽查询单客户端热 P95 约 386ms，四客户端约 1.47 秒；冷缓存、HTTP/GUI、多全文块与持续写入仍单独验证，中文真实论文质量和阶段隔离构建继续保留门槛。
+
+最新增量（2026-10-28）：100/10k 多附件真实上传/提取/VFS 与删除失效验证已通过；非首选附件删除漏发 outbox 已改为事务内发布，350 项后端测试通过。100k/700k 块测试仍在运行，连续写入的语义可用性与长时间批次尚未验收。独立阶段源码快照的实际 Linux Rust/Tauri/Qwen 功能测试通过，见 [多附件收据](benchmarks/literature-search-p4-attachments-linux.json)。中文材料现已取得并固定为 NeuCLIRTech 全量原生中文文献和 110 条官方人工判断查询；转换及 nDCG@20 工具验证完成，尚无中文检索分数，见 [来源记录](benchmarks/literature-search-p4-neuclir-source-linux.json)和 [冻结策略](benchmarks/literature-search-p4-neuclir-frozen.json)。P4 未提交，P5 未开始。
+
+最新主题/中文增量：中文主题按固定词典分词后 OR，科研符号保留原样；300 条英文查询 AST 与旧策略完全一致，353 项后端回归及最新隔离 Linux 原生通过。全量中文 395,927 篇、110 查询的词法 nDCG@20 为 0.300555，实际固定 Qwen 混合计算仍在运行，尚无收益结论。100k 原上传尝试的 500 已保留现场，恢复导入在独立副本继续；不提前报告容量完成。详见 [主题资格](benchmarks/literature-search-p4-topic-policy-linux.json)。P4 未提交，P5 未开始。
+
+P5 并行独立工作包：快照存储、实际分页捕获与冻结导出已有未接线原型，19 项本地测试及严格 Clippy 通过，见 [P5 设计](literature-search-p5-design_zh.md)与 [存储资格](benchmarks/literature-search-p5-snapshot-storage-linux.json)。不缩减 P4 质量/容量门槛，也不将原型当作 API/GUI/订阅完成；两个阶段仍分别提交。
+
+P5 列表增量：已接通引用/被引和显式推荐池的 API 与详情 GUI；复用 P3 精确身份验证及共享 S2 客户端，保留未解析条目、原始游标和引用方向，支持整体期限与取消。SDK 33、文献层 9、HTTP 5 项本地用例，以及浏览器/模拟桥接通过；实际原生、真实来源覆盖、导入预览交接、快照界面和持久订阅仍未完成。P4/P5 继续按已归档基线隔离提交，见 [P5 设计](literature-search-p5-design_zh.md)。
+
+P5 产品接线增量：快照已接入规范数据库、实际执行 API、GUI 保存/预览/删除和冻结导出；引文可通过独立精确发现会话进入预览/确认导入。末页边界修正后的完整后端回归 394 项通过，新增引文导入另行验证。P4 已测得附件键缺索引的局部瓶颈，新增非唯一索引正在隔离验收。完整 P5 仍需持久订阅和原生/恢复等验收，两个阶段均未提交。

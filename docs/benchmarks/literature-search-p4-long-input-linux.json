@@ -1,0 +1,635 @@
+{
+  "schema": "bib-p4-long-input-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 in progress; no stage commit",
+  "public_corpus": "BEIR SciFact; four supplied abstract records selected by descending Unicode length, stable ID tie-break",
+  "document_selection_uses_relevance_judgments": false,
+  "retrieval_quality_evaluation": false,
+  "raw_receipt": "target/bib-p4-validation/long-bge-rowid-20261028/receipt.json",
+  "raw_receipt_sha256": "45fe9d099ba76ef8d050ee5675deb9212d2949edd36f3537980196d97c761e2a",
+  "long_input_measurement": {
+    "changed_token_batch": {
+      "observations": {
+        "lexical_max_ms": 5.098704,
+        "lexical_p95_ms": 4.03385,
+        "lexical_samples": 42,
+        "wait_ms": 4318.2442630000005
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 4096,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "1d337d6a-db26-4d31-81b0-e07dc6ca5ea0",
+        "generation": "81abac57-8347-4b25-bc09-fad9c32e0ff9",
+        "indexed_chunks": 4,
+        "indexed_revision": 5,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 4,
+          "processed_articles": 4,
+          "processed_chunks": 4,
+          "stage": "complete",
+          "target_articles": 4,
+          "target_revision": 5
+        },
+        "signature": "f8bbbed2cb7ca3fba18a2497044cbe1a2ff376b5a1125a2605261c7e319309e9",
+        "store_generation": ""
+      }
+    },
+    "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+    "deleted_absent_from_export": true,
+    "deletion": {
+      "observations": {
+        "lexical_max_ms": 16.5002,
+        "lexical_p95_ms": 16.5002,
+        "lexical_samples": 18,
+        "wait_ms": 1907.207053
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 1000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 100,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "a487a4fd-a9d5-4d36-933e-6d7ae6e6257c",
+        "generation": "8bed28b1-a745-4eb6-bac5-0b7f402f6ef9",
+        "indexed_chunks": 28,
+        "indexed_revision": 8,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 1,
+          "processed_chunks": 0,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 8
+        },
+        "signature": "7f5e5e9e1b618b9ea37ed709943647ef243e19fa12db9ffe9b77afe72ad1608a",
+        "store_generation": ""
+      }
+    },
+    "inputs": [
+      {
+        "abstract_chars": 10000,
+        "abstract_sha256": "a65e00da04ee1bdc83b74b43fb7ec9fd670f36713fbd1e5d61b4f2c5796e12eb",
+        "article_id": "10749308"
+      },
+      {
+        "abstract_chars": 10000,
+        "abstract_sha256": "28e3a6821fd6e4963ac5badacb237ee6c8bd49b28a46d44420878e0095a6e895",
+        "article_id": "26067999"
+      },
+      {
+        "abstract_chars": 6887,
+        "abstract_sha256": "cd93f7df81c67deb94cb3e4735145fba60fd10b2a71b871272d7cdd73b94fb75",
+        "article_id": "15521377"
+      },
+      {
+        "abstract_chars": 6846,
+        "abstract_sha256": "e06394057a468d870e51165a6197eace11e638be82153ea27366184bd081474e",
+        "article_id": "27768226"
+      }
+    ],
+    "limitations": [
+      "Four long public abstract records, not full papers or judged quality",
+      "Only the replacement suffix is synthetic and explicitly marked",
+      "Single local installed-model lifecycle, not capacity percentiles or GUI/native qualification"
+    ],
+    "metadata": {
+      "observations": {
+        "lexical_max_ms": 314.910302,
+        "lexical_p95_ms": 314.910302,
+        "lexical_samples": 15,
+        "wait_ms": 1884.338269
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 1000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 100,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "a487a4fd-a9d5-4d36-933e-6d7ae6e6257c",
+        "generation": "0416a704-b3c5-4035-b487-03b6f76ec021",
+        "indexed_chunks": 38,
+        "indexed_revision": 6,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 11,
+          "embedded_chunks": 0,
+          "processed_articles": 1,
+          "processed_chunks": 11,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "signature": "7f5e5e9e1b618b9ea37ed709943647ef243e19fa12db9ffe9b77afe72ad1608a",
+        "store_generation": ""
+      }
+    },
+    "old_cursor_rejected": true,
+    "over_limit": {
+      "observations": {
+        "lexical_max_ms": 142.863836,
+        "lexical_p95_ms": 3.759709,
+        "lexical_samples": 31,
+        "wait_ms": 3348.708857
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 128,
+            "num_ctx": 128
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "3de6555f-ea13-4ddc-827f-5ac995e76214",
+        "generation": null,
+        "indexed_chunks": 0,
+        "indexed_revision": null,
+        "last_error": "unknown error: semantic embedding: embedding provider: ollama returned 400 Bad Request",
+        "maintenance": null,
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "embedding",
+          "target_articles": 4,
+          "target_revision": 5
+        },
+        "signature": null,
+        "store_generation": ""
+      }
+    },
+    "relevance_evaluation": false,
+    "replacement": {
+      "observations": {
+        "lexical_max_ms": 464.794447,
+        "lexical_p95_ms": 464.794447,
+        "lexical_samples": 16,
+        "wait_ms": 2166.236128
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 1000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 100,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "a487a4fd-a9d5-4d36-933e-6d7ae6e6257c",
+        "generation": "dc5bb78f-d986-40a3-9d3b-b1c443d2328b",
+        "indexed_chunks": 39,
+        "indexed_revision": 7,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 11,
+          "embedded_chunks": 1,
+          "processed_articles": 1,
+          "processed_chunks": 12,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 7
+        },
+        "signature": "7f5e5e9e1b618b9ea37ed709943647ef243e19fa12db9ffe9b77afe72ad1608a",
+        "store_generation": ""
+      }
+    },
+    "restart": {
+      "observations": {
+        "lexical_max_ms": 8.772943999999999,
+        "lexical_p95_ms": 8.772943999999999,
+        "lexical_samples": 1,
+        "wait_ms": 110.15937100000001
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 1000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 100,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "a487a4fd-a9d5-4d36-933e-6d7ae6e6257c",
+        "generation": "8bed28b1-a745-4eb6-bac5-0b7f402f6ef9",
+        "indexed_chunks": 28,
+        "indexed_revision": 8,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "complete",
+          "target_articles": 0,
+          "target_revision": 8
+        },
+        "signature": "7f5e5e9e1b618b9ea37ed709943647ef243e19fa12db9ffe9b77afe72ad1608a",
+        "store_generation": ""
+      }
+    },
+    "restored": {
+      "observations": {
+        "lexical_max_ms": 1.759734,
+        "lexical_p95_ms": 1.759734,
+        "lexical_samples": 1,
+        "wait_ms": 103.37977199999999
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "09a9cc0e-fe9d-44bb-bd97-2e2ec6724fe7",
+        "generation": "51c3d21b-3522-4e72-a46b-d4460ea88fc1",
+        "indexed_chunks": 4,
+        "indexed_revision": 5,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "complete",
+          "target_articles": 0,
+          "target_revision": 5
+        },
+        "signature": "c8dc705d2af506e0e5f842ed60b5ca9a49f9e3b4aed8f2a466923cbcacd32033",
+        "store_generation": ""
+      }
+    },
+    "schema": "bib-long-input-probe-v1",
+    "semantic_evidence_verbatim": true,
+    "whole": {
+      "observations": {
+        "lexical_max_ms": 7.005156,
+        "lexical_p95_ms": 5.615714,
+        "lexical_samples": 71,
+        "wait_ms": 7393.942121
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "c9030ad9-63f4-43ae-84b4-1f4ce74ba7a0",
+        "generation": "51c3d21b-3522-4e72-a46b-d4460ea88fc1",
+        "indexed_chunks": 4,
+        "indexed_revision": 5,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 4,
+          "processed_articles": 4,
+          "processed_chunks": 4,
+          "stage": "complete",
+          "target_articles": 4,
+          "target_revision": 5
+        },
+        "signature": "c8dc705d2af506e0e5f842ed60b5ca9a49f9e3b4aed8f2a466923cbcacd32033",
+        "store_generation": ""
+      }
+    },
+    "windowed": {
+      "observations": {
+        "lexical_max_ms": 6.948363,
+        "lexical_p95_ms": 4.656121,
+        "lexical_samples": 67,
+        "wait_ms": 7033.469873
+      },
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 4,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "bib-p4-bge-m3-daec91ffb5dd:latest",
+          "model_digest": "818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 1000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 100,
+            "query_instruction": ""
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "a487a4fd-a9d5-4d36-933e-6d7ae6e6257c",
+        "generation": "20316b55-1da0-4c69-9bb0-56b47db1c1c0",
+        "indexed_chunks": 38,
+        "indexed_revision": 5,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 38,
+          "processed_articles": 4,
+          "processed_chunks": 38,
+          "stage": "complete",
+          "target_articles": 4,
+          "target_revision": 5
+        },
+        "signature": "7f5e5e9e1b618b9ea37ed709943647ef243e19fa12db9ffe9b77afe72ad1608a",
+        "store_generation": ""
+      }
+    }
+  },
+  "actual_native": {
+    "raw_receipt": "target/bib-p4-validation/native-physical-reader.json",
+    "raw_receipt_sha256": "2aa6b4f844eb69f59c01d0c44367739d20e2f1372a911a366288d99cbfd0f327",
+    "receipt": {
+      "evidence": [
+        "explicit context/token-batch options persist across real IPC and page reload",
+        "actual installed model metadata via HTTP and native IPC",
+        "GUI enables full-text scope and fixed digest indexing",
+        "real model query with required year filter",
+        "candidate count and dual recall explanation",
+        "semantic source opens non-preferred attachment through binary IPC",
+        "reader locates actual source text and returns without changing topic",
+        "real WebView reload restores topic and hard conditions",
+        "backend persisted hybrid saved rule",
+        "GUI rebuild, isolated repair, persistent pause and resume through real IPC/API/model",
+        "GUI persists disable and explicitly returns to keywords"
+      ],
+      "hybrid_probe": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 2000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": true,
+            "overlap_chars": 200,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "generation": "tantivy-v2:6:924246de-3983-406c-ae8b-9edb74283f94:hybrid-rrf-v1-d100-k10-w4:a09475a8eff95b31fb2a57953752fb000ba7b6cb4dae7798bc5b006795ee3faa:54784469-c19c-4162-ab4b-c13e337a1f4d:f6bf0319-86a2-411b-8b53-cb1146c5042e",
+        "recall": {
+          "lexical_rank": 1,
+          "semantic_evidence": {
+            "anchor_key": "36A86A8B",
+            "content_hash": "96e11e3a5f8ae7e5ab022f4f90383d6390b6c69c4bba158a57dcc2317791b618",
+            "doc_id": "36A86A8B:attachment",
+            "end_byte": 72,
+            "kind": "attachment",
+            "matched_field": "fulltext",
+            "snippet": "İ prefix genome.\n😀 gene editing native evidence in the second file.\n",
+            "start_byte": 0
+          },
+          "semantic_rank": 1
+        },
+        "total": 1
+      },
+      "maintenance": [
+        {
+          "action": "rebuild",
+          "generation": "79518c4f-ed5d-4abc-8200-7f6b4c834c2f",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": ""
+        },
+        {
+          "action": "repair",
+          "generation": "e934b296-44d4-4b1b-afc1-46b111f7cb41",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": "24c404cf-a474-42ef-960d-865b2eae689d"
+        },
+        {
+          "action": "cancel",
+          "generation": "e934b296-44d4-4b1b-afc1-46b111f7cb41",
+          "progress": null,
+          "store_generation": "24c404cf-a474-42ef-960d-865b2eae689d"
+        },
+        {
+          "action": "resume",
+          "generation": "6e1b0bbd-4cb3-4050-b531-80d87b6ccd79",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": "24c404cf-a474-42ef-960d-865b2eae689d"
+        }
+      ],
+      "model": "actual installed Qwen3-Embedding 0.6B",
+      "ok": true,
+      "relevance_evaluation": false,
+      "runtime": "Tauri WebKitGTK"
+    },
+    "real_ipc_and_installed_model": true,
+    "model": "Qwen3-Embedding 0.6B",
+    "runtime": "Linux Tauri WebKitGTK",
+    "explicit_options_and_reload": true
+  },
+  "source_sha256": {
+    "crates/bib-base/examples/semantic_long_input_probe.rs": "565fb372ba1830b2fded003676c54a57f660f8a3a1d0d416b7942405c4be0812",
+    "crates/bib-base/src/semantic_index.rs": "9afbcf4b51a126b718634b148cf3c6ab608f908a3fcf10b8354dd53eeea9e44f",
+    "crates/bib-base/src/semantic_service.rs": "e02baca0d3b08b697452265e30667792c2345db880a9c13e671b33e0b7a30cca",
+    "crates/text-embedding/src/provider/ollama.rs": "0b9d8e0530997e535005c026c768249018f6e9adbfa7236cadadb2beeafc7823",
+    "crates/text-embedding/src/provider/pinned_ollama.rs": "5339f5fcea99f293cf815e9a7be4e54fccf9343ca9ce6f26b186fc6d25ceafe9",
+    "apps/gui/src/features/semantic-search.tsx": "72365976f375a90679cdd81fba9662c97725dc0a028a5d5d1e40eb469df13978",
+    "apps/gui/tests/native-semantic.mjs": "03b563839c7a6b2f695aa2d8b22656c404da539d6bf9e62734f97e99364f011e",
+    "apps/gui/tests/bibliography-semantic-native.mjs": "d802006cd8e5335d161082a184ebcd3f1dfc728e83e04cd6e47e90d2c70cf140",
+    "apps/gui/src-tauri/examples/bibliography_native_smoke.rs": "69ff78ff31cd5bda8cd8bbe6dff25edfe993e328ed506ffa226af2981097db41"
+  },
+  "binary_sha256": {
+    "long_input_probe": "0af76909e6e7529bfd172b815ac6e65a368476f597444d8303c4a348c967037a",
+    "native_probe": "c7e921ed85121824750063f1644cc3a0f1a057526ae823203c2038fed777f301"
+  },
+  "logs_sha256": {
+    "long-bge-rowid.log": "0c7c00155bdb0f0be64d8bdcd74e5865b77579886eedad556a848190964b12e9",
+    "native-physical-reader.log": "1b5868a5856b63d1d3a02652f2828d1481469987801756af43e36473a8f8feb1",
+    "physical-reader-clippy.log": "74992544d774fac33629c09823cc73ebd7697be23c1fd4893e8e18de6210a07b",
+    "physical-reader-example-clippy.log": "1cb956b1728cad30d986d020fb2e6774435eda079a252d6972d4f6426813418b"
+  },
+  "limitations": [
+    "Supplied abstract records are not full papers; no assertion about upstream dataset truncation or complete article coverage",
+    "Four length-selected English abstracts do not qualify Chinese relevance or full-library scale",
+    "Model latency observations are single lifecycle waits with lexical polling, not capacity percentiles",
+    "Small-context 128/128 produces an HTTP 400; server error body is intentionally not exposed",
+    "Token batch 8192 to 4096 changes provider signature; these are the two tested BGE overrides",
+    "Only the explicitly marked replacement suffix is generated fixture content",
+    "Native one-article/two-TXT-attachment fixture validates real IPC and source identity, not IR or PDF coordinate accuracy",
+    "Native feature mount uses current worktree reader; no isolated native stage build or qualification of unrelated workspace changes",
+    "No new macOS/Windows, human accessibility, sustained writes, cache quota or process-kill result implied"
+  ],
+  "ollama_version_observed_after_run": "0.40.1"
+}

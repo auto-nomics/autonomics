@@ -1,0 +1,222 @@
+{
+  "schema": "bib-p4-query-cpu-profile-v1",
+  "date": "2026-10-28",
+  "status": "Diagnostic; excluded from latency qualification",
+  "corpus_count": 100000,
+  "dimensions": 1024,
+  "phase": "single-client wide hybrid hot queries after initial ready",
+  "event": "cpu-clock:u",
+  "frequency_hz": 99,
+  "wall_sampling_seconds": 10,
+  "samples": 957,
+  "lost_samples": 0,
+  "callgraph": "DWARF, 8192-byte stacks",
+  "command": "perf record -F 99 -e cpu-clock:u --call-graph dwarf,8192 -p WORKER_PID -o PROFILE -- sleep 10",
+  "report_command": "DEBUGINFOD_URLS= perf report --stdio --no-children --call-graph none -i PROFILE --sort symbol --percent-limit 1",
+  "symbols": [
+    {
+      "exclusive_percent": 11.39,
+      "symbol": "bib_base::local_index::LocalIndex::run_query"
+    },
+    {
+      "exclusive_percent": 10.76,
+      "symbol": "<alloc::string::String as core::clone::Clone>::clone"
+    },
+    {
+      "exclusive_percent": 10.76,
+      "symbol": "bib_base::semantic_index::SemanticSnapshot::rank"
+    },
+    {
+      "exclusive_percent": 8.99,
+      "symbol": "<core::hash::sip::Hasher<S> as core::hash::Hasher>::write"
+    },
+    {
+      "exclusive_percent": 6.79,
+      "symbol": "0x0000000000175f19"
+    },
+    {
+      "exclusive_percent": 4.39,
+      "symbol": "core::hash::BuildHasher::hash_one"
+    },
+    {
+      "exclusive_percent": 4.08,
+      "symbol": "core::slice::sort::stable::quicksort::quicksort"
+    },
+    {
+      "exclusive_percent": 3.87,
+      "symbol": "bib_base::local_index::LocalIndex::evaluate_in"
+    },
+    {
+      "exclusive_percent": 3.66,
+      "symbol": "hashbrown::map::HashMap<K,V,S,A>::insert"
+    },
+    {
+      "exclusive_percent": 2.82,
+      "symbol": "bib_base::local_index::LocalIndex::text_matches"
+    },
+    {
+      "exclusive_percent": 2.61,
+      "symbol": "0x00000000001763e6"
+    },
+    {
+      "exclusive_percent": 2.4,
+      "symbol": "0x0000000000175f1d"
+    },
+    {
+      "exclusive_percent": 1.99,
+      "symbol": "0x0000000000176391"
+    },
+    {
+      "exclusive_percent": 1.57,
+      "symbol": "hashbrown::raw::RawTable<T,A>::reserve_rehash"
+    },
+    {
+      "exclusive_percent": 1.46,
+      "symbol": "mi_free"
+    },
+    {
+      "exclusive_percent": 1.46,
+      "symbol": "0x0000000000176687"
+    },
+    {
+      "exclusive_percent": 1.15,
+      "symbol": "hashbrown::map::HashMap<K,V,S,A>::retain"
+    },
+    {
+      "exclusive_percent": 1.04,
+      "symbol": "bib_base::search_filters::facets"
+    }
+  ],
+  "perf_data_sha256": "65aca18d279e6d81e2bd06b14380e86eaf0f03c97d9e4a2b4646853ecc4b31a7",
+  "report_sha256": "e37c7b9fea3bbce431e7b7913682257bb363235ae199993803f89f4614109709",
+  "runner_receipt": {
+    "schema": "bib-semantic-service-capacity-runner-v1",
+    "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+    "controlled_http_model_fixture": true,
+    "worker_sha256": "15bf5c113cb74fa9dfe7665af5b78bb9c3a8f342dae4c9e7a4e6748f23a82fb2",
+    "source_sha256": {
+      "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+      "scripts/benchmark_bib_semantic_service.py": "19c0ed61ff506e88567d82c3a79d269f1926aaf41ce921b2fcc448486c6e2d47",
+      "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+      "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+      "crates/bib-base/src/semantic_service.rs": "168381315bf5dc712ad60905289b1108cbef5bb16ac2bf325365ca1c6782f12a",
+      "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+      "crates/bib-base/src/local_index.rs": "1722ffe8e34c2880685200e2665890251d13667ffd6d15d8dffefd62552eda08",
+      "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+      "crates/bib-base/src/search_filters.rs": "402cca0f2bf352fd5a0a647fb4c6360459eedf2a37550c3228bc3b8a2dcf7258"
+    },
+    "runs": {
+      "100000": {
+        "build_profile": "release",
+        "built_memory": {
+          "peak_rss_kib": 591552,
+          "rss_kib": 591552
+        },
+        "controlled_http_model_fixture": true,
+        "copied_fixture_reused": true,
+        "count": 100000,
+        "dimensions": 1024,
+        "final_memory": {
+          "peak_rss_kib": 1259968,
+          "rss_kib": 1259968
+        },
+        "four_clients": {
+          "max_ms": 2162.108886,
+          "p50_ms": 2115.055311,
+          "p95_ms": 2154.8476069999997,
+          "samples": 20
+        },
+        "four_clients_wall_ms": 10618.838662,
+        "hybrid_config_transition_conflicts": 0,
+        "hybrid_during_rebuild": {
+          "max_ms": 617.381567,
+          "p50_ms": 588.8724060000001,
+          "p95_ms": 617.381567,
+          "samples": 10
+        },
+        "import_ms": null,
+        "initial_conflict_polls": 0,
+        "initial_ready_ms": 1530.945897,
+        "lexical_during_index_updates": {
+          "max_ms": 20.550281000000002,
+          "p50_ms": 17.831849000000002,
+          "p95_ms": 20.550281000000002,
+          "samples": 10
+        },
+        "lexical_during_rebuild": {
+          "max_ms": 2.746705,
+          "p50_ms": 2.566091,
+          "p95_ms": 2.746705,
+          "samples": 10
+        },
+        "limitations": [
+          "Production BibBase service/actor path with local bounded model HTTP fixture; not HTTP API or GUI end-to-end",
+          "No actual model inference speed or relevance claim",
+          "First observed queries follow initial indexing, not OS-cold cache",
+          "One title/abstract chunk per article",
+          "Single host measurements; concurrent samples include queueing"
+        ],
+        "rebuild_ms": 9394.471224,
+        "rebuild_progress": {
+          "cached_chunks": 100000,
+          "embedded_chunks": 0,
+          "processed_articles": 100000,
+          "processed_chunks": 100000,
+          "stage": "complete",
+          "target_articles": 100000,
+          "target_revision": 100021
+        },
+        "relevance_evaluation": false,
+        "schema": "bib-semantic-service-capacity-v1",
+        "single_client": {
+          "one_percent": {
+            "first_observed_ms": 66.00698700000001,
+            "hot": {
+              "max_ms": 79.867581,
+              "p50_ms": 66.93654000000001,
+              "p95_ms": 72.834884,
+              "samples": 30
+            }
+          },
+          "wide": {
+            "first_observed_ms": 1436.124524,
+            "hot": {
+              "max_ms": 570.794786,
+              "p50_ms": 519.636114,
+              "p95_ms": 541.0933570000001,
+              "samples": 30
+            }
+          }
+        },
+        "update_catchup_ms": 189.516467,
+        "update_conflict_polls": 0,
+        "vector_store_files": {
+          "library.db.semantic-v1": 580403200,
+          "library.db.semantic-v1-tshm": 3444736,
+          "library.db.semantic-v1-wal": 692057032
+        },
+        "vector_store_total_bytes": 1275904968,
+        "writes_during_index_updates": {
+          "max_ms": 1.153319,
+          "p50_ms": 0.856954,
+          "p95_ms": 1.153319,
+          "samples": 10
+        },
+        "fixture_requests": {
+          "embed_requests": 92,
+          "embedded_inputs": 92,
+          "tag_requests": 186
+        },
+        "reused_source_receipt_sha256": "1b26e9816475186bb86d668026f4f9d7fea76fe0d5c7438a408d58119486a152",
+        "wall_seconds": 41.733014700999775
+      }
+    }
+  },
+  "interpretation": "Exclusive samples still include String cloning and keyed hash work in intermediate candidate maps; dense exact ranking is about 10.76% of sampled CPU. This motivates borrowing match keys and avoiding deep copies, not changing scoring or hard scope.",
+  "limitations": [
+    "One local CPU sample window on synthetic corpus/fixture",
+    "Optimized release inlining and unresolved libc offsets limit precise attribution",
+    "Sampling perturbs this run; its latency is not combined with the unprofiled capacity receipts",
+    "Raw perf data stays in the local temporary directory; receipt stores its checksum"
+  ]
+}

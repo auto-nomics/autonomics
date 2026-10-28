@@ -23,7 +23,9 @@
     "test:bib-discovery": "node tests/discovery-workflow.mjs",
     "test:bib-discovery-native": "cargo build -p autonomics-gui --example discovery_native_smoke --locked && node tests/native-discovery.mjs",
     "test:bib-workflow": "node tests/bibliography-workflow.mjs",
-    "test:bib-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-bibliography.mjs"
+    "test:bib-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-bibliography.mjs",
+    "test:bib-semantic": "node tests/semantic-search.mjs",
+    "test:bib-semantic-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-semantic.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

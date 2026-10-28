@@ -1,0 +1,44 @@
+{
+  "base_head": "222a37d18f5f199b32288a7b409a21c526be2b40",
+  "overlay_sha256": {
+    "apps/gui/src/features/bib-search-model.ts": "31214321918a1844d03eb9dcbd153332e0885e777709e2efe01c7986c0424d0c",
+    "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+    "apps/gui/src/features/saved-searches.tsx": "97d1f1458d6a6f74566eebf2ee484931227267d3cd816cae992aaa928d60cc71",
+    "apps/gui/src/features/search-assist.tsx": "90c57a77e88f2a8cfcecfd5a5ee57f758e33a7e7dfc9974bd21e8d36e8517b89",
+    "apps/gui/src/features/search-evidence.tsx": "b96e4ba862dd2beeae7395ade42e4c953abafe2e615058b005f588f0af027019",
+    "apps/gui/src/features/search-location.ts": "0463dbc0018a5590753b89bd62a4e40b0de487097f38b3fc23551686abb71cba",
+    "apps/gui/src/features/semantic-search.tsx": "2054b06f6db6cee778d9b034b7b5d76485f9474a53cd7f6d4717eb59c333c9b1"
+  },
+  "excluded_worktree_edits": [
+    "apps/gui/src/features/agent.tsx",
+    "apps/gui/src/main.tsx",
+    "apps/gui/src/pdf-reader.ts",
+    "apps/gui/src/pdf-reader.css",
+    "apps/gui/src/features/agent-workspace.tsx",
+    "apps/gui/tests/floating-workspace.mjs",
+    "test:workspace script",
+    "crates/gateway/gui-dist/"
+  ],
+  "dependency_strategy": "symlink existing node_modules; no install or dependency changes",
+  "gui_package_sha256": "ce4f9abc1fa724b0fe3d5dac35ee5a1cebc23bf06a074aa37123eeb13d3ffbcf",
+  "schema": "bib-p4-isolated-gui-build-v1",
+  "date": "2026-10-28",
+  "command": "npm --prefix target/bib-p4-validation/isolated-p4/apps/gui run build",
+  "typecheck": true,
+  "vite_production_build": true,
+  "log_sha256": "93ffdb974b1d7403a9bbfab221f33a556f220a485c79ce4722c25c989314d8c3",
+  "artifacts": {
+    "gui.css": "e4a551b7f7ad88481f81af8264a162cd297214e49436b65920bf8cf408c40add",
+    "gui.js": "d6d256c23488de88edffceb860e13252708f9a30042fa4f91c4b00ced601654a",
+    "gui.mjs": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36"
+  },
+  "warnings": [
+    "Existing >500kB single chunk warning; not a size-budget qualification"
+  ],
+  "limitations": [
+    "Build and type checking only; no production browser/IPC interaction test",
+    "Existing node_modules reused; not clean dependency installation",
+    "Rust stage isolation and complete P4 acceptance remain pending",
+    "Generated gateway assets were not overwritten"
+  ]
+}

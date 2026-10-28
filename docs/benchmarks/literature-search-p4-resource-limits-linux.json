@@ -1,0 +1,954 @@
+{
+  "schema": "bib-p4-resource-limits-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 in progress; no stage commit",
+  "defaults": {
+    "max_chunks": 1000000,
+    "max_input_bytes": 262144,
+    "max_vector_bytes": 2147483648,
+    "max_disk_bytes": 8589934592
+  },
+  "implementation": {
+    "limits_separate_from_embedding_signature": true,
+    "vector_payload_accounting": "transactional insert/delete/update triggers with atomic legacy-store initialization",
+    "vector_payload_budget_rechecked_in_write_transaction": true,
+    "disk_budget": "cooperative checks at batch boundaries and before private repair store creation",
+    "disk_family": "one bibliography base semantic store and canonical UUID repair stores, including WAL/tshm",
+    "resource_failure_waits_for_relevant_changes": true,
+    "budget_only_maintenance_rebind_is_atomic_and_fences_old_owners": true,
+    "resource_failed_repair_keeps_private_cache_and_request_identity": true,
+    "explicit_pause_remains_paused_on_budget_save": true,
+    "settings_title_and_actions_remain_visible_while_body_scrolls": true
+  },
+  "validation": {
+    "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests -- --include-ignored",
+    "passed": 349,
+    "failed": 0,
+    "ignored_in_this_run": 0,
+    "existing_three_zotero_opt_in_tests_executed": true,
+    "strict_library_test_and_probe_clippy": true,
+    "browser_and_simulated_bridge": true,
+    "shared_advanced_saved_search_reading_regressions": true,
+    "actual_linux_tauri": true,
+    "isolated_gui_typecheck_and_production_build": true
+  },
+  "actual_model": {
+    "raw_path": "target/bib-p4-validation/resource-qwen-repair-20261028/receipt.json",
+    "raw_sha256": "dc87b7de90511491614592ed6aacbba7373cdc8abfdc6b24ee6657de822a9077",
+    "measurement": {
+      "actual_installed_model": true,
+      "article_ids": [
+        "4983",
+        "5836",
+        "7912",
+        "18670",
+        "19238",
+        "33370",
+        "36474",
+        "54440",
+        "70115",
+        "70490",
+        "72159",
+        "79447",
+        "87758",
+        "92308",
+        "92499",
+        "97884",
+        "102662",
+        "103007",
+        "104130",
+        "106301"
+      ],
+      "canonical_write_and_lexical_available": true,
+      "chunk_growth_limit": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 19,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 77824
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "b4580790-f9be-4f29-b945-5175a40be355",
+        "generation": "3c5d1d7a-6b16-4339-9af1-8b63460e8cc4",
+        "indexed_chunks": 19,
+        "indexed_revision": 20,
+        "last_error": "semantic resource limit: index chunks requires 20, configured maximum is 19; increase the budget or reduce indexed content",
+        "maintenance": null,
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "embedding",
+          "target_articles": 1,
+          "target_revision": 21
+        },
+        "resources": {
+          "disk_bytes": 415624,
+          "vector_bytes": 77824
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": ""
+      },
+      "chunk_limit_initial": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 1,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 2147483648
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "f84d29c0-336c-48e0-9be1-e31cc0cab509",
+        "generation": null,
+        "indexed_chunks": 0,
+        "indexed_revision": null,
+        "last_error": "semantic resource limit: index chunks requires 2, configured maximum is 1; increase the budget or reduce indexed content",
+        "maintenance": null,
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "embedding",
+          "target_articles": 19,
+          "target_revision": 20
+        },
+        "resources": null,
+        "signature": null,
+        "store_generation": ""
+      },
+      "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+      "disk_limit": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 1,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 81920
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "91077983-3fdb-45ec-bb26-d1bb8662512f",
+        "generation": null,
+        "indexed_chunks": 0,
+        "indexed_revision": null,
+        "last_error": "semantic resource limit: semantic cache disk bytes requires 1156728, configured maximum is 1; increase the budget or reduce indexed content",
+        "maintenance": null,
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "planning",
+          "target_articles": null,
+          "target_revision": null
+        },
+        "resources": null,
+        "signature": null,
+        "store_generation": ""
+      },
+      "grown": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 81920
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "e7d559f0-c04b-49fe-8b95-6cfc512e2ec7",
+        "generation": "2a5c1ba6-f416-4c9e-9456-4af3b398049e",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 19,
+          "embedded_chunks": 1,
+          "processed_articles": 20,
+          "processed_chunks": 20,
+          "stage": "complete",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "resources": {
+          "disk_bytes": 683424,
+          "vector_bytes": 81920
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": ""
+      },
+      "initial": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 19,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 77824
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "b4580790-f9be-4f29-b945-5175a40be355",
+        "generation": "3c5d1d7a-6b16-4339-9af1-8b63460e8cc4",
+        "indexed_chunks": 19,
+        "indexed_revision": 20,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 19,
+          "processed_articles": 19,
+          "processed_chunks": 19,
+          "stage": "complete",
+          "target_articles": 19,
+          "target_revision": 20
+        },
+        "resources": {
+          "disk_bytes": 415624,
+          "vector_bytes": 77824
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": ""
+      },
+      "limitations": [
+        "Twenty public abstract records, not capacity or relevance percentiles",
+        "Vector payload limit is per store; disk budget includes all managed store families and is cooperative",
+        "No automatic eviction of published models or filesystem compaction tested"
+      ],
+      "relevance_evaluation": false,
+      "resource_failed_repair": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 65536
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "2fb219f0-6881-44f5-80fc-34f586f096b4",
+        "generation": null,
+        "indexed_chunks": 0,
+        "indexed_revision": null,
+        "last_error": "semantic resource limit: vector payload bytes per store requires 81920, configured maximum is 65536; increase the budget or reduce indexed content",
+        "maintenance": {
+          "action": "repair",
+          "base_configuration_generation": "b1bfbaf4-6a49-4067-a995-eaa9473f5832",
+          "configuration_generation": "2fb219f0-6881-44f5-80fc-34f586f096b4",
+          "finished_at": "2026-10-28T02:14:18.300606589+00:00",
+          "last_error": "semantic resource limit: vector payload bytes per store requires 81920, configured maximum is 65536; increase the budget or reduce indexed content",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 16,
+            "processed_articles": 0,
+            "processed_chunks": 16,
+            "stage": "embedding",
+            "target_articles": 20,
+            "target_revision": 21
+          },
+          "request_id": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6",
+          "requested_at": "2026-10-28T02:14:17.585216+00:00",
+          "state": "failed",
+          "store_generation": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6"
+        },
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 16,
+          "processed_articles": 0,
+          "processed_chunks": 16,
+          "stage": "embedding",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "resources": null,
+        "signature": null,
+        "store_generation": ""
+      },
+      "restart": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 81920
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "c12991fc-9ae5-4c60-89fc-3514e963ee0b",
+        "generation": "c4b7b675-2c4c-4a5a-90fc-8fa5125c57df",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "complete",
+          "target_articles": 0,
+          "target_revision": 21
+        },
+        "resources": {
+          "disk_bytes": 1156728,
+          "vector_bytes": 81920
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6"
+      },
+      "restored": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 81920
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "c12991fc-9ae5-4c60-89fc-3514e963ee0b",
+        "generation": "c4b7b675-2c4c-4a5a-90fc-8fa5125c57df",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": null,
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "complete",
+          "target_articles": 0,
+          "target_revision": 21
+        },
+        "resources": {
+          "disk_bytes": 1156728,
+          "vector_bytes": 81920
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6"
+      },
+      "resumed_same_repair": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 81920
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "bd3e0f40-c05e-41e0-969c-9d78bf48b57c",
+        "generation": "c4b7b675-2c4c-4a5a-90fc-8fa5125c57df",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": {
+          "action": "repair",
+          "base_configuration_generation": "b1bfbaf4-6a49-4067-a995-eaa9473f5832",
+          "configuration_generation": "bd3e0f40-c05e-41e0-969c-9d78bf48b57c",
+          "finished_at": "2026-10-28T02:14:18.505025491+00:00",
+          "last_error": null,
+          "progress": {
+            "cached_chunks": 16,
+            "embedded_chunks": 4,
+            "processed_articles": 20,
+            "processed_chunks": 20,
+            "stage": "complete",
+            "target_articles": 20,
+            "target_revision": 21
+          },
+          "request_id": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6",
+          "requested_at": "2026-10-28T02:14:17.585216+00:00",
+          "state": "complete",
+          "store_generation": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6"
+        },
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 16,
+          "embedded_chunks": 4,
+          "processed_articles": 20,
+          "processed_chunks": 20,
+          "stage": "complete",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "resources": {
+          "disk_bytes": 1156728,
+          "vector_bytes": 81920
+        },
+        "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+        "store_generation": "972f516e-e7d1-4da6-956b-ce4a7c8a56d6"
+      },
+      "schema": "bib-semantic-resource-probe-v2",
+      "vector_limit": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {},
+          "limits": {
+            "max_chunks": 20,
+            "max_disk_bytes": 8589934592,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 77824
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "5ab8b8ce-adaa-44ec-bf79-e30b3bcc53e5",
+        "generation": null,
+        "indexed_chunks": 0,
+        "indexed_revision": null,
+        "last_error": "semantic resource limit: vector payload bytes per store requires 81920, configured maximum is 77824; increase the budget or reduce indexed content",
+        "maintenance": null,
+        "phase": "failed",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 0,
+          "processed_articles": 0,
+          "processed_chunks": 0,
+          "stage": "embedding",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "resources": null,
+        "signature": null,
+        "store_generation": ""
+      }
+    },
+    "binary_sha256": "1953178ecdf94225a21b0e32d4a9d297f76b00332a6dacdc7cf30fb958c43c7b"
+  },
+  "actual_native": {
+    "raw_path": "target/bib-p4-validation/native-resource-dialog-final.json",
+    "raw_sha256": "97a4c116b9f0f4c33903fc9757db676c4eb03c2bfb378ac4e0430f8c3b0545b5",
+    "receipt": {
+      "evidence": [
+        "resource limits and nonzero vector cache usage through real IPC, with limits retained on page reload",
+        "explicit context/token-batch options persist across real IPC and page reload",
+        "actual installed model metadata via HTTP and native IPC",
+        "GUI enables full-text scope and fixed digest indexing",
+        "real model query with required year filter",
+        "candidate count and dual recall explanation",
+        "semantic source opens non-preferred attachment through binary IPC",
+        "reader locates actual source text and returns without changing topic",
+        "real WebView reload restores topic and hard conditions",
+        "backend persisted hybrid saved rule",
+        "budget-only GUI save retains the paused maintenance identity until explicit resume",
+        "GUI rebuild, isolated repair, persistent pause and resume through real IPC/API/model",
+        "GUI persists disable and explicitly returns to keywords"
+      ],
+      "hybrid_probe": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "inference": {
+            "num_batch": 8192,
+            "num_ctx": 8192
+          },
+          "limits": {
+            "max_chunks": 100,
+            "max_disk_bytes": 33554432,
+            "max_input_bytes": 262144,
+            "max_vector_bytes": 8388608
+          },
+          "model": "qwen3-embedding:0.6b",
+          "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+          "origin": "http://127.0.0.1:11434",
+          "profile": {
+            "chunk_chars": 2000,
+            "dimensions": 1024,
+            "include_annotations": false,
+            "include_fulltext": true,
+            "overlap_chars": 200,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "generation": "tantivy-v2:6:7d00d806-c3a0-41a7-9f55-363459c3a61d:hybrid-rrf-v1-d100-k10-w4:a09475a8eff95b31fb2a57953752fb000ba7b6cb4dae7798bc5b006795ee3faa:ef507e34-29a7-4206-b5bf-29d17872e3e1:9acebac1-8a8c-4773-a061-9301a26e3d7c",
+        "recall": {
+          "lexical_rank": 1,
+          "semantic_evidence": {
+            "anchor_key": "9DBE6D57",
+            "content_hash": "96e11e3a5f8ae7e5ab022f4f90383d6390b6c69c4bba158a57dcc2317791b618",
+            "doc_id": "9DBE6D57:attachment",
+            "end_byte": 72,
+            "kind": "attachment",
+            "matched_field": "fulltext",
+            "snippet": "İ prefix genome.\n😀 gene editing native evidence in the second file.\n",
+            "start_byte": 0
+          },
+          "semantic_rank": 1
+        },
+        "total": 1
+      },
+      "maintenance": [
+        {
+          "action": "rebuild",
+          "generation": "64b62abd-ae5f-48c8-adbc-d39d933bd73f",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": ""
+        },
+        {
+          "action": "repair",
+          "generation": "b83e7b8c-5fe1-4767-a3f1-643059bfa42f",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": "12aa9a02-0018-4b2a-acb3-07eb09c3745c"
+        },
+        {
+          "action": "cancel",
+          "generation": "b83e7b8c-5fe1-4767-a3f1-643059bfa42f",
+          "progress": null,
+          "store_generation": "12aa9a02-0018-4b2a-acb3-07eb09c3745c"
+        },
+        {
+          "action": "resume",
+          "generation": "50ba2b49-ced4-4f67-a607-2396e6f88657",
+          "progress": {
+            "cached_chunks": 0,
+            "embedded_chunks": 3,
+            "processed_articles": 1,
+            "processed_chunks": 3,
+            "stage": "complete",
+            "target_articles": 1,
+            "target_revision": 6
+          },
+          "store_generation": "12aa9a02-0018-4b2a-acb3-07eb09c3745c"
+        }
+      ],
+      "model": "actual installed Qwen3-Embedding 0.6B",
+      "ok": true,
+      "relevance_evaluation": false,
+      "runtime": "Tauri WebKitGTK"
+    },
+    "binary_sha256": "b0952be0aea713ff5a06cb808c9616855df5415443a3e80d3e5ad423a91a3684"
+  },
+  "capacity": {
+    "raw_path": "target/bib-p4-validation/http-resource-final-advised-20261028/receipt.json",
+    "raw_sha256": "27e357ad46e88ea181644de5a9e860ba69baf89d8a1a3e5c8a5f75afcdb54767",
+    "filesystem_observed": "ext4 /mnt/projects",
+    "measurement": {
+      "schema": "bib-semantic-service-capacity-runner-v1",
+      "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+      "hardware": {
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+        "reported_logical_cpus": 24,
+        "allowed_cpus": 24,
+        "reported_mem_total_kib": 65643140,
+        "shared_host": true
+      },
+      "controlled_http_model_fixture": true,
+      "worker_sha256": "28423b963b667ee0542785ccafaeff76f661a936056e60f468e5c3c37f2b8f99",
+      "source_sha256": {
+        "Cargo.lock": "b65f4155cb93df6ee8b4e9e92299469a786134721306bfa1a01e7320710d679f",
+        "crates/api-server/Cargo.toml": "82307804d1b824e71ca5807c9f18a0c2097859a7b3b0e72e5b8a3264de70a706",
+        "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+        "scripts/benchmark_bib_semantic_service.py": "34e4f393313ac38154f628e87c51afdf627e61b52a4797cfd8b4c147f3bc5593",
+        "crates/bib-base/src/semantic_index.rs": "57210d5cf17ac878e675b752d1be388fee3387103e51b89e684d798c55edcbf1",
+        "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+        "crates/bib-base/src/semantic_service.rs": "ac93ae22bf16e7232ac1af6d61708f581b5d0b351f4051ed3d596de899eb5b4e",
+        "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+        "crates/bib-base/src/semantic_limits.rs": "2298c34ef622466b2d4d49a3dccd36ba7e2ee44da75fb30bd735c810e7d18f3e",
+        "crates/bib-base/src/semantic_service/maintenance.rs": "b921d5134c9be975cb0ae82da69b83a5225eca9fc3f6c582f9b7bc6a4b6e2d98",
+        "crates/text-embedding/src/provider/pinned_ollama.rs": "5339f5fcea99f293cf815e9a7be4e54fccf9343ca9ce6f26b186fc6d25ceafe9",
+        "crates/text-embedding/src/provider/ollama.rs": "0b9d8e0530997e535005c026c768249018f6e9adbfa7236cadadb2beeafc7823",
+        "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+        "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+        "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+        "crates/api-server/examples/semantic_http_benchmark.rs": "bf609e43ae8b0d3a68c59a55cef9706d67cab712be5db31820df3e77bd6ef897",
+        "crates/api-server/src/server.rs": "c1799f152777bbf6b6a99d4aeb4a4ef608239506965e30b040f470eda56038fa",
+        "crates/api-server/src/bib.rs": "640f129ebf5c8e0a926dd1e8662e76245f7bab0859b5cdeeb6269571aa4891ee",
+        "apps/gui/tests/bibliography-capacity.mjs": "ba962451204921c44a06c08295143b98d422eea4535d384e05273b11e9d2dbc0",
+        "apps/gui/tests/bibliography-capacity.html": "8cd2e6ce713e78f774520a65fc1b3ee0be7a410a8eda7ce02b8e5ce726153218",
+        "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+        "apps/gui/src/gateway.ts": "2aa28cd607752899e8de6076483cf9396f3d7087abfc731d82eae10a9ac5b3b2"
+      },
+      "runs": {
+        "10000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 10000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 231336,
+            "rss_kib": 221452
+          },
+          "first_result_total_ms": 889.3090070000001,
+          "four_clients": {
+            "max_ms": 171.1719,
+            "p50_ms": 149.109347,
+            "p95_ms": 169.09861800000002,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 761.7329430000001,
+          "initial_ready_ms": 386.10794999999996,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.20353600000000002,
+          "open_ms": 142.822312,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 22.063078,
+              "hot": {
+                "max_ms": 41.827202,
+                "p50_ms": 23.002033,
+                "p95_ms": 40.132781,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 359.586576,
+              "hot": {
+                "max_ms": 48.315396,
+                "p50_ms": 38.241184,
+                "p95_ms": 44.268895,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "d14ee91840e52b6ab1661f396fb6a46fdea08eed71ca6ed84aa6d9f2efafae4c",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 47,
+            "bytes": 107423204,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 3.831818963997648
+        },
+        "100000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 100000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 853452,
+            "rss_kib": 851772
+          },
+          "first_result_total_ms": 9487.531798999999,
+          "four_clients": {
+            "max_ms": 1558.944766,
+            "p50_ms": 1542.1397379999999,
+            "p95_ms": 1557.172153,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 7707.015525,
+          "initial_ready_ms": 5131.453321,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.212095,
+          "open_ms": 690.2536240000001,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 66.313343,
+              "hot": {
+                "max_ms": 68.993072,
+                "p50_ms": 63.745273000000005,
+                "p95_ms": 68.758469,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 3665.263713,
+              "hot": {
+                "max_ms": 430.753499,
+                "p50_ms": 397.870823,
+                "p95_ms": 420.315167,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "1b26e9816475186bb86d668026f4f9d7fea76fe0d5c7438a408d58119486a152",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 35,
+            "bytes": 1659261602,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 33.0726571050036
+        }
+      }
+    }
+  },
+  "isolated_gui_build": {
+    "manifest": {
+      "base_head": "222a37d18f5f199b32288a7b409a21c526be2b40",
+      "overlay_sha256": {
+        "apps/gui/src/features/bib-search-model.ts": "f0f5e40dc0de478894a56af455ec1152e9f3d271174ad96df87931a79c67d14d",
+        "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+        "apps/gui/src/features/saved-searches.tsx": "97d1f1458d6a6f74566eebf2ee484931227267d3cd816cae992aaa928d60cc71",
+        "apps/gui/src/features/search-assist.tsx": "90c57a77e88f2a8cfcecfd5a5ee57f758e33a7e7dfc9974bd21e8d36e8517b89",
+        "apps/gui/src/features/search-evidence.tsx": "b96e4ba862dd2beeae7395ade42e4c953abafe2e615058b005f588f0af027019",
+        "apps/gui/src/features/search-location.ts": "0463dbc0018a5590753b89bd62a4e40b0de487097f38b3fc23551686abb71cba",
+        "apps/gui/src/features/semantic-search.tsx": "dd12207ca82e97b5b8346067d7b3640bc146bd416bb8fc8e439e4434040c5736",
+        "apps/gui/src/features/search-dialog.tsx": "9867d0bb5b67b93028f274893592adc921d2c68fec72cf6c93ecc7430caa7680"
+      },
+      "excluded_worktree_edits": [
+        "apps/gui/src/features/agent.tsx",
+        "apps/gui/src/main.tsx",
+        "apps/gui/src/pdf-reader.ts",
+        "apps/gui/src/pdf-reader.css",
+        "apps/gui/src/features/agent-workspace.tsx",
+        "apps/gui/tests/floating-workspace.mjs",
+        "test:workspace script",
+        "crates/gateway/gui-dist/"
+      ],
+      "dependency_strategy": "symlink existing node_modules; no install or dependency changes",
+      "gui_package_sha256": "ce4f9abc1fa724b0fe3d5dac35ee5a1cebc23bf06a074aa37123eeb13d3ffbcf"
+    },
+    "artifacts_sha256": {
+      "gui.css": "81c4ebb4bd097780dc3c5ddebbb749f888f81ab76e941faecbf5c6a1e6df88a2",
+      "gui.js": "d738823fd2f37b9a1dd6c94dbe2ae395e32b18653673185c93aaf7a3b3c6a2b0",
+      "gui.mjs": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36"
+    }
+  },
+  "screenshots": {
+    "/tmp/bib-semantic-resource-settings-web.png": "ef4cabfe3b1b2d69eb9df41d01e23c4cb90a33bba7daa07f435dbd1f1ec313a2",
+    "/tmp/bib-semantic-resource-settings-bridge.png": "e6771de77556b83553576ec634f027d15139add1504127ea0657191e5d8e620a"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/error.rs": "eab9753125c9a7777aef38dc01cdbe8230d54789f229dc446f9ae41deefe02a4",
+    "crates/bib-base/src/lib.rs": "66de565a633409345be75029da8f168c036dcfa6d2d35a0c622385427418e14d",
+    "crates/bib-base/src/semantic_limits.rs": "2298c34ef622466b2d4d49a3dccd36ba7e2ee44da75fb30bd735c810e7d18f3e",
+    "crates/bib-base/src/semantic_index.rs": "57210d5cf17ac878e675b752d1be388fee3387103e51b89e684d798c55edcbf1",
+    "crates/bib-base/src/semantic_index/tests.rs": "b1d72bfc358221023138fb39e71450071e573ad58ae165a5b217fa76c518f872",
+    "crates/bib-base/src/semantic_service.rs": "ac93ae22bf16e7232ac1af6d61708f581b5d0b351f4051ed3d596de899eb5b4e",
+    "crates/bib-base/src/semantic_service/maintenance.rs": "b921d5134c9be975cb0ae82da69b83a5225eca9fc3f6c582f9b7bc6a4b6e2d98",
+    "crates/bib-base/src/semantic_service/tests.rs": "3a20fa8dd99f81d1a9a16d8b1223ff8d0500af5bed815afa6a3c8353693cfb07",
+    "crates/bib-base/src/semantic_service/tests/maintenance_tests.rs": "7b69bba7b1074ed74392634f6649ba2e63e7f942527738256c2e147e3b167a5f",
+    "crates/bib-base/examples/semantic_resource_probe.rs": "68ef12ab31b3293d0ab7ba1021d03e990359f51d402979829614290269a1184e",
+    "crates/api-server/src/bib.rs": "640f129ebf5c8e0a926dd1e8662e76245f7bab0859b5cdeeb6269571aa4891ee",
+    "crates/api-server/tests/api.rs": "aba2420fa3d5c13820b3a1c5e3b9f7d02d3c8d71e0eaa81400236291846fbb5a",
+    "apps/gui/src/features/bib-search-model.ts": "f0f5e40dc0de478894a56af455ec1152e9f3d271174ad96df87931a79c67d14d",
+    "apps/gui/src/features/semantic-search.tsx": "dd12207ca82e97b5b8346067d7b3640bc146bd416bb8fc8e439e4434040c5736",
+    "apps/gui/src/features/search-dialog.tsx": "9867d0bb5b67b93028f274893592adc921d2c68fec72cf6c93ecc7430caa7680",
+    "apps/gui/tests/semantic-search.mjs": "d830dd21ddae20dd838dd914423813faf00764ea6e7f7f42bc06d49c4be215d0",
+    "apps/gui/tests/native-semantic.mjs": "03b563839c7a6b2f695aa2d8b22656c404da539d6bf9e62734f97e99364f011e",
+    "apps/gui/tests/bibliography-semantic-native.mjs": "6d82620a0235401e79653dd20869a19864769d3927dfb1a497e1ad536d25231e",
+    "scripts/benchmark_bib_semantic_service.py": "34e4f393313ac38154f628e87c51afdf627e61b52a4797cfd8b4c147f3bc5593"
+  },
+  "logs_sha256": {
+    "resource-final-tests.log": "c5f37d9b284713d8c3b809e437590d29aee2937e993ca2f4e5502f5bfb98e13e",
+    "resource-release-qualified-clippy.log": "77d833c203d10ad47583ce66f462148964a1f8a109a1483aad0d3061c72de004",
+    "resource-dialog-tests.log": "a7583a79835dffdb018ff01db1ee886442e0998f0172fbd36772f28f62280b9e",
+    "resource-dialog-search-regression.log": "203efd0b62174385d0152fcad1a4793eedb149f339afb417eebbbc6998305a3a",
+    "resource-dialog-workflow-regression.log": "6130b343bf5f560c6527fe2337778fc01d91fb5134963e6ab2a46588ca7b93cd",
+    "resource-dialog-isolated-build.log": "edc25d29e26e8f5d40c41954fbbc1615708ac270b66ad9d8ba5d26be3872a577",
+    "native-resource-dialog-final.log": "b67e8d3a54e91fb849bd4779b5e3ff1e84728303589a130d02a8f6a14e0fa1fb",
+    "resource-qwen-repair.log": "b06031df40321c4aa7586c1ddcc5ad6585aa46926e0a48c68879db1f3980f581"
+  },
+  "limitations": [
+    "Limits are not OS hard quotas for disk, RAM or GPU; retained data may exceed a newly reduced budget while workers observe the new configuration",
+    "Vector payload excludes table/index overhead; disk size is observed cooperatively and can overshoot with temporary or concurrent writes",
+    "No automatic eviction of published models or file compaction; increasing budgets can be necessary for replacement/repair headroom",
+    "Actual model probe uses twenty public abstract records, not relevance judgments or throughput percentiles",
+    "Capacity uses a cheap deterministic 1024D HTTP fixture and advisory copied-file DONTNEED, not guaranteed physical-cache cold starts",
+    "100k hot HTTP P95 about 420ms; no claim of meeting the 400ms target universally",
+    "Native feature mount uses the current worktree reader; isolated native stage build and other platforms remain pending",
+    "Multi-attachment scale, sustained writes and Chinese real-paper quality remain open; no new judged quality score"
+  ]
+}

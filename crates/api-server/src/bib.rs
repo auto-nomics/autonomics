@@ -168,7 +168,13 @@ pub fn router(shared: BibShared) -> Router {
             put(update_saved_search).delete(delete_saved_search),
         )
         .route("/search/status", get(search_index_status))
+        .route(
+            "/search/semantic",
+            get(semantic_search_status).put(configure_semantic_search),
+        )
         .route("/search/rebuild", post(rebuild_search_index))
+        .route("/search/semantic/models", post(semantic_models))
+        .route("/search/semantic/maintenance", post(semantic_maintenance))
         .with_state(Arc::new(shared))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }
@@ -256,6 +262,9 @@ fn search_error(failure: bib_base::Error) -> (StatusCode, Json<ApiError>) {
     let status = match &failure {
         bib_base::Error::InvalidSearchQuery(_) => StatusCode::BAD_REQUEST,
         bib_base::Error::SearchConflict(_) => StatusCode::CONFLICT,
+        bib_base::Error::SemanticUnavailable(_) | bib_base::Error::SemanticResourceLimit { .. } => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         bib_base::Error::SearchCancelled => StatusCode::from_u16(499).expect("valid status"),
         bib_base::Error::NotFound(_) => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -336,11 +345,16 @@ async fn export_search(
         "csl_json" => ExportFormat::CslJson,
         _ => return Err(error(StatusCode::BAD_REQUEST, "unsupported export format")),
     };
+    let basis = if input.search.mode == bib_types::SearchMode::Hybrid {
+        "candidate_pool"
+    } else {
+        "complete_matches"
+    };
     let articles = cancellable_search(&shared, &headers, shared.bib.export_search(input.search))
         .await
         .map_err(search_error)?;
     Ok(Json(
-        json!({"format":format.extension(),"count":articles.len(),"export":bib_base::render_all(&articles,format)}),
+        json!({"format":format.extension(),"count":articles.len(),"result_basis":basis,"export":bib_base::render_all(&articles,format)}),
     ))
 }
 
@@ -387,6 +401,52 @@ async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult 
     Ok(Json(
         serde_json::to_value(shared.bib.search_index_status().await.map_err(internal)?)
             .map_err(internal)?,
+    ))
+}
+async fn semantic_search_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
+    Ok(Json(
+        serde_json::to_value(shared.bib.semantic_search_status().map_err(search_error)?)
+            .map_err(internal)?,
+    ))
+}
+async fn semantic_models(
+    Json(input): Json<bib_base::semantic_service::SemanticModelDiscovery>,
+) -> ApiResult {
+    let models = bib_base::semantic_service::installed_semantic_models(input)
+        .await
+        .map_err(search_error)?;
+    Ok(Json(json!({"models":models})))
+}
+async fn semantic_maintenance(
+    State(shared): State<Arc<BibShared>>,
+    Json(input): Json<bib_base::semantic_service::SemanticMaintenanceRequest>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    let maintenance = shared
+        .bib
+        .maintain_semantic_search(input)
+        .await
+        .map_err(search_error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            json!({"maintenance":maintenance,"status":shared.bib.semantic_search_status().map_err(search_error)?}),
+        ),
+    ))
+}
+async fn configure_semantic_search(
+    State(shared): State<Arc<BibShared>>,
+    Json(config): Json<bib_base::semantic_service::SemanticConfig>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    let generation = shared
+        .bib
+        .configure_semantic_search(config)
+        .await
+        .map_err(search_error)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(
+            json!({"configuration_generation":generation,"status":shared.bib.semantic_search_status().map_err(search_error)?}),
+        ),
     ))
 }
 async fn rebuild_search_index(

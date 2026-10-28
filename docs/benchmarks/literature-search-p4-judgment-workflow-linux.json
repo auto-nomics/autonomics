@@ -1,0 +1,29 @@
+{
+  "schema": "bib-p4-judgment-workflow-qualification-v1",
+  "date": "2026-10-28",
+  "command": "python -W error::ResourceWarning -m unittest discover -s scripts -p test_prepare_bib_judgments.py",
+  "passed": 6,
+  "failed": 0,
+  "log_sha256": "b95b5805bef96b568b1b2424b637003cd6f306e6312d682e4f2e4e23f635b26a",
+  "source_sha256": {
+    "scripts/prepare_bib_judgments.py": "c0304ca0aac0bf99246d6f2b19a56f51aee21d1e4a8a60aaca8ffa37d5b304ee",
+    "scripts/test_prepare_bib_judgments.py": "417a42f7b9ef7a1fb7ec0cbde12a5f034c8a45adb8deae5ea850a6fae21866f6",
+    "docs/literature-search-judgment-workflow_zh.md": "809c155f3e1e73bd896a28a23a64d7d3829c6f51f05a1038cdf6b9739430de97"
+  },
+  "real_chinese_dataset_provided": false,
+  "real_queries_generated": false,
+  "relevance_grades_generated": false,
+  "ready_for_chinese_quality_acceptance": false,
+  "coverage": [
+    "Blinded candidate union, blank labels and consensus export",
+    "Missing grade is not zero; exact pair coverage",
+    "Distinct assessors and explicit third-person adjudication",
+    "Group split leakage and frozen pool modifications rejected",
+    "All-zero queries and duplicate judgments rejected"
+  ],
+  "limitations": [
+    "Fictional test fixtures are format tests, not research relevance evidence",
+    "Human provenance is declared, not authenticated",
+    "Existing official human qrels may use existing evaluator directly"
+  ]
+}

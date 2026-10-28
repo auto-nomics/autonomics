@@ -1,0 +1,193 @@
+{
+  "schema": "bib-p4-binding-alias-capacity-v1",
+  "date": "2026-10-28",
+  "status": "P4 work in progress; no stage commit",
+  "environment": {
+    "date": "2026-10-28",
+    "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+    "binary_sha256": "8ce29883e42542a43a4168f1db94b8c392e7b9ba60d847c612de73d6e94073df",
+    "source_sha256": {
+      "crates/bib-base/examples/semantic_capacity_benchmark.rs": "a039ae8774119ffbd4781c94923a9c673b2c8dfd1764d911a380820df6552e1a",
+      "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82"
+    }
+  },
+  "runs": {
+    "10000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 210800,
+        "rss_kib": 210800
+      },
+      "count": 10000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 216248,
+        "rss_kib": 188340
+      },
+      "final_memory": {
+        "peak_rss_kib": 216248,
+        "rss_kib": 184768
+      },
+      "idle_ms": 0.44693,
+      "idle_snapshot_reused": true,
+      "import_ms": 4045.96992,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 10000,
+        "embedded_chunks": 10000,
+        "rebuilt": true,
+        "total_chunks": 10000
+      },
+      "initial_ms": 873.7247209999999,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "metadata_ms": 5.829862,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 10000,
+          "first_observed_ms": 9.231509,
+          "hot": {
+            "max_ms": 9.526875,
+            "p50_ms": 8.884358,
+            "p95_ms": 9.422296,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 100,
+          "first_observed_ms": 0.197338,
+          "hot": {
+            "max_ms": 0.18806,
+            "p50_ms": 0.18096299999999998,
+            "p95_ms": 0.184981,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 86.00859299999999,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 52232192,
+        "vectors.db-tshm": 86016,
+        "vectors.db-wal": 2575032
+      },
+      "vector_store_total_bytes": 54893240
+    },
+    "100000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 671624,
+        "rss_kib": 671624
+      },
+      "count": 100000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 719080,
+        "rss_kib": 717916
+      },
+      "final_memory": {
+        "peak_rss_kib": 719080,
+        "rss_kib": 647384
+      },
+      "idle_ms": 0.48450400000000005,
+      "idle_snapshot_reused": true,
+      "import_ms": 42122.836438,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 100000,
+        "embedded_chunks": 100000,
+        "rebuilt": true,
+        "total_chunks": 100000
+      },
+      "initial_ms": 9469.084026999999,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "metadata_ms": 62.194579,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 100000,
+          "first_observed_ms": 119.605192,
+          "hot": {
+            "max_ms": 126.094467,
+            "p50_ms": 121.964561,
+            "p95_ms": 123.386176,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 1000,
+          "first_observed_ms": 3.2595359999999998,
+          "hot": {
+            "max_ms": 2.2976530000000004,
+            "p50_ms": 1.9409,
+            "p95_ms": 2.124882,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 1155.435769,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 528093184,
+        "vectors.db-tshm": 86016,
+        "vectors.db-wal": 2991152
+      },
+      "vector_store_total_bytes": 531170352
+    }
+  },
+  "log_sha256": {
+    "10000": "f20350fae469840bcaba8d8ad2c6b8c4ebc855aaa0b343905bcef3855502a45f",
+    "100000": "cc97679a075b193de3e64dadcaee9778a47b0fcd3f2db826fbd33188feec4be5"
+  },
+  "interpretation": "Identical chunk identities reuse a materialized binding generation. At 100k, the single observed metadata publication took 62.19ms versus 1977.96ms in the preceding immutable-vector-sharing run. No ranking speed improvement or end-to-end SLO claim.",
+  "limitations": [
+    "Single metadata sample per size; not a latency percentile",
+    "Synthetic vectors, single title/abstract chunk per article",
+    "Direct SemanticIndex, excludes service/actor, actual model inference, HTTP API and GUI",
+    "Content change/deletion still materializes bindings; metadata aliases do not eliminate all incremental write amplification",
+    "Historical source and binary hashes retained; newer validation is recorded separately"
+  ]
+}

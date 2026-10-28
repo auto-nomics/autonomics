@@ -20,7 +20,9 @@ impl BibBase {
         article_id: &str,
         input: SearchEvidenceRequest,
     ) -> Result<SearchEvidencePage> {
+        let prepared = self.prepare_search(&input.search).await?;
         self.call(|reply| BibCommand::SearchEvidence {
+            prepared,
             article_id: article_id.into(),
             input,
             reply,
@@ -29,10 +31,11 @@ impl BibBase {
     }
 }
 impl BibCore {
-    pub(crate) async fn search_evidence(
+    pub(crate) async fn search_evidence_prepared(
         &self,
         article_id: &str,
         mut input: SearchEvidenceRequest,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
     ) -> Result<SearchEvidencePage> {
         if self.search_engine == crate::SearchEngineMode::Legacy {
             return Err(invalid(
@@ -45,7 +48,9 @@ impl BibCore {
         input.search.include_facets = false;
         let conn = self.conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Deferred).await?;
-        let result = self.evidence_snapshot(article_id, input).await;
+        let result = self
+            .evidence_snapshot(article_id, input, prepared.as_ref())
+            .await;
         match result {
             Ok(page) => {
                 tx.commit().await?;
@@ -61,9 +66,11 @@ impl BibCore {
         &self,
         article_id: &str,
         mut input: SearchEvidenceRequest,
+        prepared: Option<&crate::semantic_service::PreparedSemanticQuery>,
     ) -> Result<SearchEvidencePage> {
         let cursor = input.search.cursor.take();
-        let (eligible, _) = self.scoped_search_candidates(&input.search).await?;
+        let evaluation = self.evaluate_search(&input.search, prepared).await?;
+        let eligible = &evaluation.hits;
         if !eligible.iter().any(|hit| hit.article_id == article_id) {
             return Err(Error::NotFound(
                 "article does not match the active search and scope".into(),
@@ -74,10 +81,10 @@ impl BibCore {
                 .search_index
                 .lock()
                 .map_err(|_| invalid("search worker lock poisoned"))?;
-            format!(
-                "tantivy-v2:{}:{}",
+            crate::hybrid_search::generation(
                 index.revision.unwrap_or(0),
-                index.commit_token.as_deref().unwrap_or_default()
+                index.commit_token.as_deref().unwrap_or_default(),
+                prepared,
             )
         };
         if input
@@ -90,10 +97,21 @@ impl BibCore {
             ));
         }
         let index = self.search_index.clone();
-        let expression = input.search.expression.clone();
-        let same_child = input.search.scope.require_same_child;
+        let expression = if input.search.mode == bib_types::SearchMode::Hybrid {
+            Some(crate::hybrid_search::topic_expression(
+                input
+                    .search
+                    .semantic_query
+                    .as_deref()
+                    .expect("validated topic"),
+            )?)
+        } else {
+            input.search.expression.clone()
+        };
+        let same_child = input.search.mode == bib_types::SearchMode::Lexical
+            && input.search.scope.require_same_child;
         let id = article_id.to_owned();
-        let candidates = tokio::task::spawn_blocking(move || {
+        let mut candidates = tokio::task::spawn_blocking(move || {
             index
                 .lock()
                 .map_err(|_| invalid("search worker lock poisoned"))?
@@ -101,6 +119,27 @@ impl BibCore {
         })
         .await
         .map_err(|e| Error::Unknown(format!("evidence worker: {e}")))??;
+        let semantic_chunk = evaluation.semantic_chunks.get(article_id);
+        if let Some(chunk) = semantic_chunk {
+            if !candidates.iter().any(|hit| hit.doc_id == chunk.doc_id) {
+                let mut candidate = eligible
+                    .iter()
+                    .find(|hit| hit.article_id == article_id)
+                    .expect("eligible article")
+                    .clone();
+                candidate.doc_id = chunk.doc_id.clone();
+                candidate.anchor_key = chunk.anchor_key.clone();
+                candidate.kind = chunk.kind.clone();
+                candidate.matched_field = match chunk.kind.as_str() {
+                    "item" => "abstract",
+                    "annotation" => "annotation",
+                    _ => "fulltext",
+                }
+                .into();
+                candidate.snippet_query.clear();
+                candidates.push(candidate);
+            }
+        }
         let mut digest = Sha256::new();
         digest.update(article_id.as_bytes());
         digest.update(generation.as_bytes());
@@ -148,7 +187,19 @@ impl BibCore {
             .get::<String>(0)?;
         drop(rows);
         let mut evidence = Vec::new();
-        for (candidate, hit) in chosen.iter().zip(rendered) {
+        for (candidate, mut hit) in chosen.iter().zip(rendered) {
+            let semantic_evidence =
+                match semantic_chunk.filter(|chunk| chunk.doc_id == candidate.doc_id) {
+                    Some(chunk) => Some(self.render_semantic_evidence(chunk).await?),
+                    None => None,
+                };
+            if candidate.snippet_query.is_empty()
+                && let Some(evidence) = &semantic_evidence
+            {
+                hit.snippet = evidence.snippet.clone();
+                hit.highlight_ranges.clear();
+                hit.matched_field = Some(evidence.matched_field.clone());
+            }
             let (mut annotation_id, mut attachment_key, mut page) = (None, None, None);
             if candidate.kind == "attachment" {
                 attachment_key = Some(candidate.anchor_key.clone());
@@ -188,14 +239,25 @@ impl BibCore {
                 attachment_hash,
                 annotation_key,
                 annotation_id,
-                matched_field: candidate.matched_field.clone(),
-                snippet: hit.snippet,
+                matched_field: hit
+                    .matched_field
+                    .unwrap_or_else(|| candidate.matched_field.clone()),
+                snippet: hit.snippet.clone(),
                 highlight_ranges: hit.highlight_ranges,
-                matched_query: candidate.snippet_query.clone(),
+                matched_query: if candidate.snippet_query.is_empty() && semantic_evidence.is_some()
+                {
+                    hit.snippet.clone()
+                } else {
+                    candidate.snippet_query.clone()
+                },
                 page,
                 content_revision: generation.clone(),
                 location_status: location_status.into(),
+                semantic_evidence,
             });
+        }
+        if let Some(prepared) = prepared {
+            self.validate_semantic_configuration(prepared).await?;
         }
         Ok(SearchEvidencePage {
             evidence,

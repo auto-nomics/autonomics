@@ -1,0 +1,459 @@
+{
+  "schema": "bib-p4-startup-reader-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 in progress; no stage commit",
+  "implementation": {
+    "transient_rowid_locators_in_one_read_transaction": true,
+    "blob_read_batch_max": 256,
+    "referenced_vectors_only": true,
+    "checksum_and_normalization_checks_preserved": true,
+    "sorted_chunk_order_preserved": true,
+    "persistent_format_changed": false,
+    "other_profile_blobs_scanned": false
+  },
+  "storage": {
+    "library_filesystem": "ext4",
+    "library_mount": "/mnt/projects",
+    "cache_advice": "fsync_then_posix_fadvise_DONTNEED",
+    "physical_cache_guaranteed": false,
+    "source_fixture_copied_and_closed": true
+  },
+  "storage_diagnostic": {
+    "raw_path": "target/bib-p4-validation/storage-matched-comparison/receipt.json",
+    "raw_receipt_sha256": "8161030fe17649bd209ccf5325d8589b2a260f4898e5e1e0f6008fe6e1af87d9",
+    "measurement": {
+      "schema": "bib-vector-storage-comparison-v2",
+      "source_receipt_sha256": "b0ce17082d9f426dc0e4f921f8c56e37bd401fe01ee95aeccebb9e2c176595cf",
+      "worker_sha256": "bc54528f3bca4bed146860f553d67a99f64aa8fae65a3ac33d52a5e70ec99c61",
+      "source_sha256": {
+        "/mnt/projects/autonomics_projects/autonomics/scripts/benchmark_bib_storage_reads.py": "c1c12ccc5da4f6ddc5cb35105270a0b58153135530e05d6a0d12d42180af53dc",
+        "crates/bib-base/examples/semantic_storage_probe.rs": "6652db867515b6acec2275b08903a8cdcaa58e92247791aa3f7139257cd8ae8c"
+      },
+      "copied_fixture_only": true,
+      "physical_cache_guaranteed": false,
+      "cache_advice": "fsync_then_posix_fadvise_DONTNEED",
+      "runs": {
+        "join": {
+          "content_fingerprint": "06101cfe2ddf2cfee729c5302920b700e8fd62cfd3be4022a185f861a62435e1",
+          "limitations": [
+            "Copied sidecar projected read diagnostic only",
+            "Excludes metadata materialization, normalization, model, source validation, HTTP and GUI",
+            "Cache conditions supplied externally; not guaranteed cold by this worker"
+          ],
+          "mode": "join",
+          "read_ms": 13292.362860000001,
+          "schema": "bib-vector-storage-diagnostic-v1",
+          "search_latency": false,
+          "signature": "7d1c6db2f64659e9c7fd3f8e649547e88cb7f43e2201192358e3442289a26502",
+          "unique_vectors": 100000,
+          "vector_bytes": 409600000
+        },
+        "scan": {
+          "content_fingerprint": "06101cfe2ddf2cfee729c5302920b700e8fd62cfd3be4022a185f861a62435e1",
+          "limitations": [
+            "Copied sidecar projected read diagnostic only",
+            "Excludes metadata materialization, normalization, model, source validation, HTTP and GUI",
+            "Cache conditions supplied externally; not guaranteed cold by this worker"
+          ],
+          "mode": "scan",
+          "read_ms": 789.98366,
+          "schema": "bib-vector-storage-diagnostic-v1",
+          "search_latency": false,
+          "signature": "7d1c6db2f64659e9c7fd3f8e649547e88cb7f43e2201192358e3442289a26502",
+          "unique_vectors": 100000,
+          "vector_bytes": 409600000
+        },
+        "rowid": {
+          "content_fingerprint": "06101cfe2ddf2cfee729c5302920b700e8fd62cfd3be4022a185f861a62435e1",
+          "limitations": [
+            "Copied sidecar projected read diagnostic only",
+            "Excludes metadata materialization, normalization, model, source validation, HTTP and GUI",
+            "Cache conditions supplied externally; not guaranteed cold by this worker"
+          ],
+          "mode": "rowid",
+          "read_ms": 2334.232022,
+          "schema": "bib-vector-storage-diagnostic-v1",
+          "search_latency": false,
+          "signature": "7d1c6db2f64659e9c7fd3f8e649547e88cb7f43e2201192358e3442289a26502",
+          "unique_vectors": 100000,
+          "vector_bytes": 409600000
+        }
+      }
+    }
+  },
+  "http_before": {
+    "raw_path": "target/bib-p4-validation/http-disk-advised/receipt.json",
+    "raw_receipt_sha256": "927d60e53082b627a6e2d7d09f6479c156825478b133935a4027f69f2b1b552b",
+    "measurement": {
+      "schema": "bib-semantic-service-capacity-runner-v1",
+      "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+      "hardware": {
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+        "reported_logical_cpus": 24,
+        "allowed_cpus": 24,
+        "reported_mem_total_kib": 65643140,
+        "shared_host": true
+      },
+      "controlled_http_model_fixture": true,
+      "worker_sha256": "3df7e648d435d92cd977cc94ed4cc7153f7b75dc4945bc17c6744fc9d0fa08f2",
+      "source_sha256": {
+        "Cargo.lock": "b65f4155cb93df6ee8b4e9e92299469a786134721306bfa1a01e7320710d679f",
+        "crates/api-server/Cargo.toml": "82307804d1b824e71ca5807c9f18a0c2097859a7b3b0e72e5b8a3264de70a706",
+        "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+        "scripts/benchmark_bib_semantic_service.py": "66168f2e81f984c773b0d9c4953ea1a48e35e9af02820ef17429786a6d42cae8",
+        "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+        "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+        "crates/bib-base/src/semantic_service.rs": "168381315bf5dc712ad60905289b1108cbef5bb16ac2bf325365ca1c6782f12a",
+        "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+        "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+        "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+        "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+        "crates/api-server/examples/semantic_http_benchmark.rs": "bf609e43ae8b0d3a68c59a55cef9706d67cab712be5db31820df3e77bd6ef897",
+        "crates/api-server/src/server.rs": "c1799f152777bbf6b6a99d4aeb4a4ef608239506965e30b040f470eda56038fa",
+        "crates/api-server/src/bib.rs": "7e535ad9339f4183394acee9fcefd133ae3ed9a3aa046fd2447a512fdbdd1168",
+        "apps/gui/tests/bibliography-capacity.mjs": "ba962451204921c44a06c08295143b98d422eea4535d384e05273b11e9d2dbc0",
+        "apps/gui/tests/bibliography-capacity.html": "8cd2e6ce713e78f774520a65fc1b3ee0be7a410a8eda7ce02b8e5ce726153218",
+        "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+        "apps/gui/src/gateway.ts": "2aa28cd607752899e8de6076483cf9396f3d7087abfc731d82eae10a9ac5b3b2"
+      },
+      "runs": {
+        "10000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 10000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 226908,
+            "rss_kib": 210616
+          },
+          "first_result_total_ms": 1448.7028500000001,
+          "four_clients": {
+            "max_ms": 156.235938,
+            "p50_ms": 147.973471,
+            "p95_ms": 152.292015,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 736.936238,
+          "initial_ready_ms": 1087.679724,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.22942300000000002,
+          "open_ms": 109.598533,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 16.790885,
+              "hot": {
+                "max_ms": 40.074343,
+                "p50_ms": 21.494767000000003,
+                "p95_ms": 34.662653,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 250.64431999999996,
+              "hot": {
+                "max_ms": 48.988248,
+                "p50_ms": 39.419294,
+                "p95_ms": 46.584806,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "d14ee91840e52b6ab1661f396fb6a46fdea08eed71ca6ed84aa6d9f2efafae4c",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 47,
+            "bytes": 107423204,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 4.311661026004003
+        },
+        "100000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 100000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 790992,
+            "rss_kib": 788060
+          },
+          "first_result_total_ms": 20537.523095,
+          "four_clients": {
+            "max_ms": 1572.7452429999998,
+            "p50_ms": 1535.324949,
+            "p95_ms": 1558.128419,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 7704.574193,
+          "initial_ready_ms": 16143.706367,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.206155,
+          "open_ms": 599.6359,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 59.169081,
+              "hot": {
+                "max_ms": 68.021187,
+                "p50_ms": 61.232099999999996,
+                "p95_ms": 64.586743,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 3793.5495339999998,
+              "hot": {
+                "max_ms": 422.01517,
+                "p50_ms": 396.26971199999997,
+                "p95_ms": 414.151697,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "1b26e9816475186bb86d668026f4f9d7fea76fe0d5c7438a408d58119486a152",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 35,
+            "bytes": 1659261602,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 44.16458867199981
+        }
+      }
+    }
+  },
+  "http_after": {
+    "raw_path": "target/bib-p4-validation/http-rowid-advised-20261028/receipt.json",
+    "raw_receipt_sha256": "9aaf8558edf3c32ec32bf183f9a4faf90b6ad9ef1e77ad6a60d129d458e56973",
+    "measurement": {
+      "schema": "bib-semantic-service-capacity-runner-v1",
+      "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+      "hardware": {
+        "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+        "reported_logical_cpus": 24,
+        "allowed_cpus": 24,
+        "reported_mem_total_kib": 65643140,
+        "shared_host": true
+      },
+      "controlled_http_model_fixture": true,
+      "worker_sha256": "3179ea4a76f93e0e031ccf6d917c61be325d37c7886fc5e809a59f61f4cfe360",
+      "source_sha256": {
+        "Cargo.lock": "b65f4155cb93df6ee8b4e9e92299469a786134721306bfa1a01e7320710d679f",
+        "crates/api-server/Cargo.toml": "82307804d1b824e71ca5807c9f18a0c2097859a7b3b0e72e5b8a3264de70a706",
+        "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+        "scripts/benchmark_bib_semantic_service.py": "66168f2e81f984c773b0d9c4953ea1a48e35e9af02820ef17429786a6d42cae8",
+        "crates/bib-base/src/semantic_index.rs": "9afbcf4b51a126b718634b148cf3c6ab608f908a3fcf10b8354dd53eeea9e44f",
+        "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+        "crates/bib-base/src/semantic_service.rs": "e02baca0d3b08b697452265e30667792c2345db880a9c13e671b33e0b7a30cca",
+        "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+        "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+        "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+        "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+        "crates/api-server/examples/semantic_http_benchmark.rs": "bf609e43ae8b0d3a68c59a55cef9706d67cab712be5db31820df3e77bd6ef897",
+        "crates/api-server/src/server.rs": "c1799f152777bbf6b6a99d4aeb4a4ef608239506965e30b040f470eda56038fa",
+        "crates/api-server/src/bib.rs": "7e535ad9339f4183394acee9fcefd133ae3ed9a3aa046fd2447a512fdbdd1168",
+        "apps/gui/tests/bibliography-capacity.mjs": "ba962451204921c44a06c08295143b98d422eea4535d384e05273b11e9d2dbc0",
+        "apps/gui/tests/bibliography-capacity.html": "8cd2e6ce713e78f774520a65fc1b3ee0be7a410a8eda7ce02b8e5ce726153218",
+        "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+        "apps/gui/src/gateway.ts": "2aa28cd607752899e8de6076483cf9396f3d7087abfc731d82eae10a9ac5b3b2"
+      },
+      "runs": {
+        "10000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 10000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 239120,
+            "rss_kib": 230788
+          },
+          "first_result_total_ms": 907.644133,
+          "four_clients": {
+            "max_ms": 160.186774,
+            "p50_ms": 133.074034,
+            "p95_ms": 148.806932,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 705.522325,
+          "initial_ready_ms": 467.779974,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.328501,
+          "open_ms": 210.481732,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 16.364077,
+              "hot": {
+                "max_ms": 45.071068,
+                "p50_ms": 18.928191,
+                "p95_ms": 36.111050999999996,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 228.836318,
+              "hot": {
+                "max_ms": 52.15462,
+                "p50_ms": 37.065903999999996,
+                "p95_ms": 51.289491999999996,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "d14ee91840e52b6ab1661f396fb6a46fdea08eed71ca6ed84aa6d9f2efafae4c",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 47,
+            "bytes": 107423204,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 4.585714638000354
+        },
+        "100000": {
+          "build_profile": "release",
+          "continuation_disjoint": true,
+          "controlled_http_model_fixture": true,
+          "copied_fixture_reused": true,
+          "count": 100000,
+          "dimensions": 1024,
+          "final_memory": {
+            "peak_rss_kib": 823056,
+            "rss_kib": 805232
+          },
+          "first_result_total_ms": 10597.475468,
+          "four_clients": {
+            "max_ms": 1537.328357,
+            "p50_ms": 1518.8404119999998,
+            "p95_ms": 1529.3152850000001,
+            "samples": 20
+          },
+          "four_clients_wall_ms": 7575.974134,
+          "initial_ready_ms": 5937.964861,
+          "limitations": [
+            "Synthetic 1024D model HTTP fixture, not real model inference speed or relevance",
+            "Reopened copied library, not initial import or embedding generation",
+            "File-cache advice, when used by runner, is advisory and excludes physical storage caches",
+            "No GUI paint, input, IPC or manual accessibility timing"
+          ],
+          "listen_ms": 0.221817,
+          "open_ms": 754.5461359999999,
+          "relevance_evaluation": false,
+          "schema": "bib-semantic-http-capacity-v1",
+          "single_client": {
+            "one_percent": {
+              "first_observed_ms": 63.979293000000006,
+              "hot": {
+                "max_ms": 65.05013699999999,
+                "p50_ms": 60.774901,
+                "p95_ms": 63.62373,
+                "samples": 30
+              }
+            },
+            "wide": {
+              "first_observed_ms": 3904.2922730000005,
+              "hot": {
+                "max_ms": 416.444044,
+                "p50_ms": 392.21886700000005,
+                "p95_ms": 415.250523,
+                "samples": 30
+              }
+            }
+          },
+          "transport": "real loopback TCP/HTTP, bearer auth, JSON request and response decode",
+          "unauthenticated_status": 401,
+          "fixture_requests": {
+            "embed_requests": 84,
+            "embedded_inputs": 84,
+            "tag_requests": 169
+          },
+          "reused_source_receipt_sha256": "1b26e9816475186bb86d668026f4f9d7fea76fe0d5c7438a408d58119486a152",
+          "file_cache_advice": {
+            "method": "fsync_then_posix_fadvise_DONTNEED",
+            "files": 35,
+            "bytes": 1659261602,
+            "physical_cache_guaranteed": false
+          },
+          "wall_seconds": 39.28034243299771
+        }
+      }
+    }
+  },
+  "validation": {
+    "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests",
+    "passed": 334,
+    "failed": 0,
+    "ignored": 3,
+    "strict_libraries_and_tests_clippy": true,
+    "strict_new_examples_clippy": true,
+    "new_reader_test": "snapshot_load_spans_batches_shares_duplicates_and_ignores_other_cache_rows",
+    "existing_clippy_diagnostic_resolved_by_function_relocation_only": true
+  },
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "9afbcf4b51a126b718634b148cf3c6ab608f908a3fcf10b8354dd53eeea9e44f",
+    "crates/bib-base/src/semantic_index/tests.rs": "8aafe533126870d9280e45a0147d9287ec86bc92a73b1fad0d2e2130e515480c",
+    "crates/bib-base/src/stored_files.rs": "5731734b99f6110b24ba33b5b9aed0d3c0533522f3a5c87a292458b86727b22b",
+    "crates/bib-base/examples/semantic_storage_probe.rs": "6652db867515b6acec2275b08903a8cdcaa58e92247791aa3f7139257cd8ae8c",
+    "scripts/benchmark_bib_storage_reads.py": "c1c12ccc5da4f6ddc5cb35105270a0b58153135530e05d6a0d12d42180af53dc"
+  },
+  "logs_sha256": {
+    "physical-reader-full-regression.log": "318289164bad5e86a5d9dbf27b9fd9c293862c087bae4ae7efbb130bb885fef3",
+    "physical-reader-clippy.log": "74992544d774fac33629c09823cc73ebd7697be23c1fd4893e8e18de6210a07b",
+    "physical-reader-example-clippy.log": "1cb956b1728cad30d986d020fb2e6774435eda079a252d6972d4f6426813418b",
+    "physical-reader-release-build.log": "0c669f5bc9bb10426250fa96e9fcb52393b211281f8b4d63ae320be1f4d094f5"
+  },
+  "limitations": [
+    "Startup figures are single observations on a shared reference host, not percentile cold-start guarantees",
+    "DONTNEED is advisory; OS and physical storage caches are not globally flushed",
+    "Rowid order exploits table-key locality; no guarantee of physical file layout",
+    "Projected storage diagnostics exclude complete snapshot construction, normalization, metadata, source validation and transport",
+    "HTTP load includes synthetic model requests, auth/JSON/facets and 20 articles; not real model inference or GUI latency",
+    "100k hot HTTP P95 remains about 415ms; no hot-query improvement claim",
+    "100k peak RSS increases from 790992KiB to 823056KiB; memory tradeoff retained",
+    "Multi-attachment capacity, continuous writes, cache quota, Chinese real judgments and stage isolation remain open"
+  ]
+}

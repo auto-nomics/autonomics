@@ -1,0 +1,14 @@
+{
+  "schema": "literature-search-p4-sustained-write-v1",
+  "platform": "Linux",
+  "test": "bib-base::semantic_index::tests::sustained_writes_keep_lexical_search_available_and_converge_after_pause",
+  "test_profile": "ignored deterministic structural qualification; in-memory canonical database and deterministic 2D embedding probe",
+  "elapsed_seconds": 60.74,
+  "minimum_successful_writes": 100,
+  "per_write_lexical_read": "passed; every inserted article was returned by lexical search before the next write",
+  "embedding_paused_during_writes": true,
+  "stale_generation_published": false,
+  "stale_generation_sync_result": "explicit SearchConflict after writes changed the source revision",
+  "post_pause_sync": "passed; published revision advanced and all current chunks were present",
+  "scope": "Availability and convergence qualification only; not a production throughput, relevance, or end-to-end latency claim"
+}

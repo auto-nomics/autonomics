@@ -1,0 +1,724 @@
+{
+  "schema": "bib-p4-query-optimization-qualification-v1",
+  "date": "2026-10-28",
+  "platform": "Linux",
+  "status": "P4 in progress; no stage commit",
+  "validation": {
+    "library_targets": [
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 203,
+        "failed": 0,
+        "ignored": 2
+      }
+    ],
+    "integration_targets": [
+      {
+        "passed": 24,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "passed_total": 252,
+    "ignored_total": 3,
+    "strict_clippy": true,
+    "actual_qwen_lifecycle": true,
+    "actual_native_gui": true,
+    "sigkill_recovery": true
+  },
+  "capacity": {
+    "schema": "bib-semantic-service-capacity-runner-v1",
+    "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+    "controlled_http_model_fixture": true,
+    "worker_sha256": "97aedf496cfed1c6c3fe9975172827f5d14dd4060f9707ff8cba8e015ba2f31a",
+    "source_sha256": {
+      "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+      "scripts/benchmark_bib_semantic_service.py": "19c0ed61ff506e88567d82c3a79d269f1926aaf41ce921b2fcc448486c6e2d47",
+      "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+      "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+      "crates/bib-base/src/semantic_service.rs": "168381315bf5dc712ad60905289b1108cbef5bb16ac2bf325365ca1c6782f12a",
+      "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+      "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+      "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+      "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca"
+    },
+    "runs": {
+      "10000": {
+        "build_profile": "release",
+        "built_memory": {
+          "peak_rss_kib": 142480,
+          "rss_kib": 142480
+        },
+        "controlled_http_model_fixture": true,
+        "copied_fixture_reused": true,
+        "count": 10000,
+        "dimensions": 1024,
+        "final_memory": {
+          "peak_rss_kib": 292472,
+          "rss_kib": 292472
+        },
+        "four_clients": {
+          "max_ms": 138.170838,
+          "p50_ms": 127.794251,
+          "p95_ms": 135.694502,
+          "samples": 20
+        },
+        "four_clients_wall_ms": 649.245326,
+        "hybrid_config_transition_conflicts": 0,
+        "hybrid_during_rebuild": {
+          "max_ms": 40.7573,
+          "p50_ms": 36.358569,
+          "p95_ms": 40.7573,
+          "samples": 10
+        },
+        "import_ms": null,
+        "initial_conflict_polls": 0,
+        "initial_ready_ms": 107.590102,
+        "lexical_during_index_updates": {
+          "max_ms": 6.205882,
+          "p50_ms": 5.355879,
+          "p95_ms": 6.205882,
+          "samples": 10
+        },
+        "lexical_during_rebuild": {
+          "max_ms": 3.298899,
+          "p50_ms": 1.175202,
+          "p95_ms": 3.298899,
+          "samples": 10
+        },
+        "limitations": [
+          "Production BibBase service/actor path with local bounded model HTTP fixture; not HTTP API or GUI end-to-end",
+          "No actual model inference speed or relevance claim",
+          "First observed queries follow initial indexing, not OS-cold cache",
+          "One title/abstract chunk per article",
+          "Single host measurements; concurrent samples include queueing"
+        ],
+        "rebuild_ms": 805.4793540000001,
+        "rebuild_progress": {
+          "cached_chunks": 10000,
+          "embedded_chunks": 0,
+          "processed_articles": 10000,
+          "processed_chunks": 10000,
+          "stage": "complete",
+          "target_articles": 10000,
+          "target_revision": 10021
+        },
+        "relevance_evaluation": false,
+        "schema": "bib-semantic-service-capacity-v1",
+        "single_client": {
+          "one_percent": {
+            "first_observed_ms": 19.044833,
+            "hot": {
+              "max_ms": 46.503643,
+              "p50_ms": 26.805494999999997,
+              "p95_ms": 41.611242,
+              "samples": 30
+            }
+          },
+          "wide": {
+            "first_observed_ms": 120.09823,
+            "hot": {
+              "max_ms": 55.37173799999999,
+              "p50_ms": 36.693862,
+              "p95_ms": 47.929438999999995,
+              "samples": 30
+            }
+          }
+        },
+        "update_catchup_ms": 1310.1195089999999,
+        "update_conflict_polls": 0,
+        "vector_store_files": {
+          "library.db.semantic-v1": 57860096,
+          "library.db.semantic-v1-tshm": 86016,
+          "library.db.semantic-v1-wal": 8993992
+        },
+        "vector_store_total_bytes": 66940104,
+        "writes_during_index_updates": {
+          "max_ms": 0.987239,
+          "p50_ms": 0.612783,
+          "p95_ms": 0.987239,
+          "samples": 10
+        },
+        "fixture_requests": {
+          "embed_requests": 92,
+          "embedded_inputs": 92,
+          "tag_requests": 186
+        },
+        "reused_source_receipt_sha256": "d14ee91840e52b6ab1661f396fb6a46fdea08eed71ca6ed84aa6d9f2efafae4c",
+        "wall_seconds": 5.053782688002684
+      },
+      "100000": {
+        "build_profile": "release",
+        "built_memory": {
+          "peak_rss_kib": 597988,
+          "rss_kib": 597988
+        },
+        "controlled_http_model_fixture": true,
+        "copied_fixture_reused": true,
+        "count": 100000,
+        "dimensions": 1024,
+        "final_memory": {
+          "peak_rss_kib": 1255272,
+          "rss_kib": 1255272
+        },
+        "four_clients": {
+          "max_ms": 1471.906095,
+          "p50_ms": 1439.401564,
+          "p95_ms": 1465.733441,
+          "samples": 20
+        },
+        "four_clients_wall_ms": 7223.357505,
+        "hybrid_config_transition_conflicts": 0,
+        "hybrid_during_rebuild": {
+          "max_ms": 438.617472,
+          "p50_ms": 400.598804,
+          "p95_ms": 438.617472,
+          "samples": 10
+        },
+        "import_ms": null,
+        "initial_conflict_polls": 0,
+        "initial_ready_ms": 1601.216714,
+        "lexical_during_index_updates": {
+          "max_ms": 12.157126,
+          "p50_ms": 9.676084999999999,
+          "p95_ms": 12.157126,
+          "samples": 10
+        },
+        "lexical_during_rebuild": {
+          "max_ms": 4.107801,
+          "p50_ms": 2.267023,
+          "p95_ms": 4.107801,
+          "samples": 10
+        },
+        "limitations": [
+          "Production BibBase service/actor path with local bounded model HTTP fixture; not HTTP API or GUI end-to-end",
+          "No actual model inference speed or relevance claim",
+          "First observed queries follow initial indexing, not OS-cold cache",
+          "One title/abstract chunk per article",
+          "Single host measurements; concurrent samples include queueing"
+        ],
+        "rebuild_ms": 9490.836616999999,
+        "rebuild_progress": {
+          "cached_chunks": 100000,
+          "embedded_chunks": 0,
+          "processed_articles": 100000,
+          "processed_chunks": 100000,
+          "stage": "complete",
+          "target_articles": 100000,
+          "target_revision": 100021
+        },
+        "relevance_evaluation": false,
+        "schema": "bib-semantic-service-capacity-v1",
+        "single_client": {
+          "one_percent": {
+            "first_observed_ms": 65.688153,
+            "hot": {
+              "max_ms": 68.584045,
+              "p50_ms": 58.572566,
+              "p95_ms": 66.554007,
+              "samples": 30
+            }
+          },
+          "wide": {
+            "first_observed_ms": 1384.0163109999999,
+            "hot": {
+              "max_ms": 394.859122,
+              "p50_ms": 361.615413,
+              "p95_ms": 386.15927300000004,
+              "samples": 30
+            }
+          }
+        },
+        "update_catchup_ms": 637.709757,
+        "update_conflict_polls": 0,
+        "vector_store_files": {
+          "library.db.semantic-v1": 580403200,
+          "library.db.semantic-v1-tshm": 3444736,
+          "library.db.semantic-v1-wal": 700507152
+        },
+        "vector_store_total_bytes": 1284355088,
+        "writes_during_index_updates": {
+          "max_ms": 1.169132,
+          "p50_ms": 0.681493,
+          "p95_ms": 1.169132,
+          "samples": 10
+        },
+        "fixture_requests": {
+          "embed_requests": 92,
+          "embedded_inputs": 92,
+          "tag_requests": 186
+        },
+        "reused_source_receipt_sha256": "1b26e9816475186bb86d668026f4f9d7fea76fe0d5c7438a408d58119486a152",
+        "wall_seconds": 33.95234382300259
+      }
+    }
+  },
+  "actual_qwen": {
+    "initial": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "a808e0fd-ee31-47c1-894f-929ebccd7879",
+      "generation": "0d75f3ac-6425-4323-aa03-947fed6e032a",
+      "indexed_chunks": 32,
+      "indexed_revision": 33,
+      "last_error": null,
+      "maintenance": null,
+      "phase": "ready",
+      "progress": {
+        "cached_chunks": 0,
+        "embedded_chunks": 32,
+        "processed_articles": 32,
+        "processed_chunks": 32,
+        "stage": "complete",
+        "target_articles": 32,
+        "target_revision": 33
+      },
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+      "store_generation": ""
+    },
+    "metadata_update": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "a808e0fd-ee31-47c1-894f-929ebccd7879",
+      "generation": "68ca576c-a9f0-4c8b-9c45-d0b2aaf2ef6d",
+      "indexed_chunks": 32,
+      "indexed_revision": 34,
+      "last_error": null,
+      "maintenance": null,
+      "phase": "ready",
+      "progress": {
+        "cached_chunks": 1,
+        "embedded_chunks": 0,
+        "processed_articles": 1,
+        "processed_chunks": 1,
+        "stage": "complete",
+        "target_articles": 1,
+        "target_revision": 34
+      },
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+      "store_generation": ""
+    },
+    "content_replacement": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "a808e0fd-ee31-47c1-894f-929ebccd7879",
+      "generation": "67d58b2b-16cb-42a2-8898-6ba87f41aade",
+      "indexed_chunks": 32,
+      "indexed_revision": 35,
+      "last_error": null,
+      "maintenance": null,
+      "phase": "ready",
+      "progress": {
+        "cached_chunks": 0,
+        "embedded_chunks": 1,
+        "processed_articles": 1,
+        "processed_chunks": 1,
+        "stage": "complete",
+        "target_articles": 1,
+        "target_revision": 35
+      },
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+      "store_generation": ""
+    },
+    "deletion": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "a808e0fd-ee31-47c1-894f-929ebccd7879",
+      "generation": "d837f62c-87af-4839-ab21-c5d677c36ddc",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "maintenance": null,
+      "phase": "ready",
+      "progress": {
+        "cached_chunks": 0,
+        "embedded_chunks": 0,
+        "processed_articles": 1,
+        "processed_chunks": 0,
+        "stage": "complete",
+        "target_articles": 1,
+        "target_revision": 36
+      },
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+      "store_generation": ""
+    },
+    "restart": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "a808e0fd-ee31-47c1-894f-929ebccd7879",
+      "generation": "d837f62c-87af-4839-ab21-c5d677c36ddc",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "maintenance": null,
+      "phase": "ready",
+      "progress": {
+        "cached_chunks": 0,
+        "embedded_chunks": 0,
+        "processed_articles": 0,
+        "processed_chunks": 0,
+        "stage": "complete",
+        "target_articles": 0,
+        "target_revision": 36
+      },
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385",
+      "store_generation": ""
+    },
+    "disable_persisted": true,
+    "deleted_article_absent_from_export": true,
+    "exported_candidate_count": 32,
+    "hybrid_candidate_count": 32,
+    "relevance_evaluation": false
+  },
+  "actual_native": {
+    "evidence": [
+      "actual installed model metadata via HTTP and native IPC",
+      "GUI enables full-text scope and fixed digest indexing",
+      "real model query with required year filter",
+      "candidate count and dual recall explanation",
+      "semantic source opens non-preferred attachment through binary IPC",
+      "reader locates actual source text and returns without changing topic",
+      "real WebView reload restores topic and hard conditions",
+      "backend persisted hybrid saved rule",
+      "GUI rebuild, isolated repair, persistent pause and resume through real IPC/API/model",
+      "GUI persists disable and explicitly returns to keywords"
+    ],
+    "hybrid_probe": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": 2000,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": true,
+          "overlap_chars": 200,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "generation": "tantivy-v2:6:b7be7fb2-b4f0-49d0-b787-9162f2837695:hybrid-rrf-v1-d100-k10-w4:8da51515d07a902176a0c2384199d9cca69f5e1dbb312441c4c41592a47fb96b:f3f3d173-cbc8-4def-be47-7c910aa152ad:4eb6d944-6294-4bb9-9ca3-6a10a1daf1e0",
+      "recall": {
+        "lexical_rank": 1,
+        "semantic_evidence": {
+          "anchor_key": "D4824B62",
+          "content_hash": "96e11e3a5f8ae7e5ab022f4f90383d6390b6c69c4bba158a57dcc2317791b618",
+          "doc_id": "D4824B62:attachment",
+          "end_byte": 72,
+          "kind": "attachment",
+          "matched_field": "fulltext",
+          "snippet": "İ prefix genome.\n😀 gene editing native evidence in the second file.\n",
+          "start_byte": 0
+        },
+        "semantic_rank": 1
+      },
+      "total": 1
+    },
+    "maintenance": [
+      {
+        "action": "rebuild",
+        "generation": "c5aa1436-885e-457e-99cd-dd2dce807b7f",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": ""
+      },
+      {
+        "action": "repair",
+        "generation": "c884a65c-2935-42c2-ba09-60403240e25d",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": "738f38a5-0d92-46d2-81d5-e20dda8ed5f5"
+      },
+      {
+        "action": "cancel",
+        "generation": "c884a65c-2935-42c2-ba09-60403240e25d",
+        "progress": null,
+        "store_generation": "738f38a5-0d92-46d2-81d5-e20dda8ed5f5"
+      },
+      {
+        "action": "resume",
+        "generation": "740af71e-4a54-45e0-af5b-c51003b8e2d5",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": "738f38a5-0d92-46d2-81d5-e20dda8ed5f5"
+      }
+    ],
+    "model": "actual installed Qwen3-Embedding 0.6B",
+    "ok": true,
+    "relevance_evaluation": false,
+    "runtime": "Tauri WebKitGTK"
+  },
+  "process_recovery": {
+    "schema": "bib-semantic-maintenance-process-recovery-v1",
+    "signal": "SIGKILL",
+    "controlled_model_http_fixture": true,
+    "relevance_evaluation": false,
+    "partial": {
+      "config": {
+        "enabled": true,
+        "origin": "http://127.0.0.1:44983",
+        "allow_remote": false,
+        "model": "fixture:latest",
+        "model_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "profile": {
+          "dimensions": 2,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+          "chunk_chars": null,
+          "overlap_chars": 0,
+          "include_annotations": false,
+          "include_fulltext": false
+        },
+        "batch_size": 16,
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "dc469254-f05a-45f7-9fbc-91291c8f1a31",
+      "phase": "indexing",
+      "generation": "5346fe1b-aebc-4034-8575-999e6fead1da",
+      "signature": "a5975fe4dff4479017382da859d1e831986d8cd99370cec4eed03e38256cc9a0",
+      "indexed_revision": 21,
+      "indexed_chunks": 20,
+      "last_error": null,
+      "progress": {
+        "stage": "embedding",
+        "target_revision": 21,
+        "target_articles": 20,
+        "processed_articles": 0,
+        "processed_chunks": 16,
+        "embedded_chunks": 16,
+        "cached_chunks": 0
+      },
+      "maintenance": {
+        "request_id": "7217e264-b20e-446b-a0d8-f4ae63807fe7",
+        "action": "repair",
+        "base_configuration_generation": "dbdde150-894d-41c5-80a2-f956a8652ef1",
+        "configuration_generation": "dc469254-f05a-45f7-9fbc-91291c8f1a31",
+        "state": "running",
+        "requested_at": "2026-10-27T23:42:55.695908028+00:00",
+        "finished_at": null,
+        "progress": {
+          "stage": "embedding",
+          "target_revision": 21,
+          "target_articles": 20,
+          "processed_articles": 0,
+          "processed_chunks": 16,
+          "embedded_chunks": 16,
+          "cached_chunks": 0
+        },
+        "last_error": null,
+        "store_generation": "7217e264-b20e-446b-a0d8-f4ae63807fe7"
+      },
+      "store_generation": ""
+    },
+    "recovered": {
+      "event": "recovery_complete",
+      "query_total": 20,
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "model": "fixture:latest",
+          "model_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "origin": "http://127.0.0.1:44983",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 2,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "dc469254-f05a-45f7-9fbc-91291c8f1a31",
+        "generation": "566a97df-b7c1-48ac-b97d-2c818abb0a4a",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": {
+          "action": "repair",
+          "base_configuration_generation": "dbdde150-894d-41c5-80a2-f956a8652ef1",
+          "configuration_generation": "dc469254-f05a-45f7-9fbc-91291c8f1a31",
+          "finished_at": "2026-10-27T23:43:12.023082419+00:00",
+          "last_error": null,
+          "progress": {
+            "cached_chunks": 16,
+            "embedded_chunks": 4,
+            "processed_articles": 20,
+            "processed_chunks": 20,
+            "stage": "complete",
+            "target_articles": 20,
+            "target_revision": 21
+          },
+          "request_id": "7217e264-b20e-446b-a0d8-f4ae63807fe7",
+          "requested_at": "2026-10-27T23:42:55.695908028+00:00",
+          "state": "complete",
+          "store_generation": "7217e264-b20e-446b-a0d8-f4ae63807fe7"
+        },
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 16,
+          "embedded_chunks": 4,
+          "processed_articles": 20,
+          "processed_chunks": 20,
+          "stage": "complete",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "signature": "a5975fe4dff4479017382da859d1e831986d8cd99370cec4eed03e38256cc9a0",
+        "store_generation": "7217e264-b20e-446b-a0d8-f4ae63807fe7"
+      }
+    },
+    "recovery_seconds_including_remaining_lease": 15.121756915003061,
+    "worker_sha256": "a7f02668746f0ea0c9ca1b21dea60c759ccf89149b574247b67046931908729a",
+    "committed_batches_reused": true,
+    "canonical_documents_preserved": 20
+  },
+  "source_sha256": {
+    "Cargo.lock": "b65f4155cb93df6ee8b4e9e92299469a786134721306bfa1a01e7320710d679f",
+    "crates/bib-base/Cargo.toml": "bfe86d67833d100af02c96cc12cf7437d143dedcd0baaa23c6173cfea8b59418",
+    "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+    "crates/bib-base/src/semantic_index/tests.rs": "445ae85ce0e99ea5b89ba373ff63205bd0800d6bea01235d06e9ada331e10320",
+    "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+    "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+    "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+    "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+    "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+    "crates/bib-base/examples/semantic_capacity_benchmark.rs": "a039ae8774119ffbd4781c94923a9c673b2c8dfd1764d911a380820df6552e1a",
+    "crates/bib-base/examples/semantic_service_benchmark.rs": "c37592fec4e1b1530315441dff8fc34af179be5115164cc1e69f8aac00e6ea44",
+    "scripts/benchmark_bib_semantic_service.py": "19c0ed61ff506e88567d82c3a79d269f1926aaf41ce921b2fcc448486c6e2d47"
+  },
+  "log_sha256": {
+    "borrowed-keys-final-libraries": "fbbe688430ead963225fe34fa7075243ac4a8e3649358cef8142d89ab520bd49",
+    "borrowed-keys-final-integration": "6fae405c958f12fd7b09c7758d9928a539e721ef40e256b4dc884bad53eace4c",
+    "borrowed-keys-final-clippy": "96b4b0e7b14d1c19d4493360cadcd599ab65f1b050cfe8080ca324da6db8f44a",
+    "borrowed-benchmark-clippy": "25aadbb1e911895cb75c72d5e3b80db1d3e5078ddb49356b9e3a63d654260166",
+    "borrowed-keys-service-capacity": "3e7c6f853f9f6e10809c3cb6d07b8817f1ae45dcf0561b20de7bca33f45ac1cb",
+    "query-optimization-qwen": "b42db2283086c54e32975a913d97157a164d7bc7797bcda9c6c5ef5a15dcaee7",
+    "query-optimization-kill": "6b7dcf499caccf2f0c34252747f75185e21632283a20408d560a3a7a41d78ddf",
+    "query-optimization-native": "ba6395ff4bf8e1e49d37e24151794734b42195b265662ec141c06c571450966b"
+  },
+  "limitations": [
+    "Observed hot percentiles use a local bounded HTTP model fixture; actual model/native lifecycle is qualified separately",
+    "Single-client 100k observed P95 is below the suggested 400ms target, but four-client queueing remains about 1.47s and this is not HTTP API/GUI timing acceptance",
+    "Throughput runs copy closed synthetic fixture libraries and reuse persisted vectors; first observed queries are not OS-cold cache and initial-ready time is not initial embedding throughput",
+    "One title/abstract chunk per article; fulltext fanout and continuous-write saturation remain pending",
+    "Native GUI fixture is one synthetic article/two TXT files with actual Qwen; not IR quality, PDF-coordinate or unrelated workspace qualification",
+    "Chinese human paper-retrieval judgments, additional platforms/manual accessibility, persistent cache quotas and isolated final stage build remain pending",
+    "Three ignored backend cases are excluded; raw profiling run is excluded from latency qualification"
+  ]
+}

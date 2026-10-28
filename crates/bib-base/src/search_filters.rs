@@ -11,7 +11,7 @@ use turso::{Connection, Value};
 #[derive(Default)]
 pub(crate) struct MetadataCache {
     revision: Option<(u64, String)>,
-    documents: HashMap<String, Metadata>,
+    documents: HashMap<String, Metadata, ahash::RandomState>,
 }
 
 struct Metadata {
@@ -195,7 +195,7 @@ impl MetadataCache {
             .filter(|m| library.is_none_or(|id| m.library == id))
             .collect::<Vec<_>>();
         let facets = include_facets.then(|| facets(&metadata, f));
-        let allowed: HashSet<_> = metadata
+        let allowed: HashSet<_, ahash::RandomState> = metadata
             .iter()
             .filter(|m| m.matches(f, ""))
             .map(|m| m.id.as_str())

@@ -29,8 +29,10 @@ export function SearchEvidencePanel({ articleId, request, generation, onOpen }: 
     {current && state.error && <p role="alert" className="text-destructive">{state.error}<Button size="xs" variant="ghost" onClick={() => void load()}>Retry evidence</Button></p>}
     {current && !state.loading && !state.error && !state.page.total && <p className="text-muted-foreground">The conditions match this article without a positive text location.</p>}
     {current && state.page.evidence.map((evidence, index) => <div key={`${evidence.attachment_key ?? evidence.annotation_key ?? evidence.item_key}-${index}`} className="space-y-1 border-t pt-2">
-      <p className="font-medium">{fieldLabel[evidence.matched_field] ?? "Match"}{evidence.page ? ` · Page ${evidence.page}` : ""}{evidence.annotation_key ? " · Annotation" : ""}</p>
+      <p className="font-medium">{evidence.semantic_evidence ? "Related evidence · " : ""}{fieldLabel[evidence.matched_field] ?? "Match"}{evidence.page ? ` · Page ${evidence.page}` : ""}{evidence.annotation_key ? " · Annotation" : ""}</p>
       <p className="break-words"><SearchSnippet text={evidence.snippet} ranges={evidence.highlight_ranges} /></p>
+      {evidence.semantic_evidence && evidence.semantic_evidence.snippet !== evidence.snippet && <p className="break-words text-muted-foreground">Related passage: {evidence.semantic_evidence.snippet}</p>}
+      {evidence.semantic_evidence && !evidence.highlight_ranges.length && <p className="text-muted-foreground">Selected by semantic similarity; no literal keyword match is implied.</p>}
       {evidence.attachment_key || evidence.annotation_id ? <Button size="xs" variant="secondary" onClick={() => onOpen(evidence)}>{evidence.attachment_key ? "Open evidence" : "Show note"}</Button> : <p className="text-muted-foreground">Shown in entry details.</p>}
       {evidence.location_status === "text_search" && <p className="text-muted-foreground">Opens the matching attachment and locates this text.</p>}
     </div>)}

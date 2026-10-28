@@ -48,7 +48,9 @@ export function SavedSearches({ disabled, scopeLabel, request, activeId, onSelec
       {dialog.kind === "delete" ? <p>Delete “{dialog.rule?.name}”? The articles remain in your library.</p> : <>
         <label className="block text-xs">Search name<Input aria-label="Search name" autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
         <p className="mt-2 text-xs text-muted-foreground">This rule follows the current query, scope and filters. New matching articles appear when the search runs.</p>
-        <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{request.expression ? formatExpression(request.expression) : request.query || "All articles"}</pre>
+        {request.mode === "hybrid" && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs"><strong>Topic:</strong> {request.semantic_query}</p>}
+        <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{request.mode === "hybrid" ? "Required conditions: " : ""}{request.expression ? formatExpression(request.expression) : request.query || "All articles"}</pre>
+        {request.mode === "hybrid" && <p className="mt-2 text-xs text-muted-foreground">This rule retains the topic and required conditions. Running it needs an enabled topic index; results are a retrieved candidate pool.</p>}
         <p className="mt-2 text-xs">{scopeLabel} · {request.sort ?? "relevance"} sorting · {Object.values(request.filters ?? {}).filter(value => Array.isArray(value) ? value.length : value != null).length} active filter groups</p>
       </>}
       {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}

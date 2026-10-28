@@ -1,0 +1,70 @@
+{
+  "schema": "bib-p4-index-publication-query-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 in progress; service capacity remeasurement running",
+  "validation": {
+    "library_targets": [
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 203,
+        "failed": 0,
+        "ignored": 2
+      }
+    ],
+    "integration_targets": [
+      {
+        "passed": 24,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "strict_clippy": true,
+    "passed_total": 252,
+    "ignored_total": 3
+  },
+  "scope": [
+    "Metadata generation references the same root binding set when all changed chunk identities are unchanged",
+    "Alias root survives restart/reaping; aliases are flattened and collected after real content change/deletion",
+    "Alias insert rollback, competing head CAS, cross-profile/nested alias rejection",
+    "Reader identity cache uses immutable segment IDs, reuses unchanged segments and handles merge/deletion/rollback",
+    "Unordered scored collection has exactly the same per-document scores and matches as TopDocs, including deleted-document handling",
+    "Early allowed-article filtering preserves article score, selected evidence and cross-object AND/OR semantics"
+  ],
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "3401e8a05ff5168c8b6d3a97f033925c4df610600124ad4226f235fc1b699f82",
+    "crates/bib-base/src/semantic_index/tests.rs": "445ae85ce0e99ea5b89ba373ff63205bd0800d6bea01235d06e9ada331e10320",
+    "crates/bib-base/src/local_index.rs": "64aa5eca2c6d3aa678042a34b2af48c7645c6aa7d7ced27b606bb25a523ff56c",
+    "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+    "crates/bib-base/src/search.rs": "ee3e4fbf250d979eb1c8b4e0fb0e5f323dadf240b3eb5bc95664973cbfe46012",
+    "crates/bib-base/src/hybrid_search.rs": "ca618956bd57db86d2cefd18e1b36858c524c8cd2a959cebe1f393e8b402c0b3",
+    "crates/bib-base/examples/semantic_service_benchmark.rs": "653ecabfe40126870b35a8c5b8f9fab7ebe12789aaa7917a90578cd603cebe24",
+    "scripts/benchmark_bib_semantic_service.py": "249a9e00976946e075cc5ae1b9c8e5013ceedc75b55e7cf8f57fd6c569a2e417"
+  },
+  "log_sha256": {
+    "scored-collection-libraries": "0509e6819a5fa7f32946d20663ec51a797030163337305fd494bd3c8339562d4",
+    "scored-collection-integration": "c6521500939a9c11e60c2c9db21a3300258473819e316272570b51bb937b2b73",
+    "scored-collection-clippy": "83c556c15fc160c1563630f0025e538d563cee091f652cebd790de5804b15970",
+    "binding-alias-tests-validation": "701a3ee31f5eac964439a9ffa4ccffa48e2b11a77446c2d56187128645b2340d",
+    "doc-identity-cache-test": "cbfde842f2ad720d6c831abd9ce930f920af09cd9cc5b8c1e8f0a42c24efe2b8"
+  },
+  "limitations": [
+    "Latest throughput remeasurement is not included until terminal success",
+    "Actual Qwen/native and SIGKILL requalification after these new changes remains pending",
+    "Chinese human relevance and full HTTP/GUI capacity remain pending",
+    "Historical capacity receipts retain their original source/binary hashes; tests are not relevance or SLO proof"
+  ]
+}

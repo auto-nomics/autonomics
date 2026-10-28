@@ -20,7 +20,17 @@ pub enum Error {
     InvalidSearchQuery(String),
     #[error("search request cancelled")]
     SearchCancelled,
-    #[error("saved search conflict: {0}")]
+    #[error("semantic search unavailable: {0}")]
+    SemanticUnavailable(String),
+    #[error(
+        "semantic resource limit: {resource} requires {used}, configured maximum is {maximum}; increase the budget or reduce indexed content"
+    )]
+    SemanticResourceLimit {
+        resource: String,
+        used: u64,
+        maximum: u64,
+    },
+    #[error("search conflict: {0}")]
     SearchConflict(String),
     #[error("collection conflict: {0}")]
     CollectionConflict(String),

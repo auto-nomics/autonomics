@@ -35,6 +35,7 @@ pub mod extract;
 pub mod extraction;
 pub mod fulltext;
 pub mod http_options;
+mod hybrid_search;
 mod legacy_index;
 pub mod library_tools;
 mod local_index;
@@ -51,6 +52,9 @@ pub mod search_cancellation;
 pub mod search_evidence;
 mod search_filters;
 mod search_projection;
+pub mod semantic_index;
+pub mod semantic_limits;
+pub mod semantic_service;
 pub mod shared;
 pub mod stored_files;
 pub mod zotero_extract;
@@ -68,6 +72,7 @@ pub use extraction::{
 };
 pub use fulltext::{FullTextPage, PendingAttachmentExtraction, PendingExtraction};
 pub use http_options::BibHttpOptions;
+pub use hybrid_search::topic_expression as topic_search_expression;
 pub use library_tools::bib_all_registrations;
 pub use mineru::{
     DEFAULT_API_URL as MINERU_DEFAULT_API_URL, MineruExtractor, MineruZipOutput, markdown_from_zip,

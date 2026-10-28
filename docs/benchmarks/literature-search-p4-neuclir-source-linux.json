@@ -1,0 +1,129 @@
+{
+  "schema": "bib-p4-neuclir-source-audit-v1",
+  "date": "2026-10-28",
+  "status": "source_and_conversion_validated;full_corpus_lexical_and_hybrid_complete",
+  "quality_score_computed": true,
+  "chinese_paper_relevance_material_obtained": true,
+  "sources": [
+    {
+      "repository": "neuclir/csl",
+      "revision": "69d5404fa1bb6baa80d59af2869748e05c60f8df",
+      "declared_license": "apache-2.0",
+      "files": {
+        "README.md": {
+          "local_path": "target/bib-p4-validation/neuclir-csl-source-20261028/README.md",
+          "sha256": "1e788500d017543a478897c6cb810c878010e4e68c0e2f8843a0f1e3ac8e37bb",
+          "bytes": 3780,
+          "url": "https://huggingface.co/datasets/neuclir/csl/resolve/69d5404fa1bb6baa80d59af2869748e05c60f8df/README.md"
+        },
+        "data/csl.jsonl.gz": {
+          "local_path": "target/bib-p4-validation/neuclir-csl-source-20261028/data/csl.jsonl.gz",
+          "sha256": "749c758e11b7e4d14f3e0d0a1e2cde4ac876fb155e8cdb8f72d2861398b0814e",
+          "bytes": 115749077,
+          "url": "https://huggingface.co/datasets/neuclir/csl/resolve/69d5404fa1bb6baa80d59af2869748e05c60f8df/data/csl.jsonl.gz"
+        }
+      }
+    },
+    {
+      "repository": "neuclir/tech",
+      "revision": "a2269b2eed779694837e85c7e1c1be062d760d0b",
+      "declared_license": "cc-by-4.0",
+      "files": {
+        "README.md": {
+          "local_path": "target/bib-p4-validation/neuclir-tech-source-20261028/README.md",
+          "sha256": "a393dc0061cab20a1f8fbc77edd083f41670aeef143757888437953ecdd03570",
+          "bytes": 4624,
+          "url": "https://huggingface.co/datasets/neuclir/tech/resolve/a2269b2eed779694837e85c7e1c1be062d760d0b/README.md"
+        },
+        "data/zho.tsv": {
+          "local_path": "target/bib-p4-validation/neuclir-tech-source-20261028/data/zho.tsv",
+          "sha256": "4bf9ac87343ab7e8618879d6ecd4f699f81d03f0691cd8392057c952337e0941",
+          "bytes": 12053,
+          "url": "https://huggingface.co/datasets/neuclir/tech/resolve/a2269b2eed779694837e85c7e1c1be062d760d0b/data/zho.tsv"
+        },
+        "data/eng.tsv": {
+          "local_path": "target/bib-p4-validation/neuclir-tech-source-20261028/data/eng.tsv",
+          "sha256": "68c6f621070c006c59e17737a0da9fad8560c333ea71470011a807dd2aebde7a",
+          "bytes": 14769,
+          "url": "https://huggingface.co/datasets/neuclir/tech/resolve/a2269b2eed779694837e85c7e1c1be062d760d0b/data/eng.tsv"
+        },
+        "data/qrels.gains.txt": {
+          "local_path": "target/bib-p4-validation/neuclir-tech-source-20261028/data/qrels.gains.txt",
+          "sha256": "33537f361f7b00f9489768ebed813db93f0860c1ee106d3a2af1b43a651095d4",
+          "bytes": 669672,
+          "url": "https://huggingface.co/datasets/neuclir/tech/resolve/a2269b2eed779694837e85c7e1c1be062d760d0b/data/qrels.gains.txt"
+        }
+      }
+    }
+  ],
+  "validation": {
+    "corpus_documents": 395927,
+    "corpus_schema": {
+      "doc_id": "str",
+      "title": "str",
+      "abstract": "str",
+      "keywords": "list",
+      "category": "str",
+      "category_eng": "str",
+      "discipline": "str",
+      "discipline_eng": "str"
+    },
+    "chinese_queries": 110,
+    "english_queries": 110,
+    "query_ids_match": true,
+    "judgment_pairs": 35962,
+    "grade_counts": {
+      "0": 33872,
+      "1": 1250,
+      "3": 840
+    },
+    "judgments_all_reference_known_documents_and_queries": true,
+    "all_queries_have_positive_judgments": true,
+    "duplicate_corpus_ids_or_judgment_pairs": 0,
+    "python_tests": {
+      "passed": 19,
+      "failed": 0,
+      "command": "python3 -m unittest discover -s scripts -p 'test_*bib*.py'",
+      "log": "target/bib-p4-validation/neuclir-python-tests.log",
+      "log_sha256": "4a524af42e7f5852f848bfb98b06317d148e05d14568e5b3e389b188d1061d43"
+    }
+  },
+  "primary_references": [
+    "https://trec.nist.gov/data/neuclir2024.html",
+    "https://arxiv.org/abs/2602.05334",
+    "https://huggingface.co/datasets/neuclir/tech",
+    "https://huggingface.co/datasets/neuclir/csl"
+  ],
+  "next_steps": [
+    "Finish real-model embeddings and production hybrid retrieval on the same full corpus and 110 frozen queries",
+    "Compare frozen hybrid and lexical runs with paired nDCG@20 uncertainty; do not retune on official Chinese queries",
+    "Profile large-corpus Chinese latency separately from relevance and transport costs"
+  ],
+  "limitations": [
+    "The source audit does not satisfy the entire Chinese acceptance gate",
+    "Official benchmark recommends nDCG@20; current SciFact evaluator needs explicit support",
+    "Corpus records and judgments remain ignored local artifacts, not committed source or redistributed content",
+    "Lexical baseline score is available; hybrid quality is still pending"
+  ],
+  "conversion": {
+    "manifest_path": "target/bib-p4-validation/neuclir-chinese-frozen-20261028/manifest.json",
+    "manifest_sha256": "12de9840d33fcf2531c9b8a0c126ef1e46fbad06c56a11ee0f3e6d5655e4c336",
+    "generated_sha256": {
+      "corpus.jsonl": "8abe4a5d874dcdb3f631707e86fa456c56d9c7983259888b6666cde861ebb73b",
+      "queries.jsonl": "4a6c197361d4cc46b1df2575262fb835f36ff96f2b3c4e41af9eb23182ed91a2",
+      "qrels/all.tsv": "c3939a64bf2509e730554dc69ac4dbe3938859107bc9b2f0a1f98be2f19b5906"
+    },
+    "acceptance_queries": 110,
+    "tuning_queries": 0,
+    "primary_metric": "ndcg_at_20",
+    "all_queries_frozen_before_any_chinese_retrieval_score": true
+  },
+  "source_sha256": {
+    "scripts/prepare_bib_neuclir.py": "e9bf231349110cd1e6b19287e8a5b5012de7168c4f0918d242f9ab3c03ffc376",
+    "scripts/test_prepare_bib_neuclir.py": "8edab527c142a4cb1ffe2bcc5812a7d6094bd9a779b188b1a25bb874e842ba10",
+    "scripts/evaluate_bib_relevance.py": "710d4a56a7d630185820253a1653976147f3e97eb9a13f547ea8c5ca8f32d1f7"
+  },
+  "quality_scope": "Lexical baseline only; see topic-policy qualification, no hybrid gain claimed",
+  "production_run_qualification": "literature-search-p4-topic-policy-linux.json",
+  "hybrid_qualification": "literature-search-p4-neuclir-hybrid-linux.json"
+}

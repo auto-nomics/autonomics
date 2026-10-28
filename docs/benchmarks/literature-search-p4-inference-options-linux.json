@@ -1,0 +1,224 @@
+{
+  "schema": "bib-p4-inference-options-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 in progress; no stage commit",
+  "implementation": {
+    "fields": [
+      "inference.num_ctx",
+      "inference.num_batch"
+    ],
+    "num_ctx_range": [
+      1,
+      131072
+    ],
+    "num_batch_range": [
+      1,
+      8192
+    ],
+    "old_config_missing_fields_supported": true,
+    "empty_options_preserve_old_provider_signature": true,
+    "explicit_options_in_provider_signature": true,
+    "truncate": false,
+    "automatic_model_download": false
+  },
+  "validation": {
+    "embedding_library_passed": 36,
+    "backend_command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests",
+    "backend_targets": [
+      {
+        "result": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 24,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "result": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 204,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "result": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 20,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "result": "ok",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "backend_passed": 333,
+    "backend_ignored": 3,
+    "backend_failures": 0,
+    "gui_browser_and_simulated_bridge_passed": true,
+    "gui_coverage": [
+      "blank defaults",
+      "explicit 8192 save",
+      "reopen preserved values",
+      "clear both overrides to default"
+    ],
+    "strict_library_clippy": true,
+    "strict_embedding_tests_clippy": true,
+    "broader_tests_clippy": {
+      "passed": false,
+      "existing_diagnostic": "clippy::items_after_test_module in crates/bib-base/src/stored_files.rs:200; structured_object_path follows tests",
+      "file_changed_by_this_work": false
+    }
+  },
+  "actual_model_probes": {
+    "qwen": {
+      "cross_language_cosine": 0.8137785792350769,
+      "dimensions": 1024,
+      "inference": {
+        "num_batch": 8192,
+        "num_ctx": 8192
+      },
+      "purpose": "installed-model integration probe; no judged retrieval claim",
+      "relevance_evaluation": false,
+      "signature": "ollama-pinned-v1:sha256:ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d:dim:1024:truncate-false:unit-l2:ctx:8192:token-batch:8192",
+      "vectors": 2
+    },
+    "bge_m3": {
+      "cross_language_cosine": 0.8570138216018677,
+      "dimensions": 1024,
+      "inference": {
+        "num_batch": 8192,
+        "num_ctx": 8192
+      },
+      "purpose": "installed-model integration probe; no judged retrieval claim",
+      "relevance_evaluation": false,
+      "signature": "ollama-pinned-v1:sha256:818da0ac2fdaa4b622ef97f76819ea24490fc60684fd267cb8261a4a4a353ae3:dim:1024:truncate-false:unit-l2:ctx:8192:token-batch:8192",
+      "vectors": 2
+    }
+  },
+  "isolated_gui_build": {
+    "manifest": {
+      "base_head": "222a37d18f5f199b32288a7b409a21c526be2b40",
+      "overlay_sha256": {
+        "apps/gui/src/features/bib-search-model.ts": "8f5a2055bab9c0fe68063c3730e4213f4dd03603ff5417f4469d637bf4aab0bd",
+        "apps/gui/src/features/bibliography.tsx": "049563390b8bdbd9c84ea0f0b17af79b82d14031c52546469cc5f60aeb966717",
+        "apps/gui/src/features/saved-searches.tsx": "97d1f1458d6a6f74566eebf2ee484931227267d3cd816cae992aaa928d60cc71",
+        "apps/gui/src/features/search-assist.tsx": "90c57a77e88f2a8cfcecfd5a5ee57f758e33a7e7dfc9974bd21e8d36e8517b89",
+        "apps/gui/src/features/search-evidence.tsx": "b96e4ba862dd2beeae7395ade42e4c953abafe2e615058b005f588f0af027019",
+        "apps/gui/src/features/search-location.ts": "0463dbc0018a5590753b89bd62a4e40b0de487097f38b3fc23551686abb71cba",
+        "apps/gui/src/features/semantic-search.tsx": "72365976f375a90679cdd81fba9662c97725dc0a028a5d5d1e40eb469df13978"
+      },
+      "excluded_worktree_edits": [
+        "apps/gui/src/features/agent.tsx",
+        "apps/gui/src/main.tsx",
+        "apps/gui/src/pdf-reader.ts",
+        "apps/gui/src/pdf-reader.css",
+        "apps/gui/src/features/agent-workspace.tsx",
+        "apps/gui/tests/floating-workspace.mjs",
+        "test:workspace script",
+        "crates/gateway/gui-dist/"
+      ],
+      "dependency_strategy": "symlink existing node_modules; no install or dependency changes",
+      "gui_package_sha256": "ce4f9abc1fa724b0fe3d5dac35ee5a1cebc23bf06a074aa37123eeb13d3ffbcf"
+    },
+    "typecheck": true,
+    "production_build": true,
+    "artifacts": {
+      "gui.css": "e4a551b7f7ad88481f81af8264a162cd297214e49436b65920bf8cf408c40add",
+      "gui.js": "2cc7367b321e0f4060ad078b3e7a7d580c081e88390d86e24e15ecd27ca8838e",
+      "gui.mjs": "1baa1844c89c80a5b2797c916e75ab29254be46d8e9cb53cb6364d7aad84be36"
+    }
+  },
+  "source_sha256": {
+    "crates/text-embedding/src/lib.rs": "f67dfd99e5a62b81bf2d5b27e52b39738aca113228087085d943e964011d13bc",
+    "crates/text-embedding/src/provider.rs": "b4d70bee670d320f05f89b6104ae3a2c85e8c804ff2b19813eeb4061876a5f86",
+    "crates/text-embedding/src/provider/ollama.rs": "0b9d8e0530997e535005c026c768249018f6e9adbfa7236cadadb2beeafc7823",
+    "crates/text-embedding/src/provider/pinned_ollama.rs": "5339f5fcea99f293cf815e9a7be4e54fccf9343ca9ce6f26b186fc6d25ceafe9",
+    "crates/text-embedding/examples/pinned_ollama_probe.rs": "965643b3e69d7f4e9a448aac130e309b571b31ee91c959f582552a60b310e5a2",
+    "crates/bib-base/src/semantic_service.rs": "e02baca0d3b08b697452265e30667792c2345db880a9c13e671b33e0b7a30cca",
+    "crates/bib-base/src/semantic_service/tests.rs": "863339fa17bd911cb8b307501afc358a9b38f8fff34e3febd8d8f6c31d9a54af",
+    "crates/api-server/tests/api.rs": "f4cbe7c35a616b41ddf9be0461d5eb49e77d3c297a7db579d2a8dd2a98cbdfb0",
+    "apps/gui/src/features/bib-search-model.ts": "8f5a2055bab9c0fe68063c3730e4213f4dd03603ff5417f4469d637bf4aab0bd",
+    "apps/gui/src/features/semantic-search.tsx": "72365976f375a90679cdd81fba9662c97725dc0a028a5d5d1e40eb469df13978",
+    "apps/gui/tests/semantic-search.mjs": "84b3f4222023c5e29febe6898a92c6d340e5e8be2f43028b14ca079427685ceb"
+  },
+  "logs_sha256": {
+    "inference-provider-tests.log": "110584245dc333d562834d88f73b3010ca121d628428cc4f7ac5a36343021019",
+    "inference-full-regression.log": "4412fac879d6b43295187eb8c125b77a1d4316a5fd24ea2651b5b2fa1e8c09db",
+    "inference-library-clippy.log": "2b7805880d1232ca908147ff3cf527679b1da0083ca3a4bfc89014f5f9f4b6e3",
+    "inference-provider-test-clippy.log": "e92b72184592eb9a302e46c6050b9cfb7970a6bebd442bb4c70b3d2e3d46b208",
+    "inference-clippy.log": "b2e243bcde02f6afd7587e6e92f1f049688c476fa0914f1774d6bbfe1d0ae9b6",
+    "inference-gui-tests-final.log": "a7583a79835dffdb018ff01db1ee886442e0998f0172fbd36772f28f62280b9e",
+    "inference-isolated-build.log": "f40c719744993bf5c3022312dcd85e8210d3ff63f4f500800e233a0182f1f2cc",
+    "inference-real-qwen.log": "2501428979361a3f3d916f172bdcb901122db9f8e9ca6f8b0ce780e382091dbd",
+    "inference-real-bge.log": "ea2d82e99cd576b0242ad01820a0b3985a649f409775cb3440df4732368066cd"
+  },
+  "probe_binary_sha256": "4d64eedd04363f1920c6f4796deb117919ee52227907760d6c05969396b89969",
+  "limitations": [
+    "Actual probes contain two short English/Chinese inputs; not long-text, retrieval-quality or throughput qualification",
+    "No new judged relevance data or parameter tuning",
+    "No fresh native IPC test of these non-default controls",
+    "Earlier capacity receipts bind their historical source hashes and do not measure this new optional branch",
+    "Leaving options blank depends on server defaults; server/runtime changes are not automatically detected by a manifest digest",
+    "Three existing ignored extractor tests excluded; broad tests clippy diagnostic not counted as passed",
+    "Rust stage-isolated build remains pending; unrelated workspace files and generated gateway assets preserved"
+  ]
+}

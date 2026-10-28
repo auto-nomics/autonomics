@@ -89,7 +89,8 @@ pub struct SearchRequestV2 {
     /// Query-language input. Supply either query or expression.
     pub query: String,
     pub expression: Option<SearchExpr>,
-    /// Default fields for unfielded text; explicit fields retain their meaning.
+    /// Default fields for unfielded hard query terms; explicit fields retain
+    /// their meaning. Semantic document fields are configured on the index.
     pub default_fields: Vec<SearchField>,
     pub scope: SearchScope,
     pub sort: SearchSort,
@@ -104,6 +105,8 @@ pub struct SearchRequestV2 {
     pub sources: Vec<String>,
     /// `lexical` preserves exact query semantics; `hybrid` may include semantic recall.
     pub mode: SearchMode,
+    /// Topic text for hybrid recall, independent of the hard query/AST.
+    pub semantic_query: Option<String>,
 }
 
 impl Default for SearchRequestV2 {
@@ -121,6 +124,7 @@ impl Default for SearchRequestV2 {
             cursor: None,
             sources: Vec::new(),
             mode: SearchMode::Lexical,
+            semantic_query: None,
         }
     }
 }
@@ -139,6 +143,48 @@ pub struct SearchPageV2 {
     pub index_generation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facets: Option<SearchFacets>,
+    /// Present for bounded hybrid recall. `total` counts the retrieved pool,
+    /// not all semantically relevant documents in the library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<SearchRetrieval>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchRetrieval {
+    pub algorithm: String,
+    pub total_kind: String,
+    pub facets_basis: String,
+    pub eligible_articles: usize,
+    pub candidate_depth: usize,
+    pub lexical_weight: f64,
+    pub semantic_weight: f64,
+    pub rrf_constant: usize,
+    pub semantic_generation: String,
+    pub configuration_generation: String,
+    pub indexed_chunks: usize,
+    /// Recall explanations for the current page only.
+    pub hits: std::collections::BTreeMap<String, SearchRecall>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SearchRecall {
+    pub lexical_rank: Option<usize>,
+    pub semantic_rank: Option<usize>,
+    pub semantic_evidence: Option<SemanticSearchEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticSearchEvidence {
+    pub doc_id: String,
+    pub anchor_key: String,
+    pub kind: String,
+    pub matched_field: String,
+    pub content_hash: String,
+    /// Window offsets in canonical abstract/body UTF-8 bytes, not PDF pages.
+    pub start_byte: usize,
+    pub end_byte: usize,
+    /// Actual source excerpt; similarity alone does not imply token highlights.
+    pub snippet: String,
 }
 
 /// Recall strategy. Hybrid search must preserve exact identifier and Boolean
@@ -297,6 +343,8 @@ pub struct SearchEvidence {
     /// metadata, annotation, or text_search; page is only supplied from a
     /// stored annotation anchor, never inferred from extracted text.
     pub location_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_evidence: Option<SemanticSearchEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

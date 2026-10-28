@@ -1,0 +1,47 @@
+{
+  "schema": "bib-p4-ranking-recheck-v1",
+  "date": "2026-10-28",
+  "purpose": "Regression verification only; no held-out parameter selection",
+  "queries": 300,
+  "documents": 5183,
+  "changed_top100_rankings": 0,
+  "parameters_reselected": false,
+  "baseline_sha256": "86908589197f9a49af64a4d049f21825b4a9627fe338171017269fc68251bca1",
+  "current_run_sha256": "86908589197f9a49af64a4d049f21825b4a9627fe338171017269fc68251bca1",
+  "worker_sha256": "8f5bc2534c9d194edf0b22b7329932e4e34921ba73ba3a643a5a80fedc6e81a7",
+  "source_sha256": {
+    "crates/bib-base/examples/search_relevance.rs": "633dd5ab79b750e0c645a60759af7e7ea6d1d3b12762effe17d217b235649545",
+    "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+    "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+    "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+    "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+    "scripts/evaluate_bib_relevance.py": "af4d7667227a989748c3b340400d914a8db0a8706ec51f7b8f7ab0b17a27be5b"
+  },
+  "run_receipt": {
+    "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+    "documents": 5183,
+    "index_ms": 2429.8891839999997,
+    "operator": "or",
+    "output_sha256": "86908589197f9a49af64a4d049f21825b4a9627fe338171017269fc68251bca1",
+    "page_size": 100,
+    "queries": 300,
+    "queries_sha256": "4816c9c7ab1e5600e77f44f9ddc99910791231808dfa118620f714d7c5d2b861",
+    "query_p50_ms": 8.400547,
+    "query_p95_ms": 13.671093,
+    "release": true,
+    "schema": "bib-lexical-relevance-v1"
+  },
+  "metrics_mean": {
+    "ndcg_at_10": 0.5687314513019794,
+    "mrr_at_10": 0.5420224867724868,
+    "recall_at_50": 0.8233888888888888,
+    "recall_at_100": 0.8658888888888889,
+    "zero_hits": 0
+  },
+  "metrics_file_sha256": "acdde5ecee2227c83589485496b971ce028e5c7060fea283e124f0659d80f61e",
+  "limitations": [
+    "English SciFact lexical OR regression only",
+    "Original dense run and frozen RRF unchanged; no new independent acceptance round",
+    "No new Chinese judgments or production-hybrid relevance score"
+  ]
+}

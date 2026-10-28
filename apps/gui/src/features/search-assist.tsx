@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
-export function readQueryHistory(): string[] {
-  try { const value=JSON.parse(localStorage.getItem("autonomics.bib.searchHistory.v1")??"[]");return Array.isArray(value)?value.filter((item):item is string=>typeof item==="string"&&item.length<=16384).slice(0,20):[]; } catch {return [];}
+export function readQueryHistory(key = "autonomics.bib.searchHistory.v1"): string[] {
+  try { const value=JSON.parse(localStorage.getItem(key)??"[]");return Array.isArray(value)?value.filter((item):item is string=>typeof item==="string"&&item.length<=16384).slice(0,20):[]; } catch {return [];}
 }
-export function useQueryHistory() {
-  const [history,setHistory]=useState(readQueryHistory);
-  useEffect(()=>{try{localStorage.setItem("autonomics.bib.searchHistory.v1",JSON.stringify(history));}catch{/* Optional history storage. */}},[history]);
+export function useQueryHistory(key = "autonomics.bib.searchHistory.v1") {
+  const [history,setHistory]=useState(()=>readQueryHistory(key));
+  useEffect(()=>{try{localStorage.setItem(key,JSON.stringify(history));}catch{/* Optional history storage. */}},[history,key]);
   return {history,record:(text:string)=>{const query=text.trim();if(query)setHistory(current=>current[0]===query?current:[query,...current.filter(item=>item!==query)].slice(0,20));},clear:()=>setHistory([])};
 }
-export function SearchAssist({ history,onPick,onClear }: { history:string[];onPick:(query:string)=>void;onClear:()=>void }) {
+export function SearchAssist({ history,onPick,onClear,topic = false }: { history:string[];onPick:(query:string)=>void;onClear:()=>void;topic?:boolean }) {
   return <>
     <details className="relative"><summary className="cursor-pointer text-muted-foreground">Recent</summary><div className="absolute left-0 top-full z-20 mt-1 w-72 max-w-[85vw] rounded border bg-background p-2 shadow-lg">
       {!history.length&&<p className="text-muted-foreground">Successful searches appear here.</p>}
@@ -17,10 +17,16 @@ export function SearchAssist({ history,onPick,onClear }: { history:string[];onPi
       {history.length>0&&<Button size="xs" variant="ghost" onClick={onClear}>Clear search history</Button>}
     </div></details>
     <details className="relative"><summary className="cursor-pointer text-muted-foreground">Search help</summary><div className="absolute left-0 top-full z-20 mt-1 w-80 max-w-[85vw] space-y-2 rounded border bg-background p-3 shadow-lg">
+      {topic ? <>
+        <p>Describe the research topic and press Enter to search. Topic text is not parsed as Boolean syntax.</p>
+        <p>Use Required conditions or Advanced to constrain results with fields, AND, OR and NOT. Scope and filters always apply.</p>
+        <p>Recent topics are stored separately from keyword queries. The retrieved candidate count is not a complete count of all relevant literature.</p>
+      </> : <>
       <p>Use AND, OR, NOT and parentheses to combine conditions. Quote a phrase to keep words together.</p>
       <p><code>title:</code> · <code>author:</code> · <code>journal:</code> · <code>year:</code> · <code>tag:</code> · <code>fulltext:</code> · <code>note:</code></p>
       <button className="block text-left underline" onClick={()=>onPick('title:"gene editing" AND year:2020..2026')}>Try a title phrase and year range</button>
       <p>Enter a DOI directly for exact lookup. Explicit fields override the quick search field selection.</p>
+      </>}
       <p>Ctrl/Cmd+F focuses search. Down enters the results; arrow keys browse. Ctrl+Space selects an article.</p>
     </div></details>
   </>;

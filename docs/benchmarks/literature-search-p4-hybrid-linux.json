@@ -1,0 +1,608 @@
+{
+  "schema": "bib-p4-hybrid-qualification-v1",
+  "date": "2026-10-28",
+  "platform": "Linux",
+  "status": "P4 work in progress; no stage commit",
+  "scope": "V2 actor and HTTP hybrid recall, hard constraints before both Top-K branches, version/configuration guards, cursor, source evidence, saved rules and candidate-pool export",
+  "validation": [
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base -p bib-types -p api-server --lib --locked --offline",
+      "passed": 217,
+      "failed": 0,
+      "ignored": 2,
+      "target_results": [
+        {
+          "passed": 1,
+          "ignored": 0
+        },
+        {
+          "passed": 183,
+          "ignored": 2
+        },
+        {
+          "passed": 33,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base --test search_v2 --test search_workflow -p api-server --test api --test discovery --locked --offline",
+      "passed": 53,
+      "failed": 0,
+      "ignored": 1,
+      "target_results": [
+        {
+          "passed": 24,
+          "ignored": 1
+        },
+        {
+          "passed": 5,
+          "ignored": 0
+        },
+        {
+          "passed": 12,
+          "ignored": 0
+        },
+        {
+          "passed": 12,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base -p bib-types -p api-server --lib --locked --offline -- -D warnings",
+      "passed": true
+    },
+    {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base --example semantic_service_probe --locked --offline -- -D warnings",
+      "passed": true
+    }
+  ],
+  "real_model_probe": {
+    "content_replacement": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "generation": "6ca9fd1a-4391-4cb0-8c40-73bf2a07abe8",
+      "indexed_chunks": 32,
+      "indexed_revision": 35,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "deleted_article_absent_from_export": true,
+    "deletion": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "generation": "df016248-fde9-476a-9612-4b08427653ec",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "disable_persisted": true,
+    "evidence": {
+      "evidence": [
+        {
+          "annotation_id": null,
+          "annotation_key": null,
+          "article_id": "164985",
+          "attachment_hash": null,
+          "attachment_key": null,
+          "content_revision": "tantivy-v2:33:dc0aac5a-0fcf-44e1-8731-b59c5835b495:hybrid-rrf-v1-d100-k10-w4:900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385:cd861261-f8e6-4afd-a5ec-a4758817931e:d12ff13a-8212-490a-981f-a7f8e73c8c70",
+          "highlight_ranges": [
+            {
+              "end": 45,
+              "start": 35
+            }
+          ],
+          "item_key": "53A6000E",
+          "location_status": "metadata",
+          "matched_field": "title",
+          "matched_query": "expression",
+          "page": null,
+          "semantic_evidence": {
+            "anchor_key": "53A6000E",
+            "content_hash": "5201cd059cd0b2fdbff613b9b0a0f72d60038abbbefe1f60351dd2188ed5d076",
+            "doc_id": "53A6000E:item",
+            "end_byte": 1168,
+            "kind": "item",
+            "matched_field": "abstract",
+            "snippet": "The tumor microenvironment (TME) plays a prominent role in the growth of tumor cells. As the major inflammatory component of the TME, M2d macrophages are educated by the TME such that they adopt an immunosuppressive role that promotes tumor",
+            "start_byte": 0
+          },
+          "snippet": "Fra-1 protooncogene regulates IL-6 expression in macrophages and promotes the generation of M2d macrophages"
+        }
+      ],
+      "index_generation": "tantivy-v2:33:dc0aac5a-0fcf-44e1-8731-b59c5835b495:hybrid-rrf-v1-d100-k10-w4:900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385:cd861261-f8e6-4afd-a5ec-a4758817931e:d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "next_cursor": null,
+      "total": 1
+    },
+    "exported_candidate_count": 32,
+    "hard_filter": {
+      "articles": [
+        {
+          "abstract_text": "Alterations of the architecture of cerebral white matter in the developing human brain can affect cortical development and result in functional disabilities. A line scan diffusion-weighted magnetic resonance imaging (MRI) sequence with diffusion tensor analysis was applied to measure the apparent diffusion coefficient, to calculate relative anisotropy, and to delineate three-dimensional fiber architecture in cerebral white matter in preterm (n = 17) and full-term infants (n = 7). To assess effects of prematurity on cerebral white matter development, early gestation preterm infants (n = 10) were studied a second time at term. In the central white matter the mean apparent diffusion coefficient at 28 wk was high, 1.8 microm2/ms, and decreased toward term to 1.2 microm2/ms. In the posterior limb of the internal capsule, the mean apparent diffusion coefficients at both times were similar (1.2 versus 1.1 microm2/ms). Relative anisotropy was higher the closer birth was to term with greater absolute values in the internal capsule than in the central white matter. Preterm infants at term showed higher mean diffusion coefficients in the central white matter (1.4 +/- 0.24 versus 1.15 +/- 0.09 microm2/ms, p = 0.016) and lower relative anisotropy in both areas compared with full-term infants (white matter, 10.9 +/- 0.6 versus 22.9 +/- 3.0%, p = 0.001; internal capsule, 24.0 +/- 4.44 versus 33.1 +/- 0.6% p = 0.006). Nonmyelinated fibers in the corpus callosum were visible by diffusion tensor MRI as early as 28 wk; full-term and preterm infants at term showed marked differences in white matter fiber organization. The data indicate that quantitative assessment of water diffusion by diffusion tensor MRI provides insight into microstructural development in cerebral white matter in living infants.",
+          "authors": [],
+          "essn": null,
+          "id": "4983",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "Microstructural development of human newborn cerebral white matter assessed in vivo by diffusion tensor magnetic resonance imaging.",
+          "volume": null,
+          "year": 2026
+        }
+      ],
+      "hits": [
+        {
+          "anchor_key": "FD6EA53D",
+          "article_id": "4983",
+          "highlight_ranges": [
+            {
+              "end": 84,
+              "start": 81
+            }
+          ],
+          "matched_field": "abstract",
+          "score": 0.4545454545454546,
+          "snippet": "…bral white matter in the developing human brain can affect cortical development and result in functional disabilities. A line scan diffusion-weighted magnetic reso…",
+          "title": "Microstructural development of human newborn cerebral white matter assessed in vivo by diffusion tensor magnetic resonance imaging."
+        }
+      ],
+      "index_generation": "tantivy-v2:34:2d00015a-b480-43ad-886e-9d00f26254c5:hybrid-rrf-v1-d100-k10-w4:900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385:60885db7-9e83-4529-ab58-94bf5574ec7b:d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "next_cursor": null,
+      "retrieval": {
+        "algorithm": "weighted_rrf_v1",
+        "candidate_depth": 100,
+        "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+        "eligible_articles": 1,
+        "facets_basis": "hard_query_disjunctive_filters",
+        "hits": {
+          "4983": {
+            "lexical_rank": 1,
+            "semantic_evidence": {
+              "anchor_key": "FD6EA53D",
+              "content_hash": "c92ea19ae4da329d80cb310a8f315893b8c6465834edf418ef6267daba02eaba",
+              "doc_id": "FD6EA53D:item",
+              "end_byte": 1809,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "Alterations of the architecture of cerebral white matter in the developing human brain can affect cortical development and result in functional disabilities. A line scan diffusion-weighted magnetic resonance imaging (MRI) sequence with diff",
+              "start_byte": 0
+            },
+            "semantic_rank": 1
+          }
+        },
+        "indexed_chunks": 32,
+        "lexical_weight": 1.0,
+        "rrf_constant": 10,
+        "semantic_generation": "60885db7-9e83-4529-ab58-94bf5574ec7b",
+        "semantic_weight": 4.0,
+        "total_kind": "candidate_pool"
+      },
+      "total": 1
+    },
+    "hybrid_first_page": {
+      "articles": [
+        {
+          "abstract_text": "The tumor microenvironment (TME) plays a prominent role in the growth of tumor cells. As the major inflammatory component of the TME, M2d macrophages are educated by the TME such that they adopt an immunosuppressive role that promotes tumor metastasis and progression. Fra-1 forms activator protein-1 heterodimers with Jun partners and drives gene transcription. Fra-1 is thought to drastically induce tumorigenesis and progression. However, the functional role of Fra-1 in the generation of M2d macrophages is poorly understood to date. Here, we demonstrate that 4T1 mammary carcinoma cells, when co-cultured with RAW264.7 macrophage cells, skew the RAW264.7 macrophage cell differentiation into M2d macrophages. The 4T1 cells stimulate de novo overexpression of Fra-1 in RAW264.7 cells, and then Fra-1 binds to the interleukin 6 (IL-6) promoter to increase the production of the cytokine IL-6 in RAW264.7 cells. IL-6 acts in an autocrine fashion to skew RAW264.7 macrophage cell differentiation into M2d macrophages. These findings open new insights into how to reverse M2d macrophage-induced immune tolerance to improve the efficacy of immunotherapeutic approaches.",
+          "authors": [],
+          "essn": null,
+          "id": "164985",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "Fra-1 protooncogene regulates IL-6 expression in macrophages and promotes the generation of M2d macrophages",
+          "volume": null,
+          "year": null
+        },
+        {
+          "abstract_text": "On recognition of influenza virus (Flu) by TLR7, plasmacytoid dendritic cells (pDCs) produce type I IFN in significant amounts. Synthetic TLR7 ligands induce the maturation of pDCs, as evidenced by the expression of costimulatory molecules and the production of proinflammatory cytokines; however, they induce only low-level production of IFN-alpha. To dissect the TLR7 signaling in pDCs and how these different profiles are induced, we studied the effects of 2 TLR7 ligands (Flu and CL097) on the activation of blood-isolated pDCs and the human GEN2.2 pDC cell line. Type I IFN production by pDCs correlates with differential interferon regulatory factor 7 (IRF7) translocation into the nucleus induced by the 2 TLR7 ligands. Surprisingly, with both activators we nevertheless observed the rapid expression of the IFN-inducible genes mxa, cxcl10, and trail within 4 hours of stimulation. This expression, controlled by STAT1 phosphorylation, was independent of type I IFN. STAT1 activation was found to be strictly dependent on the PI3K-p38MAPK pathway, showing a new signaling pathway leading to rapid expression of IFN-inducible genes after TLR7 triggering. Thus, pDCs, through this unusual TLR7 signaling, have the capacity to promptly respond to viral infection during the early phases of the innate immune response.",
+          "authors": [],
+          "essn": null,
+          "id": "72159",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "induction of early IFN-inducible genes in the absence of type",
+          "volume": null,
+          "year": null
+        },
+        {
+          "abstract_text": "Two human Golli (for gene expressed in the oligodendrocyte lineage)-MBP (for myelin basic protein) cDNAs have been isolated from a human oligodendroglioma cell line. Analysis of these cDNAs has enabled us to determine the entire structure of the human Golli-MBP gene. The Golli-MBP gene, which encompasses the MBP transcription unit, is approximately 179 kb in length and consists of 10 exons, seven of which constitute the MBP gene. The human Golli-MBP gene contains two transcription start sites, each of which gives rise to a family of alternatively spliced transcripts. At least two Golli-MBP transcripts, containing the first three exons of the gene and one or more MBP exons, are produced from the first transcription start site. The second family of transcripts contains only MBP exons and produces the well-known MBPs. In humans, RNA blot analysis revealed that Golli-MBP transcripts were expressed in fetal thymus, spleen, and human B-cell and macrophage cell lines, as well as in fetal spinal cord. These findings clearly link the expression of exons encoding the autoimmunogen/encephalitogen MBP in the central nervous system to cells and tissues of the immune system through normal expression of the Golli-MBP gene. They also establish that this genetic locus, which includes the MBP gene, is conserved among species, providing further evidence that the MBP transcription unit is an integral part of the Golli transcription unit and suggest that this structural arrangement is important for the genetic function and/or regulation of these genes.",
+          "authors": [],
+          "essn": null,
+          "id": "19238",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "The human myelin basic protein gene is included within a 179-kilobase transcription unit: expression in the immune and central nervous systems.",
+          "volume": null,
+          "year": null
+        },
+        {
+          "abstract_text": "Myelodysplastic syndromes (MDS) are age-dependent stem cell malignancies that share biological features of activated adaptive immune response and ineffective hematopoiesis. Here we report that myeloid-derived suppressor cells (MDSC), which are classically linked to immunosuppression, inflammation, and cancer, were markedly expanded in the bone marrow of MDS patients and played a pathogenetic role in the development of ineffective hematopoiesis. These clonally distinct MDSC overproduce hematopoietic suppressive cytokines and function as potent apoptotic effectors targeting autologous hematopoietic progenitors. Using multiple transfected cell models, we found that MDSC expansion is driven by the interaction of the proinflammatory molecule S100A9 with CD33. These 2 proteins formed a functional ligand/receptor pair that recruited components to CD33’s immunoreceptor tyrosine-based inhibition motif (ITIM), inducing secretion of the suppressive cytokines IL-10 and TGF-β by immature myeloid cells. S100A9 transgenic mice displayed bone marrow accumulation of MDSC accompanied by development of progressive multilineage cytopenias and cytological dysplasia. Importantly, early forced maturation of MDSC by either all-trans-retinoic acid treatment or active immunoreceptor tyrosine-based activation motif–bearing (ITAM-bearing) adapter protein (DAP12) interruption of CD33 signaling rescued the hematologic phenotype. These findings indicate that primary bone marrow expansion of MDSC driven by the S100A9/CD33 pathway perturbs hematopoiesis and contributes to the development of MDS.",
+          "authors": [],
+          "essn": null,
+          "id": "5836",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "Induction of myelodysplasia by myeloid-derived suppressor cells.",
+          "volume": null,
+          "year": null
+        },
+        {
+          "abstract_text": "T cells transformed by Herpesvirus saimiri express seven viral U-rich noncoding RNAs of unknown function called HSURs. We noted that conserved sequences in HSURs 1 and 2 constitute potential binding sites for three host-cell microRNAs (miRNAs). Coimmunoprecipitation experiments confirmed that HSURs 1 and 2 interact with the predicted miRNAs in virally transformed T cells. The abundance of one of these miRNAs, miR-27, is dramatically lowered in transformed cells, with consequent effects on the expression of miR-27 target genes. Transient knockdown and ectopic expression of HSUR 1 demonstrate that it directs degradation of mature miR-27 in a sequence-specific and binding-dependent manner. This viral strategy illustrates use of a ncRNA to manipulate host-cell gene expression via the miRNA pathway.",
+          "authors": [],
+          "essn": null,
+          "id": "153744",
+          "identifiers": [],
+          "issn": null,
+          "issue": null,
+          "journal": null,
+          "keywords": [],
+          "language": null,
+          "month": null,
+          "pages": null,
+          "pub_types": [],
+          "source": "unknown",
+          "title": "Down-regulation of a host microRNA by a Herpesvirus saimiri noncoding RNA.",
+          "volume": null,
+          "year": null
+        }
+      ],
+      "hits": [
+        {
+          "anchor_key": "53A6000E",
+          "article_id": "164985",
+          "highlight_ranges": [
+            {
+              "end": 45,
+              "start": 35
+            }
+          ],
+          "matched_field": "title",
+          "score": 0.41666666666666663,
+          "snippet": "Fra-1 protooncogene regulates IL-6 expression in macrophages and promotes the generation of M2d macrophages",
+          "title": "Fra-1 protooncogene regulates IL-6 expression in macrophages and promotes the generation of M2d macrophages"
+        },
+        {
+          "anchor_key": "A9E4B04B",
+          "article_id": "72159",
+          "highlight_ranges": [
+            {
+              "end": 91,
+              "start": 81
+            }
+          ],
+          "matched_field": "abstract",
+          "score": 0.40530303030303033,
+          "snippet": "…unts. Synthetic TLR7 ligands induce the maturation of pDCs, as evidenced by the expression of costimulatory molecules and the production of proinflammatory cytokines; how…",
+          "title": "induction of early IFN-inducible genes in the absence of type"
+        },
+        {
+          "anchor_key": "A9915968",
+          "article_id": "19238",
+          "highlight_ranges": [
+            {
+              "end": 87,
+              "start": 81
+            }
+          ],
+          "matched_field": "title",
+          "score": 0.37662337662337664,
+          "snippet": "…in gene is included within a 179-kilobase transcription unit: expression in the immune and central nervous systems.",
+          "title": "The human myelin basic protein gene is included within a 179-kilobase transcription unit: expression in the immune and central nervous systems."
+        },
+        {
+          "anchor_key": "0BEE4975",
+          "article_id": "5836",
+          "highlight_ranges": [
+            {
+              "end": 63,
+              "start": 58
+            }
+          ],
+          "matched_field": "title",
+          "score": 0.37435897435897436,
+          "snippet": "Induction of myelodysplasia by myeloid-derived suppressor cells.",
+          "title": "Induction of myelodysplasia by myeloid-derived suppressor cells."
+        },
+        {
+          "anchor_key": "1EE4C022",
+          "article_id": "153744",
+          "highlight_ranges": [
+            {
+              "end": 91,
+              "start": 81
+            },
+            {
+              "end": 158,
+              "start": 148
+            }
+          ],
+          "matched_field": "abstract",
+          "score": 0.3142857142857143,
+          "snippet": "…7, is dramatically lowered in transformed cells, with consequent effects on the expression of miR-27 target genes. Transient knockdown and ectopic expression of HSUR 1 de…",
+          "title": "Down-regulation of a host microRNA by a Herpesvirus saimiri noncoding RNA."
+        }
+      ],
+      "index_generation": "tantivy-v2:33:dc0aac5a-0fcf-44e1-8731-b59c5835b495:hybrid-rrf-v1-d100-k10-w4:900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385:cd861261-f8e6-4afd-a5ec-a4758817931e:d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "next_cursor": "eyJ2ZXJzaW9uIjoxLCJmaW5nZXJwcmludCI6ImM2ZDAzODFmZmM2MGU1ODg1ZDc5MzBlYTkwMWM0ZThhMTg1NWZiZjYzYTgzNTU0YjE0NTQyMGRlMjQyYjdmNTEiLCJvZmZzZXQiOjV9",
+      "retrieval": {
+        "algorithm": "weighted_rrf_v1",
+        "candidate_depth": 100,
+        "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+        "eligible_articles": 32,
+        "facets_basis": "hard_query_disjunctive_filters",
+        "hits": {
+          "153744": {
+            "lexical_rank": 11,
+            "semantic_evidence": {
+              "anchor_key": "1EE4C022",
+              "content_hash": "78d0b75c834cbe28c7fc3e2dffb0bf80f814002be1df9178f42c4080c911eee6",
+              "doc_id": "1EE4C022:item",
+              "end_byte": 805,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "T cells transformed by Herpesvirus saimiri express seven viral U-rich noncoding RNAs of unknown function called HSURs. We noted that conserved sequences in HSURs 1 and 2 constitute potential binding sites for three host-cell microRNAs (miRN",
+              "start_byte": 0
+            },
+            "semantic_rank": 5
+          },
+          "164985": {
+            "lexical_rank": 2,
+            "semantic_evidence": {
+              "anchor_key": "53A6000E",
+              "content_hash": "5201cd059cd0b2fdbff613b9b0a0f72d60038abbbefe1f60351dd2188ed5d076",
+              "doc_id": "53A6000E:item",
+              "end_byte": 1168,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "The tumor microenvironment (TME) plays a prominent role in the growth of tumor cells. As the major inflammatory component of the TME, M2d macrophages are educated by the TME such that they adopt an immunosuppressive role that promotes tumor",
+              "start_byte": 0
+            },
+            "semantic_rank": 2
+          },
+          "19238": {
+            "lexical_rank": 1,
+            "semantic_evidence": {
+              "anchor_key": "A9915968",
+              "content_hash": "97b92622f4602395bc00c378b20547872d6486eda6ed34363772fc142a4836fb",
+              "doc_id": "A9915968:item",
+              "end_byte": 1557,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "Two human Golli (for gene expressed in the oligodendrocyte lineage)-MBP (for myelin basic protein) cDNAs have been isolated from a human oligodendroglioma cell line. Analysis of these cDNAs has enabled us to determine the entire structure o",
+              "start_byte": 0
+            },
+            "semantic_rank": 4
+          },
+          "5836": {
+            "lexical_rank": 5,
+            "semantic_evidence": {
+              "anchor_key": "0BEE4975",
+              "content_hash": "d2a056461ed0d9a51b2caa2862965f8441cd15467909968b3430a1b9d3b1e7a3",
+              "doc_id": "0BEE4975:item",
+              "end_byte": 1594,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "Myelodysplastic syndromes (MDS) are age-dependent stem cell malignancies that share biological features of activated adaptive immune response and ineffective hematopoiesis. Here we report that myeloid-derived suppressor cells (MDSC), which ",
+              "start_byte": 0
+            },
+            "semantic_rank": 3
+          },
+          "72159": {
+            "lexical_rank": 14,
+            "semantic_evidence": {
+              "anchor_key": "A9E4B04B",
+              "content_hash": "af4a8df240bbd8c19ac1f7053ea5cc5c86fd19e61428064cf1665f651cc4b70f",
+              "doc_id": "A9E4B04B:item",
+              "end_byte": 1321,
+              "kind": "item",
+              "matched_field": "abstract",
+              "snippet": "On recognition of influenza virus (Flu) by TLR7, plasmacytoid dendritic cells (pDCs) produce type I IFN in significant amounts. Synthetic TLR7 ligands induce the maturation of pDCs, as evidenced by the expression of costimulatory molecules ",
+              "start_byte": 0
+            },
+            "semantic_rank": 1
+          }
+        },
+        "indexed_chunks": 32,
+        "lexical_weight": 1.0,
+        "rrf_constant": 10,
+        "semantic_generation": "cd861261-f8e6-4afd-a5ec-a4758817931e",
+        "semantic_weight": 4.0,
+        "total_kind": "candidate_pool"
+      },
+      "total": 32
+    },
+    "hybrid_first_page_ms": 73.144847,
+    "hybrid_second_page_ids": [
+      "36474",
+      "106301",
+      "33370",
+      "18670",
+      "7912"
+    ],
+    "initial": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "generation": "cd861261-f8e6-4afd-a5ec-a4758817931e",
+      "indexed_chunks": 32,
+      "indexed_revision": 33,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "initial_ms": 1342.9843290000001,
+    "lexical_during_enable_ms": 12.549598,
+    "metadata_update": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "generation": "60885db7-9e83-4529-ab58-94bf5574ec7b",
+      "indexed_chunks": 32,
+      "indexed_revision": 34,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "production_hybrid_search_integrated": true,
+    "relevance_evaluation": false,
+    "restart": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": null,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": false,
+          "overlap_chars": 0,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "d12ff13a-8212-490a-981f-a7f8e73c8c70",
+      "generation": "df016248-fde9-476a-9612-4b08427653ec",
+      "indexed_chunks": 31,
+      "indexed_revision": 36,
+      "last_error": null,
+      "phase": "ready",
+      "signature": "900bdb3c6aa7891c52baefe37b7f67862f75a24f372d91e31af64ad2daa16385"
+    },
+    "schema": "bib-semantic-service-probe-v2",
+    "vector_store_files": {
+      "library.db.semantic-v1": 4096,
+      "library.db.semantic-v1-tshm": 86016,
+      "library.db.semantic-v1-wal": 758112
+    },
+    "vector_store_total_bytes": 848224
+  },
+  "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+  "source_sha256": {
+    "crates/bib-base/src/hybrid_search.rs": "280a3bb82584bbc439c61f623c9f8feb5e17cd789f194f3dd658034102ddf068",
+    "crates/bib-base/src/search.rs": "c7f6ec6275310345daefdca8d5d3dd3f91a72a99de71248d4f827558da706ebb",
+    "crates/bib-base/src/search_evidence.rs": "cf841f188163eb831b5b66192b9073f3142ebf45bfe75e9622488d70301e2828",
+    "crates/bib-base/src/actor.rs": "9b38782c2d2145b5dcb41a5b5dbb0053bb31d040899735766a0dcefe305ecab2",
+    "crates/bib-base/src/error.rs": "b7a5ce9d4ef8da55227e92836017d425cfd670a4a772c13c0180c4b810210b26",
+    "crates/bib-base/src/semantic_service.rs": "5f80371ee5a7102cfcb747acc0164197d1f79cb574f69420bab0d29169d9544f",
+    "crates/bib-base/src/semantic_service/tests.rs": "741db726e1d5876daa1c481a1b9e6b37472817135eabbbeda7fb80b0bb41df23",
+    "crates/bib-types/src/search.rs": "371f96e88724af49093ccc72bd3c6149417b0e25b45f0e8b9f7f4cdaac143732",
+    "crates/api-server/src/bib.rs": "f0b633f6ae5cb8bcd2cf3956a8bb5a7e58b6cfd5ef6d7496c633ae82d002245e",
+    "crates/api-server/tests/api.rs": "041b4e667deab061eec8f19027c03c0e006c27eaf19425e3a0a68b6abd09b5a6",
+    "crates/bib-base/examples/semantic_service_probe.rs": "b3b8a6725717721c8305ecfd5c53bb5ea3eb07e53bb4cf8bfb31ce908103182d"
+  },
+  "limitations": [
+    "Deterministic provider unit tests and controlled HTTP fixture demonstrate protocol/correctness, not IR quality",
+    "Real Qwen installed-model probe contains 32 public SciFact documents; first-page timing is one local observation, not a performance percentile or cold-cache result",
+    "Existing 300-query SciFact relevance evaluation is separate; not rerun or reused for parameter selection in this change",
+    "GUI and GUI restoration of hybrid rules are pending",
+    "100k vector capacity, service process-kill recovery, maintenance operations and Chinese/real-library human judgments remain pending",
+    "Ignored tests remain excluded from pass counts; no cross-platform or manual accessibility qualification is implied"
+  ]
+}

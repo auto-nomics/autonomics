@@ -8,10 +8,12 @@ use bib_types::{SearchExpr, SearchField};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    sync::Arc,
 };
 use tantivy::{
-    Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument, Term,
+    DocAddress, Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, TantivyDocument, Term,
     collector::TopDocs,
+    index::SegmentId,
     query::{AllQuery, BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery},
     schema::{
         Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions,
@@ -19,6 +21,11 @@ use tantivy::{
     },
     tokenizer::TextAnalyzer,
 };
+
+type FastMap<K, V> = HashMap<K, V, ahash::RandomState>;
+
+mod scored_docs;
+use scored_docs::AllScoredDocs;
 
 pub(crate) const TEXT_FIELDS: [&str; 10] = [
     "title",
@@ -56,9 +63,11 @@ pub(crate) struct LocalIndex {
     reader: IndexReader,
     writer: IndexWriter,
     fields: HashMap<&'static str, Field>,
-    metadata: HashMap<String, SearchCandidate>,
+    metadata: FastMap<String, SearchCandidate>,
+    doc_ids: FastMap<SegmentId, Arc<Vec<String>>>,
     pub revision: Option<u64>,
     pub commit_token: Option<String>,
+    pub source_checked: bool,
     pending: Option<PendingUpdate>,
     #[cfg(test)]
     pub fail_next_commit: bool,
@@ -172,10 +181,12 @@ impl LocalIndex {
             reader,
             writer,
             fields,
-            metadata: HashMap::new(),
+            metadata: FastMap::default(),
+            doc_ids: FastMap::default(),
             filter_cache: Default::default(),
             revision,
             commit_token,
+            source_checked: false,
             pending: None,
             #[cfg(test)]
             fail_next_commit: false,
@@ -183,6 +194,16 @@ impl LocalIndex {
             pause_before_commit: None,
         };
         let searcher = local.reader.searcher();
+        let mut doc_ids = searcher
+            .segment_readers()
+            .iter()
+            .map(|segment| {
+                (
+                    segment.segment_id(),
+                    vec![String::new(); segment.max_doc() as usize],
+                )
+            })
+            .collect::<HashMap<_, _>>();
         if searcher.num_docs() > 0 {
             for (_, address) in searcher.search(
                 &AllQuery,
@@ -207,11 +228,53 @@ impl LocalIndex {
                     matched_field: "title".into(),
                     snippet_query: String::new(),
                 };
+                doc_ids
+                    .get_mut(&searcher.segment_reader(address.segment_ord).segment_id())
+                    .expect("reader segment")[address.doc_id as usize] = candidate.doc_id.clone();
                 local.metadata.insert(candidate.doc_id.clone(), candidate);
             }
         }
+        local.doc_ids = doc_ids
+            .into_iter()
+            .map(|(id, ids)| (id, Arc::new(ids)))
+            .collect();
         local.progress.lock().expect("new progress lock").documents = local.metadata.len();
         Ok(local)
+    }
+
+    /// Segment identifiers and document ordinals remain stable until a merge.
+    /// Reuse unchanged segments; read each new stored identity only once per
+    /// reader generation, rather than once for every term/field in each query.
+    fn refresh_doc_ids(&mut self) -> Result<()> {
+        let searcher = self.reader.searcher();
+        let mut next = FastMap::default();
+        for (ordinal, segment) in searcher.segment_readers().iter().enumerate() {
+            let id = segment.segment_id();
+            let ids = match self.doc_ids.get(&id) {
+                Some(ids) => ids.clone(),
+                None => {
+                    let mut ids = vec![String::new(); segment.max_doc() as usize];
+                    for doc in 0..segment.max_doc() {
+                        if segment.is_deleted(doc) {
+                            continue;
+                        }
+                        let stored: TantivyDocument = searcher.doc(DocAddress {
+                            segment_ord: ordinal as u32,
+                            doc_id: doc,
+                        })?;
+                        ids[doc as usize] = stored
+                            .get_first(self.fields["doc_id"])
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_owned();
+                    }
+                    Arc::new(ids)
+                }
+            };
+            next.insert(id, ids);
+        }
+        self.doc_ids = next;
+        Ok(())
     }
 
     pub fn begin_update(
@@ -315,6 +378,7 @@ impl LocalIndex {
         ))?);
         commit.commit()?;
         self.reader.reload()?;
+        self.refresh_doc_ids()?;
         if pending.rebuild {
             self.metadata.clear();
         } else {
@@ -326,6 +390,7 @@ impl LocalIndex {
         }
         self.revision = Some(pending.revision);
         self.commit_token = Some(pending.commit_token);
+        self.source_checked = true;
         if let Ok(mut progress) = self.progress.lock() {
             progress.revision = Some(pending.revision);
             progress.documents = self.metadata.len();
@@ -346,8 +411,8 @@ impl LocalIndex {
         Ok(())
     }
 
-    fn universe(&self, same_child: bool) -> Matches {
-        let mut out = HashMap::new();
+    fn universe(&self, same_child: bool) -> Matches<'_> {
+        let mut out: Matches<'_> = FastMap::default();
         for candidate in self.metadata.values() {
             let key = if same_child {
                 &candidate.doc_id
@@ -355,13 +420,13 @@ impl LocalIndex {
                 &candidate.article_id
             };
             let replace = out
-                .get(key)
+                .get(key.as_str())
                 .is_none_or(|old: &Match| evidence_order(candidate, &old.candidate).is_lt());
             if replace {
                 out.insert(
-                    key.clone(),
+                    key.as_str(),
                     Match {
-                        candidate: candidate.clone(),
+                        candidate: CandidateRef::new(candidate),
                         best_score: 0.0,
                     },
                 );
@@ -375,17 +440,53 @@ impl LocalIndex {
         expression: Option<&SearchExpr>,
         same_child: bool,
     ) -> Result<Vec<SearchCandidate>> {
+        self.search_in(expression, same_child, None)
+    }
+
+    pub(crate) fn search_in(
+        &self,
+        expression: Option<&SearchExpr>,
+        same_child: bool,
+        allowed: Option<&HashSet<String>>,
+    ) -> Result<Vec<SearchCandidate>> {
+        self.search_inner(expression, same_child, allowed, None)
+    }
+
+    pub(crate) fn search_top_in(
+        &self,
+        expression: &SearchExpr,
+        allowed: &HashSet<String>,
+        limit: usize,
+    ) -> Result<Vec<SearchCandidate>> {
+        self.search_inner(Some(expression), false, Some(allowed), Some(limit))
+    }
+
+    fn search_inner(
+        &self,
+        expression: Option<&SearchExpr>,
+        same_child: bool,
+        allowed: Option<&HashSet<String>>,
+        limit: Option<usize>,
+    ) -> Result<Vec<SearchCandidate>> {
         if let Some(expr) = expression {
             validate(expr, 0, &mut 0)?;
         }
+        // One coverage check avoids repeated membership hashing when the hard
+        // universe contains every indexed article. A partial set still filters
+        // each leaf before aggregation; permissions are never inferred by size.
+        let allowed =
+            allowed.filter(|set| !self.metadata.values().all(|m| set.contains(&m.article_id)));
         let searcher = self.reader.searcher();
-        let matches = match expression {
-            Some(expr) => self.evaluate(expr, same_child, &searcher)?,
+        let mut matches = match expression {
+            Some(expr) => self.evaluate_in(expr, same_child, &searcher, allowed)?,
             None => self.universe(false),
         };
-        let mut articles: Matches = HashMap::new();
+        if let Some(allowed) = allowed {
+            matches.retain(|_, hit| allowed.contains(&hit.candidate.article_id));
+        }
+        let mut articles: Matches<'_> = FastMap::default();
         for hit in matches.into_values() {
-            let key = hit.candidate.article_id.clone();
+            let key = hit.candidate.meta.article_id.as_str();
             if let Some(previous) = articles.get(&key) {
                 if hit.candidate.score < previous.candidate.score
                     || (hit.candidate.score == previous.candidate.score
@@ -406,7 +507,10 @@ impl LocalIndex {
                 .then_with(|| a.article_id.cmp(&b.article_id))
                 .then_with(|| a.doc_id.cmp(&b.doc_id))
         });
-        Ok(ranked)
+        if let Some(limit) = limit {
+            ranked.truncate(limit);
+        }
+        Ok(ranked.into_iter().map(CandidateRef::into_owned).collect())
     }
 
     /// Collect actual positive-clause evidence only for an eligible article.
@@ -424,7 +528,7 @@ impl LocalIndex {
                 None => self.universe(true),
             }
         } else {
-            HashMap::new()
+            Matches::default()
         };
         let mut out: HashMap<String, SearchCandidate> = HashMap::new();
         if let Some(expr) = expression {
@@ -450,7 +554,7 @@ impl LocalIndex {
         expr: &SearchExpr,
         article_id: &str,
         searcher: &Searcher,
-        allowed: Option<&Matches>,
+        allowed: Option<&Matches<'_>>,
         positive: bool,
         out: &mut HashMap<String, SearchCandidate>,
     ) -> Result<()> {
@@ -466,7 +570,7 @@ impl LocalIndex {
                 eligible
                     .iter()
                     .filter(|(key, _)| allowed.contains_key(*key))
-                    .map(|(key, hit)| (key.clone(), hit.clone()))
+                    .map(|(key, hit)| (*key, hit.clone()))
                     .collect::<Matches>()
             })
         } else {
@@ -486,12 +590,15 @@ impl LocalIndex {
                 if positive =>
             {
                 for hit in self.evaluate(expr, true, searcher)?.into_values() {
-                    let mut candidate = hit.candidate;
+                    let candidate = hit.candidate;
                     if candidate.article_id != article_id
-                        || allowed.is_some_and(|allowed| !allowed.contains_key(&candidate.doc_id))
+                        || allowed.is_some_and(|allowed| {
+                            !allowed.contains_key(candidate.meta.doc_id.as_str())
+                        })
                     {
                         continue;
                     }
+                    let mut candidate = candidate.into_owned();
                     if !matches!(candidate.matched_field.as_str(), "fulltext" | "annotation") {
                         if let Some(parent) = self
                             .metadata
@@ -521,17 +628,28 @@ impl LocalIndex {
         expr: &SearchExpr,
         same_child: bool,
         searcher: &Searcher,
-    ) -> Result<Matches> {
+    ) -> Result<Matches<'_>> {
+        self.evaluate_in(expr, same_child, searcher, None)
+    }
+
+    fn evaluate_in(
+        &self,
+        expr: &SearchExpr,
+        same_child: bool,
+        searcher: &Searcher,
+        allowed: Option<&HashSet<String>>,
+    ) -> Result<Matches<'_>> {
         match expr {
             SearchExpr::And { clauses } | SearchExpr::Or { clauses } => {
                 let mut children = clauses.iter();
-                let mut out = self.evaluate(
+                let mut out = self.evaluate_in(
                     children.next().expect("validated nonempty group"),
                     same_child,
                     searcher,
+                    allowed,
                 )?;
                 for clause in children {
-                    let mut next = self.evaluate(clause, same_child, searcher)?;
+                    let mut next = self.evaluate_in(clause, same_child, searcher, allowed)?;
                     if matches!(expr, SearchExpr::And { .. }) {
                         out.retain(|key, previous| {
                             if let Some(hit) = next.remove(key) {
@@ -554,9 +672,9 @@ impl LocalIndex {
                 Ok(out)
             }
             SearchExpr::Not { clause } => {
-                let excluded = self.evaluate(clause, false, searcher)?;
+                let excluded = self.evaluate_in(clause, false, searcher, allowed)?;
                 let mut out = self.universe(same_child);
-                out.retain(|_, hit| !excluded.contains_key(&hit.candidate.article_id));
+                out.retain(|_, hit| !excluded.contains_key(hit.candidate.meta.article_id.as_str()));
                 Ok(out)
             }
             SearchExpr::Range { gte, lte, .. } => {
@@ -575,7 +693,8 @@ impl LocalIndex {
                         .candidate
                         .year
                         .map(|year| year.to_string())
-                        .unwrap_or_default();
+                        .unwrap_or_default()
+                        .into();
                 }
                 Ok(out)
             }
@@ -587,7 +706,7 @@ impl LocalIndex {
                     out.retain(|_, hit| hit.candidate.year == Some(year));
                     for hit in out.values_mut() {
                         hit.candidate.matched_field = "year_text".into();
-                        hit.candidate.snippet_query = value.clone();
+                        hit.candidate.snippet_query = value.as_str().into();
                     }
                     return Ok(out);
                 }
@@ -598,12 +717,14 @@ impl LocalIndex {
                         IndexRecordOption::Basic,
                     );
                     let mut matches =
-                        self.run_query(&query, "identifier", value, 20.0, searcher)?;
+                        self.run_query(&query, "identifier", value, 20.0, searcher, allowed)?;
                     let query = TermQuery::new(
                         Term::from_field_text(self.fields["article_id"], value.trim()),
                         IndexRecordOption::Basic,
                     );
-                    for (key, hit) in self.run_query(&query, "identifier", value, 20.0, searcher)? {
+                    for (key, hit) in
+                        self.run_query(&query, "identifier", value, 20.0, searcher, allowed)?
+                    {
                         matches.entry(key).or_insert(hit);
                     }
                     matches
@@ -613,14 +734,15 @@ impl LocalIndex {
                         value,
                         matches!(expr, SearchExpr::Phrase { .. }),
                         searcher,
+                        allowed,
                     )?
                 };
                 if same_child {
                     return Ok(docs);
                 }
-                let mut out: Matches = HashMap::new();
+                let mut out: Matches<'_> = FastMap::default();
                 for hit in docs.into_values() {
-                    let key = hit.candidate.article_id.clone();
+                    let key = hit.candidate.meta.article_id.as_str();
                     if out.get(&key).is_none_or(|previous| {
                         hit.candidate.score > previous.candidate.score
                             || (hit.candidate.score == previous.candidate.score
@@ -640,9 +762,10 @@ impl LocalIndex {
         value: &str,
         phrase: bool,
         searcher: &Searcher,
-    ) -> Result<Matches> {
+        allowed: Option<&HashSet<String>>,
+    ) -> Result<Matches<'_>> {
         let phrase = phrase || crate::search_analyzer::adjacent_symbol(value);
-        let fields: Vec<(&str, f32)> = match field {
+        let fields: Vec<(&'static str, f32)> = match field {
             SearchField::Any => vec![
                 ("title", 4.0),
                 ("abstract", 2.0),
@@ -677,7 +800,7 @@ impl LocalIndex {
         };
         let mut result: Option<Matches> = None;
         for terms in sequences {
-            let mut per_token: Matches = HashMap::new();
+            let mut per_token: Matches<'_> = FastMap::default();
             for (field, boost) in &fields {
                 let text = terms.join(" ");
                 let indexed = if phrase || text.chars().any(crate::search_analyzer::is_han) {
@@ -717,9 +840,14 @@ impl LocalIndex {
                         ),
                     ]));
                 }
-                for (key, hit) in
-                    self.run_query(query.as_ref(), field, &terms.join(" "), *boost, searcher)?
-                {
+                for (key, hit) in self.run_query(
+                    query.as_ref(),
+                    field,
+                    &terms.join(" "),
+                    *boost,
+                    searcher,
+                    allowed,
+                )? {
                     if let Some(previous) = per_token.get_mut(&key) {
                         merge(previous, hit);
                     } else {
@@ -746,31 +874,35 @@ impl LocalIndex {
     fn run_query(
         &self,
         query: &dyn Query,
-        field: &str,
+        field: &'static str,
         snippet_query: &str,
         boost: f32,
         searcher: &Searcher,
-    ) -> Result<Matches> {
-        let mut out = HashMap::new();
+        allowed: Option<&HashSet<String>>,
+    ) -> Result<Matches<'_>> {
+        let mut out: Matches<'_> = FastMap::default();
         if searcher.num_docs() == 0 {
             return Ok(out);
         }
-        for (score, address) in searcher.search(
-            query,
-            &TopDocs::with_limit(searcher.num_docs() as usize).order_by_score(),
-        )? {
-            let doc: TantivyDocument = searcher.doc(address)?;
-            let id = doc
-                .get_first(self.fields["doc_id"])
-                .and_then(|value| value.as_str())
-                .unwrap_or("");
-            if let Some(meta) = self.metadata.get(id) {
-                let mut candidate = meta.clone();
+        let shared_snippet: Arc<str> = snippet_query.into();
+        for (score, address) in searcher.search(query, &AllScoredDocs)? {
+            let id = self
+                .doc_ids
+                .get(&searcher.segment_reader(address.segment_ord).segment_id())
+                .and_then(|ids| ids.get(address.doc_id as usize))
+                .ok_or_else(|| {
+                    Error::Unknown("search document identity cache does not match reader".into())
+                })?;
+            if let Some(meta) = self.metadata.get(id.as_str()) {
+                if allowed.is_some_and(|allowed| !allowed.contains(&meta.article_id)) {
+                    continue;
+                }
+                let mut candidate = CandidateRef::new(meta);
                 candidate.score = (score * boost) as f64;
                 candidate.matched_field = field.into();
-                candidate.snippet_query = snippet_query.into();
+                candidate.snippet_query = shared_snippet.clone();
                 out.insert(
-                    id.to_owned(),
+                    id.as_str(),
                     Match {
                         best_score: candidate.score,
                         candidate,
@@ -782,10 +914,49 @@ impl LocalIndex {
     }
 }
 
-type Matches = HashMap<String, Match>;
+// Intermediate term/field matches borrow immutable metadata. Only the
+// selected output candidates allocate owned strings; scores/evidence remain
+// local to the evaluation and never mutate the reader's metadata.
 #[derive(Clone)]
-struct Match {
-    candidate: SearchCandidate,
+struct CandidateRef<'a> {
+    meta: &'a SearchCandidate,
+    score: f64,
+    matched_field: std::borrow::Cow<'a, str>,
+    snippet_query: Arc<str>,
+}
+impl<'a> CandidateRef<'a> {
+    fn new(meta: &'a SearchCandidate) -> Self {
+        static EMPTY: std::sync::LazyLock<Arc<str>> = std::sync::LazyLock::new(|| Arc::from(""));
+        Self {
+            meta,
+            score: meta.score,
+            matched_field: std::borrow::Cow::Borrowed(&meta.matched_field),
+            snippet_query: if meta.snippet_query.is_empty() {
+                EMPTY.clone()
+            } else {
+                Arc::from(meta.snippet_query.as_str())
+            },
+        }
+    }
+    fn into_owned(self) -> SearchCandidate {
+        let mut candidate = self.meta.clone();
+        candidate.score = self.score;
+        candidate.matched_field = self.matched_field.into_owned();
+        candidate.snippet_query = self.snippet_query.to_string();
+        candidate
+    }
+}
+impl std::ops::Deref for CandidateRef<'_> {
+    type Target = SearchCandidate;
+    fn deref(&self) -> &Self::Target {
+        self.meta
+    }
+}
+
+type Matches<'a> = FastMap<&'a str, Match<'a>>;
+#[derive(Clone)]
+struct Match<'a> {
+    candidate: CandidateRef<'a>,
     best_score: f64,
 }
 fn evidence_order(a: &SearchCandidate, b: &SearchCandidate) -> std::cmp::Ordering {
@@ -800,7 +971,7 @@ fn evidence_order(a: &SearchCandidate, b: &SearchCandidate) -> std::cmp::Orderin
         .cmp(&priority(&b.kind))
         .then_with(|| a.doc_id.cmp(&b.doc_id))
 }
-fn merge(previous: &mut Match, hit: Match) {
+fn merge<'a>(previous: &mut Match<'a>, hit: Match<'a>) {
     let score = previous.candidate.score + hit.candidate.score;
     if hit.best_score > previous.best_score
         || (hit.best_score == previous.best_score
@@ -877,4 +1048,285 @@ pub(crate) fn validate(expr: &SearchExpr, depth: usize, nodes: &mut usize) -> Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod identity_cache_tests {
+    use super::*;
+
+    fn document(id: &str, title: &str) -> SourceDocument {
+        SourceDocument {
+            meta: SearchCandidate {
+                doc_id: format!("{id}:item"),
+                article_id: id.into(),
+                anchor_key: id.into(),
+                kind: "item".into(),
+                title: title.into(),
+                year: None,
+                score: 0.,
+                matched_field: "title".into(),
+                snippet_query: String::new(),
+            },
+            texts: std::array::from_fn(|i| {
+                if TEXT_FIELDS[i] == "title" {
+                    title.into()
+                } else {
+                    String::new()
+                }
+            }),
+            identifiers: Vec::new(),
+        }
+    }
+    fn hits(index: &LocalIndex, value: &str) -> Vec<String> {
+        index
+            .search(
+                Some(&SearchExpr::Term {
+                    field: Some(SearchField::Title),
+                    value: value.into(),
+                }),
+                false,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|h| h.article_id)
+            .collect()
+    }
+    fn verify_stored_identities(index: &LocalIndex) {
+        let reader = index.reader.searcher();
+        assert_eq!(index.doc_ids.len(), reader.segment_readers().len());
+        for (ordinal, segment) in reader.segment_readers().iter().enumerate() {
+            let ids = &index.doc_ids[&segment.segment_id()];
+            for doc in 0..segment.max_doc() {
+                if segment.is_deleted(doc) {
+                    continue;
+                }
+                let stored: TantivyDocument = reader
+                    .doc(DocAddress {
+                        segment_ord: ordinal as u32,
+                        doc_id: doc,
+                    })
+                    .unwrap();
+                assert_eq!(
+                    ids[doc as usize],
+                    stored
+                        .get_first(index.fields["doc_id"])
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                );
+            }
+        }
+    }
+    #[test]
+    fn unordered_collection_preserves_all_scores_and_filters_deleted_documents() {
+        let mut index = LocalIndex::open(":memory:").unwrap();
+        index
+            .writer
+            .set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for batch in 0..2 {
+            index
+                .begin_update(Vec::new(), batch + 1, format!("token-{batch}"), false)
+                .unwrap();
+            index
+                .append_documents(
+                    (0..50)
+                        .map(|i| {
+                            document(
+                                &format!("id-{batch}-{i}"),
+                                &format!("gene {} immune", "gene ".repeat(i % 4)),
+                            )
+                        })
+                        .collect(),
+                )
+                .unwrap();
+            index.finish_update().unwrap();
+        }
+        index
+            .begin_update(vec!["id-0-0".into()], 3, "deleted".into(), false)
+            .unwrap();
+        index.finish_update().unwrap();
+        let reader = index.reader.searcher();
+        let query = TermQuery::new(
+            Term::from_field_text(index.fields["title"], "gene"),
+            IndexRecordOption::WithFreqs,
+        );
+        let mut expected = reader
+            .search(
+                &query,
+                &TopDocs::with_limit(reader.num_docs() as usize).order_by_score(),
+            )
+            .unwrap();
+        let mut actual = reader.search(&query, &AllScoredDocs).unwrap();
+        let order = |hit: &(f32, DocAddress)| (hit.1.segment_ord, hit.1.doc_id);
+        expected.sort_by_key(order);
+        actual.sort_by_key(order);
+        assert_eq!(actual.len(), 99);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn early_allowed_filter_preserves_article_scores_and_cross_object_matching() {
+        let mut index = LocalIndex::open(":memory:").unwrap();
+        let mut a_child = document("a", "immune evidence");
+        a_child.meta.doc_id = "a:attachment".into();
+        a_child.meta.kind = "attachment".into();
+        index
+            .begin_update(Vec::new(), 1, "token".into(), true)
+            .unwrap();
+        index
+            .append_documents(vec![
+                document("a", "gene editing"),
+                a_child,
+                document("b", "immune gene expression"),
+                document("c", "gene expression"),
+            ])
+            .unwrap();
+        index.finish_update().unwrap();
+        let allowed = HashSet::from(["a".to_owned(), "c".to_owned()]);
+        for expression in [
+            SearchExpr::Or {
+                clauses: vec![
+                    SearchExpr::Term {
+                        field: None,
+                        value: "gene".into(),
+                    },
+                    SearchExpr::Term {
+                        field: None,
+                        value: "immune".into(),
+                    },
+                ],
+            },
+            SearchExpr::And {
+                clauses: vec![
+                    SearchExpr::Term {
+                        field: None,
+                        value: "gene".into(),
+                    },
+                    SearchExpr::Term {
+                        field: None,
+                        value: "immune".into(),
+                    },
+                ],
+            },
+        ] {
+            let expected = index
+                .search(Some(&expression), false)
+                .unwrap()
+                .into_iter()
+                .filter(|h| allowed.contains(&h.article_id))
+                .map(|h| {
+                    (
+                        h.article_id,
+                        h.doc_id,
+                        h.score,
+                        h.matched_field,
+                        h.snippet_query,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let actual = index
+                .search_in(Some(&expression), false, Some(&allowed))
+                .unwrap()
+                .into_iter()
+                .map(|h| {
+                    (
+                        h.article_id,
+                        h.doc_id,
+                        h.score,
+                        h.matched_field,
+                        h.snippet_query,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+            let limited = index
+                .search_top_in(&expression, &allowed, 1)
+                .unwrap()
+                .into_iter()
+                .map(|h| {
+                    (
+                        h.article_id,
+                        h.doc_id,
+                        h.score,
+                        h.matched_field,
+                        h.snippet_query,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(limited, expected.into_iter().take(1).collect::<Vec<_>>());
+        }
+        assert!(
+            index
+                .search_in(None, false, Some(&HashSet::new()))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn identity_cache_survives_updates_deletion_rollback_and_segment_merge() {
+        let mut index = LocalIndex::open(":memory:").unwrap();
+        index
+            .writer
+            .set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+        for (revision, id, title) in [(1, "a", "alphamarker"), (2, "b", "betamarker")] {
+            index
+                .begin_update(
+                    vec![id.into()],
+                    revision,
+                    format!("token-{revision}"),
+                    false,
+                )
+                .unwrap();
+            index.append_documents(vec![document(id, title)]).unwrap();
+            index.finish_update().unwrap();
+        }
+        verify_stored_identities(&index);
+        let b_ids = index
+            .doc_ids
+            .values()
+            .find(|ids| ids.iter().any(|id| id == "b:item"))
+            .unwrap()
+            .clone();
+        index
+            .begin_update(vec!["a".into()], 3, "token-3".into(), false)
+            .unwrap();
+        index
+            .append_documents(vec![document("a", "replacementmarker")])
+            .unwrap();
+        index.finish_update().unwrap();
+        assert!(index.doc_ids.values().any(|ids| Arc::ptr_eq(ids, &b_ids)));
+        assert!(hits(&index, "alphamarker").is_empty());
+        assert_eq!(hits(&index, "replacementmarker"), ["a"]);
+        verify_stored_identities(&index);
+        let segments = index
+            .reader
+            .searcher()
+            .segment_readers()
+            .iter()
+            .map(|s| s.segment_id())
+            .collect::<Vec<_>>();
+        assert!(segments.len() > 1);
+        index.writer.merge(&segments).wait().unwrap();
+        index.reader.reload().unwrap();
+        index.refresh_doc_ids().unwrap();
+        assert_eq!(index.doc_ids.len(), 1);
+        verify_stored_identities(&index);
+        assert_eq!(hits(&index, "betamarker"), ["b"]);
+        index
+            .begin_update(vec!["b".into()], 4, "token-4".into(), false)
+            .unwrap();
+        index.fail_next_commit = true;
+        assert!(index.finish_update().is_err());
+        index.abort_update().unwrap();
+        assert_eq!(hits(&index, "betamarker"), ["b"]);
+        verify_stored_identities(&index);
+        index
+            .begin_update(vec!["b".into()], 4, "token-4".into(), false)
+            .unwrap();
+        index.finish_update().unwrap();
+        assert!(hits(&index, "betamarker").is_empty());
+        assert_eq!(hits(&index, "replacementmarker"), ["a"]);
+        verify_stored_identities(&index);
+    }
 }

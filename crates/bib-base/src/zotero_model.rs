@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS items (
     UNIQUE (libraryID, key)
 );
 CREATE INDEX IF NOT EXISTS items_synced ON items(synced);
+CREATE INDEX IF NOT EXISTS items_key ON items(key);
 
 CREATE TABLE IF NOT EXISTS articleItems (
     article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
@@ -894,24 +895,30 @@ pub(crate) async fn delete_attachment_by_key(
     article_id: &str,
     key: &str,
 ) -> Result<Option<DeletedAttachment>> {
-    let Some(attachment) = attachment_by_key(conn, article_id, key).await? else {
+    // Deleting a nonpreferred child must invalidate lexical and semantic
+    // snapshots too. Publish the outbox change atomically with the deletion.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).await?;
+    let Some(attachment) = attachment_by_key(&tx, article_id, key).await? else {
+        tx.rollback().await?;
         return Ok(None);
     };
-    let was_preferred = mapped_attachment_item(conn, article_id)
+    let was_preferred = mapped_attachment_item(&tx, article_id)
         .await?
         .is_some_and(|item_id| item_id == attachment.item_id);
-    conn.execute(
+    tx.execute(
         "DELETE FROM items WHERE itemID = ?1",
         turso::params![attachment.item_id],
     )
     .await?;
     if was_preferred {
-        conn.execute(
+        tx.execute(
             "UPDATE articleItems SET attachmentItemID = NULL WHERE article_id = ?1",
             turso::params![article_id],
         )
         .await?;
     }
+    crate::bib_base::sync_search_index(&tx, article_id).await?;
+    tx.commit().await?;
     Ok(Some(DeletedAttachment {
         attachment,
         was_preferred,

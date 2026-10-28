@@ -1,0 +1,138 @@
+{
+  "schema": "bib-p4-gui-qualification-v1",
+  "date": "2026-10-28",
+  "platform": "Linux",
+  "status": "P4 work in progress; no stage commit",
+  "scope": "Explicit topic mode and hard conditions, installed-model configuration/status, scope/remote consent, mode-specific history, saved rule and URL restoration, recall/source display, cancellation, candidate-pool export and reader return",
+  "validation": {
+    "production_build": {
+      "passed": true,
+      "log_sha256": "9624d462360f9d419eb9982c206d423fbfb3c0377eb96d66077c479e60df2844"
+    },
+    "web_and_simulated_native_topic": {
+      "passed": true,
+      "log_sha256": "80864c6a63d92e93d5d3d3f4ac59dc18a69f942778abe0531ce65ba495d3bb87"
+    },
+    "keyword_search_regression": {
+      "passed": true,
+      "log_sha256": "f64e18fef3becefeb8d798d41ddc2c143365cbf218339704f198751f55f0435a"
+    },
+    "search_reading_regression": {
+      "passed": true,
+      "log_sha256": "7f36516a411cc130a3469bfabf012e791c4d05d30e67a55ed57c10d7049cdb19"
+    },
+    "discovery_regression": {
+      "passed": true,
+      "log_sha256": "a48c10df41e6b4e1ddd48c2a1662c829e5c758774ede97f4d5979aeab5e48bc9"
+    },
+    "actual_native_topic": {
+      "passed": true,
+      "log_sha256": "8c2b38e6862111b6324c97220ec975bfd855a030f4da4e840fb9122fd0c79d54"
+    },
+    "actual_native_keyword_regression": {
+      "passed": true,
+      "log_sha256": "1b5e145e1e7f6068c7210061d8dba9df0b7b40c7bbeae3ad33e9cefd9ce2c95b"
+    },
+    "backend_libraries": {
+      "passed": 217,
+      "ignored": 2,
+      "failed": 0
+    },
+    "backend_api": {
+      "passed": 24,
+      "ignored": 1,
+      "failed": 0
+    },
+    "backend_clippy": {
+      "passed": true,
+      "log_sha256": "7ef94fca0302d9455be0a3761ca8860b59f9360d10ab2ed99134c986ad27582f"
+    },
+    "native_example_clippy": {
+      "passed": true,
+      "log_sha256": "8df12a0c2a01fb4c0beb3799fc69cf70ccb2dbb108bdc8a19bba05c728c23bf5"
+    }
+  },
+  "actual_native": {
+    "evidence": [
+      "actual installed model metadata via HTTP and native IPC",
+      "GUI enables full-text scope and fixed digest indexing",
+      "real model query with required year filter",
+      "candidate count and dual recall explanation",
+      "semantic source opens non-preferred attachment through binary IPC",
+      "reader locates actual source text and returns without changing topic",
+      "real WebView reload restores topic and hard conditions",
+      "backend persisted hybrid saved rule",
+      "GUI persists disable and explicitly returns to keywords"
+    ],
+    "hybrid_probe": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": 2000,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": true,
+          "overlap_chars": 200,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "generation": "tantivy-v2:6:ebfcadf7-fd5e-454d-860a-0f3c9b18e908:hybrid-rrf-v1-d100-k10-w4:8da51515d07a902176a0c2384199d9cca69f5e1dbb312441c4c41592a47fb96b:2d382d4b-7036-4784-b660-011d47614e64:0711b75f-7448-485e-80b0-120895dc6296",
+      "recall": {
+        "lexical_rank": 1,
+        "semantic_evidence": {
+          "anchor_key": "FBACC49D",
+          "content_hash": "96e11e3a5f8ae7e5ab022f4f90383d6390b6c69c4bba158a57dcc2317791b618",
+          "doc_id": "FBACC49D:attachment",
+          "end_byte": 72,
+          "kind": "attachment",
+          "matched_field": "fulltext",
+          "snippet": "İ prefix genome.\n😀 gene editing native evidence in the second file.\n",
+          "start_byte": 0
+        },
+        "semantic_rank": 1
+      },
+      "total": 1
+    },
+    "model": "actual installed Qwen3-Embedding 0.6B",
+    "ok": true,
+    "relevance_evaluation": false,
+    "runtime": "Tauri WebKitGTK"
+  },
+  "source_sha256": {
+    "apps/gui/src/features/bib-search-model.ts": "757b1eee8ad4b84c89d9b62c2af3f32d3197848578f439f2670e47ddf421b385",
+    "apps/gui/src/features/bibliography.tsx": "01215ad798fbb6d6198a188f28512d39262acea5ff4e8b799dfc3db88d52c519",
+    "apps/gui/src/features/search-location.ts": "0463dbc0018a5590753b89bd62a4e40b0de487097f38b3fc23551686abb71cba",
+    "apps/gui/src/features/search-assist.tsx": "90c57a77e88f2a8cfcecfd5a5ee57f758e33a7e7dfc9974bd21e8d36e8517b89",
+    "apps/gui/src/features/saved-searches.tsx": "97d1f1458d6a6f74566eebf2ee484931227267d3cd816cae992aaa928d60cc71",
+    "apps/gui/src/features/search-evidence.tsx": "b96e4ba862dd2beeae7395ade42e4c953abafe2e615058b005f588f0af027019",
+    "apps/gui/src/features/semantic-search.tsx": "0047128c6867baefbed6936d97a89e56c2f75cf7f87a912a290e1385f246d162",
+    "apps/gui/tests/semantic-search.mjs": "d3c10ccdcffc5a69dd45e5d9e8a642685132516c958e55fc62633fd6b73c4f0d",
+    "apps/gui/tests/native-semantic.mjs": "0db92a72981a7773239e5fe6efaedc3717dfa5ad5cc812fc705b147b07fe3e71",
+    "apps/gui/tests/bibliography-semantic-native.mjs": "4cbf9898a83d464a7bc8709b017313024fc5c5c00e10696a6470d67eb92b57a9",
+    "apps/gui/tests/bibliography-semantic-native.html": "64ffdc20487d3b9a843c752ca9df002f9b0b290f823fb258ef5fea7260b36ac4",
+    "apps/gui/src-tauri/examples/bibliography_native_smoke.rs": "69ff78ff31cd5bda8cd8bbe6dff25edfe993e328ed506ffa226af2981097db41",
+    "crates/bib-base/src/semantic_service.rs": "d59c24af445dcf0e6b8011fc1bf106862dce424aab2a9581509e49e8b42ac96e",
+    "crates/api-server/src/bib.rs": "cb77a7271ea6bcf6e7845f05ccf042e65a98e50e436a6802ea97f42521476c05",
+    "crates/api-server/tests/api.rs": "c10c3946547c9eaa79e017455338d450702c7a74381651c91509605ede18e1ec"
+  },
+  "screenshots": {
+    "/tmp/bib-semantic-web.png": "79f8b5475ba4cd603995e991b64afa91aa8a0d346ca7aeb4a7c3ec54bb49e0e1",
+    "/tmp/bib-semantic-bridge.png": "0e97bdc25ee5caef55118e79d60d45d6ef73429313304f911d6fc6a5401f1110"
+  },
+  "limitations": [
+    "Feature tests mount the bibliography feature directly; not a qualification of unrelated workspace changes or an isolated final stage build",
+    "Browser/simulated bridge tests use controlled fixtures; actual Tauri WebKitGTK uses the real backend, IPC and an installed digest-pinned Qwen model",
+    "Actual model/native fixture has one synthetic bibliography article and two extracted TXT attachments; demonstrates source identity and transport, not IR quality or PDF-coordinate coverage",
+    "Remote consent is exercised with controlled GUI responses; no external remote model service is qualified",
+    "No new Chinese relevance score, 100k capacity, service SIGKILL recovery, model/runtime tuning or full index-maintenance acceptance implied",
+    "macOS/Windows and manual screen-reader acceptance remain pending",
+    "Three ignored backend tests are excluded from pass counts",
+    "Full production build passed on the current workspace; generated gateway assets were not synchronized because the stage is unfinished and unrelated asset edits must be preserved"
+  ]
+}

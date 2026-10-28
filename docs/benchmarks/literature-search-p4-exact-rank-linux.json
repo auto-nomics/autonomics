@@ -1,0 +1,212 @@
+{
+  "schema": "bib-p4-exact-ranking-qualification-v1",
+  "date": "2026-10-28",
+  "phase": "P4 uncommitted",
+  "status": "exact_top_k_and_bounded_parallel_ranking_qualified;end_to_end_and_final_phase_gates_open",
+  "changes": [
+    "Select exact Top-K using borrowed winners before cloning evidence strings; sort only the final K",
+    "At most four scoped workers for >=65536 chunks and >=16384 eligible articles, bounded by actual available parallelism",
+    "Keep each chunk serial f64 accumulation unchanged; merge article maxima with the original chunk-ID tie break",
+    "Small scopes do not query CPU parallelism or spawn workers; model, preprocessing, schema and cursor algorithm identity unchanged"
+  ],
+  "verification": {
+    "parallel_before_small_scope_capability_guard": {
+      "passed": 419,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 17,
+      "log": "target/bib-p4-validation/p4-parallel-rank-final-regression.log",
+      "sha256": "f1e2c8af634ef080684d3976a119edcc0356a5a9528b91ad69b6d269b0aff46f"
+    },
+    "final_guard_index": {
+      "passed": 33,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 1,
+      "log": "target/bib-p4-validation/p4-exact-rank-guard-index-tests.log",
+      "sha256": "e212d8e5e63a74e9b45bfdde2f02093d5ce8a4f7b1d2d069b4b62d56ed09b8a9"
+    },
+    "final_api": {
+      "passed": 48,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 7,
+      "log": "target/bib-p4-validation/p4-exact-rank-api-regression.log",
+      "sha256": "d39ae45395e6d6c560670c7343fc533e80de49ed0d5fe211d6fe9f1e48a2e3ec"
+    },
+    "single_cpu_fallback": {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "targets": 1,
+      "log": "target/bib-p4-validation/p4-exact-rank-one-cpu.log",
+      "sha256": "ce1c46f0331adcd4e0015b6dfd9252de0c0a5640d2e5e00860a5e5bf10d307bf"
+    },
+    "strict_all_targets_clippy": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p4-parallel-rank-final-clippy.log",
+      "sha256": "6df7ad9abf07e4c433fb5541c534928c5ecdfcb3dea894b9b38bd7f555b1ceae"
+    }
+  },
+  "verification_scope": "The 419-test run precedes only moving available_parallelism inside the existing size guard. Final-source index and API tests, Clippy and both microbenchmarks follow that change. Counts overlap and must not be summed as a single suite.",
+  "worker": {
+    "path": "target/bib-p4-validation/p4-exact-rank-final-worker-20261028/worker",
+    "sha256": "36a47708644205b768e5bb3026f9c54bcba8405a778435b48cc782d5196d433f",
+    "source_manifest": "target/bib-p4-validation/p4-exact-rank-final-worker-20261028/receipt.json",
+    "source_manifest_sha256": "5173f790370fbf4647395a966de208042e2d428fa9d0ab5024c60c13faa3ccb2",
+    "source_sha256": {
+      "crates/bib-base/src/semantic_index.rs": "afe751935307de1f1237be759d86e6d0cbfbc935d1e3a306798f1aa30c0701dd",
+      "crates/bib-base/src/semantic_index/tests.rs": "988735017aa5913c1aeca14eba6efc92fd7bb9f349b9a96fd1e1267b9adc66e4",
+      "crates/bib-base/examples/semantic_rank_probe.rs": "0b44d9d77ec4fe26b17744198637fc0a70220b23b2e2f3633292de68510515f0",
+      "Cargo.lock": "ad147664bc85699394a7e4076b91586b7af5369ee81efad89885c880462a671c",
+      "crates/bib-base/Cargo.toml": "b8baf72e48408228017a3e064f26f6a973449ab9238843426d8bdef53534c93b"
+    },
+    "baseline_source_sha256": "4be544c2397f005ebe33cda6689f800827025dddd262b29de82475b0700c1939",
+    "combined_tree_not_phase_isolated": true
+  },
+  "runs": {
+    "10000": {
+      "receipt": "target/bib-p4-validation/p4-exact-rank-final-10000-20261028/receipt.json",
+      "receipt_sha256": "5560b9437482a2a077bdcb2ef2e8fc24a5dfd58dc26ff3d6a44281ce3705b311",
+      "resources": {
+        "worker_pid": 2007429,
+        "exit_code": 0,
+        "peak_rss_kib": 335144,
+        "user_cpu_seconds": 2.215513,
+        "system_cpu_seconds": 0.059883,
+        "major_faults": 0
+      },
+      "resource_receipt_sha256": "4a81b96ae60b3d485ded0e3b4d69759461fd1714a867de567cf586f52f5adb79",
+      "measurement": {
+        "alternating_order": true,
+        "articles": 10000,
+        "available_parallelism": 24,
+        "build_profile": "release",
+        "cases": {
+          "stride_1": {
+            "all_compared_results_bit_identical": true,
+            "baseline": {
+              "max_ms": 55.924588,
+              "p50_ms": 49.06911,
+              "p95_ms": 55.876404,
+              "samples": 20
+            },
+            "eligible_articles": 10000,
+            "optimized": {
+              "max_ms": 52.160444,
+              "p50_ms": 45.891869,
+              "p95_ms": 51.514875,
+              "samples": 20
+            }
+          },
+          "stride_100": {
+            "all_compared_results_bit_identical": true,
+            "baseline": {
+              "max_ms": 1.979374,
+              "p50_ms": 1.504848,
+              "p95_ms": 1.9243350000000001,
+              "samples": 20
+            },
+            "eligible_articles": 100,
+            "optimized": {
+              "max_ms": 2.0334670000000004,
+              "p50_ms": 1.4403000000000001,
+              "p95_ms": 1.743154,
+              "samples": 20
+            }
+          }
+        },
+        "chunks": 70000,
+        "dimensions": 1024,
+        "ranking_thread_cap": 4,
+        "same_vectors_and_process": true,
+        "schema": "bib-semantic-rank-probe-v1",
+        "scope": "Ranking only; no service/API/GUI latency or model relevance claim",
+        "synthetic_vectors": true,
+        "vector_storage": "one distinct allocation per chunk",
+        "warmup_pairs_excluded": 1
+      }
+    },
+    "100000": {
+      "receipt": "target/bib-p4-validation/p4-exact-rank-final-100000-20261028/receipt.json",
+      "receipt_sha256": "f730a25180bfe2e70d5c3c7079d76d368d5ad18c472d3a6907d4f1da137067d4",
+      "resources": {
+        "worker_pid": 2005350,
+        "exit_code": 0,
+        "peak_rss_kib": 3162504,
+        "user_cpu_seconds": 31.707698,
+        "system_cpu_seconds": 3.284026,
+        "major_faults": 0
+      },
+      "resource_receipt_sha256": "009612b3234a016719878e80700e1d2e3d4530ebbf7f43a552f7806e208ef8e9",
+      "measurement": {
+        "alternating_order": true,
+        "articles": 100000,
+        "available_parallelism": 24,
+        "build_profile": "release",
+        "cases": {
+          "stride_1": {
+            "all_compared_results_bit_identical": true,
+            "baseline": {
+              "max_ms": 813.5016109999999,
+              "p50_ms": 515.4159390000001,
+              "p95_ms": 628.713717,
+              "samples": 20
+            },
+            "eligible_articles": 100000,
+            "optimized": {
+              "max_ms": 745.282854,
+              "p50_ms": 239.574377,
+              "p95_ms": 339.822522,
+              "samples": 20
+            }
+          },
+          "stride_100": {
+            "all_compared_results_bit_identical": true,
+            "baseline": {
+              "max_ms": 35.52798,
+              "p50_ms": 24.311778,
+              "p95_ms": 31.705346000000002,
+              "samples": 20
+            },
+            "eligible_articles": 1000,
+            "optimized": {
+              "max_ms": 38.257086,
+              "p50_ms": 24.055164,
+              "p95_ms": 35.751096000000004,
+              "samples": 20
+            }
+          }
+        },
+        "chunks": 700000,
+        "dimensions": 1024,
+        "ranking_thread_cap": 4,
+        "same_vectors_and_process": true,
+        "schema": "bib-semantic-rank-probe-v1",
+        "scope": "Ranking only; no service/API/GUI latency or model relevance claim",
+        "synthetic_vectors": true,
+        "vector_storage": "one distinct allocation per chunk",
+        "warmup_pairs_excluded": 1
+      }
+    }
+  },
+  "method": {
+    "rank_limit": 100,
+    "one_deterministic_1024d_query_per_corpus": true,
+    "samples_per_case_per_implementation": 20,
+    "warmup_pairs_excluded": 1,
+    "alternating_baseline_optimized_order": true,
+    "same_vectors_same_process": true,
+    "independent_vector_allocation_per_chunk": true,
+    "baseline": "Frozen pre-optimization full-clone/full-sort exact ranking in the same executable",
+    "score_comparison": "Selected article/chunk identities and f64 score bits, plus Arc vector identity",
+    "shared_host": "Compilation/tests and unrelated activity overlapped some samples; retain complete distributions, no controlled hardware or universal speed claim"
+  },
+  "limitations": [
+    "Ranking microbenchmark only; not DB filtering, hydration, HTTP, GUI, model inference, startup or sustained-write qualification",
+    "Synthetic vectors, not new relevance evaluation; scientific ranking policy and independent quality fixtures remain unchanged",
+    "Narrow 100k-scope P95 varied from 31.705ms baseline to 35.751ms optimized; do not claim every case improved",
+    "Peak RSS is the whole paired benchmark process, not separate per-implementation memory reduction",
+    "Original 100k/200k-attachment/700k-block full functional receipt retained; final-source end-to-end timing and long write/recovery/resource/native/phase-isolation audit still pending"
+  ]
+}

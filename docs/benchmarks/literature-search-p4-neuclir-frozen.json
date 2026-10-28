@@ -1,0 +1,45 @@
+{
+  "schema": "bib-p4-neuclir-frozen-v2",
+  "frozen_at_utc": "2026-10-28 04:07:35 UTC",
+  "status": "frozen_before_chinese_retrieval; no score yet",
+  "dataset_manifest_path": "target/bib-p4-validation/neuclir-chinese-frozen-20261028/manifest.json",
+  "dataset_manifest_sha256": "12de9840d33fcf2531c9b8a0c126ef1e46fbad06c56a11ee0f3e6d5655e4c336",
+  "generated_sha256": {
+    "corpus.jsonl": "8abe4a5d874dcdb3f631707e86fa456c56d9c7983259888b6666cde861ebb73b",
+    "queries.jsonl": "4a6c197361d4cc46b1df2575262fb835f36ff96f2b3c4e41af9eb23182ed91a2",
+    "qrels/all.tsv": "c3939a64bf2509e730554dc69ac4dbe3938859107bc9b2f0a1f98be2f19b5906"
+  },
+  "acceptance_queries": 110,
+  "tuning_queries": 0,
+  "primary_metric": "ndcg_at_20",
+  "additional_metrics": [
+    "ndcg_at_10",
+    "mrr_at_10",
+    "recall_at_50",
+    "recall_at_100"
+  ],
+  "paired_uncertainty_metric": "ndcg_at_20",
+  "reference": "https://huggingface.co/datasets/neuclir/tech",
+  "model": "Qwen3-Embedding-0.6B Q8_0 Ollama",
+  "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+  "dimensions": 1024,
+  "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+  "document_preprocessing": "title + newline + complete native Chinese abstract; no truncation, no English translation",
+  "chunk_codepoints": 0,
+  "rerank": null,
+  "inference_options": {},
+  "dense_weight": 4,
+  "rrf_constant": 10,
+  "candidate_depth": 100,
+  "lexical_baseline": "Production topic_search_expression: whitespace OR, Han runs segmented with the same locked Jieba analyzer then OR; non-Han symbols/repeated English words preserved; full corpus",
+  "filters": "No relevance-dependent corpus filtering; entire 395927-document native corpus",
+  "parameters_selected_on": "English SciFact train only; weights/depth/model/inference unchanged; generic Han OR semantic correction validated with constructed cases before any official Chinese scores",
+  "previous_parameter_freeze_sha256": "4001f33ce80597636dac79aab48e5f60e76f451cd6d171aa285149bc3a7bc9ca",
+  "quality_score_computed": false,
+  "supersedes": {
+    "path": "literature-search-p4-neuclir-frozen-v1.json",
+    "sha256": "fc370ef0f0bf7f9151f582d36766b2c10540f95e32c2603539f80ef23956a9dd",
+    "reason": "Static pre-score audit found whitespace-only OR turned a no-space Han sentence into implicit all-word AND. Segment Han runs using the locked index dictionary before OR; preserve original non-Han runs and every English expression. No official Chinese retrieval run or score inspected."
+  },
+  "topic_source_sha256": "1d42b90292779a67a61bb87cdd07b27756c09a746c6a64b33c35aab5c84f5474"
+}

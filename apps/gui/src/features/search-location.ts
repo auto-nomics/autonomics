@@ -9,12 +9,14 @@ function expression(value: unknown, depth = 0): value is SearchExpr {
 }
 function validate(value: unknown): value is SearchRequest {
   if (!object(value)) return false;
-  if (Object.keys(value).some(key=>!["query","expression","default_fields","scope","filters","sort","page_size","cursor","include_facets","include_articles","sources","mode"].includes(key))) return false;
+  if (Object.keys(value).some(key=>!["query","expression","default_fields","scope","filters","sort","page_size","cursor","include_facets","include_articles","sources","mode","semantic_query"].includes(key))) return false;
   if (value.sources != null && (!Array.isArray(value.sources) || !value.sources.every((source:unknown)=>source==="local"))) return false;
   if (value.query != null && (typeof value.query !== "string" || value.query.length > 16384)) return false;
   if (value.expression != null && !expression(value.expression)) return false;
   if (value.sort != null && !["relevance", "title", "newest", "oldest"].includes(value.sort)) return false;
-  if (value.mode != null && value.mode !== "lexical") return false;
+  if (value.mode != null && !["lexical","hybrid"].includes(value.mode)) return false;
+  if (value.semantic_query != null && (typeof value.semantic_query !== "string" || new TextEncoder().encode(value.semantic_query).length > 16384)) return false;
+  if (value.mode === "hybrid" ? !value.semantic_query?.trim() : Boolean(value.semantic_query?.trim())) return false;
   if (value.default_fields != null && (!Array.isArray(value.default_fields) || !value.default_fields.every((field: unknown) => typeof field === "string" && field !== "any" && field in searchFieldLabels))) return false;
   if (value.scope != null) {
     const scope = value.scope;

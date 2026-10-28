@@ -1,0 +1,312 @@
+{
+  "schema": "bib-p4-recovery-qualification-v1",
+  "date": "2026-10-28",
+  "status": "P4 work in progress; no stage commit",
+  "platform": "Linux",
+  "validation": {
+    "library_targets": [
+      {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 196,
+        "failed": 0,
+        "ignored": 2
+      }
+    ],
+    "integration_targets": [
+      {
+        "passed": 24,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "passed_total": 245,
+    "ignored_total": 3,
+    "strict_clippy": true,
+    "actual_native": true
+  },
+  "changes": [
+    "Immutable vector sharing on incremental publication, binding-count guard and cross-batch deduplication",
+    "Staging heartbeat during blocked model calls and expiration cleanup during ordinary sync",
+    "New handles re-enumerate changed canonical sources before trusting the compacted outbox, for semantic and Tantivy indexes"
+  ],
+  "backup_lineage": {
+    "controlled_higher_revision_branch": true,
+    "semantic_before_fix_regression_failed": true,
+    "before_fix_log_sha256": "398c3352bce3969652126e83fd614eef7a933e4f11b080424636835d43cb7db2",
+    "semantic_and_lexical_reopen_tests_passed": true,
+    "same_version_reopen_reuses_index": true,
+    "rebuild_on_mismatched_fresh_source": true,
+    "normal_live_updates_remain_incremental": true
+  },
+  "actual_native": {
+    "evidence": [
+      "actual installed model metadata via HTTP and native IPC",
+      "GUI enables full-text scope and fixed digest indexing",
+      "real model query with required year filter",
+      "candidate count and dual recall explanation",
+      "semantic source opens non-preferred attachment through binary IPC",
+      "reader locates actual source text and returns without changing topic",
+      "real WebView reload restores topic and hard conditions",
+      "backend persisted hybrid saved rule",
+      "GUI rebuild, isolated repair, persistent pause and resume through real IPC/API/model",
+      "GUI persists disable and explicitly returns to keywords"
+    ],
+    "hybrid_probe": {
+      "config": {
+        "allow_remote": false,
+        "batch_size": 16,
+        "enabled": true,
+        "model": "qwen3-embedding:0.6b",
+        "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+        "origin": "http://127.0.0.1:11434",
+        "profile": {
+          "chunk_chars": 2000,
+          "dimensions": 1024,
+          "include_annotations": false,
+          "include_fulltext": true,
+          "overlap_chars": 200,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+        },
+        "timeout_seconds": 120
+      },
+      "generation": "tantivy-v2:6:55c45c1a-ffc4-4b7f-a130-abc1b800a96d:hybrid-rrf-v1-d100-k10-w4:8da51515d07a902176a0c2384199d9cca69f5e1dbb312441c4c41592a47fb96b:406b3e71-26b7-4a0b-a2fa-c43698c7a97a:51e3c550-9361-4ca9-9379-b824557df02a",
+      "recall": {
+        "lexical_rank": 1,
+        "semantic_evidence": {
+          "anchor_key": "DCA7AA83",
+          "content_hash": "96e11e3a5f8ae7e5ab022f4f90383d6390b6c69c4bba158a57dcc2317791b618",
+          "doc_id": "DCA7AA83:attachment",
+          "end_byte": 72,
+          "kind": "attachment",
+          "matched_field": "fulltext",
+          "snippet": "İ prefix genome.\n😀 gene editing native evidence in the second file.\n",
+          "start_byte": 0
+        },
+        "semantic_rank": 1
+      },
+      "total": 1
+    },
+    "maintenance": [
+      {
+        "action": "rebuild",
+        "generation": "2daea813-6fa6-4a79-977d-7a19dc9f4f2d",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": ""
+      },
+      {
+        "action": "repair",
+        "generation": "6ae1ad0f-5221-4a96-ae8e-3243249d9518",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": "7ea89055-5f74-42bb-a7e7-8968e30f78b2"
+      },
+      {
+        "action": "cancel",
+        "generation": "6ae1ad0f-5221-4a96-ae8e-3243249d9518",
+        "progress": null,
+        "store_generation": "7ea89055-5f74-42bb-a7e7-8968e30f78b2"
+      },
+      {
+        "action": "resume",
+        "generation": "d30ebcc2-3fda-4aad-88dc-19b14e24418a",
+        "progress": {
+          "cached_chunks": 0,
+          "embedded_chunks": 3,
+          "processed_articles": 1,
+          "processed_chunks": 3,
+          "stage": "complete",
+          "target_articles": 1,
+          "target_revision": 6
+        },
+        "store_generation": "7ea89055-5f74-42bb-a7e7-8968e30f78b2"
+      }
+    ],
+    "model": "actual installed Qwen3-Embedding 0.6B",
+    "ok": true,
+    "relevance_evaluation": false,
+    "runtime": "Tauri WebKitGTK"
+  },
+  "process_recovery": {
+    "schema": "bib-semantic-maintenance-process-recovery-v1",
+    "signal": "SIGKILL",
+    "controlled_model_http_fixture": true,
+    "relevance_evaluation": false,
+    "partial": {
+      "config": {
+        "enabled": true,
+        "origin": "http://127.0.0.1:41603",
+        "allow_remote": false,
+        "model": "fixture:latest",
+        "model_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "profile": {
+          "dimensions": 2,
+          "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence.",
+          "chunk_chars": null,
+          "overlap_chars": 0,
+          "include_annotations": false,
+          "include_fulltext": false
+        },
+        "batch_size": 16,
+        "timeout_seconds": 120
+      },
+      "configuration_generation": "3c61e2ea-4d4f-4ffa-9328-6f2ba7f71f1d",
+      "phase": "indexing",
+      "generation": "08fac54b-ca2b-4ba3-a918-47689d70c4ee",
+      "signature": "a5975fe4dff4479017382da859d1e831986d8cd99370cec4eed03e38256cc9a0",
+      "indexed_revision": 21,
+      "indexed_chunks": 20,
+      "last_error": null,
+      "progress": {
+        "stage": "embedding",
+        "target_revision": 21,
+        "target_articles": 20,
+        "processed_articles": 0,
+        "processed_chunks": 16,
+        "embedded_chunks": 16,
+        "cached_chunks": 0
+      },
+      "maintenance": {
+        "request_id": "8ea390a8-8a03-423a-b55c-63a476c687c2",
+        "action": "repair",
+        "base_configuration_generation": "79dba165-f77c-464f-b527-74a1d60af1b2",
+        "configuration_generation": "3c61e2ea-4d4f-4ffa-9328-6f2ba7f71f1d",
+        "state": "running",
+        "requested_at": "2026-10-27T22:52:08.481648142+00:00",
+        "finished_at": null,
+        "progress": {
+          "stage": "embedding",
+          "target_revision": 21,
+          "target_articles": 20,
+          "processed_articles": 0,
+          "processed_chunks": 16,
+          "embedded_chunks": 16,
+          "cached_chunks": 0
+        },
+        "last_error": null,
+        "store_generation": "8ea390a8-8a03-423a-b55c-63a476c687c2"
+      },
+      "store_generation": ""
+    },
+    "recovered": {
+      "event": "recovery_complete",
+      "query_total": 20,
+      "status": {
+        "config": {
+          "allow_remote": false,
+          "batch_size": 16,
+          "enabled": true,
+          "model": "fixture:latest",
+          "model_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "origin": "http://127.0.0.1:41603",
+          "profile": {
+            "chunk_chars": null,
+            "dimensions": 2,
+            "include_annotations": false,
+            "include_fulltext": false,
+            "overlap_chars": 0,
+            "query_instruction": "Given a scientific claim, retrieve scientific papers that provide relevant evidence."
+          },
+          "timeout_seconds": 120
+        },
+        "configuration_generation": "3c61e2ea-4d4f-4ffa-9328-6f2ba7f71f1d",
+        "generation": "591d4682-b662-4925-9096-aac26da17121",
+        "indexed_chunks": 20,
+        "indexed_revision": 21,
+        "last_error": null,
+        "maintenance": {
+          "action": "repair",
+          "base_configuration_generation": "79dba165-f77c-464f-b527-74a1d60af1b2",
+          "configuration_generation": "3c61e2ea-4d4f-4ffa-9328-6f2ba7f71f1d",
+          "finished_at": "2026-10-27T22:52:24.584197185+00:00",
+          "last_error": null,
+          "progress": {
+            "cached_chunks": 16,
+            "embedded_chunks": 4,
+            "processed_articles": 20,
+            "processed_chunks": 20,
+            "stage": "complete",
+            "target_articles": 20,
+            "target_revision": 21
+          },
+          "request_id": "8ea390a8-8a03-423a-b55c-63a476c687c2",
+          "requested_at": "2026-10-27T22:52:08.481648142+00:00",
+          "state": "complete",
+          "store_generation": "8ea390a8-8a03-423a-b55c-63a476c687c2"
+        },
+        "phase": "ready",
+        "progress": {
+          "cached_chunks": 16,
+          "embedded_chunks": 4,
+          "processed_articles": 20,
+          "processed_chunks": 20,
+          "stage": "complete",
+          "target_articles": 20,
+          "target_revision": 21
+        },
+        "signature": "a5975fe4dff4479017382da859d1e831986d8cd99370cec4eed03e38256cc9a0",
+        "store_generation": "8ea390a8-8a03-423a-b55c-63a476c687c2"
+      }
+    },
+    "recovery_seconds_including_remaining_lease": 14.889843181001197,
+    "worker_sha256": "8faaf7bef560d7bed2e5045728df604485ccc3ee8557d2ab057c608897e7f7fc",
+    "committed_batches_reused": true,
+    "canonical_documents_preserved": 20
+  },
+  "log_sha256": {
+    "recovery-final-libraries": "a96a8eb9e42f1e204bd201995cda1373955ee532f228dcf6665d2d9a7bcc30bd",
+    "backup-both-integration": "2bc95a2c407d50656e3c2716c7ae79291f55886e6ef31fa186d93d29e5ca24a4",
+    "backup-both-clippy-final": "43230f094777cabd1b15e66276014be9ce71e153285349d1bc10946bbf7186a5",
+    "recovery-final-native": "3b14351bbc56a2966e128dbae9da16da3621d0f3edbe8f761da5e0061aa30d19",
+    "recovery-final-process": "468cfa4c6c6d3c60ae102809f084a2030c01f67a80cb0bc9881786f46ee281bb"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "4f728685e727804ad1beefbd9e68adad79b06204a9f5b031879474e557de6ca7",
+    "crates/bib-base/src/semantic_index/tests.rs": "ea4af8d01059ab525e6135c3e9b13c91e6c9f44a1df23c24af41b75af2333dae",
+    "crates/bib-base/src/local_index.rs": "e5e9b25a1af449b9e55939b453ea8fcf7fed877f5fd65a4c8ebdc100d307fb80",
+    "crates/bib-base/src/search.rs": "7cab34421cfd79a8b61290c25da5024442b1f31360292912647c8fff3ff33931",
+    "crates/bib-base/src/semantic_service.rs": "168381315bf5dc712ad60905289b1108cbef5bb16ac2bf325365ca1c6782f12a",
+    "crates/bib-base/src/semantic_service/maintenance.rs": "68447a5db95e879f5ad731154b5901065a28947a285ecc1f1babffb55f1f0695",
+    "crates/bib-base/src/semantic_service/tests/maintenance_tests.rs": "923cc0a876a5807c252abee8427e335c0f90a37bd1739f60f49a777f42ff762a",
+    "crates/bib-base/examples/semantic_process_probe.rs": "3db6bdf9bb9ed4400d8d5fe6b2fc07181434b46e59efc8f8d772acc2e9ddc4ef",
+    "scripts/qualify_bib_semantic_recovery.py": "764ec03ed68580649d49ce1901c24d5092d524f7927d418ec711801f847c27fe",
+    "apps/gui/tests/bibliography-semantic-native.mjs": "c5980ec91032127f0341c136dac56f93dbd12a10c31fd9f6e3428564ddaa3831",
+    "apps/gui/src/features/semantic-search.tsx": "2054b06f6db6cee778d9b034b7b5d76485f9474a53cd7f6d4717eb59c333c9b1"
+  },
+  "limitations": [
+    "Backup tests construct a controlled divergent source/outbox state; not an OS backup product or live-file replacement qualification",
+    "Changed source on fresh reopen may require full enumeration; capacity receipts predate this startup guard and retain historical source/binary hashes",
+    "SIGKILL provider is a local bounded 2D HTTP fixture; native GUI separately uses actual installed digest-pinned Qwen on one synthetic article and two TXT files",
+    "No Chinese human relevance or cross-platform/manual accessibility acceptance",
+    "100k metadata binding copy, model throughput, fulltext fanout, concurrent end-to-end capacity and persistent cache quotas remain pending",
+    "Three ignored backend tests are excluded; native feature test does not qualify unrelated workspace edits or an isolated final stage build"
+  ]
+}

@@ -50,9 +50,10 @@ import { SearchEvidencePanel } from "./search-evidence";
 import { SearchIndexStatus } from "./search-index-status";
 import { useBibSearch } from "./use-bib-search";
 import { SearchSnippet } from "./search-snippet";
+import { SemanticSearchControls, RecallLabel } from "./semantic-search";
 import { DiscoveryView } from "./discovery-view";
 import { DiscoveryProvenance } from "./discovery-provenance";
-import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort } from "./bib-search-model";
+import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort, type SearchMode, type SearchRetrieval } from "./bib-search-model";
 
 type BibAuthor = NonNullable<BibArticle["authors"]>[number];
 
@@ -350,8 +351,8 @@ export function BibliographyView() {
 
 function LibraryView() {
   const [initial] = useState(readSearchLocation);
-  const {history,record:recordHistory,clear:clearHistory}=useQueryHistory();
-  const recordHistoryRef=useRef(recordHistory);recordHistoryRef.current=recordHistory;
+  const keywordHistory=useQueryHistory();
+  const topicHistory=useQueryHistory("autonomics.bib.topicHistory.v1");
   const [columns,setColumns]=useState(readResultColumns);
   const [showSnippets,setShowSnippets]=useState(()=>{try{return localStorage.getItem("autonomics.bib.snippets")!=="false";}catch{return true;}});
   const [wideColumns,setWideColumns]=useState(()=>window.matchMedia("(min-width:768px)").matches);
@@ -362,6 +363,12 @@ function LibraryView() {
   const [articles, setArticles] = useState<BibArticle[]>([]);
   const [attachmentSummaries, setAttachmentSummaries] = useState<Record<string, AttachmentSummary>>({});
   const [total, setTotal] = useState(0);
+  const [mode, setMode] = useState<SearchMode>(initial.request.mode ?? "lexical");
+  const {history,clear:clearHistory}=mode === "hybrid" ? topicHistory : keywordHistory;
+  const recordHistoryRef=useRef({lexical:keywordHistory.record,hybrid:topicHistory.record});recordHistoryRef.current={lexical:keywordHistory.record,hybrid:topicHistory.record};
+  const [topicDraft, setTopicDraft] = useState(initial.request.semantic_query ?? "");
+  const [topic, setTopic] = useState(initial.request.semantic_query ?? "");
+  const [retrieval, setRetrieval] = useState<SearchRetrieval | null>(null);
   const [queryDraft, setQueryDraft] = useState(initial.request.expression ? formatExpression(initial.request.expression) : initial.request.query ?? "");
   const [query, setQuery] = useState(initial.request.expression ? formatExpression(initial.request.expression) : initial.request.query ?? "");
   const [expression, setExpression] = useState<SearchExpr | null>(initial.request.expression ?? null);
@@ -386,7 +393,7 @@ function LibraryView() {
   const composing = useRef(false);
   const [isComposing, setIsComposing] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchActive = Boolean(query.trim()) || Boolean(expression) || hasFilters(filters) || sort !== "relevance" || defaultFields.length > 0 || sameChild || filtersOpen || libraryId !== null || Boolean(locationError);
+  const searchActive = mode === "hybrid" || Boolean(query.trim()) || Boolean(expression) || hasFilters(filters) || sort !== "relevance" || defaultFields.length > 0 || sameChild || filtersOpen || libraryId !== null || Boolean(locationError);
   const [selectedCollection, setSelectedCollection] = useState<string | null>(initial.request.scope?.unfiled ? "@unfiled" : initial.request.scope?.collection_id ?? null);
   const [includeDescendants, setIncludeDescendants] = useState(() => { if (initial.request.scope?.include_descendants !== undefined) return initial.request.scope.include_descendants; try { return localStorage.getItem("autonomics.collections.recursive") === "true"; } catch { return false; } });
   const [associations, setAssociations] = useState<Array<{ collection_id: string; article_id: string }>>([]);
@@ -399,6 +406,7 @@ function LibraryView() {
   const [detail, setDetail] = useState<BibDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [searchCancelled, setSearchCancelled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -414,13 +422,17 @@ function LibraryView() {
   const buttonColumns=["24px","minmax(0,1fr)",...(wideColumns&&columns.creator?["160px"]:[]),...(columns.year?["56px"]:[]),...(wideColumns&&columns.journal?["160px"]:[]),...(columns.files?[wideColumns?"80px":"56px"]:[])].join(" ");
   const scopeLabel = selectedCollection === "@unfiled" ? "Unfiled" : selectedCollection ? collectionPath(collections, selectedCollection) : "All references";
   const currentRequest = useMemo<SearchRequest>(() => ({
+    mode, semantic_query: mode === "hybrid" ? topic : null,
     query: expression ? "" : query, expression, default_fields: defaultFields, filters, sort,
     scope: { library_id: libraryId, collection_id: selectedCollection && selectedCollection !== "@unfiled" ? selectedCollection : null, unfiled: selectedCollection === "@unfiled", include_descendants: includeDescendants, require_same_child: sameChild },
-  }), [query, expression, defaultFields, filters, sort, libraryId, selectedCollection, includeDescendants, sameChild]);
+  }), [mode, topic, query, expression, defaultFields, filters, sort, libraryId, selectedCollection, includeDescendants, sameChild]);
   const commitQuery = (text = queryDraft) => { if (text !== query) {setExpression(null);setQuery(text);} else void loadLibrary(query); };
-  const clearSearch = () => {setLocationError("");setFilters({});setSort("relevance");setDefaultFields([]);setExpression(null);setSameChild(false);setQuery("");setQueryDraft("");setActiveSavedId(null);setFiltersOpen(false);setLibraryId(null);};
+  const commitMainQuery = () => { if (mode === "hybrid") { if (topicDraft !== topic) setTopic(topicDraft.trim()); else void loadLibrary(query); } else commitQuery(); };
+  const draftRequest: SearchRequest = { ...currentRequest, ...(queryDraft !== query ? {query:queryDraft, expression:null} : {}), semantic_query: mode === "hybrid" ? topicDraft.trim() : null };
+  const clearSearch = () => {setMode("lexical");setTopic("");setTopicDraft("");setLocationError("");setFilters({});setSort("relevance");setDefaultFields([]);setExpression(null);setSameChild(false);setQuery("");setQueryDraft("");setActiveSavedId(null);setFiltersOpen(false);setLibraryId(null);};
   const restoreRequest = (request: SearchRequest, savedId: string | null) => {
     setLocationError("");
+    setMode(request.mode ?? "lexical");setTopic(request.semantic_query ?? "");setTopicDraft(request.semantic_query ?? "");
     setQueryDraft(request.expression ? formatExpression(request.expression) : request.query ?? "");
     setQuery(request.expression ? formatExpression(request.expression) : request.query ?? "");
     setExpression(request.expression ?? null);setFilters(request.filters ?? {});setSort(request.sort ?? "relevance");setDefaultFields(request.default_fields ?? []);
@@ -430,13 +442,14 @@ function LibraryView() {
 
 
   const applySavedSearch = (rule: SavedSearch) => restoreRequest(rule.request, rule.id);
-  useEffect(() => {if (!locationError) writeSearchLocation(currentRequest, activeSavedId);}, [currentRequest, activeSavedId, locationError]);
+  useEffect(() => {if (!locationError && (mode !== "hybrid" || topic.trim())) writeSearchLocation(currentRequest, activeSavedId);}, [currentRequest, activeSavedId, locationError, mode, topic]);
   useEffect(() => {const restore = () => {const state=readSearchLocation();if(state.error)setLocationError(state.error);else restoreRequest(state.request,state.savedId);};window.addEventListener("popstate",restore);return()=>window.removeEventListener("popstate",restore);}, []);
 
   const loadLibrary = useCallback(async (
     nextQuery = "",
     options: { append?: boolean; offset?: number; cursor?: string | null } = {},
   ) => {
+    if (mode === "hybrid" && !topic.trim()) { requestSequence.current++; listAbort.current?.abort(); setLoading(false); setError(null); return; }
     if (locationError) {setError(locationError);return;}
     const append = options.append ?? false;
     const offset = options.offset ?? 0;
@@ -447,12 +460,13 @@ function LibraryView() {
     const abort = new AbortController();
     listAbort.current = abort;
     setLoading(true);
+    setSearchCancelled(false);
     setError(null);
     try {
       const base = selectedCollection === "@unfiled" ? "/bib/articles/unfiled"
         : selectedCollection ? `/bib/collections/${encodeURIComponent(selectedCollection)}/articles` : "/bib/articles";
       const advanced = Boolean(expression) || hasFilters(filters) || sort !== "relevance" || defaultFields.length > 0 || sameChild || filtersOpen || libraryId !== null;
-      const useV2 = advanced || (indexEngine !== "legacy" && Boolean(nextQuery.trim()));
+      const useV2 = mode === "hybrid" || advanced || (indexEngine !== "legacy" && Boolean(nextQuery.trim()));
       const pagePromise = useV2
         ? searchPage({ ...currentRequest, query: expression ? "" : nextQuery, cursor: append ? options.cursor : null }, abort.signal)
         : gatewayRequest("GET", `${base}?query=${encodeURIComponent(nextQuery)}&include_descendants=${includeDescendants}&limit=50&offset=${offset}`, undefined, { signal: abort.signal });
@@ -473,10 +487,11 @@ function LibraryView() {
         return append ? { ...current, ...hits } : hits;
       });
       setFacets(articleResponse.facets ?? null);
+      setRetrieval(previous => articleResponse.retrieval ? { ...articleResponse.retrieval, hits: append ? { ...previous?.hits, ...articleResponse.retrieval.hits } : articleResponse.retrieval.hits } : null);
       setNextCursor(articleResponse.next_cursor ?? null);
       setIndexGeneration(articleResponse.index_generation ?? "");
       setUpdatesPending(false);
-      recordHistoryRef.current(nextQuery);
+      recordHistoryRef.current[mode](mode === "hybrid" ? topic : nextQuery);
       const nextArticles: BibArticle[] = articleResponse.articles ?? [];
       const nextSummaries = articleResponse.attachment_summaries ?? {};
       if (!append && context!==lastResultContext.current && detailSequence.current===selectionVersion && selectionRef.current && !nextArticles.some(article=>article.id===selectionRef.current)) {
@@ -496,11 +511,12 @@ function LibraryView() {
       setHasMoreArticles(useV2 ? Boolean(articleResponse.next_cursor) : offset + nextArticles.length < (articleResponse.total ?? 0));
     } catch (cause) {
       if (requestId !== requestSequence.current || abort.signal.aborted) return;
+      if (append) {setHasMoreArticles(false);setNextCursor(null);setUpdatesPending(true);}
       setError(String(cause));
     } finally {
       if (requestId === requestSequence.current) setLoading(false);
     }
-  }, [selectedCollection, includeDescendants, filters, sort, expression, defaultFields, sameChild, filtersOpen, libraryId, indexEngine, currentRequest, locationError, searchPage, libraryMetadata]);
+  }, [mode, topic, selectedCollection, includeDescendants, filters, sort, expression, defaultFields, sameChild, filtersOpen, libraryId, indexEngine, currentRequest, locationError, searchPage, libraryMetadata]);
 
   useEffect(() => {
     if (isComposing) return;
@@ -801,7 +817,7 @@ function LibraryView() {
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
           <span className="text-xs font-semibold tracking-wide uppercase">Library</span>
           <div className="flex shrink-0 items-center gap-1">
-            <Badge variant="secondary">{total.toLocaleString()}</Badge>
+            <Badge variant="secondary" aria-label="Articles in library" title="All articles, independent of the current search">{libraryTotal.toLocaleString()}</Badge>
             <Button
               size="icon-xs"
               variant="ghost"
@@ -815,7 +831,7 @@ function LibraryView() {
         </div>
         <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5">
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
-          <SavedSearches request={queryDraft !== query ? {...currentRequest,query:queryDraft,expression:null} : currentRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy"} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
+          <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
           <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
         </ScrollArea>
@@ -836,7 +852,7 @@ function LibraryView() {
             className="relative min-w-0 flex-1"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!composing.current) commitQuery();
+              if (!composing.current) commitMainQuery();
 
             }}
           >
@@ -844,23 +860,25 @@ function LibraryView() {
             <Input
               ref={searchInputRef}
               aria-label="Search bibliography"
-              value={queryDraft}
+              value={mode === "hybrid" ? topicDraft : queryDraft}
               onCompositionStart={() => { composing.current = true; setIsComposing(true); }}
-              onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); setQueryDraft(event.currentTarget.value); }}
-              placeholder={`Search ${total.toLocaleString()} items`}
+              onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); if (mode === "hybrid") setTopicDraft(event.currentTarget.value); else setQueryDraft(event.currentTarget.value); }}
+              placeholder={mode === "hybrid" ? "Describe a research topic, then press Enter" : `Search ${total.toLocaleString()} items`}
               className="h-7 pl-8 text-[13px]"
-              onChange={(event) => {setLocationError("");setQueryDraft(event.target.value);}}
+              onChange={(event) => {setLocationError("");if (mode === "hybrid") setTopicDraft(event.target.value); else setQueryDraft(event.target.value);}}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" && !isComposing && !loading && articles.length) {event.preventDefault();resultsViewport.current?.scrollTo({top:0});selectArticle(articles[0].id);requestAnimationFrame(()=>resultsViewport.current?.querySelector<HTMLButtonElement>("[data-bib-row-primary]")?.focus());}
-                if (event.key === "Escape") { setQueryDraft(""); setQuery(""); setExpression(null); }
+                if (event.key === "Escape") { if (mode === "hybrid") {setTopicDraft("");setTopic("");} else {setQueryDraft("");setQuery("");setExpression(null);} }
                 if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) {
                   event.preventDefault();
-                  commitQuery();
+                  commitMainQuery();
 
                 }
               }}
             />
           </form>
+          {mode === "hybrid" && <Button size="xs" variant="secondary" disabled={!topicDraft.trim() || isComposing} onClick={commitMainQuery}>Search topic</Button>}
+          {mode === "hybrid" && loading && <Button size="xs" variant="ghost" aria-label="Cancel search" onClick={() => {requestSequence.current++;listAbort.current?.abort();setLoading(false);setError(null);setSearchCancelled(true);}}>Cancel</Button>}
           <Button size="xs" variant="ghost" disabled={indexEngine === "legacy"} onClick={() => setAdvancedOpen(true)}>Advanced</Button>
           <Button size="icon-sm" variant="ghost" aria-label="Import article" title="Import article" onClick={() => void importArticle()} disabled={busy === "import"}>
             <Plus />
@@ -877,24 +895,36 @@ function LibraryView() {
           <Button size="icon-sm" variant="ghost" aria-label="Upload full text" title="Upload full text" onClick={() => void uploadFulltext()} disabled={!selected || busy === "upload"}>
             <Upload />
           </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title="Export BibTeX" onClick={() => void exportLibrary()} disabled={loading || busy === "export"}>
+          <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title={retrieval ? "Export retrieved candidates as BibTeX" : "Export BibTeX"} onClick={() => void exportLibrary()} disabled={loading || busy === "export" || (mode === "hybrid" && resultContext !== JSON.stringify(currentRequest))}>
             <Download />
           </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
+          <select aria-label="Search mode" className="rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={mode} onChange={event => {setLocationError("");setMode(event.target.value as SearchMode);}}><option value="lexical">Keywords</option><option value="hybrid">Topic · experimental</option></select>
           <span className="min-w-0 truncate text-muted-foreground">{scopeLabel}{selectedCollection && includeDescendants ? " · including subcollections" : ""}</span>
           <select aria-label="Quick search fields" title="Default fields for words without an explicit field" className="max-w-44 rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={Object.keys(quickFields).find(key => JSON.stringify(quickFields[key]) === JSON.stringify(defaultFields)) ?? "custom"} onChange={event => setDefaultFields(quickFields[event.target.value] ?? [])}><option value="all">Everything</option><option value="title">Title, year, author</option><option value="metadata">Metadata and notes</option><option value="custom" disabled>Custom fields</option></select>
           <Button size="xs" variant={filtersOpen ? "secondary" : "ghost"} disabled={indexEngine === "legacy"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>Filters</Button>
           <label className="flex items-center gap-1" title="Positive conditions must match the same evidence object"><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />Same attachment</label>
-          <SearchAssist history={history} onClear={clearHistory} onPick={text=>{setQueryDraft(text);commitQuery(text);searchInputRef.current?.focus();}} />
+          <SearchAssist topic={mode === "hybrid"} history={history} onClear={clearHistory} onPick={text=>{if (mode === "hybrid") {setTopicDraft(text);setTopic(text);} else {setQueryDraft(text);commitQuery(text);}searchInputRef.current?.focus();}} />
           <ColumnsPicker columns={columns} onChange={setColumns} snippets={showSnippets} onSnippets={setShowSnippets} />
-          <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} article${total === 1 ? "" : "s"}`}</span>
+          <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} ${retrieval ? "candidate articles" : `article${total === 1 ? "" : "s"}`}`}</span>
           <select aria-label="Search sort" disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">Relevance</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select>
           {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>Clear search</Button>}
         </div>
+        {mode === "hybrid" && <>
+          <div className="space-y-1 border-b px-2 py-2 text-xs">
+            <label className="flex flex-wrap items-center gap-2">Required conditions<Input aria-label="Required search conditions" className="h-7 min-w-40 flex-1 text-xs" value={queryDraft} placeholder="Optional: year:2020..2026 NOT tag:excluded" onChange={event => {setLocationError("");setQueryDraft(event.target.value);}} onCompositionStart={() => {composing.current=true;setIsComposing(true);}} onCompositionEnd={event => {composing.current=false;setIsComposing(false);setQueryDraft(event.currentTarget.value);}} onKeyDown={event => {if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) {event.preventDefault();commitQuery();}}} /></label>
+            <p className="text-muted-foreground">Required conditions, scope and filters always apply. The topic is a natural-language description, not Boolean syntax.</p>
+            {(!topic.trim() || topicDraft.trim() !== topic) && <p role="status">Enter a topic and submit it to apply your changes.</p>}
+          </div>
+          <SemanticSearchControls onInvalidate={() => {setUpdatesPending(true);setNextCursor(null);setHasMoreArticles(false);}} onReady={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} onKeyword={() => setMode("lexical")} />
+        </>}
+        {resultContext && resultContext !== JSON.stringify(currentRequest) && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">Previous results are retained until the new search succeeds.</p>}
+        {mode === "hybrid" && searchCancelled && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">Search cancelled. Previous results are retained.</p>}
+        {retrieval && <p className="border-b px-2 py-1 text-xs text-muted-foreground">Retrieved candidate pool · {retrieval.eligible_articles.toLocaleString()} articles satisfy the required conditions. Facet counts describe the required query and filters; sorting and export apply to retrieved candidates.</p>}
         {filtersOpen && <SearchFiltersPanel value={filters} facets={facets} onChange={setFilters} />}
-        {updatesPending && <div className="flex items-center justify-between border-b px-2 py-1 text-xs">Library updated<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Refresh results</Button></div>}
+        {updatesPending && <div className="flex items-center justify-between border-b px-2 py-1 text-xs">Library or search index updated<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Refresh results</Button></div>}
         {facets && !filtersOpen && <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
           <select aria-label="Exact tag filter" value={filters.tag_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,tag_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All tags</option>{facets.tags.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
           <select aria-label="Exact creator filter" value={filters.creator_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,creator_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All authors</option>{facets.creators.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
@@ -981,7 +1011,8 @@ function LibraryView() {
                     </button>
                   </div>
 
-                  {showSnippets && Boolean(query.trim() || expression) && searchHits[article.id] && <div className="px-9 pb-2 text-xs text-muted-foreground">
+                  {showSnippets && Boolean(query.trim() || expression || retrieval) && searchHits[article.id] && <div className="px-9 pb-2 text-xs text-muted-foreground">
+                    <RecallLabel recall={retrieval?.hits[article.id]} />
                     <span className="mr-2 font-medium">{searchHits[article.id].matched_field}</span>
                     <SearchSnippet text={searchHits[article.id].snippet} ranges={searchHits[article.id].highlight_ranges} />
                     <Button size="xs" variant="ghost" onClick={() => selectArticle(article.id)}>View evidence</Button>

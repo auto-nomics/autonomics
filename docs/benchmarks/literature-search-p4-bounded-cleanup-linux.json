@@ -1,0 +1,180 @@
+{
+  "schema": "bib-p4-bounded-cleanup-qualification-v1",
+  "status": "cleanup_isolated_regression_and_full_100000_functional_run_passed;performance_and_final_phase_gates_open",
+  "phase": "P4 uncommitted",
+  "change": {
+    "atomic_publication": "Head swap and old-generation retirement only; nonempty generations never cascade in publication",
+    "generation_gc": "At most 4 transactions of 2048 binding rows per maintenance tick; head/alias/live-staging guards rechecked under writer transaction",
+    "vector_gc": "Persistent signature-specific keyset cursor; at most 16 transactions scanning 256 hashes; indexed references checked under writer transaction",
+    "cache_reuse": "Vector reclamation only when a published head matches the canonical source; never-published or source-ahead stores retain retry batches",
+    "failure_visibility": "Cleanup errors preserve the published head and Ready query state, surface as retryable maintenance warnings, and retry without model calls",
+    "resource_wait": "Bounded cleanup may run while otherwise parked; it does not invoke an embedder"
+  },
+  "tests": {
+    "index": 31,
+    "service": 28,
+    "isolated_complete_backend": 360,
+    "failures": 0,
+    "ignored": 0
+  },
+  "strict_clippy": {
+    "passed": true,
+    "all_targets": true,
+    "target_directory": "target/bib-p4-validation/p4-bounded-cleanup-build-target-20261028"
+  },
+  "gui": {
+    "typescript": true,
+    "browser": true,
+    "simulated_bridge": true,
+    "actual_native_current_candidate": "pending"
+  },
+  "owned_copy_experiment": {
+    "whole_generation_delete_before": {
+      "error": "Busy: database is locked",
+      "elapsed_ms": 159182.704104,
+      "log": "target/bib-p4-validation/semantic-binding-profile-20261028/turso-delete-700000.jsonl"
+    },
+    "bounded_delete_after": {
+      "deleted_bindings": 700000,
+      "page_size": 2048,
+      "elapsed_ms": 411025.17674699996,
+      "input_reference_index_migration_ms": 106096.8148,
+      "log": "target/bib-p4-validation/semantic-binding-profile-20261028/turso-bounded-delete-700000.jsonl",
+      "verification": {
+        "schema": "semantic-bounded-delete-verification-v1",
+        "engine": "SQLite read-only on closed owned copy",
+        "published_head": "e758ad95-894e-42b5-8490-ebe87f14960e",
+        "source_rows": 700000,
+        "source_content_sha256": "c01784c6ac691cf50a2bfc07edffe2cd1a0648d68407c3167e39062871228831",
+        "deleted_bindings_remaining": 0,
+        "deleted_generation_remaining": 0,
+        "vector_rows": 700000
+      }
+    },
+    "scope": "Debug standalone SQL reproduction on an owned closed-fixture copy; shared host, no controlled latency improvement or complete service claim"
+  },
+  "build_cache_audit": {
+    "initial_shared_target_release": "Rejected before use: reported Fresh but executable lacked new cleanup SQL and dependency module",
+    "initial_single_test_recheck": "Discarded: selected cached 223-test binary rather than the 229-test candidate",
+    "scoped_cache_reset": "Derived bib-base package artifacts only; original fixture/archives/source files unchanged",
+    "authoritative_build": "All dependencies rebuilt in a dedicated target directory; worker receipt verifies source hashes, new binary markers, dependency source path and excluded P5 markers",
+    "initial_full_test_timeout": "One 8-second repair readiness timeout in initial shared-target full run; cause unproven; complete dedicated 360-test run passed without timeout changes"
+  },
+  "receipt_integrity": {
+    "original_copy_receipt_restored_sha256": "77329f13d02bbeaaf5de4a6f538a81539180f27747fd76f3d9712b2dc3aaf148",
+    "recheck_saved_separately": "target/bib-p4-validation/semantic-binding-profile-20261028/post-failed-delete-verification.json",
+    "original_failure_scenes_preserved": true
+  },
+  "worker_receipt": "target/bib-p4-validation/p4-bounded-cleanup-worker-20261028/receipt.json",
+  "pilot": {
+    "count": 100,
+    "passed": true,
+    "wall_seconds": 21.713047209996148,
+    "receipt": "target/bib-p4-validation/attachment-bounded-cleanup-pilot-20261028/100/receipt.json"
+  },
+  "actual_qwen": {
+    "status": "functional_probe_completed",
+    "model": "qwen3-embedding:0.6b",
+    "digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "corpus": "/tmp/bib-p4-scifact/corpus.jsonl",
+    "corpus_sha256": "faf545f2b1f55287fa1b7a20973c59b2692614a67c775a3b5ea38962a11e005a",
+    "scope": "32 public documents; functional maintenance/restart, not new relevance qualification",
+    "log": "target/bib-p4-validation/p4-cleanup-qwen-functional.log",
+    "log_sha256": "9470d208af2a1496a9550434c860d0195839a749f184ba15a22ef6f8d910ce2a",
+    "production_hybrid_search_integrated": true,
+    "deleted_article_absent_from_export": true,
+    "disable_persisted": true
+  },
+  "source_sha256": {
+    "crates/bib-base/src/semantic_index.rs": "4be544c2397f005ebe33cda6689f800827025dddd262b29de82475b0700c1939",
+    "crates/bib-base/src/semantic_index/cleanup.rs": "91b6f5b3f44790c9174bd5662a94eb5ee414fe778836f40bab9a0217121df902",
+    "crates/bib-base/src/semantic_index/tests.rs": "1c3409e66ba193a43db64bd0c31590f053694a29fdfc3290078ceb8d9bb54965",
+    "crates/bib-base/src/semantic_service.rs": "72c0c0f1892bdb544b949fcf052227d948a3159fdd128a756aaa3752e400fcb4",
+    "crates/bib-base/src/semantic_service/tests.rs": "3b3b0757b7e3226902967d0e9105fc88dac30b7c5de863523c0d54480d36fd66",
+    "apps/gui/src/features/semantic-search.tsx": "a44d4d18c9b3a5bcbc665ef0e49b7f8fc5c239b6654ebf81b214f22685e379e9",
+    "crates/bib-base/examples/semantic_binding_probe.rs": "361252d14b1708d505cf10d3b1e2a0a7051d9e0b2b07ecb0dbb2b60a6cac5a88"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p4-bounded-cleanup-final-index-tests.log": "5fefa80542f04e1e7de7dbb32843e0fd0acd658b38f2e3be2200529c7dd0fe70",
+    "target/bib-p4-validation/p4-bounded-cleanup-service-tests.log": "0f46c9dbae400b696a3efa39032330a5b45fb43299268041893020854e5bc0c7",
+    "target/bib-p4-validation/p4-cleanup-dedicated-tests.log": "6db2d9ed4650c5ab320949d924e87a54bc0a203a20cd7997d7fe99bb76e034e8",
+    "target/bib-p4-validation/p4-cleanup-dedicated-clippy.log": "ddadb704f249aaa6f3b26874bbda32aecbb8efe67f4dad7e1c5fbc4c1d27ba15",
+    "target/bib-p4-validation/p4-cleanup-dedicated-release-build.log": "5b09bb08d786ae60b1687c608dca8a729957f94fe0b55cffca983e83ae79e6d2",
+    "target/bib-p4-validation/p4-cleanup-gui-tests.log": "a7583a79835dffdb018ff01db1ee886442e0998f0172fbd36772f28f62280b9e",
+    "target/bib-p4-validation/p4-cleanup-gui-types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "target/bib-p4-validation/attachment-bounded-cleanup-pilot.log": "9f6a2edb4f4031b5646a89b3569652fe7b598130b0d333887209730321358fbd"
+  },
+  "limitations": [
+    "Large-model relevance scores remain scoped to their prior frozen experiments",
+    "Dedicated-build native functional test and final recovery/resource matrix remain open",
+    "P5 subscriptions still need scheduler, API and GUI integration",
+    "700k-block shared-host hot wide P95 3252.06ms and four-client P95 9040.38ms are not latency-goal success; first wide query 45908.84ms",
+    "Forty writes at 100ms spacing with explicit updating responses are a short burst, not long-duration sustained semantic availability",
+    "Root current combined backend 461 tests passed before P5 Crossref compatibility changes; final isolated phase source qualification remains separate"
+  ],
+  "completed_100000": {
+    "status": "functional_run_passed",
+    "directory": "target/bib-p4-validation/attachment-100k-bounded-cleanup-resume-20261028",
+    "resume_from": "target/bib-p4-validation/attachment-100k-recover-20261028",
+    "timeout_seconds": 14400,
+    "upload_extract_ms": 698334.461577,
+    "observation": "target/bib-p4-validation/attachment-100k-bounded-cleanup-resume-20261028/status-observation-20261028.json",
+    "initial_index_ms": 1845953.659901,
+    "query_observation": {
+      "four_clients": {
+        "latency": {
+          "max_ms": 9593.436703,
+          "p50_ms": 7369.338713,
+          "p95_ms": 9040.384082999999,
+          "samples": 20
+        },
+        "wall_ms": 37893.858141000004
+      },
+      "memory": {
+        "peak_rss_kib": 4125440,
+        "rss_kib": 3983544
+      },
+      "single_client": {
+        "one_percent": {
+          "first_observed_ms": 566.447455,
+          "hot": {
+            "max_ms": 507.034769,
+            "p50_ms": 479.371888,
+            "p95_ms": 499.231653,
+            "samples": 30
+          }
+        },
+        "wide": {
+          "first_observed_ms": 45908.836344,
+          "hot": {
+            "max_ms": 3259.214472,
+            "p50_ms": 2208.910017,
+            "p95_ms": 3252.064181,
+            "samples": 30
+          }
+        }
+      }
+    },
+    "measurement_scope": "shared host, synthetic HTTP model; compilation overlapped parts of initial build/query work; no controlled performance comparison; 40-write burst is not a long-duration availability qualification",
+    "last_stage_at": "2026-10-28T12:45:22.781416770Z",
+    "metadata_converged": {
+      "at": "2026-10-28T12:45:22.781416770Z",
+      "wall_ms": 1783856.19566,
+      "indexed_revision": 500071,
+      "indexed_chunks": 700000,
+      "phase": "ready",
+      "last_error": null
+    },
+    "exit_code": 0,
+    "wall_seconds": 5548.636462968003,
+    "receipt": "target/bib-p4-validation/attachment-100k-bounded-cleanup-resume-20261028/100000/receipt.json",
+    "receipt_sha256": "7bd5a89e55865123f7d3fcdd8aacb102da2c1a575bad87dae272e8e120dee386",
+    "initial_ready_ms": 1845953.659901,
+    "final_indexed_revision": 500073,
+    "final_indexed_chunks": 700000,
+    "delete_and_new_attachment_verified": true,
+    "nonpreferred_raw_and_evidence_verified": true,
+    "old_cursor_rejected": true,
+    "final_error": null
+  }
+}

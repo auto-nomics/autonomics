@@ -29,6 +29,9 @@ fn main() {
             .with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp()));
         let mut article = bib_types::Article::new("native-a", "Native literature evidence");
         article.year = Some(2022);
+        article.abstract_text = Some(
+            "Native qualification fixture for searching and reading scientific evidence.".into(),
+        );
         article.pub_types = vec!["Review".into()];
         article.keywords = vec!["gene".into()];
         shared.bib.upsert_article(&article).await.unwrap();
@@ -91,6 +94,11 @@ fn main() {
     let api_addr = server.addr().to_string();
     let origin =
         std::env::var("BIB_NATIVE_SMOKE_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:1428".into());
+    let fixture_page = if std::env::var("BIB_NATIVE_SEMANTIC_SMOKE").as_deref() == Ok("1") {
+        "bibliography-semantic-native.html"
+    } else {
+        "bibliography-native.html"
+    };
     let mut context = tauri::generate_context!();
     context.config_mut().app.windows.clear();
     context.config_mut().build.dev_url = Some(origin.parse().unwrap());
@@ -110,9 +118,7 @@ fn main() {
                 app,
                 "main",
                 tauri::WebviewUrl::External(
-                    format!("{origin}/tests/bibliography-native.html")
-                        .parse()
-                        .unwrap(),
+                    format!("{origin}/tests/{fixture_page}").parse().unwrap(),
                 ),
             )
             .title("Bibliography native qualification")

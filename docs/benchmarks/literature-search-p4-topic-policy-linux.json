@@ -1,0 +1,125 @@
+{
+  "schema": "bib-p4-topic-policy-qualification-v1",
+  "date": "2026-10-28",
+  "status": "topic_and_isolated_native_passed;full_chinese_lexical_completed;real_hybrid_embedding_in_progress",
+  "change": "Segment Han runs using the locked indexing dictionary before OR; preserve original non-Han symbol runs and every English expression, including repeated words",
+  "cause": "Whitespace-only topic OR represented a no-space Han sentence as one Term, whose constituent dictionary terms were implicitly ANDed",
+  "scope": "Soft topic lexical recall only; explicit hard query parser and dense/weighted-RRF model parameters unchanged",
+  "source_sha256": {
+    "crates/bib-base/src/hybrid_search.rs": "1d42b90292779a67a61bb87cdd07b27756c09a746c6a64b33c35aab5c84f5474",
+    "crates/bib-base/src/lib.rs": "bff9741d36f841d76e2498a9472e9719b0b82bfdfb369b2034e4398b1d978e17",
+    "crates/bib-base/examples/semantic_relevance.rs": "32d48bd9e3dda92ff013bcdd2f9f18dba3075e9512c9cf00ae6cffe6efa97c13",
+    "crates/bib-base/examples/topic_expression_probe.rs": "8654235ff7e3ed152c060cc17b34df0691d8fbf2c6e4685634b843029bbc6de1"
+  },
+  "validation": {
+    "constructed_topic_tests": 3,
+    "backend_tests": {
+      "passed": 353,
+      "failed": 0,
+      "ignored": 0,
+      "command": "TMPDIR=<owned ext4 test directory> CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests -- --include-ignored",
+      "log": "target/bib-p4-validation/topic-qualified-ext4-tests.log",
+      "sha256": "5f5af4e779abc8454a9a2acac22e3860e3be98d87027c3f8f75ee71874aa089f"
+    },
+    "strict_clippy": {
+      "passed": true,
+      "log": "target/bib-p4-validation/topic-qualified-clippy.log",
+      "sha256": "927e6d36ae94e52e83089bc82ff995e586a627839fa68f9dcbe5ea64d65ddfa8"
+    },
+    "english_scifact_300_ast_compatibility": {
+      "receipt": "target/bib-p4-validation/topic-scifact-300-compatibility.json",
+      "sha256": "4be7b80dff881c8451c230d10f138d65bf1b8a06bd03e935471b75a4110fc1dc",
+      "result": {
+        "all_expressions_identical": true,
+        "judgments_read": false,
+        "queries": 300,
+        "query_sha256": "4816c9c7ab1e5600e77f44f9ddc99910791231808dfa118620f714d7c5d2b861",
+        "schema": "bib-topic-expression-compatibility-v1",
+        "topic_source_sha256": "1d42b90292779a67a61bb87cdd07b27756c09a746c6a64b33c35aab5c84f5474"
+      },
+      "scope": "Exact query-expression equality, not a new relevance-score computation"
+    },
+    "probe_strict_clippy": {
+      "passed": true,
+      "log": "target/bib-p4-validation/topic-expression-probe-clippy.log",
+      "sha256": "b9ba944ad5dd97ad59e98df60bfef8e747b8c3a7fda4a3da1e3e8ff25c54a9dc"
+    }
+  },
+  "actual_model_runner_smoke": {
+    "fixture": "10 constructed Chinese documents, 2 constructed queries; no qrels",
+    "model": "qwen3-embedding:0.6b",
+    "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "modes": {
+      "lexical": {
+        "receipt": "target/bib-p4-validation/semantic-relevance-format-han-run-20261028/lexical.receipt.json",
+        "sha256": "409f49866a7297ae63c1f032b246ac37efe6ada95d9532065d5596ef2e5c9462"
+      },
+      "hybrid": {
+        "receipt": "target/bib-p4-validation/semantic-relevance-format-han-run-20261028/hybrid.receipt.json",
+        "sha256": "be646e15d356cf8f5c8299ddb7e3317f2a1564966c2d98b6d81ea4a7e1d3e65e"
+      }
+    },
+    "quality_score_computed": false
+  },
+  "full_chinese_run": {
+    "control": "target/bib-p4-validation/neuclir-production-control-20261028/receipt.json",
+    "dataset_documents": 395927,
+    "queries": 110,
+    "phase": "real_hybrid_embedding",
+    "judgments_read_by_retrieval": false,
+    "quality_score_computed": true,
+    "scope_of_available_score": "Lexical baseline only; no hybrid result or gain claimed",
+    "lexical_receipt": {
+      "path": "target/bib-p4-validation/neuclir-production-run-20261028/lexical.receipt.json",
+      "sha256": "5c114f37a8ff0f6d1dae4c1bf922590ad8f1bf4b40447e104b09a25fe65b579f"
+    },
+    "lexical_evaluation": {
+      "path": "target/bib-p4-validation/neuclir-production-run-20261028/lexical-evaluation.json",
+      "sha256": "b2f4942b0a5029f9c1fc0b104a5a240b85407af5985db23b4b3d3a4c4ceba662",
+      "mean": {
+        "ndcg_at_10": 0.30228757495917535,
+        "ndcg_at_20": 0.3005553865411694,
+        "mrr_at_10": 0.6015512265512265,
+        "recall_at_50": 0.32391174746555623,
+        "recall_at_100": 0.3945554140672024,
+        "zero_hits": 0
+      }
+    },
+    "lexical_latency": {
+      "max_ms": 2412.9552900000003,
+      "p50_ms": 1224.035958,
+      "p95_ms": 1898.9450799999997,
+      "samples": 110
+    },
+    "lexical_memory": {
+      "peak_rss_kib": 1206480,
+      "rss_kib": 987300
+    }
+  },
+  "temporary_storage_failure": {
+    "observed": "Default /tmp uses usrquota; 24 API tests failed on empty database creation with Turso IoError(QuotaExceeded,pwrite)",
+    "resolved_for_tests": "Use owned ext4 TMPDIR; 353 tests passed",
+    "failure_log_sha256": "2783259a91f4240914b23c6940590715a90968919bf352f287807328a19dd6d8",
+    "archive_receipt": "target/bib-p4-validation/archived-tmp-capacity-20261028/receipt.json",
+    "archive_sha256": "381305785e39fbb25b7d282f8dc2c06f54783c8591ce7c5796b8c30eeaed44f0",
+    "no_claim_that_this_proves_original_upload_500_cause": true
+  },
+  "limitations": [
+    "Official Chinese lexical baseline is measured; hybrid quality and improvement are not yet established",
+    "Full corpus real-model hybrid embeddings and evaluation are running",
+    "Capacity run uses its archived pre-Han-fix binary; English topic AST equality is proven, not a new performance qualification"
+  ],
+  "isolated_native": {
+    "passed": true,
+    "snapshot_path": "target/bib-p4-validation/isolated-p4-topic-candidate-20261028",
+    "manifest_sha256": "053d0c4ce63ff22a5819d08dc26f516a4d2d70271660dc9a6a3ee907ca0d06ed",
+    "overlay_files": 113,
+    "sources_unchanged_after_run": true,
+    "baseline_reader_main_agent_match_HEAD": true,
+    "receipt_path": "target/bib-p4-validation/native-topic-isolated-20261028.json",
+    "receipt_sha256": "4c8c6637f5f3481ca1d43aeeb3e37df3e9b6bf6d8d7f9e83e51807000d1620c9",
+    "binary_sha256": "b6aeadcaabb684ca6cf9e474ea8072bb1c8bcdf1fcd0f400ebc4b1671fdb0cce",
+    "log_sha256": "de2fecec9ca54b8e47309e0c9a414c7eb7a8ff1a746f6690e2a5b429f2a1de4f",
+    "scope": "Actual Linux Tauri/WebKitGTK feature harness with pinned Qwen, model/limits, nonpreferred evidence and reader, maintenance, rules/reload; not a full signed desktop release"
+  }
+}

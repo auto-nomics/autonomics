@@ -887,7 +887,7 @@ pub struct FullText {
 pub struct SearchHit {
     pub article_id: String,
     pub title: String,
-    /// BM25 relevance score; the legacy rollout mode retains field priority 0–3.
+    /// BM25 for lexical, weighted RRF for hybrid; legacy uses field priority 0–3.
     pub score: f64,
     /// Text snippet around the best matching position.
     pub snippet: String,

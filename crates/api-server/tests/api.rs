@@ -709,6 +709,448 @@ async fn api_bearer_auth_protects_api_routes_only() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+#[tokio::test]
+async fn semantic_configuration_is_explicit_validated_and_authenticated() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = api_server::api_router_with_auth(shared, Some("semantic-test-token".into()));
+    let path = "/api/v1/bib/search/semantic";
+    let discovery = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/semantic/models",
+            Some("{}".into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(discovery.status(), StatusCode::UNAUTHORIZED);
+    let maintenance = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/semantic/maintenance",
+            Some("{}".into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(maintenance.status(), StatusCode::UNAUTHORIZED);
+    for method in ["GET", "PUT"] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                method,
+                path,
+                if method == "PUT" {
+                    Some("{}".into())
+                } else {
+                    None
+                },
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let authenticated = |method: &str, body: Option<String>| {
+        let mut request = request(method, path, body);
+        request.headers_mut().insert(
+            "authorization",
+            "Bearer semantic-test-token".parse().unwrap(),
+        );
+        request
+    };
+    let response = app
+        .clone()
+        .oneshot(authenticated("GET", None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status["phase"], "disabled");
+    assert_eq!(status["config"]["enabled"], false);
+    let before = status["configuration_generation"].clone();
+    for invalid in [
+        serde_json::json!({"enabled":true}),
+        serde_json::json!({"origin":"https://embedding.example"}),
+        serde_json::json!({"unknown":true}),
+        serde_json::json!({"inference":{"num_ctx":0}}),
+        serde_json::json!({"inference":{"num_batch":8193}}),
+        serde_json::json!({"inference":{"unknown":1}}),
+        serde_json::json!({"limits":{"max_chunks":0}}),
+        serde_json::json!({"limits":{"max_vector_bytes":0}}),
+        serde_json::json!({"limits":{"max_disk_bytes":0}}),
+        serde_json::json!({"limits":{"unknown":1}}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(authenticated("PUT", Some(invalid.to_string())))
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+    }
+    let response = app
+        .clone()
+        .oneshot(authenticated("GET", None))
+        .await
+        .unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(status["configuration_generation"], before);
+    let response = app
+        .clone()
+        .oneshot(authenticated("PUT", Some("{}".into())))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let accepted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_ne!(accepted["configuration_generation"], before);
+    assert_eq!(accepted["status"]["phase"], "disabled");
+    let response = app
+        .clone()
+        .oneshot(authenticated(
+            "PUT",
+            Some(
+                serde_json::json!({"limits":{"max_chunks":25,"max_vector_bytes":1048576}})
+                    .to_string(),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let accepted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(accepted["status"]["config"]["limits"]["max_chunks"], 25);
+    assert_eq!(
+        accepted["status"]["config"]["limits"]["max_vector_bytes"],
+        1048576
+    );
+    assert_eq!(
+        accepted["status"]["config"]["limits"]["max_disk_bytes"],
+        8u64 * 1024 * 1024 * 1024
+    );
+}
+
+#[tokio::test]
+async fn hybrid_http_uses_pinned_provider_hard_filters_evidence_and_bounded_export() {
+    // A real local HTTP model protocol fixture, not a relevance evaluation.
+    let digest = "a".repeat(64);
+    let tags = serde_json::json!({"models":[{"name":format!("autonomics-embedding:{digest}"),"digest":digest},{"name":"fixture:latest","digest":digest}]});
+    let model = axum::Router::new()
+        .route(
+            "/api/tags",
+            axum::routing::get(move || {
+                let tags = tags.clone();
+                async move { axum::Json(tags) }
+            }),
+        )
+        .route(
+            "/api/embed",
+            axum::routing::post(
+                |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    assert_eq!(body["truncate"], false);
+                    assert_eq!(
+                        body["options"],
+                        serde_json::json!({"num_ctx":8192,"num_batch":8192})
+                    );
+                    assert!(
+                        body["model"]
+                            .as_str()
+                            .unwrap()
+                            .starts_with("autonomics-embedding:")
+                    );
+                    let inputs = body["input"].as_array().unwrap();
+                    axum::Json(serde_json::json!({"embeddings":vec![vec![1.,0.];inputs.len()]}))
+                },
+            ),
+        );
+    let server = api_server::start(model, "127.0.0.1:0").await.unwrap();
+    let shared = BibShared::open_in_memory().await.unwrap();
+    for (id, year) in [("a", 2026), ("b", 2010)] {
+        let mut article = bib_types::Article::new(id, format!("Scientific paper {id}"));
+        article.year = Some(year);
+        article.abstract_text = Some(format!("原始摘要 {id}，无需逐字命中主题。"));
+        shared.bib.upsert_article(&article).await.unwrap();
+    }
+    let app = api_server::api_router(shared);
+    let search = serde_json::json!({"mode":"hybrid","semantic_query":"xylophone","query":"year:2026","include_articles":true});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/semantic/models",
+            Some(serde_json::json!({"origin":format!("http://{}",server.addr())}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let installed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(installed["models"].as_array().unwrap().len(), 2);
+    assert!(
+        installed["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["name"] == "fixture:latest" && model["digest"] == digest)
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/semantic/models",
+            Some(serde_json::json!({"origin":"https://embedding.example"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let unavailable = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(search.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    for invalid in [
+        serde_json::json!({"mode":"hybrid"}),
+        serde_json::json!({"semantic_query":"topic"}),
+        serde_json::json!({"mode":"hybrid","semantic_query":"   "}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/bib/search/v2",
+                Some(invalid.to_string()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let config = serde_json::json!({"enabled":true,"origin":format!("http://{}",server.addr()),"model":"fixture:latest","model_digest":digest,"profile":{"dimensions":2},"inference":{"num_ctx":8192,"num_batch":8192}});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/api/v1/bib/search/semantic",
+            Some(config.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let response = app
+                .clone()
+                .oneshot(request("GET", "/api/v1/bib/search/semantic", None))
+                .await
+                .unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_ne!(status["phase"], "failed", "{status}");
+            if status["phase"] == "ready" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for action in ["rebuild", "repair", "cancel", "resume"] {
+        let response = app
+            .clone()
+            .oneshot(request("GET", "/api/v1/bib/search/semantic", None))
+            .await
+            .unwrap();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let before: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let command = serde_json::json!({"action":action,"expected_configuration_generation":before["configuration_generation"],"request_id":id});
+        for _ in 0..2 {
+            let response = app
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/api/v1/bib/search/semantic/maintenance",
+                    Some(command.to_string()),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let ack: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(ack["maintenance"]["request_id"], id);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let response = app
+                    .clone()
+                    .oneshot(request("GET", "/api/v1/bib/search/semantic", None))
+                    .await
+                    .unwrap();
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert_ne!(status["phase"], "failed", "{status}");
+                if status["maintenance"]["request_id"] == id
+                    && (if action == "cancel" {
+                        status["phase"] == "paused"
+                    } else {
+                        status["maintenance"]["state"] == "complete"
+                    })
+                {
+                    if action == "repair" {
+                        assert!(!status["store_generation"].as_str().unwrap().is_empty());
+                    }
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(search.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let page: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["hits"][0]["article_id"], "a");
+    assert_eq!(page["hits"][0]["snippet"], "原始摘要 a，无需逐字命中主题。");
+    assert_eq!(page["hits"][0]["highlight_ranges"], serde_json::json!([]));
+    assert_eq!(page["retrieval"]["total_kind"], "candidate_pool");
+    assert_eq!(page["retrieval"]["eligible_articles"], 1);
+    assert_eq!(
+        page["retrieval"]["hits"]["a"]["lexical_rank"],
+        serde_json::Value::Null
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/articles/a/search-evidence",
+            Some(
+                serde_json::json!({"search":search,"index_generation":page["index_generation"]})
+                    .to_string(),
+            ),
+        ))
+        .await
+        .unwrap();
+    // Evidence path shares the same generation and source object checks.
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let evidence: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        evidence["evidence"][0]["snippet"],
+        page["hits"][0]["snippet"]
+    );
+    assert!(evidence["evidence"][0]["semantic_evidence"].is_object());
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/export",
+            Some(serde_json::json!({"search":search,"format":"ris"}).to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let exported: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(exported["count"], 1);
+    assert_eq!(exported["result_basis"], "candidate_pool");
+    assert!(
+        exported["export"]
+            .as_str()
+            .unwrap()
+            .contains("Scientific paper a")
+    );
+    let mut limited = config.clone();
+    limited["limits"] = serde_json::json!({"max_input_bytes":64});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/api/v1/bib/search/semantic",
+            Some(limited.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let epoch: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let response = app
+                .clone()
+                .oneshot(request("GET", "/api/v1/bib/search/semantic", None))
+                .await
+                .unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            if status["configuration_generation"] == epoch["configuration_generation"]
+                && status["phase"] == "ready"
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(
+                serde_json::json!({"mode":"hybrid","semantic_query":"immune gene expression"})
+                    .to_string(),
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let failure: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .contains("model query input bytes")
+    );
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/api/v1/bib/search/semantic",
+            Some("{}".into()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/api/v1/bib/search/v2",
+            Some(search.to_string()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    server.shutdown().await.unwrap();
+}
+
 #[test]
 fn http_api_defaults_to_localhost() {
     assert_eq!(api_server::DEFAULT_HTTP_API_ADDR, "127.0.0.1:8765");

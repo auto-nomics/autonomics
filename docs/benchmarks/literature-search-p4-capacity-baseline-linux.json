@@ -1,0 +1,188 @@
+{
+  "schema": "bib-p4-capacity-baseline-v1",
+  "status": "Pre-optimization synthetic index diagnostic; P4 in progress",
+  "environment": {
+    "date": "2026-10-28",
+    "platform": "Linux-6.18.55-1-lts-x86_64-with-glibc2.44",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-13700KF",
+    "logical_cpus": 24,
+    "mem_total_kib": "65643140",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "binary_sha256": "ff27909ac80dd8e3b7bc124dc0ecb21c9e765ede714f0439708d9eb91346ea81",
+    "source_sha256": {
+      "crates/bib-base/examples/semantic_capacity_benchmark.rs": "a039ae8774119ffbd4781c94923a9c673b2c8dfd1764d911a380820df6552e1a",
+      "crates/bib-base/src/semantic_index.rs": "cd3430ba4316fbfd1c49539e2ff79485f78b93469d4b5ae0012d0a72bed2983d"
+    }
+  },
+  "runs": {
+    "10000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 206732,
+        "rss_kib": 206732
+      },
+      "count": 10000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 215096,
+        "rss_kib": 208492
+      },
+      "final_memory": {
+        "peak_rss_kib": 215096,
+        "rss_kib": 204372
+      },
+      "idle_ms": 0.27451,
+      "idle_snapshot_reused": true,
+      "import_ms": 4048.7537780000002,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 10000,
+        "embedded_chunks": 10000,
+        "rebuilt": true,
+        "total_chunks": 10000
+      },
+      "initial_ms": 937.311585,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "metadata_ms": 219.200919,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 10000,
+          "first_observed_ms": 8.164627000000001,
+          "hot": {
+            "max_ms": 8.110644,
+            "p50_ms": 7.18633,
+            "p95_ms": 7.433033,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 100,
+          "first_observed_ms": 0.19868,
+          "hot": {
+            "max_ms": 0.184418,
+            "p50_ms": 0.179616,
+            "p95_ms": 0.184406,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 87.112268,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 10000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 58015744,
+        "vectors.db-tshm": 86016,
+        "vectors.db-wal": 5253032
+      },
+      "vector_store_total_bytes": 63354792
+    },
+    "100000": {
+      "build_profile": "release",
+      "built_memory": {
+        "peak_rss_kib": 648636,
+        "rss_kib": 648636
+      },
+      "count": 100000,
+      "dimensions": 1024,
+      "dual_generation_memory": {
+        "peak_rss_kib": 1089932,
+        "rss_kib": 1089932
+      },
+      "final_memory": {
+        "peak_rss_kib": 1087460,
+        "rss_kib": 632352
+      },
+      "idle_ms": 0.33544599999999997,
+      "idle_snapshot_reused": true,
+      "import_ms": 41934.580807000006,
+      "initial": {
+        "cached_chunks": 0,
+        "changed_articles": 100000,
+        "embedded_chunks": 100000,
+        "rebuilt": true,
+        "total_chunks": 100000
+      },
+      "initial_ms": 10465.236784,
+      "limitations": [
+        "Direct SemanticIndex exercise, excludes HTTP/GUI, hard-filter computation and model inference",
+        "First observed query is after index construction; not operating-system cold cache",
+        "One title/abstract chunk per article; no fulltext fanout",
+        "Single query worker, no concurrency SLO claim"
+      ],
+      "metadata": {
+        "cached_chunks": 1,
+        "changed_articles": 1,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "metadata_ms": 3089.226241,
+      "model_throughput_evaluation": false,
+      "rankings": {
+        "all": {
+          "allowed_articles": 100000,
+          "first_observed_ms": 109.489809,
+          "hot": {
+            "max_ms": 118.45647,
+            "p50_ms": 108.86358899999999,
+            "p95_ms": 117.98095599999999,
+            "samples": 30
+          }
+        },
+        "one_percent": {
+          "allowed_articles": 1000,
+          "first_observed_ms": 2.32146,
+          "hot": {
+            "max_ms": 2.111611,
+            "p50_ms": 1.837189,
+            "p95_ms": 1.915618,
+            "samples": 30
+          }
+        }
+      },
+      "relevance_evaluation": false,
+      "reopen_ms": 1367.54043,
+      "restart": {
+        "cached_chunks": 0,
+        "changed_articles": 0,
+        "embedded_chunks": 0,
+        "rebuilt": false,
+        "total_chunks": 100000
+      },
+      "schema": "bib-semantic-capacity-v1",
+      "synthetic_provider": true,
+      "vector_store_files": {
+        "vectors.db": 580595712,
+        "vectors.db-tshm": 1806336,
+        "vectors.db-wal": 334902472
+      },
+      "vector_store_total_bytes": 917304520
+    }
+  },
+  "log_sha256": {
+    "10000": "ab1350a781ab89c457316d0634b539c23cef1b9b079ad11dd4df80d051d673c0",
+    "100000": "e5f181a83ee86b831a99e1683a318cfed68bcfd0970a8d36d2fd43b2bd6b14bb"
+  },
+  "interpretation": "Metadata-only publication reloaded all vectors. At 100k the single observed update took 3089ms, overlapping readers and new vectors peaked at 1089932KiB RSS. This motivates immutable vector sharing; no model or GUI SLO claim."
+}

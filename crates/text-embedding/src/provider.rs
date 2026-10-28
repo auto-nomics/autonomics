@@ -5,6 +5,7 @@
 mod bm25;
 pub mod error;
 mod ollama;
+mod pinned_ollama;
 
 use std::collections::BTreeMap;
 
@@ -13,7 +14,8 @@ use crate::output::EmbeddingOutput;
 use crate::provider::error::Result;
 
 pub use bm25::{Bm25TextEmbedder, DEFAULT_EMBEDDING_DIM};
-pub use ollama::OllamaEmbedder;
+pub use ollama::{OllamaEmbedder, OllamaInferenceOptions};
+pub use pinned_ollama::PinnedOllamaEmbedder;
 
 use async_trait::async_trait;
 

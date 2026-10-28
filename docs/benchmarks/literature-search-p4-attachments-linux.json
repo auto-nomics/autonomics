@@ -1,0 +1,377 @@
+{
+  "schema": "bib-p4-attachment-qualification-v1",
+  "date": "2026-10-28",
+  "status": "100_and_10000_passed;original_100000_failed;copied_fixture_recovery_in_progress",
+  "controlled_synthetic_model": true,
+  "dimensions": 1024,
+  "fanout": {
+    "attachments_per_article": 2,
+    "unicode_chars_per_attachment": 1536,
+    "windows_per_attachment": 3,
+    "abstract_blocks_per_article": 1,
+    "blocks_per_article": 7,
+    "window_identity": "Every window includes article, attachment and window IDs; no repeated-window vector-cache shortcut"
+  },
+  "routes": "Actual authenticated loopback HTTP upload/extract/search/evidence/raw/delete, production actor, owned ext4 VFS",
+  "source_validation": {
+    "nonpreferred_attachment_raw_bytes_and_evidence": true,
+    "delete_removes_three_blocks_and_old_term": true,
+    "new_attachment_adds_three_blocks_and_new_term": true,
+    "old_cursor_returns_explicit_expired_error": 400
+  },
+  "fix": {
+    "path": "crates/bib-base/src/zotero_model.rs",
+    "cause": "Deleting nonpreferred attachment did not advance search outbox; previously indexed body survived deletion",
+    "change": "Immediate transaction publishes child deletion and outbox revision/token atomically",
+    "regression_test": "deleting_nonpreferred_attachment_invalidates_index_evidence_and_cursor"
+  },
+  "validation": {
+    "rust_tests": {
+      "command": "CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests -- --include-ignored",
+      "passed": 350,
+      "failed": 0,
+      "ignored": 0
+    },
+    "strict_clippy": {
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base -p api-server --lib --tests --example semantic_attachment_benchmark -- -D warnings",
+      "passed": true
+    }
+  },
+  "runs": {
+    "100": {
+      "receipt_path": "target/bib-p4-validation/attachment-pilot-qualified-20261028/receipt.json",
+      "sha256": "06e9381e43673897706fb9acfcddcc0c53d6f62c8099b8560457d76fb03bb918"
+    },
+    "10000": {
+      "receipt_path": "target/bib-p4-validation/attachment-10k-20261028/receipt.json",
+      "sha256": "ec024dcd7883d5421abf28184ea23cbd21810ac4fa960fedc88ca8ba4d27fda2",
+      "source_sha256": {
+        "scripts/benchmark_bib_attachments.py": "9aac5e05b3cd1578dc3b777a4131e6218345d335aec4150049b8ec9b8839f4ad",
+        "crates/api-server/examples/semantic_attachment_benchmark.rs": "a294811529e4bfeed26641da95e8f33f55fe7c79d8a40e6d2c12a697d23e983d",
+        "Cargo.lock": "b65f4155cb93df6ee8b4e9e92299469a786134721306bfa1a01e7320710d679f",
+        "crates/bib-base/src/actor.rs": "9b38782c2d2145b5dcb41a5b5dbb0053bb31d040899735766a0dcefe305ecab2",
+        "crates/bib-base/src/annotations.rs": "2ffdb81cab5cc6982056386a4a82f5795bfe94d67daac17e4f8c8560d6ac5004",
+        "crates/bib-base/src/bib_base.rs": "0884f830d429bebcda31936ea5a1db5a83b195c7967b6fe5051b324932f05800",
+        "crates/bib-base/src/collection_schema.rs": "5c766c9e8ae6d8660be56b8c24c40be23110367820992b72f2c682a7ef5be040",
+        "crates/bib-base/src/collections.rs": "ed06f405dc216c903fe3cb7913b2b3147ef61a16d889e2fed809f0618c8cb2f9",
+        "crates/bib-base/src/discovery_acquisition.rs": "dd8fe0cbb1c5aa87ef9796c5d987669c1c12ce2ec7a0a37bafc12bbf447ebbde",
+        "crates/bib-base/src/discovery_arxiv.rs": "d3b02b28d8afc395974e03497252c4f4bc0ea577acc78c9c9a0bb1347b8c2e7f",
+        "crates/bib-base/src/discovery_crossref.rs": "736f6f1427ddf3e1571870e3b23070b44af8859724070308e1bd3dbb2e3fef09",
+        "crates/bib-base/src/discovery_import.rs": "f4365f7924d058ed6c9f74f9e9effcb07882ba5c515a528b5b325f709d402dc4",
+        "crates/bib-base/src/discovery_merge.rs": "2dff4384a771a4c740fa85c23b9d37b7eb0bfe2ba04c5221d603fda79da81521",
+        "crates/bib-base/src/discovery_plan.rs": "6c48d7d34c7a4155eecbd163aa230a1584a97935ffffd757e020e0d57fd14e67",
+        "crates/bib-base/src/discovery_s2.rs": "b3ac4afa58bee4fed5494eb399e0ca4a7855e9c80391dc637015577bfb0ed46e",
+        "crates/bib-base/src/discovery_sessions.rs": "2030182f8f3f69c6ccbe44ec450d1b99eded4c5065e3ad659e3fe0be1f121aa9",
+        "crates/bib-base/src/discovery_sources.rs": "da563dbf392e63fd3353dc22d676a0975e0128a0d750d8f37cbdfff9cf3b8cdc",
+        "crates/bib-base/src/error.rs": "eab9753125c9a7777aef38dc01cdbe8230d54789f229dc446f9ae41deefe02a4",
+        "crates/bib-base/src/export.rs": "5ae79533b0da3a11004afd26b7ba64675980e25ca191ecb6e565a09af5df6c8b",
+        "crates/bib-base/src/extract.rs": "0532e01caf1bcc19c1acbf1c82574daf40eeb8c464fa474b1fd9e698a40df2d3",
+        "crates/bib-base/src/extraction.rs": "5f2ac760a5b963d9d520d1b0cef6f39ac6c184cf6831cfd0fe5b89034a57fda7",
+        "crates/bib-base/src/fulltext.rs": "c402df0cb710b48ecb8c51311d1dec78762b5b2de9c8012eff2ca525401e372d",
+        "crates/bib-base/src/http_options.rs": "61552163eb2e2346a9168e654c3795c9efad0a69076f8de08d25128a8f350a8f",
+        "crates/bib-base/src/hybrid_search.rs": "8434d9393fe38878e6e72c3bf7072d9a9625321f74c5807b44d6d62e425442bd",
+        "crates/bib-base/src/legacy_index.rs": "3df74bed93a0d170eef268965d421171d8be8676492338317b9c7cfce3d606f9",
+        "crates/bib-base/src/lib.rs": "66de565a633409345be75029da8f168c036dcfa6d2d35a0c622385427418e14d",
+        "crates/bib-base/src/library_tools.rs": "9add54da3965edb6e680128be9700bd29d7eb7d1bc34440e46097c260c12df85",
+        "crates/bib-base/src/local_index/scored_docs.rs": "390b81c1552005143b3a61d5d1c7585fcf269afe216762aabc28621a013f25a4",
+        "crates/bib-base/src/local_index.rs": "818df2e83883beebb688611ccceaf5f810106612cc4d081cb6a383a8d1fe9e63",
+        "crates/bib-base/src/managed_fulltext.rs": "7cdf0375007b627d6546938833c42b909271ca6bc54ab04b83e9c2cd89ef68a0",
+        "crates/bib-base/src/mineru.rs": "3d32e50e5d61b51f1db3d826ab110920d0a8891eba6e35fd24a439f3e6af44f1",
+        "crates/bib-base/src/nodes/bib_save.rs": "a5d327ecd9f7598b8e344602fa9d1985f5b025551d2056f85e59fcddd750f7c1",
+        "crates/bib-base/src/nodes/evidence_export.rs": "f3c5e506a1c20b61fdde0ca2fb7f99ddacb3f9b3565b23e13732e4995ace8681",
+        "crates/bib-base/src/nodes/evidence_merge.rs": "f057a7e6ce2b6710206b584f36cce4a5b9ebc5f9878e17a05acbfd475eaca9b3",
+        "crates/bib-base/src/nodes/literature_citations.rs": "db6d87aab3fe4aadaf4c172533b320e77722487c3ae8bda18614237e20124fd0",
+        "crates/bib-base/src/nodes/literature_fetch.rs": "c224a061497c7827d87e4200fcab74faca361a9a49fb3173142896c6c07b711d",
+        "crates/bib-base/src/nodes/literature_fulltext.rs": "5771e030b554437e3de2808fadad9b370a06ca15700bc591f567f0328820b0ba",
+        "crates/bib-base/src/nodes/literature_search.rs": "11e22d2ec933de0f16b707cc429c59c57722538ef4ac128694c13246ac86e98c",
+        "crates/bib-base/src/nodes/mod.rs": "ac88726ab26815f2afacdbe0ec8e769c71ef30ddaa326c2035667ae504762b36",
+        "crates/bib-base/src/nodes/s2_recommendations.rs": "c084df23edc953766d0050e448d619cc2b1c0d025b4ac5160f7bf4760f298b5a",
+        "crates/bib-base/src/oa_fetch.rs": "b8bcfef96a1f8428c76dc8afa3b4b1af58564811fee66a7b1a54ead49a0cbf2c",
+        "crates/bib-base/src/pmc_pdf.rs": "20afeef65c682abbddf51d30bd5b931477b40418d4934294a0b4b2c5fddd6f03",
+        "crates/bib-base/src/query.rs": "d9331521cde3acb7ae28519bbf9aaf417ff555ecbda7eda92b334b16fac18fce",
+        "crates/bib-base/src/saved_searches.rs": "03f8e0ba3681880c480de78a943d0c509d5849cfd81605de0086d71371a47e4d",
+        "crates/bib-base/src/search.rs": "fdf7023e931a1fef4470b1e7e76ea98affecfc23c50700cc4e8720dde9b2bfbe",
+        "crates/bib-base/src/search_analyzer.rs": "d4600743beafde85af3cf788db1be968a8f08f788abba645b49edcb4fcbb6c33",
+        "crates/bib-base/src/search_cancellation.rs": "5ef5a8e0f9729c9daa12e75f3a91fbd29bec7f896c0d459bc1fc1ba3049f74ce",
+        "crates/bib-base/src/search_evidence.rs": "cf841f188163eb831b5b66192b9073f3142ebf45bfe75e9622488d70301e2828",
+        "crates/bib-base/src/search_filters.rs": "8bb3b50cd8af173a7543b66dfb7bd9948f2ebdcdd5d2cb6254e812b75a9144ca",
+        "crates/bib-base/src/search_projection.rs": "871f0f2ce28dc45d578c602eed7e598615f9a8ef7d46602b9e0bd42d3295a517",
+        "crates/bib-base/src/semantic_index/tests.rs": "b1d72bfc358221023138fb39e71450071e573ad58ae165a5b217fa76c518f872",
+        "crates/bib-base/src/semantic_index.rs": "57210d5cf17ac878e675b752d1be388fee3387103e51b89e684d798c55edcbf1",
+        "crates/bib-base/src/semantic_limits.rs": "2298c34ef622466b2d4d49a3dccd36ba7e2ee44da75fb30bd735c810e7d18f3e",
+        "crates/bib-base/src/semantic_service/maintenance.rs": "b921d5134c9be975cb0ae82da69b83a5225eca9fc3f6c582f9b7bc6a4b6e2d98",
+        "crates/bib-base/src/semantic_service/tests/maintenance_tests.rs": "7b69bba7b1074ed74392634f6649ba2e63e7f942527738256c2e147e3b167a5f",
+        "crates/bib-base/src/semantic_service/tests.rs": "3a20fa8dd99f81d1a9a16d8b1223ff8d0500af5bed815afa6a3c8353693cfb07",
+        "crates/bib-base/src/semantic_service.rs": "ac93ae22bf16e7232ac1af6d61708f581b5d0b351f4051ed3d596de899eb5b4e",
+        "crates/bib-base/src/shared.rs": "f061ec8c249e41c78de739858ac2552bef66078af5fc1bf1acc87cae23e21fbf",
+        "crates/bib-base/src/stored_files.rs": "5731734b99f6110b24ba33b5b9aed0d3c0533522f3a5c87a292458b86727b22b",
+        "crates/bib-base/src/zotero_extract.rs": "582b4672f8e4795ca078b52851dea391205643c83e11a10ae7193f10ccd4da01",
+        "crates/bib-base/src/zotero_model.rs": "cbbbf9049524f1ef38fd4062e243a3196946a8138f5a9a8f72f7c662f0669423",
+        "crates/api-server/src/bib.rs": "640f129ebf5c8e0a926dd1e8662e76245f7bab0859b5cdeeb6269571aa4891ee",
+        "crates/api-server/src/discovery.rs": "1f069ba87245e4d5d88241ce53d2cba8636f2cc31c80ef9509e2deb8724c17f0",
+        "crates/api-server/src/lib.rs": "7d68be48aef804aecf4e606ddd0a764c438d32994e1cfeb5b9a4b5307210b8c1",
+        "crates/api-server/src/server.rs": "c1799f152777bbf6b6a99d4aeb4a4ef608239506965e30b040f470eda56038fa",
+        "crates/bib-types/src/convert.rs": "b2f5465bd12dd43cdcd5d53c1e4e51284ec14c3a029e57d30c3b55ed9b8080be",
+        "crates/bib-types/src/discovery.rs": "7868884b7920ab3ddcfe5c353dda84999d2ebc4d0433bd48146c80f311d9c1ae",
+        "crates/bib-types/src/evidence.rs": "35d02df7c1c1068e6646bb102b57458c9166a36a40503baceb53b06c87c1eaf9",
+        "crates/bib-types/src/lib.rs": "7f7c333260b41f3ff9021bb6cb4ec6af7208316c24034fbb227ef6b029dd9f9f",
+        "crates/bib-types/src/query.rs": "9f6079988a14574796d88f954f7325a6a09a840ca9ecee0b8963552262da8cf8",
+        "crates/bib-types/src/search.rs": "371f96e88724af49093ccc72bd3c6149417b0e25b45f0e8b9f7f4cdaac143732",
+        "crates/bib-types/src/search_parser.rs": "4634ee660737b9a123caf6d9f367887b017297609086928c577259686f6405ed",
+        "crates/bib-types/src/types.rs": "309b211246e2f1f2d791383a4ca82b63330e2447c9451dd4f67a5a2ab6cac195",
+        "crates/text-embedding/src/error.rs": "c31cba8a9fd89f769423dad04a1f78935ebf6e6b45a14f38275b50c1473800ac",
+        "crates/text-embedding/src/input.rs": "60cc7dad90c4a75082eb97fc15a90a2ccd0f6b7fed762296c17828a62e89e4df",
+        "crates/text-embedding/src/lib.rs": "f67dfd99e5a62b81bf2d5b27e52b39738aca113228087085d943e964011d13bc",
+        "crates/text-embedding/src/output.rs": "d2680d790268e1950f993fe1426fbf8c5fa89e9a96b812cb8680f842df6b038d",
+        "crates/text-embedding/src/provider/bm25.rs": "b3d7d938c56365384f906d706e29f42bdc3f61307aab4f6b8c623bf03c3b5cd2",
+        "crates/text-embedding/src/provider/error.rs": "8af73ccc5b805753e9cad36235657b8bb5765884b09e7c81fa26300843ac5609",
+        "crates/text-embedding/src/provider/ollama.rs": "0b9d8e0530997e535005c026c768249018f6e9adbfa7236cadadb2beeafc7823",
+        "crates/text-embedding/src/provider/pinned_ollama.rs": "5339f5fcea99f293cf815e9a7be4e54fccf9343ca9ce6f26b186fc6d25ceafe9",
+        "crates/text-embedding/src/provider.rs": "b4d70bee670d320f05f89b6104ae3a2c85e8c804ff2b19813eeb4061876a5f86",
+        "crates/text-embedding/src/service/error.rs": "92d656d81979b4bcc6a7251233423e23f49b025169fb3b345f4d4b8286561fb2",
+        "crates/text-embedding/src/service/remote_embedding_service.rs": "7abe1d1a2434c63b01c88552ff18ece03dab50604139e1acd2c3270eae2f16bf",
+        "crates/text-embedding/src/service.rs": "e819579a26fe9f46e4b1a81470012c6ea9971838f4fc82deb05a21adb3e575d3",
+        "crates/text-embedding/src/vector.rs": "ee7b901b2a62fa3d9a6093acb28e8cb1d5594264ad11e580f67a9587a7e2126b",
+        "crates/text-embedding/src/vector_map.rs": "1b614ae4850bfabfb6db3f5bc36a2cd40d39845f1258517a1ff5af6d214ad43c",
+        "crates/vfs/src/authorized.rs": "e489176400277df1ef87cb873ff7eeef4135688b7d31281acd94b0605c95d5a1",
+        "crates/vfs/src/lib.rs": "7b5d2f742e06472ed69faf8079a512e13fb513c665535ecb1d017ff1f786381a",
+        "crates/vfs/src/mount.rs": "274e3b67ea316c2a47e0dd31df8e5994f7dcacd6391941f06afe02cdfccb09cc",
+        "crates/vfs/src/permission.rs": "4953c3d1aa7b685669f0eb150b178510370136c94fb4af0c2e9c443ee686b1b2",
+        "crates/vfs/src/storage.rs": "ed1a51d166c79534798dfb7f0ee9db032f4a0c89234cfd0bffe1e68c02e86b75",
+        "crates/vfs/src/vbash/mod.rs": "ed8ef395c515ddbeb8f0918f5764e62281e43680cb20b00732e5d2aa2c372a11",
+        "crates/vfs/src/vbash/ops/common.rs": "4c7bb32f7a2b9899e0fb8e43ca74da5885a2d197eb9e43e573c5ddc3afebbae2",
+        "crates/vfs/src/vbash/ops/file.rs": "61306dda71863195bd5e22c3420fa28557c11398ecb70d1ff913b96364f55b3a",
+        "crates/vfs/src/vbash/ops/list.rs": "936a35357a4d31fcd60c81617018bb6088b182c55e4137234d0a0edf6f16c2a4",
+        "crates/vfs/src/vbash/ops/mod.rs": "02c5fba47b746dd7d26744d0eab4a542150b382234c551bc20068a176a2c474f",
+        "crates/vfs/src/vbash/ops/read.rs": "92da3763276144a4b2921c61c9298865b01b7da4d800db89a1857ddf7f10fc36",
+        "crates/vfs/src/vbash/ops/write.rs": "5404882a01f677f5800c07994923e01c626e931e28bd9e0d871cd4b20269354f",
+        "crates/vfs/src/vbash/search.rs": "207b336de6395a241ca4ba01ff4a5acb3a84151d15a3b2351f94136621781c74"
+      },
+      "summary": {
+        "import_ms": 4231.6905639999995,
+        "upload_extract_ms": 426539.90969199996,
+        "initial_ready_ms": 65573.724432,
+        "single_client": {
+          "one_percent": {
+            "first_observed_ms": 34.635123,
+            "hot": {
+              "max_ms": 50.046537,
+              "p50_ms": 35.697812,
+              "p95_ms": 41.861674,
+              "samples": 30
+            }
+          },
+          "wide": {
+            "first_observed_ms": 310.411497,
+            "hot": {
+              "max_ms": 138.598577,
+              "p50_ms": 127.107265,
+              "p95_ms": 137.87053699999998,
+              "samples": 30
+            }
+          }
+        },
+        "four_clients": {
+          "latency": {
+            "max_ms": 568.3825009999999,
+            "p50_ms": 527.3499310000001,
+            "p95_ms": 561.657796,
+            "samples": 20
+          },
+          "wall_ms": 2657.961993
+        },
+        "memory": {
+          "peak_rss_kib": 811776,
+          "rss_kib": 742224
+        },
+        "vfs": {
+          "files": 40000,
+          "logical_file_bytes": 61440000
+        },
+        "fixture_requests": {
+          "embed_requests": 4593,
+          "embedded_inputs": 70226,
+          "tag_requests": 9187
+        }
+      },
+      "sustained_writes": {
+        "hybrid_http_status_counts": {
+          "409": 132
+        },
+        "interval_ms": 100,
+        "iterations": 40,
+        "lexical": {
+          "max_ms": 62.653283,
+          "p50_ms": 26.649452,
+          "p95_ms": 45.876015,
+          "samples": 132
+        },
+        "wall_ms": 7020.690701,
+        "write_latency": {
+          "max_ms": 25.490169,
+          "p50_ms": 2.1898690000000003,
+          "p95_ms": 4.4279649999999995,
+          "samples": 40
+        }
+      }
+    }
+  },
+  "limits": {
+    "max_chunks": 1000000,
+    "max_input_bytes": 262144,
+    "max_vector_bytes": 4294967296,
+    "max_disk_bytes": 17179869184,
+    "reason": "700000 distinct 1024D vectors need 2867200000 payload bytes; explicit vector/disk budgets exceed defaults"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/attachment-qualified-tests.log": "38f8283382e29a093d1337ab4e6d803673da28f52fe60984329055750cffac00",
+    "target/bib-p4-validation/attachment-qualified-clippy.log": "e51609333bb803e49acd1875d74b82951b92727ac79573afaf00b273888e2f29",
+    "target/bib-p4-validation/attachment-build-qualified.log": "ceb6bc2da946cd435b3f0e861c458dd3e77f66bd337d0c75d3eeeecc9d182692",
+    "target/bib-p4-validation/attachment-pilot-qualified.log": "e400dcdb6c0f3a046a33781245f426a5c6bf36376fc4ac727c2c6d1ffa8818e5",
+    "target/bib-p4-validation/attachment-10k.log": "356cbb62c7c2c40e54f3dd01ea5a31e28822886a955dae3336d7954f379b0323"
+  },
+  "limitations": [
+    "Synthetic TXT and deterministic cheap vectors; no real inference or IR-quality claim",
+    "Shared Linux host; no dedicated-machine latency guarantee",
+    "40 metadata edits at 100ms intervals are a short write burst, not long-duration qualification",
+    "All 132 hybrid requests during the 10k burst returned 409; lexical stayed available and final source version caught up; continuous-write semantic availability is not established",
+    "100k and longer-duration qualifications are still pending; isolated Linux native feature harness passed, other-platform/manual accessibility release evidence remains open"
+  ],
+  "isolated_native": {
+    "passed": true,
+    "base_head": "222a37d18f5f199b32288a7b409a21c526be2b40",
+    "source_snapshot_path": "target/bib-p4-validation/isolated-p4-attachment-candidate-20261028",
+    "manifest_sha256": "5685f693b29833239124708460da53cd7e40687761fe450028b85a2c9c31356b",
+    "overlay_files": 107,
+    "all_overlay_sources_unchanged_after_build_and_run": true,
+    "baseline_reader_main_and_agent_verified_against_HEAD": true,
+    "receipt_path": "target/bib-p4-validation/native-attachment-isolated-20261028.json",
+    "receipt_sha256": "26889a3d248c244955e789de3d508bc72bc12a0017419240d244755f880af381",
+    "binary_sha256": "b2e8413845c74826066df33127edf459ee20ed3bfe7f286921b0a2c27aa0d6a4",
+    "model": "qwen3-embedding:0.6b",
+    "model_digest": "ac6da0dfba84a81fdbfbaf330198c33cd77c4cdfc53e8bc50eb581914a15621d",
+    "runtime": "actual Linux Tauri WebKitGTK under xvfb",
+    "build_log_sha256": "6529b0388c78f961a344f27ab22c5c1ffa9686006d28fdd3d120f453de2040c5",
+    "run_log_sha256": "90cca06b2f73e6335a4c6bedfc0ebf52c44fba997ba1b2b9517ec81ccee34d6f",
+    "limitation": "Isolated native feature harness/dev server; not a complete signed desktop release, platform matrix, manual screen reader or capacity qualification"
+  },
+  "qualified_10000_source_sha256": {
+    "crates/bib-base/src/zotero_model.rs": "cbbbf9049524f1ef38fd4062e243a3196946a8138f5a9a8f72f7c662f0669423",
+    "crates/bib-base/tests/search_workflow.rs": "8ddf1a625dfded42555f8e4493a3209e5aeec197a17ee4c25d58b08a14e06674",
+    "crates/api-server/examples/semantic_attachment_benchmark.rs": "a294811529e4bfeed26641da95e8f33f55fe7c79d8a40e6d2c12a697d23e983d",
+    "scripts/benchmark_bib_attachments.py": "9aac5e05b3cd1578dc3b777a4131e6218345d335aec4150049b8ec9b8839f4ad"
+  },
+  "resume_tooling": {
+    "source_snapshot_path": "target/bib-p4-validation/attachment-100k-recover-20261028/source_snapshot",
+    "source_sha256": {
+      "crates/api-server/examples/semantic_attachment_benchmark.rs": "58e98d9c59dd18b05b1d068df29e00c53058ed0c325b4f9f74c0b0c27d981239",
+      "scripts/benchmark_bib_attachments.py": "8e6fb9ee21feae78166f48d9ff12e70f7797707a5d5d5c40327af260d94a92f3"
+    },
+    "strict_clippy_log": "target/bib-p4-validation/attachment-resume-recover-clippy.log",
+    "failed_and_running_receipts_persisted": true,
+    "phase_checkpoints_persisted": true,
+    "bounded_upload_error_body_retained": true,
+    "completed_mutation_fixtures_cannot_be_resumed": true
+  },
+  "first_recovery_run": {
+    "count": 100000,
+    "directory": "target/bib-p4-validation/attachment-100k-recover-20261028",
+    "expected_attachments": 200000,
+    "expected_chunks": 700000,
+    "resumed_from_copy_of": "target/bib-p4-validation/attachment-100k-20261028",
+    "no_result_claimed": true,
+    "original_failure": "HTTP 500 during article 7614 upload; body discarded by old benchmark; cause remains unproven",
+    "original_failure_receipt": "target/bib-p4-validation/attachment-100k-failure-evidence-20261028/receipt.json",
+    "first_resume_diagnostic": "Two incomplete child records without VFS metadata were found; no missing file is silently counted as complete",
+    "recovery": "Verify existing raw bytes and extracted text; delete/reupload incomplete owned synthetic records through production API, recording counts",
+    "status": "timed_out",
+    "wall_seconds": 14401.359239123994
+  },
+  "latest_100000_run": {
+    "directory": "target/bib-p4-validation/attachment-100k-key-index-resume-20261028",
+    "status": "failed",
+    "reused_attachments": 185468,
+    "restarted_extractions": 14,
+    "recreated_partial_uploads": 0,
+    "upload_extract_and_verification_ms": 355053.0362,
+    "initial_ready_chunks": 700000,
+    "initial_ready_seconds_rounded": 873.9,
+    "wall_seconds": 2516.0518811119982,
+    "terminal_error": "database is locked",
+    "failed_operation": "not proven; old log lacks per-stage failure context",
+    "receipt": "target/bib-p4-validation/attachment-100k-key-index-resume-20261028/receipt.json",
+    "receipt_sha256": "ca5dd4b469742358fd1825dc3207d1eb8e3c19e62f13634d31927404108850f3"
+  },
+  "binding_copy_qualification": "literature-search-p4-binding-copy-linux.json",
+  "latest_binding_pages_run": {
+    "status": "failed",
+    "count": 100000,
+    "directory": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028",
+    "resume_from": "target/bib-p4-validation/attachment-100k-recover-20261028",
+    "sealed_worker_receipt": "target/bib-p4-validation/p4-binding-pages-worker-20261028/receipt.json",
+    "observed_progress": {
+      "stage": "publishing",
+      "target_revision": 500071,
+      "processed_articles": 1,
+      "embedded_chunks": 7,
+      "indexed_revision": 500031,
+      "last_error": "search conflict from preceding write-race attempt; still indexing"
+    },
+    "initial_ready_ms": 1531929.04897,
+    "note": "Full service run failed; query and initial-ready metrics are partial measurements, not a successful capacity qualification",
+    "debug_attach_attempt": {
+      "tool": "gdb",
+      "status": "OS ptrace denied",
+      "log": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028/publishing-gdb.log",
+      "benchmark_not_paused": true
+    },
+    "partial_query_measurements": {
+      "four_clients": {
+        "latency": {
+          "max_ms": 6535.4302210000005,
+          "p50_ms": 5665.509056,
+          "p95_ms": 6479.767423,
+          "samples": 20
+        },
+        "wall_ms": 29183.22162
+      },
+      "memory": {
+        "peak_rss_kib": 4070308,
+        "rss_kib": 3927320
+      },
+      "single_client": {
+        "one_percent": {
+          "first_observed_ms": 355.04713999999996,
+          "hot": {
+            "max_ms": 352.252948,
+            "p50_ms": 317.203773,
+            "p95_ms": 346.031929,
+            "samples": 30
+          }
+        },
+        "wide": {
+          "first_observed_ms": 13059.739759,
+          "hot": {
+            "max_ms": 1701.921061,
+            "p50_ms": 1450.819047,
+            "p95_ms": 1580.003875,
+            "samples": 30
+          }
+        }
+      }
+    },
+    "terminal": {
+      "error": "database is locked",
+      "stage": "publishing",
+      "target_revision": 500071,
+      "indexed_revision": 500031,
+      "processed_articles": 1,
+      "embedded_chunks": 7,
+      "wall_seconds": 3321.328651703996,
+      "receipt": "target/bib-p4-validation/attachment-100k-binding-pages-resume-20261028/receipt.json",
+      "receipt_sha256": "f96ce5e1b6fe9a4805598387f21aab190c16b51d017eba13ab890861d36556b8"
+    }
+  },
+  "latest_full_100000_qualification": "docs/benchmarks/literature-search-p4-bounded-cleanup-linux.json",
+  "latest_full_100000_status": "functional_run_passed;see_latest_receipt_for_scope_and_latency_limitations"
+}

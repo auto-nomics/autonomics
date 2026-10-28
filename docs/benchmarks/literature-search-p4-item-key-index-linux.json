@@ -1,0 +1,114 @@
+{
+  "schema": "bib-p4-item-key-index-diagnostic-v1",
+  "date": "2026-10-28",
+  "diagnostic": {
+    "after": {
+      "max_ms": 0.865184,
+      "p50_ms": 0.177386,
+      "p95_ms": 0.199269,
+      "samples": 320
+    },
+    "after_plan": [
+      "SEARCH items USING INDEX items_key_probe (key=?)"
+    ],
+    "all_results_identical": true,
+    "before": {
+      "max_ms": 190.594712,
+      "p50_ms": 101.654093,
+      "p95_ms": 124.594573,
+      "samples": 320
+    },
+    "before_plan": [
+      "SCAN items USING COVERING INDEX sqlite_autoindex_items_1"
+    ],
+    "fixture": {
+      "closed_source_family": {
+        "target/bib-p4-validation/attachment-100k-20261028/100000/library.db": {
+          "copy": "target/bib-p4-validation/key-lookup-probe-20261028/library.db",
+          "sha256": "dc2d47b1eadeb8a5fccf71e85c80c56ebe0f7bff59663d922838105d1c8829af"
+        },
+        "target/bib-p4-validation/attachment-100k-20261028/100000/library.db-tshm": {
+          "copy": "target/bib-p4-validation/key-lookup-probe-20261028/library.db-tshm",
+          "sha256": "d72edea835faf2a018422123869c5a2b2821d6b9d8b8fffac5dc92240f809d0b"
+        },
+        "target/bib-p4-validation/attachment-100k-20261028/100000/library.db-wal": {
+          "copy": "target/bib-p4-validation/key-lookup-probe-20261028/library.db-wal",
+          "sha256": "dba4a274081928d3690b1fc952b2a55c0d9416500dda5a66bd4ec52eeacbddb2"
+        }
+      },
+      "source_open_handle_check": "lsof returned no handles for DB/WAL/TSHM; only copies may be opened"
+    },
+    "index_build_ms": 11958.600742,
+    "index_is_nonunique": true,
+    "items": 115222,
+    "limitations": [
+      "Closed partial fixture copy; not complete 100k/700k attachment ingestion",
+      "Warm serial exact SQL lookup; not HTTP/extraction/model/GUI performance",
+      "Only the owned copy receives the diagnostic index; running worker and original fixture are unchanged"
+    ],
+    "probe_sha256": "6253dfad875802839835d16fae5480b36d11fdd91731d155c4a9d0ff9591c5b3",
+    "schema": "bib-attachment-key-diagnostic-v1"
+  },
+  "diagnostic_log": "target/bib-p4-validation/key-lookup-probe-20261028/run.log",
+  "diagnostic_log_sha256": "c0a516bd372eabdfbb95e62e30d8f3ea9f05713d575170ae2dbc2b5f22e4d594",
+  "production_change": "CREATE INDEX IF NOT EXISTS items_key ON items(key); nonunique, idempotent existing-db schema path",
+  "source_sha256": {
+    "crates/bib-base/src/zotero_model.rs": "5e5c397df983d1d8448eea946289ba0df6b42483917c2786d95c08f741ea2286",
+    "crates/bib-base/examples/attachment_key_probe.rs": "6253dfad875802839835d16fae5480b36d11fdd91731d155c4a9d0ff9591c5b3"
+  },
+  "model_tests": {
+    "passed": 4,
+    "failed": 0,
+    "log": "target/bib-p4-validation/p4-item-key-migration-tests.log",
+    "sha256": "7798b558a346a12860a0424b0e5cf06f1f38c0e85bbd2b94ae7f620df7a20a45"
+  },
+  "probe_strict_clippy": {
+    "passed": true,
+    "log": "target/bib-p4-validation/p5-import-p4-key-probe-clippy.log",
+    "sha256": "eb5f2f10ee9a0c62f4a73b51fa15d4ddf3f1388a9c10341fe779ec7d2db910a6"
+  },
+  "isolated_candidate": "target/bib-p4-validation/isolated-p4-key-index-candidate-20261028",
+  "isolated_qualification": "353_backend_tests_passed;strict_clippy_passed;capacity_resume_failed",
+  "old_running_attachment_worker_archived": "target/bib-p4-validation/attachment-100k-recover-20261028/worker-before-key-index",
+  "limitations": [
+    "Warm closed-fixture SQL diagnostic is not full HTTP throughput",
+    "Prior 4h recovery timeout and original 500 scenes preserved; original 500 cause remains unproven",
+    "100k resumed run reached 700000 ready blocks but subsequently failed with database is locked; full capacity qualification did not pass",
+    "Source bundle completeness repaired; full P4 phase not committed"
+  ],
+  "isolated_tests": {
+    "passed": 353,
+    "failed": 0,
+    "ignored": 0,
+    "log": "target/bib-p4-validation/p4-key-index-isolated-complete-tests.log",
+    "sha256": "fe4df0602f55e767b67bb4dbbef0342a81de463821b40b1a841c6517047d1fdf"
+  },
+  "isolated_strict_clippy": {
+    "passed": true,
+    "log": "target/bib-p4-validation/p4-key-index-isolated-clippy.log",
+    "sha256": "9f37087e95744f6c24541654ef4585741088df64feab2d1f4382899096bbbe68"
+  },
+  "baseline_source_completeness_fix": {
+    "ignore_exception": ".gitignore",
+    "missing_required_modules": 8,
+    "files": "tools/zotero-extractor/vendor/document-worker/src/pdf/structure/reference/*.js",
+    "existing_module_contents_unchanged": true,
+    "runtime_dependencies": "matching locked node_modules symlink; sources copied, no runtime source mount"
+  },
+  "capacity_resume": {
+    "directory": "target/bib-p4-validation/attachment-100k-key-index-resume-20261028",
+    "status": "failed",
+    "reused_attachments": 185468,
+    "restarted_extractions": 14,
+    "recreated_partial_uploads": 0,
+    "upload_extract_and_verification_ms": 355053.0362,
+    "initial_ready_chunks": 700000,
+    "initial_ready_seconds_rounded": 873.9,
+    "wall_seconds": 2516.0518811119982,
+    "terminal_error": "database is locked",
+    "failed_operation": "not proven; old log lacks per-stage failure context",
+    "receipt": "target/bib-p4-validation/attachment-100k-key-index-resume-20261028/receipt.json",
+    "receipt_sha256": "ca5dd4b469742358fd1825dc3207d1eb8e3c19e62f13634d31927404108850f3"
+  },
+  "diagnostic_did_not_change_then_running_workers": true
+}

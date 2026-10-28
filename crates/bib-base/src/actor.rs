@@ -129,15 +129,18 @@ pub(crate) enum BibCommand {
     },
     ExportSearch {
         request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         reply: oneshot::Sender<Result<Vec<Article>>>,
     },
     SearchEvidence {
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         article_id: String,
         input: bib_types::SearchEvidenceRequest,
         reply: oneshot::Sender<Result<bib_types::SearchEvidencePage>>,
     },
     SearchV2 {
         request: SearchRequestV2,
+        prepared: Option<crate::semantic_service::PreparedSemanticQuery>,
         reply: oneshot::Sender<Result<SearchPageV2>>,
     },
     SearchArticles {
@@ -495,18 +498,30 @@ impl BibCommand {
                 }
                 let _ = reply.send(core.refresh_search_index().await);
             }
-            Self::ExportSearch { request, reply } => {
-                let _ = reply.send(core.export_search(request).await);
+            Self::ExportSearch {
+                request,
+                prepared,
+                reply,
+            } => {
+                let _ = reply.send(core.export_search_prepared(request, prepared).await);
             }
             Self::SearchEvidence {
+                prepared,
                 article_id,
                 input,
                 reply,
             } => {
-                let _ = reply.send(core.search_evidence(&article_id, input).await);
+                let _ = reply.send(
+                    core.search_evidence_prepared(&article_id, input, prepared)
+                        .await,
+                );
             }
-            Self::SearchV2 { request, reply } => {
-                let _ = reply.send(core.search_v2(request).await);
+            Self::SearchV2 {
+                request,
+                prepared,
+                reply,
+            } => {
+                let _ = reply.send(core.search_v2_prepared(request, prepared).await);
             }
             Self::SearchArticles {
                 query,
@@ -897,6 +912,7 @@ impl BibCommand {
 
 /// Spawn the storage actor around an opened core and return the handle.
 pub(crate) fn spawn(mut core: BibCore) -> BibBase {
+    let semantic = core.semantic.clone();
     let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
     let search_tx = core.search_context.take().map(|context| {
         let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -905,7 +921,11 @@ pub(crate) fn spawn(mut core: BibCore) -> BibBase {
     });
     tokio::spawn(run(core, rx, search_tx));
     let (changes, _) = tokio::sync::watch::channel(chrono::Utc::now().timestamp_millis() as u64);
-    BibBase { tx, changes }
+    BibBase {
+        tx,
+        changes,
+        semantic,
+    }
 }
 
 enum SearchRoute {
@@ -917,17 +937,35 @@ impl BibCommand {
     fn into_search_job(self) -> SearchRoute {
         use crate::search::SearchJob;
         let job = match self {
-            Self::ExportSearch { request, reply } => SearchJob::Export { request, reply },
+            Self::ExportSearch {
+                request,
+                prepared,
+                reply,
+            } => SearchJob::Export {
+                request,
+                prepared,
+                reply,
+            },
             Self::SearchEvidence {
+                prepared,
                 article_id,
                 input,
                 reply,
             } => SearchJob::Evidence {
+                prepared,
                 article_id,
                 input,
                 reply,
             },
-            Self::SearchV2 { request, reply } => SearchJob::V2 { request, reply },
+            Self::SearchV2 {
+                request,
+                prepared,
+                reply,
+            } => SearchJob::V2 {
+                request,
+                prepared,
+                reply,
+            },
             Self::SearchArticles {
                 query,
                 limit,

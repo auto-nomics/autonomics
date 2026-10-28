@@ -435,6 +435,71 @@ async fn attachment(db: &BibBase, name: &str, text: &str, preferred: bool) -> St
 }
 
 #[tokio::test]
+async fn deleting_nonpreferred_attachment_invalidates_index_evidence_and_cursor() {
+    let db = fixture().await;
+    let first = attachment(&db, "first.pdf", "retainedbody sharedbody", true).await;
+    let second = attachment(&db, "second.pdf", "removedbody sharedbody", false).await;
+    let query = SearchRequestV2 {
+        query: "fulltext:removedbody".into(),
+        ..all()
+    };
+    let before = db.search_v2(query.clone()).await.unwrap();
+    assert_eq!(before.total, 1);
+    let mut paged = SearchRequestV2 {
+        page_size: 1,
+        ..all()
+    };
+    paged.cursor = db.search_v2(paged.clone()).await.unwrap().next_cursor;
+    assert!(paged.cursor.is_some());
+    let revision = db.search_index_status().await.unwrap().source_revision;
+    let removed = db
+        .delete_zotero_attachment("a", &second)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!removed.was_preferred);
+    assert!(db.search_index_status().await.unwrap().source_revision > revision);
+    assert_eq!(db.search_v2(query.clone()).await.unwrap().total, 0);
+    assert!(matches!(
+        db.search_v2(paged).await,
+        Err(Error::InvalidSearchQuery(message)) if message.contains("cursor expired")
+    ));
+    assert!(
+        db.search_evidence(
+            "a",
+            bib_types::SearchEvidenceRequest {
+                search: query,
+                index_generation: Some(before.index_generation),
+            }
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(db.zotero_attachment("a").await.unwrap().unwrap().key, first);
+    assert_eq!(
+        db.search_v2(SearchRequestV2 {
+            query: "fulltext:retainedbody".into(),
+            ..all()
+        })
+        .await
+        .unwrap()
+        .total,
+        1
+    );
+    let revision = db.search_index_status().await.unwrap().source_revision;
+    assert!(
+        db.delete_zotero_attachment("a", &second)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        db.search_index_status().await.unwrap().source_revision,
+        revision
+    );
+}
+
+#[tokio::test]
 async fn evidence_keeps_each_attachment_and_annotation_with_safe_unicode_ranges() {
     let db = fixture().await;
     let first = attachment(&db, "first.pdf", "😀 前缀 肿瘤免疫治疗 distinctive", true).await;
