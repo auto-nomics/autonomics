@@ -54,9 +54,7 @@ impl RuntimeHost {
         info: crate::control::AgentInfo,
     ) {
         let path = handle.path.clone();
-        let mut event_info = info;
-        event_info.agent_id = Some(handle.agent_id);
-        self.register_agent(handle, event_info.clone());
+        let event_info = self.register_agent(handle, info);
         self.emit_host_event(super::HostEvent::AgentRegistered {
             path: path.clone(),
             info: event_info,
@@ -347,7 +345,7 @@ impl RuntimeHost {
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
                 let status = HostStatus {
-                    agents: self.agents.values().map(|e| e.info.clone()).collect(),
+                    agents: self.agents.values().map(|e| self.snapshot_info(e)).collect(),
                     profiles: AgentKind::ALL
                         .iter()
                         .map(|k| capability_from_kind(k.name(), k.name(), *k))
@@ -377,7 +375,7 @@ impl RuntimeHost {
                 let resolved = self.resolve_agent(&name);
                 let info = resolved
                     .as_ref()
-                    .and_then(|key| self.agents.get(key).map(|e| e.info.clone()))
+                    .and_then(|key| self.agents.get(key).map(|e| self.snapshot_info(e)))
                     .or_else(|| {
                         AgentKind::from_name(&name)
                             .map(|k| capability_from_kind(k.name(), k.name(), k))
@@ -461,7 +459,19 @@ impl RuntimeHost {
 
             // ── Model management ──
             HostCommand::SetAgentModel { name, model } => {
+                // Capture the spec from the payload before the relay takes
+                // ownership — the async slot store must not race the event.
+                let spec = model.model_spec();
+                let context_length = model.model_info.context_length;
+                let resolved = self.resolve_agent(&name);
                 self.send_agent_command(&name, AgentCommand::SetModel(model));
+                if let Some(path) = resolved {
+                    self.emit_host_event(super::HostEvent::AgentModelChanged {
+                        path,
+                        spec,
+                        context_length,
+                    });
+                }
             }
             HostCommand::SetAgentRuntimeConfig {
                 name,
@@ -956,6 +966,8 @@ pub(super) fn capability_from_kind(
         tools: Vec::new(), // populated at runtime if needed
         status: crate::control::AgentStatus::Idle,
         last_event: None,
+        model: None,
+        context_length: None,
     }
 }
 

@@ -5,11 +5,10 @@ import {
   ArrowDown,
   ArrowUp,
   Brain,
+  GitFork,
   CheckCircle2,
   ChevronDown,
   Copy,
-  PanelLeftClose,
-  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -20,7 +19,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { renderMarkdown } from "@/markdown";
+import { renderMarkdown } from "@/lib/markdown";
 import type { AgentInfo, ChatItem } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +31,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Trace,
@@ -45,14 +45,14 @@ import {
 } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
 import {
+  AgentStatusIcon,
   type DisplaySettings,
   copyText,
   leafName,
   preview,
-  statusDot,
   statusLabel,
-} from "@/features/agent";
-import { ToolPayloadView, parseMaybeJson } from "@/features/agent-json";
+} from "./agent";
+import { ToolPayloadPreview, ToolPayloadView, parseMaybeJson } from "./agent-json";
 
 /** Where the workspace renders: docked in the agent view's center
  *  column, floating over any other view, or briefly standby until the
@@ -120,6 +120,42 @@ function groupTraceSteps(messages: ChatItem[]): TranscriptBlock[] {
     }
   }
   return blocks;
+}
+
+/** Chat-shaped placeholders shown while a session's history loads; the
+ *  block shapes mirror real transcript rows (user bubbles right, assistant
+ *  avatar + text left, trace lines indented) so the swap-in is calm. */
+function TranscriptSkeleton() {
+  return (
+    <>
+      <div className="flex justify-end" aria-hidden>
+        <Skeleton className="h-9 w-2/5 rounded-2xl rounded-br-md" />
+      </div>
+      <div className="flex gap-2.5" aria-hidden>
+        <Skeleton className="mt-0.5 size-6 shrink-0 rounded-lg" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-3 w-full max-w-md" />
+          <Skeleton className="h-3 w-3/4" />
+        </div>
+      </div>
+      <div className="ml-8.5 flex items-center gap-2" aria-hidden>
+        <Skeleton className="size-3.5 rounded-sm" />
+        <Skeleton className="h-3 w-44" />
+      </div>
+      <div className="flex justify-end" aria-hidden>
+        <Skeleton className="h-12 w-1/3 rounded-2xl rounded-br-md" />
+      </div>
+      <div className="flex gap-2.5" aria-hidden>
+        <Skeleton className="mt-0.5 size-6 shrink-0 rounded-lg" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-3 w-full max-w-lg" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      </div>
+    </>
+  );
 }
 
 type MessageItemProps = {
@@ -203,7 +239,11 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
                 <Wrench className="size-3.5" />
               </TraceIcon>
               <TraceTitle>{name}</TraceTitle>
-              {input && <TraceDescription className="max-w-60 truncate">{preview(input)}</TraceDescription>}
+              {input && (
+                <TraceDescription className="min-w-0 shrink max-w-[min(32rem,55vw)] truncate text-xs">
+                  {inputJson ? <ToolPayloadPreview value={inputJson} /> : preview(input)}
+                </TraceDescription>
+              )}
             </TraceLine>
           </TraceCollapsibleTrigger>
           {input && (
@@ -226,7 +266,11 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
                 {ok ? <CheckCircle2 className="text-emerald-500" /> : <XCircle />}
               </TraceIcon>
               <TraceTitle>{ok ? "Result" : "Failed"}</TraceTitle>
-              {content && <TraceDescription className="max-w-60 truncate">{preview(content)}</TraceDescription>}
+              {content && (
+                <TraceDescription className="min-w-0 shrink max-w-[min(32rem,55vw)] truncate text-xs">
+                  {resultJson ? <ToolPayloadPreview value={resultJson} /> : preview(content)}
+                </TraceDescription>
+              )}
             </TraceLine>
           </TraceCollapsibleTrigger>
           {content && (
@@ -272,20 +316,22 @@ export type AgentWorkspaceProps = {
   activeAgent: string;
   statuses: Record<string, string>;
   messages: ChatItem[];
+  /** True while the active agent's session history is being fetched;
+   *  renders chat-shaped skeleton placeholders instead of the transcript. */
+  historyLoading: boolean;
   streaming: ChatItem | null;
   usage: { input: number; output: number; cache: number } | null;
   display: DisplaySettings;
   draft: string;
   busy: string | null;
-  leftOpen: boolean;
   rightOpen: boolean;
   onDraftChange: (value: string) => void;
   onSendMessage: () => void;
   onSelectAgent: (path: string) => void;
   onShutdown: (path: string) => void;
   onSpawn: () => void;
-  onToggleLeft: () => void;
   onToggleRight: () => void;
+  onOpenDag: () => void;
 };
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {
@@ -296,12 +342,12 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     activeAgent,
     statuses,
     messages,
+    historyLoading,
     streaming,
     usage,
     display,
     draft,
     busy,
-    leftOpen,
     rightOpen,
   } = props;
 
@@ -446,6 +492,16 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const [atBottom, setAtBottom] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  // The transcript subtree remounts whenever its portal target changes
+  // (standby→docked slot, float collapse/expand), replacing the viewport
+  // element. A plain ref would leave the scroll listener on the dead
+  // element, so the mounted node doubles as reactive state to re-key the
+  // listener effect below.
+  const [transcriptNode, setTranscriptNode] = useState<HTMLDivElement | null>(null);
+  const setTranscriptViewport = useCallback((node: HTMLDivElement | null) => {
+    transcriptRef.current = node;
+    setTranscriptNode(node);
+  }, []);
   const atBottomRef = useRef(true);
   const windowStartRef = useRef(0);
   const pendingAnchorRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
@@ -504,7 +560,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   }, [messages.length, streaming?.text]);
 
   useEffect(() => {
-    const viewport = transcriptRef.current;
+    const viewport = transcriptNode;
     if (!viewport) return;
     const onScroll = () => {
       const bottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 48;
@@ -516,7 +572,17 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
     return () => viewport.removeEventListener("scroll", onScroll);
-  }, [activeAgent, loadEarlier]);
+  }, [transcriptNode, loadEarlier]);
+
+  // A fresh viewport always starts at the top of its content; re-pin it to
+  // the latest message so the remount (portal target swap, float expand)
+  // does not strand the user above a stale scroll offset.
+  useLayoutEffect(() => {
+    if (!transcriptNode) return;
+    transcriptNode.scrollTop = transcriptNode.scrollHeight;
+    atBottomRef.current = true;
+    setAtBottom(true);
+  }, [transcriptNode]);
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
@@ -541,7 +607,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const searchToggle = (
     <Button
       size="icon-sm"
-      variant={agentPickerOpen ? "secondary" : "ghost"}
+      variant={agentPickerOpen ? "default" : "ghost"}
       aria-label="Search agents"
       aria-expanded={agentPickerOpen}
       title={agentPickerOpen ? "关闭 agent 搜索" : "搜索 agent"}
@@ -557,7 +623,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         "flex min-h-0 flex-1 flex-col",
         // Entrance for (re)docking into the agent view's center column.
         mode === "docked" &&
-          "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none",
+        "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none",
       )}
     >
       <div className="shrink-0 border-b bg-muted/40">
@@ -573,16 +639,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           >
             <div className="flex h-10 items-center gap-1 px-1.5">
               {searchToggle}
-              {docked && (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Toggle left sidebar"
-                  onClick={props.onToggleLeft}
-                >
-                  {leftOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-                </Button>
-              )}
               <div className="min-w-0 flex-1 [&>div]:p-0">
                 <CommandInput autoFocus placeholder="输入以切换 agent，Esc 返回" />
               </div>
@@ -610,7 +666,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                       setAgentPickerOpen(false);
                     }}
                   >
-                    <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[agent.path]))} />
+                    <AgentStatusIcon status={statuses[agent.path]} />
                     <span className="truncate">{leafName(agent.path)}</span>
                     <span title={agent.path} className="min-w-0 truncate pl-2 text-xs text-muted-foreground">
                       {agent.path}
@@ -623,16 +679,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         ) : (
           <div className="flex h-10 items-center gap-1 px-1.5">
             {searchToggle}
-            {docked && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Toggle left sidebar"
-                onClick={props.onToggleLeft}
-              >
-                {leftOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-              </Button>
-            )}
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {agents.map((agent) => (
                 <div
@@ -642,7 +688,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                     activeAgent === agent.path ? "border-border bg-card shadow-sm" : "text-muted-foreground hover:bg-accent",
                   )}
                 >
-                  <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[agent.path]))} />
+                  <AgentStatusIcon status={statuses[agent.path]} />
                   <button
                     type="button"
                     onClick={() => props.onSelectAgent(agent.path)}
@@ -666,6 +712,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                 <Plus />
               </Button>
             </div>
+            <Button size="icon-sm" variant="ghost" aria-label="View agent DAG" title="View agent DAG" disabled={!activeAgent} onClick={props.onOpenDag}><GitFork /></Button>
             {docked && (
               <Button
                 size="icon-sm"
@@ -687,7 +734,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             <span>·</span>
             <span className="shrink-0">{activeInfo?.model ?? "no model"}</span>
             <span>·</span>
-            <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[activeAgent]))} />
+            <AgentStatusIcon status={statuses[activeAgent]} />
             <span className="shrink-0">{running}</span>
             {usage && (
               <span className="ml-auto hidden shrink-0 sm:inline">
@@ -701,37 +748,43 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       {activeAgent ? (
         <>
           <div className="relative flex min-h-0 flex-1">
-            <ScrollArea viewportRef={transcriptRef} className="min-h-0 flex-1" contentClassName="space-y-3 p-3 sm:p-4">
-              {hiddenCount > 0 && (
-                <div className="flex justify-center pb-2">
-                  <Button size="xs" variant="outline" onClick={loadEarlier}>
-                    <ArrowUp />
-                    Load earlier messages ({hiddenCount})
-                  </Button>
-                </div>
-              )}
-              {groupTraceSteps(visibleMessages).map((block) => {
-                const renderItem = (message: ChatItem) => (
-                  <MessageItem
-                    key={message.id}
-                    message={message}
-                    streamingId={streaming?.id ?? null}
-                    display={display}
-                    expanded={expanded}
-                    onToggle={toggleExpand}
-                    onCopy={async (text) => void copyText(text)}
-                  />
-                );
-                return "trace" in block ? (
-                  <Trace key={block.trace[0].id} className="ml-8.5">
-                    {block.trace.map(renderItem)}
-                  </Trace>
-                ) : (
-                  renderItem(block.message)
-                );
-              })}
-              {!messages.length && !streaming && (
-                <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
+            <ScrollArea viewportRef={setTranscriptViewport} className="min-h-0 flex-1" contentClassName="space-y-3 p-3 sm:p-4">
+              {historyLoading ? (
+                <TranscriptSkeleton />
+              ) : (
+                <>
+                  {hiddenCount > 0 && (
+                    <div className="flex justify-center pb-2">
+                      <Button size="xs" variant="outline" onClick={loadEarlier}>
+                        <ArrowUp />
+                        Load earlier messages ({hiddenCount})
+                      </Button>
+                    </div>
+                  )}
+                  {groupTraceSteps(visibleMessages).map((block) => {
+                    const renderItem = (message: ChatItem) => (
+                      <MessageItem
+                        key={message.id}
+                        message={message}
+                        streamingId={streaming?.id ?? null}
+                        display={display}
+                        expanded={expanded}
+                        onToggle={toggleExpand}
+                        onCopy={async (text) => void copyText(text)}
+                      />
+                    );
+                    return "trace" in block ? (
+                      <Trace key={block.trace[0].id} className="ml-8.5">
+                        {block.trace.map(renderItem)}
+                      </Trace>
+                    ) : (
+                      renderItem(block.message)
+                    );
+                  })}
+                  {!messages.length && !streaming && (
+                    <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
+                  )}
+                </>
               )}
             </ScrollArea>
             {!atBottom && (
@@ -747,14 +800,50 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           </div>
 
           <form
-            className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] gap-2 border-t bg-muted p-2 sm:p-3"
+            className="shrink-0 border-t bg-muted p-2 sm:p-3"
             onSubmit={(event) => {
               event.preventDefault();
               props.onSendMessage();
             }}
           >
-            <Textarea value={draft} rows={3} onChange={(event) => props.onDraftChange(event.target.value)} placeholder="输入消息；Ctrl+R 搜索 prompt 历史" />
-            <Button type="submit" disabled={!draft.trim() || busy === "send"}>发送</Button>
+            {/* Card-style composer: borderless textarea with a floating
+                round send button, meta row below (hints / streaming). */}
+            <div className="rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+              <div className="flex items-end gap-2 px-2.5 pt-2">
+                <Textarea
+                  value={draft}
+                  rows={1}
+                  onChange={(event) => props.onDraftChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send") {
+                      event.preventDefault();
+                      props.onSendMessage();
+                    }
+                  }}
+                  placeholder="输入消息…"
+                  className="max-h-48 min-h-9 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 focus-visible:ring-0 md:text-sm dark:bg-transparent"
+                />
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="mb-0.5 shrink-0 rounded-full"
+                  disabled={!draft.trim() || busy === "send"}
+                  aria-label="发送"
+                  title="发送（Ctrl+Enter）"
+                >
+                  <ArrowUp />
+                </Button>
+              </div>
+              <div className="flex items-center gap-2 px-2.5 pb-2 pt-1 text-[11px] text-muted-foreground">
+                <span className="truncate">Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史</span>
+                {streaming && (
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
+                    streaming…
+                  </span>
+                )}
+              </div>
+            </div>
           </form>
         </>
       ) : (
@@ -763,12 +852,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         </div>
       )}
 
-      <div className="flex h-6 shrink-0 items-center justify-between border-t bg-muted/40 px-3 text-[11px] text-muted-foreground">
-        <span className="truncate">{activeAgent ? (streaming ? "streaming…" : running) : ""}</span>
-        <span className="shrink-0">
-          {messages.length ? (visibleMessages.length < messages.length ? `${visibleMessages.length} / ${messages.length} messages` : `${messages.length} messages`) : ""}
-        </span>
-      </div>
     </div>
   );
 
@@ -813,7 +896,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               collapsed && "border-b-transparent hover:bg-accent",
             )}
           >
-            <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[activeAgent]))} />
+            <AgentStatusIcon status={statuses[activeAgent]} />
             <span className="min-w-0 truncate text-xs font-medium">
               {collapsed ? (activeAgent ? leafName(activeAgent) : "Agent") : activeAgent}
             </span>

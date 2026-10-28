@@ -787,7 +787,13 @@ proactively rather than answering from memory alone.";
 
 const PROMPT_BIBLIOGRAPHY: &str = "\n\
 ### Literature & Evidence\n\
-- Literature retrieval runs on the DAG evidence channel: add a \
+- For a single retrieval decision, call `literature_search` directly: one \
+  query across your local library (full text + annotations) AND external \
+  sources (PubMed, OpenAlex, arXiv, Crossref, Semantic Scholar), deduplicated \
+  across sources with `in_library` flags. Save external finds with \
+  `literature_import` (session_id + candidate id/fingerprint from that \
+  response; dry_run previews matches).\n\
+- Multi-step retrieval pipelines run on the DAG evidence channel: a \
   `source_literature` node (structured multi-source search: PubMed, arXiv, \
   bioRxiv, OpenAlex, Crossref, Semantic Scholar), a `source_literature_fetch` \
   node (one article by DOI / PMID / arXiv / S2 / OpenAlex id), a \
@@ -798,8 +804,9 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
   evidence outputs render as a compact citation list inline.\n\
 - Give every evidence node its own output `path`; chain `evidence_export` \
   (bibtex / ris / markdown) when a bibliography file is needed.\n\
-- Use the `bib_save` DAG node to store articles in your personal library, `bib_search_library` \
-  to find saved articles, and `bib_export` to export collections.\n\
+- Use the `bib_save` DAG node to store evidence-batch articles in your \
+  personal library, `bib_search_library` for quick library-only lookups, and \
+  `bib_export` to export collections.\n\
 - `bib_export` writes rendered citation files directly to a VFS `output_path`.\n\
 - Always verify claims against primary literature when possible.";
 

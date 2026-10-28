@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { gatewayRequest } from "@/gateway";
 import type { DagSnapshot } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ function dagStatus(status: unknown) {
   return "pending";
 }
 
-function calculateLevels(snapshot: DagSnapshot) {
+export function calculateLevels(snapshot: DagSnapshot) {
   const incoming = new Map(snapshot.nodes.map((node) => [node.id, 0]));
   const outgoing = new Map(snapshot.nodes.map((node) => [node.id, [] as string[]]));
   for (const edge of snapshot.edges) {
@@ -39,6 +39,42 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  const zoomAnchor = useRef<{ x: number; y: number; graphX: number; graphY: number } | null>(null);
+
+  useEffect(() => {
+    if (!viewport) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const oldZoom = zoomRef.current;
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
+      const nextZoom = Math.min(3, Math.max(0.25, oldZoom * Math.exp(-delta * 0.002)));
+      if (nextZoom === oldZoom) return;
+      const rect = viewport.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const previous = zoomAnchor.current;
+      // Multiple wheel events can arrive before React commits the new size.
+      const scrollX = previous ? previous.graphX * oldZoom - previous.x : viewport.scrollLeft;
+      const scrollY = previous ? previous.graphY * oldZoom - previous.y : viewport.scrollTop;
+      zoomAnchor.current = { x, y, graphX: (scrollX + x) / oldZoom, graphY: (scrollY + y) / oldZoom };
+      zoomRef.current = nextZoom;
+      setZoom(nextZoom);
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, [viewport]);
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    if (!viewport || !anchor) return;
+    viewport.scrollLeft = anchor.graphX * zoom - anchor.x;
+    viewport.scrollTop = anchor.graphY * zoom - anchor.y;
+    zoomAnchor.current = null;
+  }, [viewport, zoom]);
 
   const load = useCallback(async (agent: string) => {
     if (!agent) {
@@ -97,14 +133,15 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
             ? `${snapshot.nodes.length} nodes · ${snapshot.edges.length} edges · ${snapshot.nodes.filter((node) => dagStatus(node.status) === "running").length} running · ${snapshot.nodes.filter((node) => dagStatus(node.status) === "failed").length} failed`
             : `agent ${activeAgent || "—"}`}
         </span>
-        <Button size="sm" variant="secondary" onClick={() => void load(activeAgent)}>Refresh</Button>
+        <div className="flex items-center gap-2"><span className="text-xs tabular-nums" title="Ctrl + scroll to zoom">{Math.round(zoom * 100)}%</span><Button size="sm" variant="secondary" onClick={() => void load(activeAgent)}>Refresh</Button></div>
       </div>
       {loading && <Card className="p-3 text-sm text-muted-foreground">Loading DAG snapshot…</Card>}
       {error && <Card className="border-destructive/40 p-3 text-sm text-destructive">{error}</Card>}
       {snapshot && layout && (
         <Card className="min-h-0 p-0!">
-          <ScrollArea className="h-full" scrollOrientation="both">
-          <div className="relative" style={{ width: layout.width, height: layout.height }}>
+          <ScrollArea className="h-full" scrollOrientation="both" viewportRef={setViewport}>
+          <div style={{ width: layout.width * zoom, height: layout.height * zoom }}>
+          <div className="relative origin-top-left" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
             <svg width={layout.width} height={layout.height} className="absolute inset-0 pointer-events-none">
               {snapshot.edges.map((edge) => {
                 const from = layout.positions.get(edge.from);
@@ -149,6 +186,7 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
                 </button>
               );
             })}
+          </div>
           </div>
           </ScrollArea>
         </Card>

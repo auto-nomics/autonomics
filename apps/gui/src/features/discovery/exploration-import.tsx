@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
-import { SearchDialog } from "./search-dialog";
+import { SearchDialog } from "@/features/bibliography";
 import { useDiscovery } from "./use-discovery";
 import type { DiscoveryRequest, DiscoveryImportRequest, DiscoveryImportResult, DiscoveryPreview } from "./discovery-model";
 import type { BibArticle } from "@/types";

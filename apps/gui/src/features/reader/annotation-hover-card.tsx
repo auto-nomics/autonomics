@@ -1,6 +1,6 @@
 import { useCallback, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { HoverCard, HoverCardContent, HoverCardTrigger } from './components/ui/hover-card';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 
 type Rect = { left: number; top: number; width: number; height: number };
 type State = { open: boolean; rect: Rect };

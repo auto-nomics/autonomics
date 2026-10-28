@@ -3,13 +3,11 @@ import { gatewayRequest } from "@/gateway";
 import type { BibCollection } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AdvancedSearchBuilder } from "./advanced-search-builder";
-import { VirtualArticleList } from "./virtual-article-list";
+import { AdvancedSearchBuilder, VirtualArticleList, type SearchExpr } from "@/features/bibliography";
 import { useDiscovery } from "./use-discovery";
 import { SubscribeSearchButton } from "./subscriptions";
 import { SaveSnapshotButton } from "./search-snapshots";
 import { useDiscoveryPresence } from "./use-discovery-presence";
-import type { SearchExpr } from "./bib-search-model";
 import type { DiscoveryAcquisition, DiscoveryCandidate, DiscoveryImportRequest, DiscoveryImportResult, DiscoveryOrder, DiscoveryPreview, DiscoveryRequest, DiscoverySelection, SourceCapabilities } from "./discovery-model";
 
 const activePhase = (phase: string) => ["running", "queued", "waiting_retry"].includes(phase);

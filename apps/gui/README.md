@@ -50,6 +50,37 @@ Static JS/CSS are metadata-only and unauthenticated; all API requests remain
 bearer-guarded. Tauri uses the same frontend and switches to its native bridge
 and dialogs when `__TAURI_INTERNALS__` is present.
 
+## Source layout
+
+`src/` is organized by domain. Dependencies only point downward:
+`app → features/* → gateway/types/lib/components`, and between features only
+through each domain's `index.ts` barrel (`discovery → bibliography`,
+`bibliography → reader`).
+
+```text
+src/
+  main.tsx               entry: mounts <App/>
+  app/                   shell + agent runtime store
+    app-view.tsx         navigation, view switch, workspace hosting, login/boot screens
+    use-agent-runtime.ts gateway connection, event reducer, agent/session actions
+  gateway.ts             HTTP/SSE client, the only backend access point
+  types.ts               shared wire types
+  features/
+    agent/               agent view, floating workspace, layout persistence
+    bibliography/        library view, search model + panels, collection tree
+    discovery/           federated discovery, subscriptions, snapshots, citation exploration
+    reader/              PDF/TXT readers, annotations, reading mode (opened from bibliography)
+    system/              config, KMS, DAG views
+  components/ui/         shadcn-style primitives (no domain logic)
+  lib/                   markdown rendering and misc utilities
+  hooks/                 shared React hooks
+  vendor/                generated third-party code (zotero-sdt)
+```
+
+Playwright tests in `tests/` import modules by path (`/src/features/...` or
+`@/...`); the four reader tests spin up a bare Vite server and therefore pass
+the `@` alias explicitly.
+
 ## Implemented alignment
 
 - Gateway hydration with consistent snapshot/SSE sequence handling

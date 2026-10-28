@@ -405,17 +405,15 @@ impl RuntimeHost {
                 .await
             {
                 Ok(handle) => {
-                    let agent_id = handle.agent_id;
-                    let mut info = super::commands::capability_from_kind(
+                    let info = super::commands::capability_from_kind(
                         handle.path.name(),
                         handle.path.as_str(),
                         config.kind,
                     );
-                    info.agent_id = Some(agent_id);
-                    self.register_agent(handle, info.clone());
+                    let event_info = self.register_agent(handle, info);
                     self.emit_host_event(HostEvent::AgentRegistered {
                         path: path.clone(),
-                        info,
+                        info: event_info,
                     });
                     restored += 1;
                     tracing::info!(

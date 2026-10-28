@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {notificationLookup} from '../src/features/subscription-model.ts';
+import {notificationLookup} from '../src/features/discovery/subscription-model.ts';
 const record=(source,identifiers)=>({source,article:{id:'fixture',title:'Same tempting title',identifiers}});
 const id=(kind,value)=>({kind,value});
 const doi=notificationLookup(record('crossref',[id('doi','https://doi.org/10.1000/Case?x#fragment')]));

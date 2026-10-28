@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, Library, Inbox, Plus, Trash2 } from "lucide-react";
 import type { BibCollection } from "@/types";
-import { collectionDescendants, collectionPath, collectionRows } from "@/collection-tree-model";
+import { collectionDescendants, collectionPath, collectionRows } from "./collection-tree-model";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { Dialog as ConfirmDialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
   const [parent, setParent] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
   const tree = useRef<HTMLDivElement>(null);
   const modal = useRef<HTMLDialogElement>(null);
   const trashNode: BibCollection = { id: "@trash", name: "Trash", article_ids: [], direct_article_count: collections.filter(c => c.deleted).length, deleted: true };
@@ -79,6 +81,18 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
     else input = { method: "DELETE", path: `${path}${dialog.kind === "erase" ? "?permanent=true" : ""}` };
     try { await action(input); modal.current?.close(); setDialog(null); } catch { /* keep the dialog and input */ }
   }
+  async function emptyTrash() {
+    const trashed = collections.filter(c => c.deleted);
+    const ids = new Set(trashed.map(c => c.id));
+    const roots = trashed.filter(c => !c.parent_id || !ids.has(c.parent_id));
+    if (!roots.length) return;
+    setBusy(true); setError("");
+    try {
+      for (const root of roots) await onAction({ method: "DELETE", path: `/bib/collections/${encodeURIComponent(root.id)}?permanent=true` });
+      setEmptyTrashOpen(false);
+    } catch (e) { setError(`Could not empty trash: ${String(e)}`); }
+    finally { setBusy(false); }
+  }
   async function drop(event: React.DragEvent, parentId: string | null) {
     event.preventDefault(); event.stopPropagation();
     const id = event.dataTransfer.getData("application/x-autonomics-collection");
@@ -98,7 +112,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
     <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", !selected && "bg-accent")} onClick={() => onSelect(null)} onDragOver={e => e.preventDefault()} onDrop={e => void drop(e, null)}><Library className="size-4" />All Articles<span className="ml-auto">{total}</span></button>
     <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", selected === "@unfiled" && "bg-accent")} onClick={() => onSelect("@unfiled")}><Inbox className="size-4" />Unfiled</button>
     <div ref={tree} role="tree" aria-label="Collections" className="py-1">
-      {rows.map(({ collection: c, depth, hasChildren }, index) => c.id === "@trash" ? <div key={c.id} role="treeitem" data-collection-id={c.id} aria-label="Trash" aria-level={1} aria-expanded={expanded.has(c.id)} tabIndex={focusId === c.id ? 0 : -1} onFocus={() => setFocused(c.id)} onKeyDown={event => { if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) { event.preventDefault(); toggle(c.id); } }}><button type="button" className="mt-2 flex w-full items-center gap-2 border-t px-2 py-2 text-left text-xs" aria-label="Toggle collection trash" onClick={() => toggle(c.id)}>{expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}<Trash2 className="size-3.5" />Trash<span className="ml-auto">{c.direct_article_count}</span></button></div> : <ContextMenu key={c.id}>
+      {rows.map(({ collection: c, depth, hasChildren }, index) => c.id === "@trash" ? <ContextMenu key={c.id}><ContextMenuTrigger render={<div />}><div role="treeitem" data-collection-id={c.id} aria-label="Trash" aria-level={1} aria-expanded={expanded.has(c.id)} tabIndex={focusId === c.id ? 0 : -1} onFocus={() => setFocused(c.id)} onKeyDown={event => { if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) { event.preventDefault(); toggle(c.id); } }}><button type="button" className="mt-2 flex w-full items-center gap-2 border-t px-2 py-2 text-left text-xs" aria-label="Toggle collection trash" onClick={() => toggle(c.id)}>{expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}<Trash2 className="size-3.5" />Trash<span className="ml-auto">{c.direct_article_count}</span></button></div></ContextMenuTrigger><ContextMenuContent><ContextMenuItem variant="destructive" disabled={busy || !c.direct_article_count} onClick={() => { setError(""); setEmptyTrashOpen(true); }}>Empty trash…</ContextMenuItem></ContextMenuContent></ContextMenu> : <ContextMenu key={c.id}>
         <ContextMenuTrigger render={<div />}>
           <div role="treeitem" data-collection-id={c.id} aria-label={c.name} aria-level={depth} aria-selected={selected === c.id} aria-expanded={hasChildren ? expanded.has(c.id) : undefined}
             tabIndex={focusId === c.id ? 0 : -1}
@@ -136,7 +150,20 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
       </ContextMenu>)}
     </div>
 
-    {error && !dialog && <p role="alert" className="p-2 text-xs text-destructive">{error}</p>}
+    <ConfirmDialog open={emptyTrashOpen} onOpenChange={(open) => { if (!busy) setEmptyTrashOpen(open); }}>
+      <DialogContent role="alertdialog" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>Empty trash?</DialogTitle>
+          <DialogDescription>Permanently delete all {collections.filter(c => c.deleted).length} trashed collections? Articles, attachments and notes remain in your library.</DialogDescription>
+        </DialogHeader>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => setEmptyTrashOpen(false)}>Cancel</Button>
+          <Button variant="destructive" disabled={busy} onClick={() => void emptyTrash()}>{busy ? "Deleting…" : "Empty trash"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </ConfirmDialog>
+    {error && !dialog && !emptyTrashOpen && <p role="alert" className="p-2 text-xs text-destructive">{error}</p>}
     {dialog && <dialog ref={modal} aria-labelledby="collection-dialog-title" onCancel={e => { if (busy) e.preventDefault(); else setDialog(null); }} className="fixed inset-0 m-auto w-[min(90vw,420px)] rounded-lg border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50">
       <form onSubmit={submit} className="space-y-4">
         <h2 id="collection-dialog-title" className="font-semibold">{({ create: "New collection", rename: "Rename collection", move: "Move collection", trash: "Move collection to trash?", erase: "Delete collection permanently?" })[dialog.kind]}</h2>

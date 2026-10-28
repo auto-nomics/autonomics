@@ -1,5 +1,5 @@
 import type { ReadingTextRange } from './reading-text-range';
-import { escapeHtml } from './markdown';
+import { escapeHtml } from '@/lib/markdown';
 import { AnnotationHoverCard } from './annotation-hover-card';
 
 export type ReaderAnnotation = {

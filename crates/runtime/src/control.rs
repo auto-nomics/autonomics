@@ -755,6 +755,14 @@ pub struct AgentInfo {
     /// the first event arrives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<String>,
+    /// The agent's current model as a `provider:model` spec, read from
+    /// the live model slot (own override or the shared daemon default).
+    /// `None` while no model is resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Context window of the agent's current model (tokens).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u64>,
 }
 
 fn default_agent_status() -> AgentStatus {

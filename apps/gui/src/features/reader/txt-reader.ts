@@ -1,10 +1,12 @@
 import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget } from "./reader-target";
-import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
-import { escapeHtml } from "./markdown";
-import type { BibArticle } from "./types";
+import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
+import { escapeHtml } from "@/lib/markdown";
+import type { BibArticle } from "@/types";
 import "./pdf-reader.css";
 import "./txt-reader.css";
-import { Toast } from "./components/ui/toast";
+import { Toast } from "@/components/ui/toast";
+import { ReaderAlertDialog } from "./reader-alert-dialog";
+import { NoteComposer } from "./note-composer";
 import {
   AnnotationInspector,
   type AnnotationPatch,
@@ -146,6 +148,8 @@ class ZoteroStyleTxtReader {
 
   private root: HTMLDivElement;
   private toast: Toast;
+  private alertDialog: ReaderAlertDialog;
+  private noteComposer: NoteComposer;
   private container: HTMLDivElement;
   private article: HTMLElement;
   private overlay: HTMLDivElement;
@@ -279,6 +283,8 @@ class ZoteroStyleTxtReader {
     `;
     document.body.append(this.root);
     this.toast = new Toast(this.root);
+    this.alertDialog = new ReaderAlertDialog(this.root);
+    this.noteComposer = new NoteComposer(this.root);
 
     this.container = this.select<HTMLDivElement>('[data-output="document-container"]');
     this.article = this.select(".reader-txt-document");
@@ -833,23 +839,23 @@ class ZoteroStyleTxtReader {
 
   private async addNote() {
     if (!this.anchor) return;
-    const comment = window.prompt("Add note");
-    if (!comment?.trim()) return;
     const anchor = this.anchor;
-    await gatewayRequest(
-      "POST",
-      annotationPath(this.articleId, this.attachmentKey),
-      {
-        content: comment.trim(),
-        kind: "comment",
-        page: 1,
-        rects: [{ left: anchor.start, top: 0, width: anchor.end - anchor.start, height: 0, space: "char" }],
-      },
-    );
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
-    await this.loadAnnotations();
-    this.renderSidebarTags();
+    this.noteComposer.open(anchor, async comment => {
+      try {
+        await gatewayRequest("POST", annotationPath(this.articleId, this.attachmentKey), {
+          content: comment, kind: "comment", page: 1,
+          rects: [{ left: anchor.start, top: 0, width: anchor.end - anchor.start, height: 0, space: "char" }],
+        });
+        await this.loadAnnotations();
+        this.renderSidebarTags();
+        return true;
+      } catch (error) {
+        this.toast.show(`Failed to save note: ${String(error)}`);
+        return false;
+      }
+    });
   }
 
   private async updateAnnotation(id: string, patch: AnnotationPatch): Promise<ReaderAnnotation> {
@@ -864,7 +870,7 @@ class ZoteroStyleTxtReader {
   }
 
   private async deleteAnnotation(id: string) {
-    if (!window.confirm("Delete this annotation?")) return;
+    if (!await this.alertDialog.open({ title: "Delete this annotation?", description: "The annotation will be permanently removed from the document.", actionLabel: "Delete", destructive: true })) return;
     await gatewayRequest("DELETE", `/bib/annotations/${encodeURIComponent(id)}`);
     await this.loadAnnotations();
     this.renderSidebarTags();
@@ -1098,6 +1104,8 @@ class ZoteroStyleTxtReader {
     releaseReaderSession(this.sessionToken);
     this.events.abort();
     this.toast.destroy();
+    this.alertDialog.destroy();
+    this.noteComposer.destroy();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
     this.annotationInspector.destroy();

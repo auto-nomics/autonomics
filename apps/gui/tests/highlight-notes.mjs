@@ -1,15 +1,16 @@
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { PDFPositionMapper } from '../src/zotero-sdt.generated.js';
+import { PDFPositionMapper } from '../src/vendor/zotero-sdt.generated.js';
 
 const pdf = readFileSync(new URL('../../../tools/zotero-extractor/test/fixtures/synthetic-list-links.pdf', import.meta.url));
 const structure = JSON.parse(readFileSync(new URL('../../../tools/zotero-extractor/test/fixtures/synthetic-list-links.json', import.meta.url)));
 const position = new PDFPositionMapper(structure).sdtToSourcePosition({ start: [1, 0, 0], end: [1, 2, 20] });
 const annotations = [{ id: 'commented', kind: 'highlight', content: 'The invented sources [1-6] illustrate independent', page: 1, color: '#ffd400', comment: 'A note on the highlighted passage', rects: position.rects.map(rect => ({ left: rect[0] / 612, top: rect[1] / 792, width: (rect[2] - rect[0]) / 612, height: (rect[3] - rect[1]) / 792, space: 'pdf' })) }, { id: 'plain', kind: 'highlight', content: 'The invented sources', page: 1, color: '#5fb236', comment: '  ', rects: [{ left: .1, top: .3, width: .1, height: .02, space: 'pdf' }] }];
 const origin = 'http://127.0.0.1:1427';
-const server = await createServer({ configFile: false, optimizeDeps: { entries: [] }, server: { host: '127.0.0.1', port: 1427, strictPort: true } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, optimizeDeps: { entries: [] }, server: { host: '127.0.0.1', port: 1427, strictPort: true } });
 await server.listen();
 let browser;
 try {
@@ -31,7 +32,7 @@ try {
   await page.goto(origin);
   await page.evaluate(async () => {
     localStorage.setItem('autonomics.pdf.sidebarOpen', '0');
-    const { openPdfReader } = await import('/src/pdf-reader.ts');
+    const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
     window.reader = await openPdfReader({ articleId: 'note-indicators', title: 'Highlight note indicators' });
   });
   await page.waitForSelector('.reader-page-area .reader-highlight-note-indicator');

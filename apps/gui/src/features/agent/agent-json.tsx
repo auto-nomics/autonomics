@@ -57,6 +57,35 @@ function JsonValue({ value, depth }: { value: unknown; depth: number }) {
   );
 }
 
+/** Choose a useful subject instead of exposing serialization order and defaults. */
+function payloadSummary(value: object): string {
+  if (Array.isArray(value)) return `${value.length} items`;
+  const fields = value as Record<string, unknown>;
+  const text = (keys: string[]) => {
+    for (const key of keys) {
+      const candidate = fields[key];
+      if (typeof candidate === "string" && candidate.trim()) return candidate.replace(/\s+/g, " ").trim();
+    }
+    return "";
+  };
+  const subject = text(["error", "message", "summary", "command", "cmd", "query", "pattern", "path", "file_path", "dst", "url", "ref_id", "run_id", "name"]);
+  const action = text(["action", "operation", "op"]);
+  const collection = ["entries", "results", "matches", "files", "nodes", "items", "records"].find((key) => Array.isArray(fields[key]));
+  const count = collection ? `${(fields[collection] as unknown[]).length} ${collection}` : "";
+  const primary = [action, subject].filter(Boolean).join(" · ");
+  if (primary || count) return [primary, count].filter(Boolean).join(" · ");
+  // Unknown schemas get one meaningful value, never a row of optional flags.
+  const fallback = Object.entries(fields).find(([key, item]) =>
+    typeof item === "string" && item.trim() && !/^(fields|filter|sort|format)/.test(key));
+  if (fallback) return String(fallback[1]).replace(/\s+/g, " ").trim();
+  return `${Object.keys(fields).length} fields`;
+}
+
+export function ToolPayloadPreview({ value }: { value: object }) {
+  const summary = payloadSummary(value);
+  return <span className="block truncate" title={summary}>{summary}</span>;
+}
+
 /** Render a parsed JSON payload; `fallback` shows as pre-wrapped text when
  *  the payload did not parse. */
 export function ToolPayloadView({ value, fallback }: { value: object | undefined; fallback: string }) {

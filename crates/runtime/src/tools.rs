@@ -101,10 +101,13 @@ pub const DEFAULT_BIB_DB: &str = "bib.db";
 /// Bibliography tools: local-library management (`bib_save` is a DAG node;
 /// `bib_create_collection`, …, `bib_export`).
 ///
-/// Literature *retrieval* (search / fetch / citation graph /
-/// recommendations) is not a tool anymore — it flows through the DAG
-/// evidence channel (`source_literature`, `source_literature_fetch`,
-/// `source_literature_citations`, `source_s2_recommendations`).
+/// Literature *retrieval* flows through two surfaces: the unified
+/// `literature_search` / `literature_import` tools (single-call decisions;
+/// registered by the multi-agent host from its `BibShared`, see
+/// [`crate::RuntimeHost`]) and the DAG evidence channel
+/// (`source_literature`, `source_literature_fetch`,
+/// `source_literature_citations`, `source_s2_recommendations`) for
+/// multi-step pipelines.
 ///
 /// `db_path` selects the libSQL file backing [`BibBase`]; pass
 /// [`DEFAULT_BIB_DB`] for the conventional location.

@@ -1,5 +1,5 @@
 import type { BibArticle } from "@/types";
-import type { SearchExpr, SearchField } from "./bib-search-model";
+import type { SearchExpr, SearchField } from "@/features/bibliography";
 
 export type DiscoveryRequest = {
   query?: string; expression?: SearchExpr | null;

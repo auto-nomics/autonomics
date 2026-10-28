@@ -990,6 +990,17 @@ impl App {
             } => {
                 tracing::debug!(                    agent = %path,                    status = %status.tag(),                    last_event = ?last_event,                    "daemon observed agent status change"                );
             }
+
+            // Per-agent model hot-swap observed on the daemon. The TUI's
+            // model chip refreshes via its own `agent_model_info` polling,
+            // so this arm is a log-only bridge.
+            gateway::proto::HostEventView::AgentModelChanged {
+                path,
+                spec,
+                context_length,
+            } => {
+                tracing::debug!(                    agent = %path,                    model = %spec,                    context = context_length,                    "daemon observed agent model change"                );
+            }
         }
     }
 

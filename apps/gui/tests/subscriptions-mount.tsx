@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { SubscribeSearchButton, Subscriptions } from "../src/features/subscriptions";
+import { SubscribeSearchButton, Subscriptions } from "../src/features/discovery/subscriptions";
 function Harness() {
   const [view,setView] = useState("discover");
   return <main style={{height:"100vh",display:"flex",flexDirection:"column",minWidth:0}}>

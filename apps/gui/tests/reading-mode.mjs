@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, readFileSync } from 'node:fs';
 import { extractPDF } from '../../../tools/zotero-extractor/extract.mjs';
-import { PDFPositionMapper } from '../src/zotero-sdt.generated.js';
+import { PDFPositionMapper } from '../src/vendor/zotero-sdt.generated.js';
 
 const pdf = readFileSync(new URL('../../../tools/zotero-extractor/test/fixtures/synthetic-list-links.pdf', import.meta.url));
 const { structure } = await extractPDF(pdf);
@@ -66,7 +66,7 @@ try {
       window.$RefreshReg$ = () => {};
       window.$RefreshSig$ = () => type => type;
       window.__vite_plugin_react_preamble_installed__ = true;
-      const { openPdfReader } = await import('/src/pdf-reader.ts');
+      const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
     window.reader = await openPdfReader({ articleId, title: 'Synthetic reference links' });
   }, articleId);
   await open();

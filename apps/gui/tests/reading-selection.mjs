@@ -4,6 +4,7 @@
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 
 const pdf = readFileSync(new URL('../../../tools/zotero-extractor/test/fixtures/synthetic-list-links.pdf', import.meta.url));
@@ -17,7 +18,7 @@ const coarsen = node => {
 };
 structure.content.slice(0, 4).forEach(coarsen);
 let annotations = [];
-const server = await createServer({ configFile: false, optimizeDeps: { entries: [] }, server: { host: '127.0.0.1', port: 1426, strictPort: true } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, optimizeDeps: { entries: [] }, server: { host: '127.0.0.1', port: 1426, strictPort: true } });
 await server.listen();
 let browser;
 try {
@@ -40,7 +41,7 @@ try {
     const restoresReadingMode = await page.evaluate(async () => {
       localStorage.setItem('autonomics.pdf.sidebarOpen', '0');
       const restores = JSON.parse(localStorage.getItem('autonomics.pdf.readingLocation.reading-selection') ?? 'null')?.enabled;
-      const { openPdfReader } = await import('/src/pdf-reader.ts');
+      const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
       window.reader = await openPdfReader({ articleId: 'reading-selection', title: 'Precise partial highlights' });
       return restores;
     });

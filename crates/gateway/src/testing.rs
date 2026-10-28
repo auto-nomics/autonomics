@@ -94,6 +94,16 @@ pub fn mock_model_info() -> ModelInfo {
     }
 }
 
+/// A mock model with a distinct name and context window, for hot-swap
+/// assertions that compare specs. Its client carries no expectations —
+/// the swap target is never asked to generate.
+pub fn renamed_mock_model(name: &str, context_length: u64) -> Model {
+    let mut info = mock_model_info();
+    info.model_name = name.into();
+    info.context_length = context_length;
+    Model::with_client(info, MockApiClient::new())
+}
+
 /// A mock model whose stream scripts one plain-text assistant reply
 /// ending with `EndTurn` (usage: 11 input / 6 output tokens — asserted by
 /// consumers' JSONL contract tests).

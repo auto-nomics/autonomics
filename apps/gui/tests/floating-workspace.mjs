@@ -51,7 +51,7 @@ try {
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
 
   await page.goto(origin);
-  const composer = page.getByPlaceholder('输入消息；Ctrl+R 搜索 prompt 历史');
+  const composer = page.getByPlaceholder('输入消息…');
 
   // Docked: the workspace lives in the agent view's center column.
   await composer.waitFor({ state: 'visible' });

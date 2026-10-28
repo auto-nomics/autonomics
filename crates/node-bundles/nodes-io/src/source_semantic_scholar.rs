@@ -176,6 +176,7 @@ impl DagNode for S2PaperSearchNode {
         let limit = self.spec.limit.unwrap_or(50);
         let filter = PaperSearchFilter {
             year: self.spec.year.clone(),
+            publication_date_or_year: None,
             venue: self.spec.venue.clone(),
             fields_of_study: self.spec.fields_of_study.clone(),
             publication_types: self.spec.publication_types.clone(),

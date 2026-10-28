@@ -50,7 +50,7 @@ try {
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
 
   await page.goto(origin);
-  await page.getByPlaceholder('输入消息；Ctrl+R 搜索 prompt 历史').waitFor({ state: 'visible' });
+  await page.getByPlaceholder('输入消息…').waitFor({ state: 'visible' });
   await page.getByText('alpha answer').waitFor({ state: 'visible' });
 
   const search = page.getByRole('button', { name: 'Search agents' });

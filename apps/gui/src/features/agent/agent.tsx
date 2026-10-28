@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DagMinimap } from "@/features/system/dag-minimap";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Layout, LayoutChangedMeta, PanelImperativeHandle } from "react-resizable-panels";
 import {
   Archive,
+  Check,
+  CheckCircle2,
+  CircleDashed,
+  CircleSlash,
   Copy,
   GitFork,
   History,
+  Hourglass,
+  LoaderCircle,
+  MessagesSquare,
   Pencil,
+  PenLine,
   Plus,
-  PowerOff,
   RefreshCw,
-  RotateCcw,
+  Shrink,
   Square,
-  Trash2,
+  Wrench,
   X,
+  XCircle,
 } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import type {
@@ -24,7 +33,7 @@ import type {
 } from "@/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -32,13 +41,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { Item, ItemActions, ItemGroup, ItemSeparator } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { Separator } from "@/components/ui/separator";
 import {
   Sheet,
   SheetContent,
@@ -46,7 +70,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { layoutSideOpen, readAgentLayout, writeAgentLayout } from "@/features/agent-layout";
+import { Switch } from "@/components/ui/switch";
+import { layoutSideOpen, readAgentLayout, writeAgentLayout } from "./agent-layout";
 import { cn } from "@/lib/utils";
 
 export type DisplaySettings = {
@@ -55,7 +80,7 @@ export type DisplaySettings = {
   collapse_tool_results: boolean;
 };
 
-type View = "agent" | "config" | "bib" | "kms" | "dag";
+type View = "agent" | "config" | "bib" | "kms";
 
 type PickerMode = "copy" | "fork";
 type PickerItem = { id: string; role: "user" | "assistant"; text: string };
@@ -95,6 +120,14 @@ export function leafName(path: string) {
   return path.split("/").filter(Boolean).pop() ?? "";
 }
 
+/** Compact timestamp for a sidebar session row ("10/29 01:17"); the full
+ *  datetime stays on the row tooltip. */
+function formatSessionTime(time: number) {
+  const date = new Date(time);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 export type AgentViewProps = {
   activeAgent: string;
   activeSessionId: string | null;
@@ -107,12 +140,10 @@ export type AgentViewProps = {
   display: DisplaySettings;
   promptHistory: string[];
   rawMessages: BackendMessage[];
-  leftOpen: boolean;
   rightOpen: boolean;
-  /** Desktop (≥ md): sidebars are resizable panels. Below it they become
-   *  drawers, so the same flags open sheets instead of panels. */
+  /** Desktop (≥ md): the inspector is a resizable panel. Below it it
+   *  becomes a drawer, so the same flag opens a sheet instead. */
   isDesktop: boolean;
-  onSetLeft: (open: boolean) => void;
   onSetRight: (open: boolean) => void;
   /** Registers the center-column DOM node that hosts the (portaled)
    *  AgentWorkspace; called with null when this view unmounts. */
@@ -121,11 +152,9 @@ export type AgentViewProps = {
   /** Restores a prompt from the history dialog into the workspace
    *  composer (the draft lives above both views). */
   onDraftChange: (value: string) => void;
-  onSelectAgent: (path: string) => void;
   onCancel: () => void;
   onCompact: () => void;
   onShutdown: (path: string) => void;
-  onDelete: (path: string, agentId: string | null) => void;
   onSpawnAgent: (input: { name: string; parentPath: string; profile: string }) => Promise<void>;
   onResumeAgent: (agent: StoredAgent) => Promise<void>;
   onCreateSession: (title: string) => Promise<void>;
@@ -135,16 +164,35 @@ export type AgentViewProps = {
   onForkMessage: (message: PickerItem) => Promise<void>;
   onToggleDisplay: (key: keyof DisplaySettings) => void;
   onView: (view: View) => void;
+  onOpenDag: () => void;
   onRefreshHistory: () => void;
 };
 
-export function statusDot(status?: string) {
+/** Per-status icon + tone for agent lifecycle states. Backend source of
+ *  truth is `AgentLifecycleStatus` (crates/agentik-types/src/lifecycle.rs);
+ *  every variant must land in one of these arms — unknown values fall
+ *  through to the idle marker. */
+export function agentStatusIconMeta(status?: string) {
   const value = (status ?? "idle").toLowerCase();
-  if (value.includes("error")) return "bg-destructive";
-  if (value.includes("stream") || value.includes("request")) return "animate-pulse bg-sky-400";
-  if (value.includes("execut")) return "bg-amber-400";
-  if (value.includes("waiting") || value.includes("compact")) return "bg-violet-400";
-  return "bg-muted-foreground/50";
+  if (value.includes("error") || value.includes("fail")) return { Icon: XCircle, className: "text-destructive" };
+  if (value.includes("retry")) return { Icon: RefreshCw, className: "animate-spin text-amber-400" };
+  if (value.includes("tool")) return { Icon: Wrench, className: "animate-pulse text-amber-400" };
+  if (value.includes("stream")) return { Icon: PenLine, className: "animate-pulse text-sky-400" };
+  if (value.includes("request") || value === "running")
+    return { Icon: LoaderCircle, className: "animate-spin text-sky-400" };
+  if (value.includes("compact")) return { Icon: Shrink, className: "animate-pulse text-violet-400" };
+  if (value.includes("waiting")) return { Icon: Hourglass, className: "text-violet-400" };
+  if (value.includes("cancel") || value.includes("abort"))
+    return { Icon: CircleSlash, className: "text-muted-foreground/70" };
+  // Host-level coarse projection: the turn finished cleanly and the agent
+  // rests until the next message (lifecycle itself never emits this).
+  if (value.includes("completed")) return { Icon: CheckCircle2, className: "text-emerald-500/80" };
+  return { Icon: CircleDashed, className: "text-muted-foreground/60" };
+}
+
+export function AgentStatusIcon({ status, className }: { status?: string; className?: string }) {
+  const { Icon, className: tone } = agentStatusIconMeta(status);
+  return <Icon aria-hidden className={cn("size-3 shrink-0 motion-reduce:animate-none", tone, className)} />;
 }
 
 function planStepIcon(status: unknown) {
@@ -168,7 +216,6 @@ export function AgentView(props: AgentViewProps) {
     display,
     promptHistory,
     rawMessages,
-    leftOpen,
     rightOpen,
     isDesktop,
   } = props;
@@ -295,7 +342,7 @@ export function AgentView(props: AgentViewProps) {
     { id: "model", title: "Select model", category: "config", keywords: "model provider api key activate", run: () => props.onView("config" as View) },
     { id: "bibliography", title: "Bibliography library", category: "research", keywords: "papers articles fulltext collections", run: () => props.onView("bib" as View) },
     { id: "kms", title: "Evolution dashboard", category: "kms", keywords: "skills wiki evidence governance proposals", run: () => props.onView("kms" as View) },
-    { id: "dag", title: "View DAG", category: "data", keywords: "graph pipeline topology node edge", run: () => props.onView("dag" as View) },
+    { id: "dag", title: "View DAG", category: "data", keywords: "graph pipeline topology node edge", run: () => { if (activeAgent) props.onOpenDag(); else showToast("Select an agent first"); } },
     { id: "thinking", title: "Toggle thinking blocks", category: "view", keywords: "collapse fold reasoning", run: () => props.onToggleDisplay("collapse_thinking") },
     { id: "tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => props.onToggleDisplay("collapse_tool_calls") },
     { id: "tool-results", title: "Toggle tool results", category: "view", keywords: "collapse fold output", run: () => props.onToggleDisplay("collapse_tool_results") },
@@ -318,92 +365,39 @@ export function AgentView(props: AgentViewProps) {
     return [...promptHistory].reverse().filter((item) => !needle || item.toLowerCase().includes(needle));
   }, [historyQuery, promptHistory]);
 
-  // Desktop layout: collapsible sidebars whose widths persist to
-  // localStorage; the open flags stay in App so the workspace tab-bar
-  // toggles drive both the panels and the mobile drawers.
-  const leftPanelRef = useRef<PanelImperativeHandle | null>(null);
+  // Desktop layout: the inspector's width persists to localStorage; the
+  // open flag stays in App so the workspace tab-bar toggle drives both
+  // the panel and the mobile drawer.
   const rightPanelRef = useRef<PanelImperativeHandle | null>(null);
-  const [defaultLayout] = useState<Layout | null>(() => readAgentLayout());
+  const [defaultLayout] = useState<Layout | null>(() => {
+    const saved = readAgentLayout();
+    if (!saved) return null;
+    // Prune ids of retired panels (the agents sidebar was removed): the
+    // panel group only honors a defaultLayout whose key count equals the
+    // mounted panel count, so a stale key would silently discard the
+    // whole saved layout.
+    const panelIds = ["workspace", "inspector"];
+    return Object.fromEntries(
+      Object.entries(saved).filter(([id]) => panelIds.includes(id)),
+    ) as Layout;
+  });
 
   const handleLayoutChanged = useCallback((layout: Layout, meta: LayoutChangedMeta) => {
     writeAgentLayout(meta.requestedLayout ?? layout);
-    props.onSetLeft(layoutSideOpen(layout, "agents"));
     props.onSetRight(layoutSideOpen(layout, "inspector"));
   }, [props]);
 
-  // Mirror the shared open flags onto the collapsible desktop panels.
+  // Mirror the shared open flag onto the collapsible desktop panel.
   useEffect(() => {
     if (!isDesktop) return;
-    for (const [open, panel] of [
-      [leftOpen, leftPanelRef.current],
-      [rightOpen, rightPanelRef.current],
-    ] as const) {
-      if (!panel) continue;
-      if (open) {
-        if (panel.isCollapsed()) panel.expand();
-      } else if (!panel.isCollapsed()) {
-        panel.collapse();
-      }
+    const panel = rightPanelRef.current;
+    if (!panel) return;
+    if (rightOpen) {
+      if (panel.isCollapsed()) panel.expand();
+    } else if (!panel.isCollapsed()) {
+      panel.collapse();
     }
-  }, [isDesktop, leftOpen, rightOpen]);
-
-  // The action buttons rely on hover to appear; touch users get them
-  // permanently visible below md where the sidebars become drawers.
-  const revealActions = "opacity-100 transition group-hover:opacity-100 md:opacity-0";
-
-  const renderAgentsSidebar = (onSelect: (path: string) => void) => (
-    <ScrollArea className="min-h-0 flex-1" contentClassName="flex flex-col gap-1 p-3">
-      <div className="flex items-center justify-between gap-2 pb-1">
-        <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Agents</h2>
-        <div className="flex gap-0.5">
-          <Button size="icon-xs" variant="ghost" aria-label="Resume agent" onClick={openResume}>
-            <RotateCcw />
-          </Button>
-          <Button size="icon-xs" variant="ghost" aria-label="New agent" onClick={props.onSpawn}>
-            <Plus />
-          </Button>
-        </div>
-      </div>
-      {agents.map((agent) => (
-        <div
-          key={agent.path}
-          className={cn(
-            "group/agent flex items-center gap-0.5 rounded-md px-1",
-            activeAgent === agent.path && "bg-accent",
-          )}
-        >
-          <button
-            type="button"
-            onClick={() => onSelect(agent.path)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-accent"
-            title={agent.path}
-          >
-            <span className={cn("size-1.5 shrink-0 rounded-full", statusDot(statuses[agent.path]))} />
-            <span className="truncate text-sm">{agent.path}</span>
-          </button>
-          <span className={cn("flex shrink-0 items-center", revealActions)}>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Shutdown agent"
-              onClick={() => props.onShutdown(agent.path)}
-            >
-              <PowerOff />
-            </Button>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              aria-label="Delete agent"
-              disabled={!agent.agent_id}
-              onClick={() => props.onDelete(agent.path, agent.agent_id)}
-            >
-              <Trash2 />
-            </Button>
-          </span>
-        </div>
-      ))}
-    </ScrollArea>
-  );
+  }, [isDesktop, rightOpen]);
 
   const renderInspectorSidebar = (onActivate: (sessionId: string) => void) => (
     <ScrollArea className="min-h-0 flex-1" contentClassName="space-y-4 p-3">
@@ -414,73 +408,126 @@ export function AgentView(props: AgentViewProps) {
             <Plus />
           </Button>
         </div>
-        {sessionCreating && (
-          <form
-            className="flex gap-1.5"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              await props.onCreateSession(sessionTitle);
-              setSessionTitle("");
-              setSessionCreating(false);
-            }}
-          >
-            <Input value={sessionTitle} placeholder="New session title" onChange={(event) => setSessionTitle(event.target.value)} />
-            <Button type="submit" size="icon" aria-label="Create session">+</Button>
-          </form>
-        )}
-        <div className="space-y-1">
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className={cn(
-                "group/session rounded-md px-1",
-                activeSessionId === session.id && "bg-accent",
-              )}
-            >
-              {sessionEditor?.id === session.id ? (
-                <form
-                  className="flex gap-1.5"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    await props.onRenameSession(session.id, sessionEditor.title);
-                    setSessionEditor(null);
-                  }}
-                >
-                  <Input value={sessionEditor.title} onChange={(event) => setSessionEditor({ id: session.id, title: event.target.value })} />
-                  <Button type="submit" size="icon" aria-label="Save title">✓</Button>
-                </form>
-              ) : (
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => void onActivate(session.id)}
-                    className="min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-left hover:bg-accent"
-                    title={session.title || session.id}
-                  >
-                    <span className="line-clamp-2 block text-sm">{session.title || session.id}</span>
-                    <span className="text-xs text-muted-foreground">{new Date(session.last_active).toLocaleString()}</span>
-                  </button>
-                  <span className={cn("flex shrink-0 flex-col", revealActions)}>
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      aria-label="Rename session"
-                      onClick={() => setSessionEditor({ id: session.id, title: session.title || "" })}
-                    >
-                      <Pencil className="size-2.5" />
-                    </Button>
-                    <Button size="icon-xs" variant="ghost" aria-label="Close session" onClick={() => void props.onCloseSession(session.id)}>
-                      <X className="size-2.5" />
-                    </Button>
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
-          {!sessions.length && (
-            <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No sessions</div>
-          )}
-        </div>
+        <Card size="sm" className="gap-0 py-0">
+          <CardContent className="p-0">
+            {sessionCreating && (
+              <form
+                className="border-b p-2"
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  await props.onCreateSession(sessionTitle);
+                  setSessionTitle("");
+                  setSessionCreating(false);
+                }}
+              >
+                <InputGroup>
+                  <InputGroupInput
+                    autoFocus
+                    value={sessionTitle}
+                    placeholder="New session title"
+                    onChange={(event) => setSessionTitle(event.target.value)}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton type="submit" size="icon-xs" aria-label="Create session" disabled={!sessionTitle.trim()}>
+                      <Plus />
+                    </InputGroupButton>
+                    <InputGroupButton size="icon-xs" aria-label="Cancel" onClick={() => setSessionCreating(false)}>
+                      <X />
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </form>
+            )}
+            {sessions.length ? (
+              <ScrollArea className="max-h-60">
+                <ItemGroup className="gap-0">
+                  {sessions.map((session, index) => {
+                    const active = activeSessionId === session.id;
+                    return (
+                      <Fragment key={session.id}>
+                        {index > 0 && <ItemSeparator className="my-0" />}
+                        {sessionEditor?.id === session.id ? (
+                          <form
+                            className="px-2 py-1.5"
+                            onSubmit={async (event) => {
+                              event.preventDefault();
+                              await props.onRenameSession(session.id, sessionEditor.title);
+                              setSessionEditor(null);
+                            }}
+                          >
+                            <InputGroup>
+                              <InputGroupInput
+                                autoFocus
+                                value={sessionEditor.title}
+                                onChange={(event) => setSessionEditor({ id: session.id, title: event.target.value })}
+                              />
+                              <InputGroupAddon align="inline-end">
+                                <InputGroupButton type="submit" size="icon-xs" aria-label="Save title">
+                                  <Check />
+                                </InputGroupButton>
+                                <InputGroupButton size="icon-xs" aria-label="Cancel" onClick={() => setSessionEditor(null)}>
+                                  <X />
+                                </InputGroupButton>
+                              </InputGroupAddon>
+                            </InputGroup>
+                          </form>
+                        ) : (
+                          <Item
+                            data-active={active ? "true" : undefined}
+                            className="group/session relative rounded-none border-0 p-0 hover:bg-accent data-[active=true]:bg-accent"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void onActivate(session.id)}
+                              title={session.title || session.id}
+                              className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-sm px-2 py-1.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
+                            >
+                              <span className="line-clamp-2 text-sm leading-snug">{session.title || session.id}</span>
+                              <span className="text-xs text-muted-foreground tabular-nums">{formatSessionTime(session.last_active)}</span>
+                            </button>
+                            {/* Floating actions: no layout width; the opaque
+                                backdrop tracks the row's tint so the underlying
+                                text never bleeds through. Touch users get them
+                                permanently visible below md. */}
+                            <ItemActions
+                              className={cn(
+                                "absolute inset-y-0 right-0 flex items-center gap-0.5 bg-card pr-1.5 pl-6 opacity-100 transition md:opacity-0",
+                                "md:group-hover/session:opacity-100 md:group-focus-within/session:opacity-100",
+                                "group-hover/session:bg-accent group-data-[active=true]/session:bg-accent",
+                              )}
+                            >
+                              <Button
+                                size="icon-xs"
+                                variant="ghost"
+                                aria-label="Rename session"
+                                onClick={() => setSessionEditor({ id: session.id, title: session.title || "" })}
+                              >
+                                <Pencil />
+                              </Button>
+                              <Button size="icon-xs" variant="ghost" aria-label="Close session" onClick={() => void props.onCloseSession(session.id)}>
+                                <X />
+                              </Button>
+                            </ItemActions>
+                          </Item>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </ItemGroup>
+              </ScrollArea>
+            ) : (
+              <Empty className="gap-2 p-4">
+                <EmptyMedia variant="icon">
+                  <MessagesSquare />
+                </EmptyMedia>
+                <EmptyHeader className="gap-1">
+                  <EmptyTitle className="text-xs">No sessions</EmptyTitle>
+                  <EmptyDescription className="text-xs">点击右上角 + 新建会话</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
       <section>
@@ -513,6 +560,14 @@ export function AgentView(props: AgentViewProps) {
       </section>
 
       <section>
+        <div className="mb-1.5 flex items-center justify-between">
+          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">DAG</h2>
+          <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenDag}>Open</Button>
+        </div>
+        {rightOpen && activeAgent ? <DagMinimap key={activeAgent} activeAgent={activeAgent} /> : <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>}
+      </section>
+
+      <section>
         <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Plan</h2>
         {planSteps.length ? (
           <div className="space-y-1">
@@ -532,42 +587,39 @@ export function AgentView(props: AgentViewProps) {
 
       <section>
         <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">View</h2>
-        <div className="space-y-0.5">
-          {([
-            ["collapse_thinking", "Collapse thinking"],
-            ["collapse_tool_calls", "Collapse tool calls"],
-            ["collapse_tool_results", "Collapse tool results"],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => props.onToggleDisplay(key)}
-              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-            >
-              <span>{label}</span>
-              <span
-                className={cn(
-                  "flex h-4 w-7 items-center rounded-full px-0.5 transition-colors",
-                  display[key] ? "justify-end bg-primary" : "justify-start bg-muted-foreground/30",
-                )}
-              >
-                <span className="size-3 rounded-full bg-background" />
-              </span>
-            </button>
-          ))}
-        </div>
+        <Card size="sm" className="gap-0 py-0">
+          <CardContent className="p-0">
+            {([
+              ["collapse_thinking", "Collapse thinking"],
+              ["collapse_tool_calls", "Collapse tool calls"],
+              ["collapse_tool_results", "Collapse tool results"],
+            ] as const).map(([key, label], index) => (
+              <Fragment key={key}>
+                {index > 0 && <Separator />}
+                <label className="flex w-full cursor-pointer items-center justify-between gap-2 px-2 py-1.5 text-sm hover:bg-accent">
+                  <span>{label}</span>
+                  <Switch size="sm" checked={display[key]} onCheckedChange={() => props.onToggleDisplay(key)} />
+                </label>
+              </Fragment>
+            ))}
+          </CardContent>
+        </Card>
       </section>
 
       <section>
         <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Actions</h2>
-        <div className="grid grid-cols-2 gap-1.5">
-          <Button size="xs" variant="secondary" onClick={props.onCancel}><Square />Cancel</Button>
-          <Button size="xs" variant="secondary" onClick={props.onCompact}><Archive />Compact</Button>
-          <Button size="xs" variant="secondary" onClick={openCopy}><Copy />Copy</Button>
-          <Button size="xs" variant="secondary" onClick={openFork}><GitFork />Fork</Button>
-          <Button size="xs" variant="secondary" onClick={() => setHistoryOpen(true)}><History />History</Button>
-          <Button size="xs" variant="secondary" onClick={props.onRefreshHistory}><RefreshCw />Refresh</Button>
-        </div>
+        <Card size="sm" className="gap-0 py-0">
+          <CardContent className="p-1.5">
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button size="xs" variant="secondary" onClick={props.onCancel}><Square />Cancel</Button>
+              <Button size="xs" variant="secondary" onClick={props.onCompact}><Archive />Compact</Button>
+              <Button size="xs" variant="secondary" onClick={openCopy}><Copy />Copy</Button>
+              <Button size="xs" variant="secondary" onClick={openFork}><GitFork />Fork</Button>
+              <Button size="xs" variant="secondary" onClick={() => setHistoryOpen(true)}><History />History</Button>
+              <Button size="xs" variant="secondary" onClick={props.onRefreshHistory}><RefreshCw />Refresh</Button>
+            </div>
+          </CardContent>
+        </Card>
       </section>
     </ScrollArea>
   );
@@ -588,21 +640,6 @@ export function AgentView(props: AgentViewProps) {
           onLayoutChanged={handleLayoutChanged}
           className="min-h-0 min-w-0 flex-1"
         >
-          <ResizablePanel
-            id="agents"
-            panelRef={leftPanelRef}
-            defaultSize="300px"
-            minSize="180px"
-            maxSize="460px"
-            collapsible
-            collapsedSize="0%"
-            className="bg-muted/50"
-          >
-            <aside className="flex h-full min-h-0 overflow-hidden border-r">
-              {renderAgentsSidebar(props.onSelectAgent)}
-            </aside>
-          </ResizablePanel>
-          <ResizableHandle aria-label="Resize agents sidebar" />
           <ResizablePanel id="workspace" minSize="30%" className="min-w-0">
             {/* The workspace (tab bar, transcript, composer) is portaled into
                 this slot from App so the same component instance survives view
@@ -628,18 +665,6 @@ export function AgentView(props: AgentViewProps) {
       ) : (
         <>
           {workspaceSlot("flex-1")}
-          <Sheet open={leftOpen} onOpenChange={props.onSetLeft}>
-            <SheetContent side="left" className="w-80 max-w-[85vw] gap-0">
-              <SheetHeader className="sr-only">
-                <SheetTitle>Agents</SheetTitle>
-                <SheetDescription>选择或新建 agent</SheetDescription>
-              </SheetHeader>
-              {renderAgentsSidebar((path) => {
-                props.onSelectAgent(path);
-                props.onSetLeft(false);
-              })}
-            </SheetContent>
-          </Sheet>
           <Sheet open={rightOpen} onOpenChange={props.onSetRight}>
             <SheetContent side="right" className="w-80 max-w-[85vw] gap-0">
               <SheetHeader className="sr-only">
@@ -790,7 +815,7 @@ export function AgentView(props: AgentViewProps) {
       </Dialog>
 
       <Dialog open={paletteOpen} onOpenChange={setPaletteOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Command palette</DialogTitle>
             <DialogDescription>Ctrl+P opens · type to filter · Enter runs.</DialogDescription>

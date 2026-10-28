@@ -72,11 +72,15 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     .await;
     let GatewayFrame::Sequenced {
         seq: registered_seq,
-        ..
+        inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { info, .. }),
     } = registered
     else {
         unreachable!()
     };
+    // The capability info carries the live model — frontends read this
+    // field to render the agent's model without extra round-trips.
+    assert_eq!(info.model.as_deref(), Some("mock-model"));
+    assert_eq!(info.context_length, Some(8192));
 
     // Deliver a user message; the scripted mock model completes the turn.
     client.deliver_message(&path, "What is 1+1?").await.unwrap();
@@ -123,6 +127,56 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     .await
     .expect("agent + sessions visible in /state");
     assert!(!refreshed.sessions[&path].is_empty());
+    let state_agent = refreshed
+        .agents
+        .iter()
+        .find(|a| a.path == path)
+        .expect("agent listed in /state");
+    assert_eq!(state_agent.model.as_deref(), Some("mock-model"));
+
+    // Hot-swap the model through the same control path the gateway's
+    // PUT /agents/{name}/model handler uses, then expect the change
+    // event and a refreshed /state (the relay stores asynchronously, so
+    // poll until the snapshot flips).
+    gateway_daemon
+        .infra
+        .host_control
+        .as_ref()
+        .expect("host control installed")
+        .set_agent_model(&path, gateway::testing::renamed_mock_model("mock-model-b", 4096));
+    let changed = wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::AgentModelChanged {
+                    spec,
+                    context_length,
+                    ..
+                }),
+                ..
+            } if spec == "mock-model-b" && *context_length == 4096
+        )
+    })
+    .await;
+    assert!(matches!(
+        changed,
+        GatewayFrame::Sequenced { seq, .. } if seq > registered_seq
+    ));
+    let swapped = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let snapshot = client.state().await.unwrap();
+            if snapshot
+                .agents
+                .iter()
+                .any(|a| a.path == path && a.model.as_deref() == Some("mock-model-b"))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(swapped.is_ok(), "/state reflects the swapped model");
 
     let records = client.list_storage_agents().await.unwrap();
     let record = records

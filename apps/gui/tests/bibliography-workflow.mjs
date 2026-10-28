@@ -112,7 +112,7 @@ try {
     const viewport=page.getByLabel('Literature results viewport'),scrollBefore=await viewport.evaluate(node=>node.scrollTop);
     await page.getByRole('button',{name:'Open evidence',exact:true}).click();const reader=page.locator('.zotero-pdf-reader[data-reader-kind=txt]');await reader.waitFor();await reader.getByRole('button',{name:/Match 1/}).waitFor();
     await page.keyboard.press('Control+f');assert.equal(await reader.locator('[data-input=search]').evaluate(node=>node===document.activeElement),true);
-    const ranges=await page.evaluate(async()=>{const {findTextRanges}=await import('/src/reader-target.ts');const source='İ before genome and gene';return findTextRanges(source,'gene',true).map(r=>source.slice(r.start,r.end));});assert.deepEqual(ranges,['gene']);
+    const ranges=await page.evaluate(async()=>{const {findTextRanges}=await import('/src/features/reader/reader-target.ts');const source='İ before genome and gene';return findTextRanges(source,'gene',true).map(r=>source.slice(r.start,r.end));});assert.deepEqual(ranges,['gene']);
     await reader.locator('[data-action=close]').click();await reader.waitFor({state:'detached'});assert.equal(await viewport.evaluate(node=>node.scrollTop),scrollBefore);assert.equal(await page.getByRole('checkbox',{name:'Select Alpha gene editing',exact:true}).isChecked(),true);
     assert.equal(calls.some(call=>call.path.endsWith('/FIRST/raw')),false);assert.equal(calls.some(call=>call.path.endsWith('/SECOND/annotations')),true);
     if(native) assert.equal(await page.evaluate(()=>window.nativeCalls.some(call=>call.command==='bib_fulltext_raw'&&call.args.attachmentKey==='SECOND')),true);

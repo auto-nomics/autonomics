@@ -65,6 +65,8 @@ pub mod subscription_plan;
 pub mod subscription_scheduler;
 pub mod subscription_store;
 pub mod subscriptions;
+pub mod unified_search;
+pub mod unified_tools;
 pub mod zotero_extract;
 pub mod zotero_model;
 pub use zotero_extract::ZoteroExtractor;
@@ -96,6 +98,8 @@ pub use stored_files::{
     extracted_object_path, figure_object_path, sanitize_figure_name, scan_image_refs,
     stored_attachment, stored_extracted_text, stored_fulltext, vfs_virtual_path,
 };
+pub use unified_search::{unified_import, unified_search};
+pub use unified_tools::unified_registrations;
 pub use zotero_model::LINK_MODE_IMPORTED_FILE;
 pub use zotero_model::{AttachmentTypeSummary, DeletedAttachment, NewAttachment, StoredAttachment};
 

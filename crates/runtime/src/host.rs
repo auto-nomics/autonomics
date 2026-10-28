@@ -147,6 +147,16 @@ pub enum HostEvent {
         status: crate::control::AgentStatus,
         last_event: Option<String>,
     },
+    /// An agent's model slot was swapped (per-agent override via
+    /// `SetAgentModel`). Emitted from the command handler with the spec
+    /// taken from the command payload, so it does not race the relay's
+    /// async store into the shared slot. Frontends use it to refresh
+    /// the model shown for the agent without re-fetching `/state`.
+    AgentModelChanged {
+        path: String,
+        spec: String,
+        context_length: u64,
+    },
 }
 
 /// An `AgentEvent` tagged with the agent name that produced it.

@@ -63,7 +63,7 @@ try {
     window.$RefreshReg$ = () => {};
     window.$RefreshSig$ = () => type => type;
     window.__vite_plugin_react_preamble_installed__ = true;
-    const { openTxtReader } = await import('/src/txt-reader.ts');
+    const { openTxtReader } = await import('/src/features/reader/txt-reader.ts');
     window.reader = await openTxtReader({ articleId: 'txt-fixture', title: 'TXT regression' });
   });
   await page.waitForFunction(() => document.querySelector('.reader-txt-document')?.firstChild);

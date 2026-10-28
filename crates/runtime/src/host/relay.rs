@@ -84,7 +84,11 @@ impl RuntimeHost {
     /// delivery and [`recv_any`](Self::recv_any) for unified event polling.
     /// The host takes ownership of the handle — do not use it directly
     /// after registration.
-    pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) {
+    ///
+    /// Returns the enriched info (with `agent_id` and the model fields
+    /// filled from the live slot) for callers to broadcast in
+    /// [`HostEvent::AgentRegistered`].
+    pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) -> crate::control::AgentInfo {
         let path = handle.path.clone();
         let kind = handle.kind;
         let agent_id = handle.agent_id;
@@ -93,6 +97,7 @@ impl RuntimeHost {
         let memory = Arc::clone(&handle.memory);
         let mut info = info;
         info.agent_id = Some(agent_id);
+        fill_model_fields(&mut info, &model);
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
         let layout_order = self.next_layout_order;
@@ -131,6 +136,7 @@ impl RuntimeHost {
         // not abort the spawn flow.
         self.persist_upsert_agent_graph(&path, agent_id, kind.name(), &info);
         self.persist_current_agent_layout();
+        info
     }
 
     /// Send a message to a named agent (via the relay task).
@@ -202,6 +208,16 @@ impl RuntimeHost {
                 .as_deref()
                 .map(|m| (m.model_spec(), m.model_info.context_length))
         })
+    }
+
+    /// Clone an entry's capability info with the model fields refreshed
+    /// from the live slot. `GetStatus` / `GetAgentInfo` serialize through
+    /// this so a later hot-swap (per-agent override or the shared daemon
+    /// default) is reflected without re-registering.
+    pub(super) fn snapshot_info(&self, entry: &AgentEntry) -> crate::control::AgentInfo {
+        let mut info = entry.info.clone();
+        fill_model_fields(&mut info, &entry.model);
+        info
     }
 
     /// Notify listeners that an agent has been shut down.
@@ -387,6 +403,26 @@ impl Drop for RuntimeHost {
     fn drop(&mut self) {
         for (_, entry) in self.agents.drain() {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
+        }
+    }
+}
+
+/// Overlay the live model spec onto an [`AgentInfo`](crate::control::AgentInfo).
+/// Reads through the shared `ArcSwapOption`, so agents that inherited the
+/// daemon-wide default slot report the current default, not the one at
+/// registration time. Clears both fields when the slot is empty.
+fn fill_model_fields(
+    info: &mut crate::control::AgentInfo,
+    model: &Arc<ArcSwapOption<Model>>,
+) {
+    match model.load_full().as_deref() {
+        Some(model) => {
+            info.model = Some(model.model_spec());
+            info.context_length = Some(model.model_info.context_length);
+        }
+        None => {
+            info.model = None;
+            info.context_length = None;
         }
     }
 }

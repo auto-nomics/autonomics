@@ -3,20 +3,20 @@ import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { fetchBibFulltextRaw, gatewayRequest } from "./gateway";
-import { escapeHtml } from "./markdown";
-import type { BibArticle } from "./types";
+import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
+import { escapeHtml } from "@/lib/markdown";
+import type { BibArticle } from "@/types";
 import "./pdf-reader.css";
 import type { ReadingTextRange } from "./reading-text-range";
 import { highlightNoteIndicator } from "./highlight-note-indicator";
 import { NoteComposer } from "./note-composer";
-import { Toast } from "./components/ui/toast";
-import { AlertDialog } from "./components/ui/alert-dialog";
+import { Toast } from "@/components/ui/toast";
+import { ReaderAlertDialog as AlertDialog } from "./reader-alert-dialog";
 import { PdfTextSelection } from "./pdf-text-selection";
 import { AnnotationInspector, type AnnotationPatch, type ReaderAnnotation } from "./annotation-inspector";
 import { openTxtReader } from "./txt-reader";
 import { ReadingModeView, DEFAULT_READING_APPEARANCE, sourcePageRects, type ReadingAppearance } from "./reading-mode";
-import type { StructuredDocumentText } from "./zotero-sdt.generated";
+import type { StructuredDocumentText } from "@/vendor/zotero-sdt.generated";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 

@@ -705,6 +705,8 @@ mod tests {
             tools: vec![],
             status: crate::control::AgentStatus::Idle,
             last_event: None,
+            model: None,
+            context_length: None,
         }
     }
 

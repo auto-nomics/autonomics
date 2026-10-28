@@ -37,6 +37,11 @@ pub enum HostEventView {
         status: AgentStatus,
         last_event: Option<String>,
     },
+    AgentModelChanged {
+        path: String,
+        spec: String,
+        context_length: u64,
+    },
 }
 
 impl From<runtime::HostEvent> for HostEventView {
@@ -57,6 +62,15 @@ impl From<runtime::HostEvent> for HostEventView {
                 path,
                 status,
                 last_event,
+            },
+            runtime::HostEvent::AgentModelChanged {
+                path,
+                spec,
+                context_length,
+            } => HostEventView::AgentModelChanged {
+                path,
+                spec,
+                context_length,
             },
         }
     }

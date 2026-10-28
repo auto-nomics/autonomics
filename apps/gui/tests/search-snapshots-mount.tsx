@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { SaveSnapshotButton, SearchSnapshots } from "../src/features/search-snapshots";
+import { SaveSnapshotButton, SearchSnapshots } from "../src/features/discovery/search-snapshots";
 function Harness() {
   const [view,setView]=useState("library");
   return <main style={{height:"100vh",display:"flex",flexDirection:"column"}}>

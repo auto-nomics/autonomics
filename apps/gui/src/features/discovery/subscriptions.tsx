@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { BibCollection } from "@/types";
 import type { DiscoveryRequest } from "./discovery-model";
-import { SearchDialog } from "./search-dialog";
+import { SearchDialog } from "@/features/bibliography";
 import { IdentityImportReview, type ExplorationImportTarget } from "./exploration-import";
 import { defaultSubscription, notificationLookup, type InboxItem, type NotificationLookup, type Run, type RunSummary, type SubscriptionLimits, type SubscriptionRule, type SubscriptionSpec } from "./subscription-model";
 const sources = ["pubmed", "openalex", "crossref", "arxiv", "semantic_scholar"];

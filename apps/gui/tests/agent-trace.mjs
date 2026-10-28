@@ -48,7 +48,7 @@ try {
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
 
   await page.goto(origin);
-  await page.getByPlaceholder('输入消息；Ctrl+R 搜索 prompt 历史').waitFor({ state: 'visible' });
+  await page.getByPlaceholder('输入消息…').waitFor({ state: 'visible' });
   await page.getByText('alpha answer').waitFor({ state: 'visible' });
 
   // The four consecutive steps render as one Trace list between the text messages.
@@ -67,7 +67,8 @@ try {
 
   // Tool call input renders as structured field rows, nested objects included.
   await assert.doesNotReject(() => trace.getByText('path', { exact: true }).waitFor({ state: 'visible' }));
-  await assert.doesNotReject(() => trace.getByText('/tmp', { exact: true }).waitFor({ state: 'visible' }));
+  // '/tmp' matches twice: the collapsed-row summary and the expanded field leaf.
+  await assert.doesNotReject(() => trace.getByText('/tmp', { exact: true }).first().waitFor({ state: 'visible' }));
   await assert.doesNotReject(() => trace.getByText('depth', { exact: true }).waitFor({ state: 'visible' }));
   await assert.doesNotReject(() => trace.getByText('true', { exact: true }).waitFor({ state: 'visible' }));
 

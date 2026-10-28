@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { LiteratureExploration } from "../src/features/literature-exploration";
+import { LiteratureExploration } from "../src/features/discovery/literature-exploration";
 import type { BibArticle } from "../src/types";
 
 function Harness() {

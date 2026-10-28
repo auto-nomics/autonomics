@@ -538,12 +538,18 @@ impl SharedInfra {
                 bib_base::bib_all_registrations(bib_shared.bib.clone(), file_storage.clone());
             tools.extend(bib_tools);
 
-            // Literature retrieval (search, fetch, citation graph,
-            // recommendations) flows through the DAG evidence channel —
-            // source_literature / source_literature_fetch /
-            // source_literature_citations / source_s2_recommendations —
-            // not through agent tools. BibShared still owns the shared
-            // clients the nodes reach via their process-wide singletons.
+            // Unified retrieval: one query across the local library and
+            // the external discovery session engine, merged and ranked —
+            // plus candidate import back into the library. These share
+            // BibShared's clients, session engine and rate-limit windows.
+            tools.extend(bib_base::unified_registrations(bib_shared.clone()));
+
+            // Multi-step retrieval pipelines (fetch, citation graph,
+            // recommendations, evidence merge/export) still flow through
+            // the DAG evidence channel — source_literature /
+            // source_literature_fetch / source_literature_citations /
+            // source_s2_recommendations — whose nodes reach BibShared via
+            // its process-wide singleton.
         }
 
         if kind.enable_writing() {

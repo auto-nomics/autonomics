@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { gatewayRequest, gatewayRequestOptional } from "@/gateway";
-import { renderMarkdown } from "@/markdown";
+import { renderMarkdown } from "@/lib/markdown";
 import type {
   KmsEvidence,
   KmsKnowledgeNode,

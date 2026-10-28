@@ -45,7 +45,7 @@ try {
     await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
   };
 
-  // ── Desktop: three resizable panels ──────────────────────────────────
+  // ── Desktop: workspace + inspector, one resizable boundary ───────────
   {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];
@@ -54,52 +54,51 @@ try {
     await mockApi(page);
 
     await page.goto(origin);
-    const composer = page.getByPlaceholder('输入消息；Ctrl+R 搜索 prompt 历史');
+    const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
     assert.equal(await page.locator('[data-group]').count(), 1, 'desktop renders one resizable group');
-    assert.equal(await page.locator('[data-separator]').count(), 2, 'desktop renders two handles');
+    assert.equal(await page.locator('[data-separator]').count(), 1, 'desktop renders one handle');
+    assert.equal(await page.locator('[data-panel]#agents').count(), 0, 'agents sidebar is retired');
     const dockedInFloat = await composer.evaluate(node => Boolean(node.closest('.fixed')));
     assert.equal(dockedInFloat, false, 'workspace must stay docked on desktop');
 
-    const panelWidth = () => page.locator('[data-panel]#agents').evaluate(node => node.getBoundingClientRect().width);
     const inspectorWidth = () => page.locator('[data-panel]#inspector').evaluate(node => node.getBoundingClientRect().width);
-    const left0 = await panelWidth();
     const right0 = await inspectorWidth();
-    assert.ok(Math.abs(left0 - 300) <= 12, `agents panel should default near 300px, got ${left0}`);
     assert.ok(Math.abs(right0 - 280) <= 12, `inspector panel should default near 280px, got ${right0}`);
 
-    // Drag the left handle: the agents panel follows the pointer.
+    // Drag the handle leftwards: the inspector panel follows the pointer
+    // (right side grows as the boundary moves left).
     const handle = page.locator('[data-separator]').first();
     const hb = await handle.boundingBox();
     await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
     await page.mouse.down();
-    await page.mouse.move(hb.x + hb.width / 2 + 80, hb.y + hb.height / 2, { steps: 6 });
+    await page.mouse.move(hb.x + hb.width / 2 - 60, hb.y + hb.height / 2, { steps: 6 });
     await page.mouse.up();
-    const left1 = await panelWidth();
-    assert.ok(Math.abs(left1 - (left0 + 80)) <= 10, `agents panel must grow by ~80px, got ${left1} from ${left0}`);
+    const right1 = await inspectorWidth();
+    assert.ok(Math.abs(right1 - (right0 + 60)) <= 10, `inspector panel must grow by ~60px, got ${right1} from ${right0}`);
     const stored = await page.evaluate(() => localStorage.getItem('autonomics.agent.layout'));
-    assert.ok(stored && JSON.parse(stored).agents > 0, 'dragged layout must persist');
+    assert.ok(stored && JSON.parse(stored).inspector > 0, 'dragged layout must persist');
 
     // Collapse via the tab-bar toggle and expand back to the saved size.
-    await page.getByRole('button', { name: 'Toggle left sidebar' }).click();
+    await page.getByRole('button', { name: 'Toggle right sidebar' }).click();
     await page.waitForTimeout(120);
-    assert.ok(await panelWidth() < 2, 'toggle must collapse the agents panel');
-    await page.getByRole('button', { name: 'Toggle left sidebar' }).click();
+    assert.ok(await inspectorWidth() < 2, 'toggle must collapse the inspector panel');
+    await page.getByRole('button', { name: 'Toggle right sidebar' }).click();
     await page.waitForTimeout(120);
-    const left2 = await panelWidth();
-    assert.ok(Math.abs(left2 - left1) <= 10, `re-expand must restore the size, got ${left2} vs ${left1}`);
+    const right2 = await inspectorWidth();
+    assert.ok(Math.abs(right2 - right1) <= 10, `re-expand must restore the size, got ${right2} vs ${right1}`);
 
     // Reload: the dragged layout survives.
     await page.reload();
     await composer.waitFor({ state: 'visible' });
-    const left3 = await panelWidth();
-    assert.ok(Math.abs(left3 - left1) <= 10, `layout must survive a reload, got ${left3} vs ${left1}`);
+    const right3 = await inspectorWidth();
+    assert.ok(Math.abs(right3 - right1) <= 10, `layout must survive a reload, got ${right3} vs ${right1}`);
 
     assert.deepEqual(errors, []);
     await page.close();
   }
 
-  // ── Mobile: drawers replace the panels ───────────────────────────────
+  // ── Mobile: inspector drawer + tab-bar agent switching ───────────────
   {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
@@ -108,17 +107,13 @@ try {
     await mockApi(page);
 
     await page.goto(origin);
-    const composer = page.getByPlaceholder('输入消息；Ctrl+R 搜索 prompt 历史');
+    const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
     assert.equal(await page.locator('[data-group]').count(), 0, 'mobile must not render the resizable group');
     assert.equal(await page.locator('[data-slot=sheet-content]').count(), 0, 'no drawer initially');
 
-    // The left toggle opens the agents drawer; picking an agent closes it.
-    await page.getByRole('button', { name: 'Toggle left sidebar' }).click();
-    const sheet = page.locator('[data-slot=sheet-content]').first();
-    await sheet.waitFor({ state: 'visible' });
-    await sheet.getByTitle('/root/beta').click();
-    await sheet.waitFor({ state: 'detached' });
+    // Agents switch through the tab bar now; no drawer involved.
+    await page.getByTitle('/root/beta').click();
     await assert.doesNotReject(() => page.getByText('beta prompt').waitFor({ state: 'visible' }));
 
     // The right toggle opens the inspector drawer; Escape closes it.

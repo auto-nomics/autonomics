@@ -127,6 +127,7 @@ pub async fn run(
                             sessions.remove_agent(path.as_str());
                         }
                         runtime::HostEvent::AgentStatusChanged { .. } => {}
+                        runtime::HostEvent::AgentModelChanged { .. } => {}
                     }
                     hub.publish(EventKind::Host(HostEventView::from(event)));
                 }

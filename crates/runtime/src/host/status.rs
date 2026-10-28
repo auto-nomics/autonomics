@@ -590,6 +590,7 @@ mod status_tests {
                 HostEvent::AgentRegistered { path, .. } => path.as_str(),
                 HostEvent::AgentUnregistered { path } => path,
                 HostEvent::AgentStatusChanged { path, .. } => path,
+                HostEvent::AgentModelChanged { path, .. } => path,
             }
         }
     }

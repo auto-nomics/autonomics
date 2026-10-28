@@ -71,7 +71,7 @@ try {
         window.$RefreshReg$ = () => {};
         window.$RefreshSig$ = () => type => type;
         window.__vite_plugin_react_preamble_installed__ = true;
-        const { openPdfReader } = await import('/src/pdf-reader.ts');
+        const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
         await openPdfReader({ articleId: 'regression', title: 'Alignment regression' });
       });
       const ready = () => page.waitForFunction(() => document.querySelector('.reader-text-layer span') && !document.querySelector('.reader-page-wrapper.rendering'));

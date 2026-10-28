@@ -22,10 +22,9 @@ import {
   X,
 } from "lucide-react";
 import { gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext, watchBibCollections } from "@/gateway";
-import { CollectionTree, type CollectionAction } from "@/collection-tree";
-import { collectionPath } from "@/collection-tree-model";
-import { openPdfReader } from "@/pdf-reader";
-import { openTxtReader } from "@/txt-reader";
+import { CollectionTree, type CollectionAction } from "./collection-tree";
+import { collectionPath } from "./collection-tree-model";
+import { openPdfReader, openTxtReader } from "@/features/reader";
 import type { BibArticle, BibCollection, BibDetail } from "@/types";
 import {
   ContextMenu,
@@ -51,11 +50,14 @@ import { SearchIndexStatus } from "./search-index-status";
 import { useBibSearch } from "./use-bib-search";
 import { SearchSnippet } from "./search-snippet";
 import { SemanticSearchControls, RecallLabel } from "./semantic-search";
-import { DiscoveryView } from "./discovery-view";
-import { LiteratureExploration } from "./literature-exploration";
-import { Subscriptions } from "./subscriptions";
-import { SaveSnapshotButton, SearchSnapshots } from "./search-snapshots";
-import { DiscoveryProvenance } from "./discovery-provenance";
+import {
+  DiscoveryProvenance,
+  DiscoveryView,
+  LiteratureExploration,
+  SaveSnapshotButton,
+  SearchSnapshots,
+  Subscriptions,
+} from "@/features/discovery";
 import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort, type SearchMode, type SearchRetrieval } from "./bib-search-model";
 
 type BibAuthor = NonNullable<BibArticle["authors"]>[number];
@@ -703,7 +705,7 @@ function LibraryView() {
   };
 
   const readerRef = useRef<{ close: () => void } | null>(null);
-  const openReaderFor = (article: BibArticle, format?: string | null, attachmentKey?: string | null, search?: import("@/reader-target").ReaderSearchTarget, expectedHash?: string | null) => {
+  const openReaderFor = (article: BibArticle, format?: string | null, attachmentKey?: string | null, search?: import("@/features/reader/reader-target").ReaderSearchTarget, expectedHash?: string | null) => {
     readerRef.current?.close();
     readerRef.current = null;
     const openReader = format === "txt" ? openTxtReader : openPdfReader;
@@ -838,7 +840,9 @@ function LibraryView() {
             </Button>
           </div>
         </div>
-        <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5">
+        {/* Same radius-clip guard as the results list: the selected
+            collection row's background sits within the inherited radius. */}
+        <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5" viewportClassName="rounded-none">
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
           <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
@@ -942,22 +946,31 @@ function LibraryView() {
           <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_annotations === true} onChange={event => setFilters(current => ({...current,has_annotations:event.target.checked ? true : null}))}/>Has notes</label>
         </div>}
         {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Retry</Button></div>}
-        <div style={{gridTemplateColumns:`24px ${buttonColumns}`}} className="grid h-8 shrink-0 items-center border-b bg-muted/60 px-2 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          <Checkbox
-            aria-label="Select all visible articles"
-            checked={allVisibleChecked}
-            indeterminate={!allVisibleChecked && someVisibleChecked}
-            onCheckedChange={(checked) => toggleAllChecked(checked === true)}
-          />
-          <span />
-          <span>Title{checkedIds.length ? ` (${checkedIds.length} selected)` : ""}</span>
-          {wideColumns && columns.creator && <span>Creator</span>}
-          {columns.year && <span>Year</span>}
-          {wideColumns && columns.journal && <span>Journal</span>}
-          {columns.files && <span className="text-center">Files</span>}
+        {/* Mirror the row structure (24px checkbox track outside the row's
+            px-2 padding) so the header checkbox lands on the row checkboxes. */}
+        <div className="grid h-8 shrink-0 grid-cols-[24px_minmax(0,1fr)] items-center border-b bg-muted/60 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          <span className="flex items-center justify-center">
+            <Checkbox
+              aria-label="Select all visible articles"
+              checked={allVisibleChecked}
+              indeterminate={!allVisibleChecked && someVisibleChecked}
+              onCheckedChange={(checked) => toggleAllChecked(checked === true)}
+            />
+          </span>
+          <div style={{gridTemplateColumns:buttonColumns}} className="grid h-8 items-center px-2">
+            <span />
+            <span>Title{checkedIds.length ? ` (${checkedIds.length} selected)` : ""}</span>
+            {wideColumns && columns.creator && <span>Creator</span>}
+            {columns.year && <span>Year</span>}
+            {wideColumns && columns.journal && <span>Journal</span>}
+            {columns.files && <span className="text-center">Files</span>}
+          </div>
         </div>
 
-        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
+        {/* Full-bleed row backgrounds reach the viewport top; without this
+            the inherited panel radius bites rounded corners out of the
+            first row (visible whenever it is selected/expanded). */}
+        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="rounded-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
           {loading && !visibleArticles.length && (
             <div className="space-y-px">
               {Array.from({ length: 10 }).map((_, index) => (

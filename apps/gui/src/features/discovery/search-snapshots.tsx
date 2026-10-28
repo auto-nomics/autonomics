@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { gatewayRequest, newGatewayRequestId, saveTextFile } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { SearchDialog } from "./search-dialog";
-import type { SearchRequest } from "./bib-search-model";
+import { SearchDialog, type SearchRequest } from "@/features/bibliography";
 import type { DiscoveryOrder } from "./discovery-model";
 import type { BibArticle } from "@/types";
 

@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 function fixture(rotation) {
   const stream = ['BT /F1 20 Tf', ...Array.from({ length: 8 }, (_, i) =>
@@ -31,6 +32,7 @@ function fixture(rotation) {
 const origin = 'http://127.0.0.1:1423';
 const server = await createServer({
   configFile: false, plugins: [react()], optimizeDeps: { entries: [] },
+  resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
   server: { host: '127.0.0.1', port: 1423, strictPort: true },
 });
 await server.listen();
@@ -58,7 +60,7 @@ try {
       window.$RefreshReg$ = () => {};
       window.$RefreshSig$ = () => type => type;
       window.__vite_plugin_react_preamble_installed__ = true;
-      const { openPdfReader } = await import('/src/pdf-reader.ts');
+      const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
       window.reader = await openPdfReader({ articleId: 'selection', title: 'Selection regression' });
     });
     await page.waitForFunction(() => document.querySelectorAll('.reader-text-layer > span').length === 8

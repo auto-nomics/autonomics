@@ -5,7 +5,7 @@ import { ReadingImagePreview } from './reading-image-preview';
 import {
   renderSDT, PDFPositionMapper, getBlockNodeByRef,
   type StructuredDocumentText, type SDTPosition, type PDFPosition, type ContentBlockNode,
-} from './zotero-sdt.generated';
+} from '@/vendor/zotero-sdt.generated';
 
 export type ReadingAppearance = {
   fontSize: number;

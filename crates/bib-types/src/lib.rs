@@ -20,6 +20,12 @@ pub mod search;
 pub mod search_parser;
 pub use search_parser::{SearchParseError, parse_search_query};
 pub mod types;
+pub mod unified;
+pub use unified::{
+    LOCAL_SOURCE, UnifiedCandidate, UnifiedImportRequest, UnifiedImportResponse,
+    UnifiedImportSelection, UnifiedSearchRequest, UnifiedSearchResponse, UnifiedSnippet,
+    UnifiedSourceStatus,
+};
 
 pub use evidence::{EvidenceRecord, EvidenceSet};
 pub use query::{BoolOp, StructuredSearch, YearRange};
