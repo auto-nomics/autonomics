@@ -27,6 +27,13 @@ pub(crate) enum ProviderCursor {
         fingerprint: String,
         cursor: String,
         obtained: u64,
+        #[serde(default)]
+        initial_total: Option<u64>,
+    },
+    CrossrefOffset {
+        fingerprint: String,
+        offset: u32,
+        initial_total: u64,
     },
     Arxiv {
         fingerprint: String,
@@ -77,7 +84,8 @@ pub(crate) fn cursor_decode(text: &str, plan: &SourcePlan) -> PageResult<Provide
         .ok_or_else(|| failure(SourceFailureKind::CursorExpired, "invalid source cursor"))?;
     let (source, fp) = match &parsed {
         ProviderCursor::SemanticScholar { fingerprint, .. } => ("semantic_scholar", fingerprint),
-        ProviderCursor::Crossref { fingerprint, .. } => ("crossref", fingerprint),
+        ProviderCursor::Crossref { fingerprint, .. }
+        | ProviderCursor::CrossrefOffset { fingerprint, .. } => ("crossref", fingerprint),
         ProviderCursor::Arxiv { fingerprint, .. } => ("arxiv", fingerprint),
         ProviderCursor::Pubmed { fingerprint, .. } => ("pubmed", fingerprint),
         ProviderCursor::Openalex { fingerprint, .. } => ("openalex", fingerprint),

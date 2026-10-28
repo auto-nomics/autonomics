@@ -22,6 +22,7 @@ uuid = { version = "1.23", features = ["v4"] }
 vfs = { path = "../vfs" }
 
 [dev-dependencies]
+turso.workspace = true
 async-trait.workspace = true
 http-body-util = "0.1"
 tempfile = "3"

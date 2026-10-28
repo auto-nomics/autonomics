@@ -1,0 +1,63 @@
+{
+  "schema": "bib-subscription-execution-qualification-v1",
+  "phase": "P5 uncommitted",
+  "status": "local_executor_and_shared_store_qualified;scheduled_product_incomplete",
+  "implemented": [
+    "Persistent per-source scan target and progressing overlap subwindows; fixed cursor/plan retained across run budgets and restart",
+    "Durable frozen execution history; request/record reservations precede provider I/O; notification/checkpoint/scan/counters settle in one transaction",
+    "Reserved settlement bytes permit terminal history after quota lowering; retained history never silently evicted",
+    "Injected shared gateway/sessions; one-second heartbeat polled concurrently with page loop; cancellation drops provider future",
+    "One page per source per pass; initial source rotates by durable lease epoch to prevent starvation with a one-page budget",
+    "Manual run UUID lookup precedes claim; retained terminal retries return original without new provider calls",
+    "Per-source Retry-After persisted; manual execution cannot bypass it; other sources can complete independently",
+    "BibShared opens same-library subscription store and constructs executor only from final injected sources; no implicit subscription network on construction"
+  ],
+  "tests": {
+    "executor": 9,
+    "run_history_and_scans": 7,
+    "storage": 21,
+    "failed": 0,
+    "ignored": 0,
+    "log": "target/bib-p4-validation/p5-subscription-execution-shared-tests.log"
+  },
+  "strict_clippy": {
+    "packages": [
+      "bib-base",
+      "api-server"
+    ],
+    "all_targets": true,
+    "passed": true,
+    "log": "target/bib-p4-validation/p5-subscription-execution-shared-clippy.log"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/subscriptions.rs": "9e69ee611b91c45f13c372a5af657e790b5e8f7d71e9cc7ff3dd3fadeb491da2",
+    "crates/bib-base/src/subscription_store.rs": "991d191010d106f04aa3e07d2718a7803f76a4d93d0155110c4f1c1d93ba8460",
+    "crates/bib-base/src/subscription_store/pages.rs": "9747a980392042535f9f6e8037272e3e22cdfb94e3f05c58d7036672e1c0d3e6",
+    "crates/bib-base/src/subscription_store/runs.rs": "d7a065c41413990380a3f05cbbbf4f6ae31ca5b141c1e38ce6926f371fafe496",
+    "crates/bib-base/src/subscription_execution.rs": "e99946353a4da74bbc2140dcbc970606683af5a348a9cfcac865878dc3f02e27",
+    "crates/bib-base/src/shared.rs": "34f0f2838a6f3e312c22e0133727da3dd5cabf71b07d05c96553e16bcc539237",
+    "crates/bib-base/src/lib.rs": "577f31f982108801d248150bd16d2ad57eff8acd9b1c30672e69ab96b9e480f3",
+    "crates/bib-base/tests/subscription_execution_workflow.rs": "10be9152e649e2b891caa25736a45f02834dd656242e0d7fb5a62e78d3ac4b08",
+    "crates/bib-base/tests/subscription_runs_workflow.rs": "eeaa1350099719daaa202cd72b1e3177aad3d39940a6f196e216a490d801a187",
+    "crates/bib-base/tests/subscription_store_workflow.rs": "333d2bc30efd4b90d0ab1c224cc0f13e23f41a67acb33620a4eb355f8a2e3b87"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-subscription-execution-shared-tests.log": "db088f39cbbc076a3c2ff1bc0f485eb671c2c41cb0e96a718d812f86cf13aa3c",
+    "target/bib-p4-validation/p5-subscription-execution-shared-clippy.log": "a18db9adead8803f9a0dc6518b0dc57c4148f11eef586515825266b1437d9dcb"
+  },
+  "pending": [
+    "Automatic bounded scheduling/lifecycle and persisted resource-wait state; no automatic provider requery on unchanged exhausted quotas",
+    "Authenticated HTTP/native API and GUI rules/inbox/history/confirmed import",
+    "Current Crossref cursor/sort source compatibility and actual HTTP contracts",
+    "Cross-process interruption/backup/restore and actual native UI qualification",
+    "Full current phase-isolated regression, source/staging audit and P5 commit"
+  ],
+  "limitations": [
+    "Injected provider fixtures; no real external subscription traffic or external messages",
+    "37 targeted tests are not a current complete backend regression",
+    "records counters describe atomically committed page records, not uncommitted provider responses",
+    "Current source execution is sequential with shared global/source permits; independent sources are fairly budgeted rather than simultaneously requested",
+    "Run UUID idempotency is for retained run records; no network is started by constructing BibShared or executor"
+  ],
+  "later_qualification": "docs/benchmarks/literature-search-p5-scheduler-linux.json"
+}

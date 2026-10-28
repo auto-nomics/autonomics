@@ -381,6 +381,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "turso",
  "uuid",
  "vfs",
 ]

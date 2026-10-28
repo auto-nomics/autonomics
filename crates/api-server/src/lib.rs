@@ -8,6 +8,8 @@
 pub mod bib;
 mod discovery;
 pub mod server;
+mod snapshots;
+mod subscriptions;
 
 pub use server::{
     DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, frontend_router,

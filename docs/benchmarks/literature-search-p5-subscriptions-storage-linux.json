@@ -1,0 +1,91 @@
+{
+  "schema": "bib-subscription-storage-qualification-v1",
+  "status": "storage_foundation_qualified;not_wired_to_product",
+  "phase": "P5 uncommitted",
+  "implemented": [
+    "Persisted rules and CAS versions; pause/resume preserves cursor/window and fences old owners",
+    "Shared persisted quotas across independent connections; lowering quotas never evicts retained data",
+    "UUID owner, monotonically increasing lease epoch, deadline checks before and after durable writes; processing/queue elapsed time included",
+    "Atomic page seen identities/inbox/cursor-history/checkpoint, content-bound idempotent commit receipt",
+    "Conservative shared strong-ID normalization and publication compatibility; safe bridges merge, ambiguous/conflicting versions remain separate with review links",
+    "Deleted inbox entries never erase seen identities; late strong identifiers enrich seen identity",
+    "Per-source errors and retry timestamps persist; expired cursor replays only the frozen plan/window",
+    "Whole UTC-day PubMed creation/revision windows; whole UTC-second Crossref index-date windows; saved hard constraints preserved and plans revalidated",
+    "Background single-page execution reuses interactive global/source permits and cooldown; page wait included in deadline",
+    "Publication/preprint evidence gained on a duplicate source record is retained for later cross-source compatibility checks; identity group cap applies even after inbox deletion"
+  ],
+  "default_limits": {
+    "rules": 128,
+    "seen": 100000,
+    "seen_logical_bytes": 268435456,
+    "inbox": 10000,
+    "inbox_logical_bytes": 134217728,
+    "page_and_inbox_group_bytes": 2097152,
+    "cursor_checkpoints": 100000,
+    "max_identity_group_members": 512,
+    "max_inbox_group_records": 512
+  },
+  "tests": {
+    "current_storage": {
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p5-subscription-identity-final-tests.log"
+    },
+    "shared_executor": {
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p5-subscription-shared-executor-tests.log",
+      "filtered_integration_tests": 16,
+      "integration_tests_not_counted_as_passed": true
+    },
+    "broad_regression_before_final_expiry_fencing": {
+      "passed": 416,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p5-subscription-full-backend-tests.log",
+      "scope_note": "Run started before final OperationClock/final-fence and failure-persistence additions; current storage is separately covered by 20 tests"
+    }
+  },
+  "strict_clippy": {
+    "passed": true,
+    "all_targets": true,
+    "packages": [
+      "bib-base",
+      "api-server"
+    ],
+    "log": "target/bib-p4-validation/p5-subscription-current-core-clippy.log"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/subscriptions.rs": "6b2c15a29c9c0add013e585a45bd6bd3f922ad5b47ffdf5c6fd3d7b3df1b18ce",
+    "crates/bib-base/src/subscription_store.rs": "e97c8f1553df8a0dbaa24648488cb2ef6e7753ba22645d46a51ad3cfa505895d",
+    "crates/bib-base/src/subscription_store/pages.rs": "e948c4bca7a3137cce492db73ae5b514f2bc7227f13c7df009704e4f822f8874",
+    "crates/bib-base/src/subscription_plan.rs": "353d6f77947b716b7cfa419fd1e47eef73dc7089d0c58135f140ab8a5f768686",
+    "crates/bib-base/src/discovery_sessions.rs": "f5c017e7583656028c834da5ddb6daf3134b82b7678e676d2af28046eea48896",
+    "crates/bib-base/src/lib.rs": "e6b9f5cc0972eda54aac68693517af5c68084eb76fbe4a4815cba1803924a220",
+    "crates/bib-base/tests/subscription_store_workflow.rs": "333d2bc30efd4b90d0ab1c224cc0f13e23f41a67acb33620a4eb355f8a2e3b87"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-subscription-persistent-failures-tests.log": "b822aabd822b92e8364e91e9968a1597232770670391491c546858b6964684dd",
+    "target/bib-p4-validation/p5-subscription-shared-executor-tests.log": "d13fb205f4d4679849621e3db1a0d14879b7f50ba30725b03b7fde5593018846",
+    "target/bib-p4-validation/p5-subscription-full-backend-tests.log": "da1a4facd7b8f1315b4b197caa37a0f8712fdbec26000bcdcd7900f0c519b022",
+    "target/bib-p4-validation/p5-subscription-final-fencing-clippy.log": "4081851cc996e0dc1262aa297bb0224e40042f386d6a18fd653ffa7ceb8400fc",
+    "target/bib-p4-validation/p5-subscription-identity-final-tests.log": "00cbcaf47063669fc6540bcbfed65bcf7267d621a0e552feda0c14514009f4f6",
+    "target/bib-p4-validation/p5-subscription-current-core-clippy.log": "382c89cacc462b689e4a0905f3e89f5ef8eb0c8e85456c7344c376ca771c3fef"
+  },
+  "pending": [
+    "Persistent full-round cutoff, run history and scheduling/recovery service",
+    "Source compatibility and actual HTTP contract qualification",
+    "BibShared integration; authenticated API; GUI rules/inbox/preview import",
+    "Cross-process kill/backup/restore qualification and actual native GUI",
+    "Complete phase isolation, final current-tree regression and P5 commit"
+  ],
+  "limitations": [
+    "Local tests use source fixtures and synthetic timestamps; no real external subscription traffic or emails",
+    "No claim of universal upstream change coverage; PubMed LR limitation and mutable Crossref cursor results are disclosed",
+    "Optional OpenAlex updated-date entitlements are not inferred from an ordinary API key",
+    "Only local inbox notifications are authorized; canonical articles are not automatically imported"
+  ],
+  "later_qualification": "docs/benchmarks/literature-search-p5-scheduler-linux.json"
+}

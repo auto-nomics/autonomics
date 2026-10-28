@@ -52,6 +52,9 @@ import { useBibSearch } from "./use-bib-search";
 import { SearchSnippet } from "./search-snippet";
 import { SemanticSearchControls, RecallLabel } from "./semantic-search";
 import { DiscoveryView } from "./discovery-view";
+import { LiteratureExploration } from "./literature-exploration";
+import { Subscriptions } from "./subscriptions";
+import { SaveSnapshotButton, SearchSnapshots } from "./search-snapshots";
 import { DiscoveryProvenance } from "./discovery-provenance";
 import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort, type SearchMode, type SearchRetrieval } from "./bib-search-model";
 
@@ -337,15 +340,21 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
 }
 
 export function BibliographyView() {
-  const [workspace, setWorkspace] = useState<"library" | "discover">("library");
+  const [workspace, setWorkspace] = useState<"library" | "discover" | "snapshots" | "subscriptions">("library");
   const [discoveryMounted, setDiscoveryMounted] = useState(false);
+  const [snapshotsMounted, setSnapshotsMounted] = useState(false);
+  const [subscriptionsMounted, setSubscriptionsMounted] = useState(false);
   return <div className="flex min-h-0 flex-1 flex-col gap-2">
-    <nav aria-label="Bibliography workspace" className="flex gap-1">
+    <nav aria-label="Bibliography workspace" className="flex flex-wrap gap-1">
       <Button size="sm" variant={workspace === "library" ? "secondary" : "ghost"} aria-current={workspace === "library" ? "page" : undefined} onClick={() => setWorkspace("library")}>Library</Button>
       <Button size="sm" variant={workspace === "discover" ? "secondary" : "ghost"} aria-current={workspace === "discover" ? "page" : undefined} onClick={() => { setDiscoveryMounted(true); setWorkspace("discover"); }}>Discover</Button>
+      <Button size="sm" variant={workspace === "snapshots" ? "secondary" : "ghost"} aria-current={workspace === "snapshots" ? "page" : undefined} onClick={() => { setSnapshotsMounted(true); setWorkspace("snapshots"); }}>Snapshots</Button>
+      <Button size="sm" variant={workspace === "subscriptions" ? "secondary" : "ghost"} aria-current={workspace === "subscriptions" ? "page" : undefined} onClick={() => { setSubscriptionsMounted(true); setWorkspace("subscriptions"); }}>Subscriptions</Button>
     </nav>
     <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView /></div>
     {discoveryMounted && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
+    {snapshotsMounted && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={workspace === "snapshots"} /></div>}
+    {subscriptionsMounted && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={workspace === "subscriptions"} /></div>}
   </div>;
 }
 
@@ -908,6 +917,7 @@ function LibraryView() {
           <label className="flex items-center gap-1" title="Positive conditions must match the same evidence object"><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />Same attachment</label>
           <SearchAssist topic={mode === "hybrid"} history={history} onClear={clearHistory} onPick={text=>{if (mode === "hybrid") {setTopicDraft(text);setTopic(text);} else {setQueryDraft(text);commitQuery(text);}searchInputRef.current?.focus();}} />
           <ColumnsPicker columns={columns} onChange={setColumns} snippets={showSnippets} onSnippets={setShowSnippets} />
+          <SaveSnapshotButton execution={{ kind: "library", search: currentRequest }} disabled={indexEngine === "legacy" || loading || (mode === "hybrid" && !topic.trim())} />
           <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} ${retrieval ? "candidate articles" : `article${total === 1 ? "" : "s"}`}`}</span>
           <select aria-label="Search sort" disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">Relevance</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select>
           {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>Clear search</Button>}
@@ -1130,6 +1140,8 @@ function LibraryView() {
                   </div>
                 )}
               </Section>
+
+              <LiteratureExploration article={selected} importTarget={selectedCollection && selectedCollection !== "@unfiled" ? { collection_id: selectedCollection } : { library_id: libraryId ?? 1 }} targetLabel={scopeLabel} onImported={() => { invalidateMetadata(); void loadLibrary(query); }} />
 
               <Section title="Details">
                 <MetadataTable>

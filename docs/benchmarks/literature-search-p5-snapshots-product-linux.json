@@ -1,0 +1,152 @@
+{
+  "schema": "bib-p5-snapshots-product-qualification-v1",
+  "date": "2026-10-28",
+  "status": "local_storage_api_gui_and_backend_qualified;P5_incomplete",
+  "source_sha256": {
+    "crates/bib-base/src/search_snapshots.rs": "8fd5d16166baaa80f0a3b3bb5843baf316a255f82448cec7b31c6b5761463b58",
+    "crates/bib-base/src/search_snapshot_exports.rs": "dab003080c2325b318d9d551df37f6c17a5a4ff93ebd52a0359b9c849fdf27e9",
+    "crates/bib-base/src/shared.rs": "9cf509b4b6105f674b8f31527e186046cb4b212b54ea23e04b9660ee28d5d260",
+    "crates/bib-base/src/lib.rs": "020477bbe463bd2ee1d0b64d770eda4ff2c31b0504a766bd6d1f7c5506cb3d3a",
+    "crates/bib-base/src/discovery_sessions.rs": "6a9d9a48d0d8a7a60e3b15667953b41bfd8b44bd8879680093e878b8db2cb0ca",
+    "crates/bib-base/tests/search_snapshots_workflow.rs": "f7d601718eb01ad841e718dea631b5b48db94d6866769cacb6a3808b674662e1",
+    "crates/bib-base/Cargo.toml": "b8baf72e48408228017a3e064f26f6a973449ab9238843426d8bdef53534c93b",
+    "crates/api-server/src/snapshots.rs": "0e1d15a246addb731eca1e84d5e37ff3efb89662b18a9e1a03897d769693d67a",
+    "crates/api-server/src/bib.rs": "bac60198ad88e4b517a00c3573f412976a39fb8e6019c2f9d6e13be04f9455b6",
+    "crates/api-server/src/lib.rs": "2b8f34c8dea41e558b32a574a50ad3a97e049dcdb4ca63d23372185edf367fb6",
+    "crates/api-server/tests/snapshots.rs": "92395cb9586d3fa425ba479a030288db784a7dd23ab9f4bc1b9e2819624aa331",
+    "apps/gui/src/features/search-snapshots.tsx": "138239a162bf9665e6a9ee1d4b45913d56a591d6a60ba70abaca67368818d81c",
+    "apps/gui/src/features/bibliography.tsx": "83987ef4ea74c4cce91d1d643b67d45f7b879e760b5538436c96935a47640daa",
+    "apps/gui/src/features/discovery-view.tsx": "81d84a75229338e3ca7a48fcbbab459f7906f71593b8d57e467bfd21b998807b",
+    "apps/gui/src/gateway.ts": "36194571df91a4b465aa310688bfcd44d79e302ed3b8ed11ac20283c97366f5e",
+    "apps/gui/tests/search-snapshots.html": "4fdc4f43bceedcc72016610ec642a528874184c54fffe926ba0a0dc08575b45c",
+    "apps/gui/tests/search-snapshots-mount.tsx": "d2722b2178451332d61d8c513bbeda154b574202e6b3fa927b06d6c2f2a52d9b",
+    "apps/gui/tests/search-snapshots.mjs": "274bbe738dc2c5de9cce41625ad8b11f86f6c7640568364c2ef4e7a8c6a51dd2"
+  },
+  "validation": {
+    "storage": {
+      "passed": 20,
+      "failed": 0,
+      "log": "target/bib-p4-validation/p5-snapshots-tail-qualified-tests.log",
+      "sha256": "d3ae3e4760cc4bb01189d2426cc6ae434b7a61da0a033e2052357b207adc2cb8",
+      "scope": "20 storage tests plus 7 API tests in this combined log"
+    },
+    "api": {
+      "passed": 7,
+      "failed": 0,
+      "log": "target/bib-p4-validation/p5-snapshots-api-final-tests.log",
+      "sha256": "bbde84cbb244387e72ec97964af89f264e7aa9813f49d9e9b1c5d855a88afb0f"
+    },
+    "gui": {
+      "log": "target/bib-p4-validation/p5-snapshots-browser-tests.log",
+      "sha256": "f8746cfd24a9f3821f4faaa40335dd30e6af2f76c8bfdf98eab195a1582a5f1b"
+    },
+    "typescript": {
+      "log": "target/bib-p4-validation/p5-snapshots-gui-qualified-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "strict_clippy_specific_storage": {
+      "log": "target/bib-p4-validation/p5-snapshots-wired-storage-clippy.log",
+      "sha256": "dad08de73fd2983c81a8d010172c9b91e6bf89533c9099e1ac54806db31d2b6f"
+    },
+    "strict_clippy_specific_api": {
+      "log": "target/bib-p4-validation/p5-snapshots-wired-api-clippy.log",
+      "sha256": "73ad1d8ace8693fa9b057c851485931e1bfeecb079027bd72241fd6d199ecfcf"
+    },
+    "existing_search_gui": {
+      "log": "target/bib-p4-validation/p5-snapshots-existing-search-gui.log",
+      "sha256": "203efd0b62174385d0152fcad1a4793eedb149f339afb417eebbbc6998305a3a"
+    },
+    "existing_discovery_gui": {
+      "log": "target/bib-p4-validation/p5-snapshots-existing-discovery-gui.log",
+      "sha256": "2db5c20078a0f52066b2fdd8b65455e083e8f9af075278c1c3943885c2269dc1"
+    },
+    "full_current_backend_tests": {
+      "passed": 394,
+      "log": "target/bib-p4-validation/p5-snapshots-tail-full-backend-tests.log",
+      "sha256": "53407aac1740c11418d7007a1114f251625fdd8cf5a2ca6826113527d7b0e6ae",
+      "scope": "Current snapshot product and tail correction; predates the subsequent P4 nonunique-key index and new exploration-import API test",
+      "failed": 0,
+      "ignored": 0
+    },
+    "full_current_backend_clippy": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-snapshots-tail-full-backend-clippy.log",
+      "sha256": "df924c1729748e83799636d7af3e604971a256aee8bba336675bd02cb1265153",
+      "scope": "Current snapshot product and tail correction; predates the subsequent P4 nonunique-key index and new exploration-import API test"
+    }
+  },
+  "gui_transports": [
+    {
+      "mode": "browser_fetch",
+      "requests": 17,
+      "viewport": {
+        "width": 480,
+        "height": 900
+      },
+      "screenshot": "target/bib-p4-validation/p5-snapshots-browser.png",
+      "screenshot_sha256": "9996d5d5cca1cc1431bf2626c45bc817d6d582e8615b06b8e2c8c6796a888aa5"
+    },
+    {
+      "mode": "simulated_desktop_bridge",
+      "requests": 17,
+      "viewport": {
+        "width": 480,
+        "height": 900
+      },
+      "screenshot": "target/bib-p4-validation/p5-snapshots-bridge.png",
+      "screenshot_sha256": "9996d5d5cca1cc1431bf2626c45bc817d6d582e8615b06b8e2c8c6796a888aa5"
+    }
+  ],
+  "contract": {
+    "storage": "canonical library.db for disk BibShared; temporary independent store per in-memory bundle",
+    "request_body_limit": 131072,
+    "deadline_ms": {
+      "default": 30000,
+      "min": 100,
+      "max": 120000
+    },
+    "max_capture_items": 10000,
+    "input_rows_accepted": false,
+    "library": "server search with complete frozen article hydration, actual runtime/model and same-generation pagination",
+    "discovery": "session plus candidates from one lock at expected sequence; retries resolve committed action before requiring live session",
+    "list": "opaque high-water store/anchor cursor, 1..100 entries",
+    "delete": "explicit checksum compare",
+    "exports": [
+      "ris",
+      "bibtex",
+      "json"
+    ],
+    "default_export_limit_bytes": 16777216,
+    "preview_limit_articles": 100,
+    "original_files_included": false
+  },
+  "coverage": [
+    "Actual lexical pages and metadata frozen across canonical edits/deletes and idempotent retries",
+    "RIS/BibTeX/JSON API exports use saved metadata only",
+    "Persisted limits reject additional captures without corrupting existing ones; checked deletion releases capacity",
+    "Shared canonical DB survives BibShared reopen; a direct SnapshotStore connection to that DB sees saved rows",
+    "Discovery expected-sequence conflicts, single-lock source/candidate capture, partial failed source provenance and bounded coverage",
+    "Removed discovery session does not prevent retry of an already committed action",
+    "Real local HTTP model protocol provides runtime provenance matching all actual hybrid pages; no model quality claim",
+    "Disabled/dead model does not prevent committed retry; pre-cancel and cancel during blocked query embedding return 499 without publishing new capture",
+    "GUI lost response after commit retries same key, freezes old metadata, exports all formats, shows source failure, paginates and deletes with checksum",
+    "GUI cancellation and late response handling; existing search/discovery regression suites passed",
+    "Short final page is captured when all actual results fit max_items; a page that would exceed the cap remains excluded and coverage partial"
+  ],
+  "phase_boundary": {
+    "manifest": "target/bib-p4-validation/p5-boundary-20261028/manifest.json",
+    "sha256": "b8e119d0c9c7dddcf6e476e473cb858b0ae12b6cb5b06c44671b41dabe315e98",
+    "p4_jobs_use_unchanged_archived_binaries": true,
+    "stage_saved_p4_baselines_before_P4_commit": true
+  },
+  "limitations": [
+    "Browser GUI and simulated bridge only; actual Tauri IPC/native interaction still pending",
+    "No complete physical backup/restore or process-crash qualification",
+    "Preview intentionally shows first 100 captured articles; export contains full saved set",
+    "No original attachment bytes captured",
+    "Citation import-preview handoff has separate local qualification; durable subscriptions/inbox remain unfinished",
+    "P4 full capacity/Chinese quality still running; neither P4 nor P5 committed",
+    "Full 394 tests/Clippy predate the later P4 index migration; its isolated qualification is separate"
+  ],
+  "later_native_qualification": "docs/benchmarks/literature-search-p5-native-linux.json"
+}

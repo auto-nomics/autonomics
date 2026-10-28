@@ -1,0 +1,81 @@
+{
+  "schema": "bib-subscription-gui-qualification-v1",
+  "phase": "P5 uncommitted",
+  "status": "browser_simulated_bridge_and_later_actual_native_qualified;final_phase_gates_open",
+  "implemented": [
+    "Discover subscribes from a frozen executed request; default paused; original source/native/advanced filters retained",
+    "Fourth bibliography workspace with name/query/source/schedule/budget editing, CAS pause/resume/delete and versioned rule confirmations",
+    "Inbox/source variants/related-identity notices, read/unread/delete, pagination and persistent destination selection",
+    "Execution history pagination, saved plans, committed-vs-attempted counters, explicit incomplete-result wording and cancellation",
+    "Storage-limit editor with human units and visible quota-wait reasons; unchanged wait disables new checks",
+    "UUID acknowledgement retry after a lost response; foreground fetch sequence fencing and view-lifetime cancellation separate from durable check cancellation",
+    "Notification import creates independent exact-identifier discovery, verifies returned candidate identity before preview, freezes destination and uses existing fingerprinted preview/commit",
+    "Literal DOI suffixes retained, conservative PMID wrappers, original native IDs and exact arXiv versions; no title-based identity fallback",
+    "Live selected execution updates; deleting a rule removes associated inbox/history views; page state retained while switching workspace"
+  ],
+  "verification": {
+    "typescript": true,
+    "root_gui_bundle_build": true,
+    "subscription_model": true,
+    "subscriptions_browser_and_bridge": true,
+    "exploration_import_regression_browser_and_bridge": true,
+    "discovery_workflow_regression_browser_and_bridge": true,
+    "populated_480px_screenshot_reviewed": true,
+    "no_page_errors_or_horizontal_overflow": true,
+    "checks": [
+      "stored request and filters",
+      "lost acknowledgement reuses same UUID",
+      "pause/resume/edit",
+      "quota wait and limits",
+      "history/inbox pagination",
+      "wrong source identity blocks preview",
+      "fresh lookup and fingerprint preview",
+      "frozen destination despite concurrent selection change",
+      "explicit cancellation only",
+      "read/delete and rule cleanup",
+      "collection disappearing between visits blocks implicit default-library fallback"
+    ],
+    "unavailable_destination_blocks_lookup_instead_of_falling_back": true
+  },
+  "source_sha256": {
+    "apps/gui/src/features/subscription-model.ts": "8271e39ca34a9d68cf6789903b09b1c74db1a404db80425465a2f75466f8ff5c",
+    "apps/gui/src/features/subscriptions.tsx": "24d62e36c26a598fe3264c3602f8c081e75fecd88cfc96298cf7a64b9f800be5",
+    "apps/gui/src/features/exploration-import.tsx": "87f5039d47a8ae6999753fa32f7453560b475fb1f0e455ebf71c0dff7d223569",
+    "apps/gui/src/features/discovery-view.tsx": "d69e0030fa40136b0f4be219eb21eb82be0be8e6741eae1c6125d4bf270020f4",
+    "apps/gui/src/features/bibliography.tsx": "87f1491013fd22b55162068676aecbd0514054ba9f7380f96230ca3417ade640",
+    "apps/gui/package.json": "c6413e4552e66b88afe6f55abe4eb84de8694473b7bdc90046f2abb29d00042d",
+    "apps/gui/tests/subscription-model.mjs": "777ed6b24e687e856092a9a10d84f7f7ca4126148a286c41de7926b9af425f6f",
+    "apps/gui/tests/subscriptions.mjs": "37b5ab13ad8a6f6a9feba5ddf6547839aeafb50bb4a03b68b87a55d4077708f7",
+    "apps/gui/tests/subscriptions-mount.tsx": "a64ca4e8a609ce7bfa8aded3587374e66ca567a81210f469fea819da66cfbbc9",
+    "apps/gui/tests/subscriptions.html": "489ba7da6d70d541590efd780f8f327945b05840bd59f2f656c3da79993aa560"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-subscription-gui-final-regressions.log": "d796e54e7ae40d458280fd2f96dbc74601d32a704ebd6cbeaecd05ff0806f301",
+    "target/bib-p4-validation/p5-subscription-gui-visual-tests.log": "1c87ada7be06cc438dbc7fde7e0f6faa6ae090bc8ad51a62ca24f65636fc31be",
+    "target/bib-p4-validation/p5-subscription-gui-final-types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "target/bib-p4-validation/p5-subscription-gui-build.log": "d0bb63f1de7c5818614c8f6905ae6fca414195d27fed565c3f370774114008c8",
+    "target/bib-p4-validation/p5-subscription-identity-model-tests.log": "ff3b6beaa50fde0fa1370629def03d593db7f6a040fc1eab98fc3b72e51ce921",
+    "target/bib-p4-validation/p5-subscription-gui-final-tests.log": "1c87ada7be06cc438dbc7fde7e0f6faa6ae090bc8ad51a62ca24f65636fc31be",
+    "target/bib-p4-validation/p5-subscription-gui-final-build.log": "cf02f30d22659fca05301a11ab45facc789c676eae92bc795e7b76b8382a2e57"
+  },
+  "screenshots": [
+    "target/bib-p4-validation/p5-subscriptions-browser-populated.png",
+    "target/bib-p4-validation/p5-subscriptions-bridge-populated.png"
+  ],
+  "primary_reference_review": [
+    "https://help.openalex.org/data/works/attributes/",
+    "https://help.openalex.org/data/common-attributes/",
+    "https://help.openalex.org/api/filtering/"
+  ],
+  "limitations": [
+    "GUI browser tests use protocol fixtures; simulated desktop bridge is not actual native Tauri qualification",
+    "Source-identity helpers have local coverage; actual upstream HTTP contracts remain separate and incomplete",
+    "Root GUI build includes existing unrelated worktree GUI files; isolated final phase-source build still required",
+    "Current combined backend regression passed 461/0/0; P4 100k post-metadata delete/replacement run completed successfully; performance/availability phase gates remain",
+    "Actual native UI and final P5 phase audit/commit pending; process recovery completed in linked receipt"
+  ],
+  "backend_regression": "docs/benchmarks/literature-search-p5-scheduler-linux.json",
+  "source_compatibility_followup": "docs/benchmarks/literature-search-p5-source-compat-linux.json",
+  "later_process_recovery_qualification": "docs/benchmarks/literature-search-p5-subscription-recovery-linux.json",
+  "later_native_qualification": "docs/benchmarks/literature-search-p5-native-linux.json"
+}

@@ -5,6 +5,7 @@ use reqwest::Client;
 use tokio::sync::Mutex;
 
 use crate::error::{Result, S2Error};
+use crate::relation_types::{PaperRelation, RecommendationPool, RelationPage};
 use crate::types::*;
 
 fn env_endpoint(env: &str, fallback: &str) -> String {
@@ -511,6 +512,50 @@ impl S2Client {
         self.get_json(&self.graph_base, &path, &params).await
     }
 
+    /// Read one graph window without discarding unresolved references. Uses
+    /// the same transport, response limit, cooldown and pacing as other calls.
+    pub async fn get_relations(
+        &self,
+        paper_id: &str,
+        relation: PaperRelation,
+        limit: u32,
+        offset: u32,
+        fields: Option<&str>,
+    ) -> Result<RelationPage> {
+        if paper_id.trim().is_empty() || !(1..=1000).contains(&limit) {
+            return Err(S2Error::Param(
+                "paper ID and limit 1..1000 are required".into(),
+            ));
+        }
+        let path = format!("/paper/{}/{}", urlencode(paper_id), relation.path());
+        let params = vec![
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+            (
+                "fields",
+                fields.unwrap_or(DEFAULT_CITATION_FIELDS).to_owned(),
+            ),
+        ];
+        let page: RelationPage = self.get_json(&self.graph_base, &path, &params).await?;
+        let end = offset.checked_add(page.data.len() as u32);
+        if page.offset != offset
+            || page.data.len() > limit as usize
+            || end.is_none()
+            || page
+                .next
+                .is_some_and(|next| Some(next) != end || next <= offset)
+            || page.data.iter().any(|record| match relation {
+                PaperRelation::References => record.citing_paper.is_some(),
+                PaperRelation::Citations => record.cited_paper.is_some(),
+            })
+        {
+            return Err(S2Error::InvalidResponse(
+                "inconsistent relation window".into(),
+            ));
+        }
+        Ok(page)
+    }
+
     // ===================================================================
     // Autocomplete
     // ===================================================================
@@ -600,6 +645,42 @@ impl S2Client {
             params.push(("fields", DEFAULT_PAPER_FIELDS.to_owned()));
         }
         self.get_json(&self.reco_base, &path, &params).await
+    }
+
+    /// Recommendations from an explicit provider pool; these are not citation
+    /// edges and the provider does not expose continuation for this endpoint.
+    pub async fn recommendations_from(
+        &self,
+        paper_id: &str,
+        pool: RecommendationPool,
+        limit: u32,
+        fields: Option<&str>,
+    ) -> Result<RecommendationsResponse> {
+        if paper_id.trim().is_empty() || !(1..=500).contains(&limit) {
+            return Err(S2Error::Param(
+                "paper ID and limit 1..500 are required".into(),
+            ));
+        }
+        let path = format!("/papers/forpaper/{}", urlencode(paper_id));
+        let params = vec![
+            ("from", pool.as_str().to_owned()),
+            ("limit", limit.to_string()),
+            ("fields", fields.unwrap_or(DEFAULT_PAPER_FIELDS).to_owned()),
+        ];
+        #[derive(serde::Deserialize)]
+        struct Window {
+            #[serde(rename = "recommendedPapers")]
+            recommended_papers: Vec<Paper>,
+        }
+        let response: Window = self.get_json(&self.reco_base, &path, &params).await?;
+        if response.recommended_papers.len() > limit as usize {
+            return Err(S2Error::InvalidResponse(
+                "recommendations exceed requested limit".into(),
+            ));
+        }
+        Ok(RecommendationsResponse {
+            recommended_papers: response.recommended_papers,
+        })
     }
 }
 

@@ -309,7 +309,7 @@ async fn crossref_exact_filters_survive_transport_and_reject_unrequested_dois() 
                 "doi:10.1000/a,doi:10.1000/b,from-pub-date:2020-01-01,until-pub-date:2022-12-31,type:journal-article"
             )
         );
-        assert_eq!(param(&requests[0], "sort").as_deref(), Some("published"));
+        assert_eq!(param(&requests[0], "sort").as_deref(), Some("indexed"));
     }
 }
 
@@ -788,6 +788,218 @@ async fn pubmed_rate_limit_http_date_and_real_zero_results_remain_distinct() {
     let page = source.discovery_page(&plan, None, 1).await.unwrap();
     assert_eq!(page.total, Some(0));
     assert!(page.articles.is_empty());
+    assert!(page.next_cursor.is_none());
+    requests.await.unwrap();
+}
+
+#[tokio::test]
+async fn crossref_publication_sort_uses_offsets_and_preserves_all_constraints_on_every_page() {
+    for (sort, order) in [
+        (DiscoverySort::Newest, "desc"),
+        (DiscoverySort::Oldest, "asc"),
+    ] {
+        let (url, requests) = server(vec![
+            json(crossref_list(3, &["10.1000/a"], None)),
+            json(crossref_list(3, &["10.1000/b"], None)),
+            json(crossref_list(3, &["10.1000/c"], None)),
+        ])
+        .await;
+        let source = crossref_source(url);
+        let plan = source
+            .plan_discovery(&DiscoveryRequest {
+                sort,
+                filters: DiscoveryFilters {
+                    year_from: Some(2020),
+                    ..Default::default()
+                },
+                ..crossref_request()
+            })
+            .unwrap();
+        let a = source.discovery_page(&plan, None, 1).await.unwrap();
+        let b = source
+            .discovery_page(&plan, a.next_cursor.as_deref(), 1)
+            .await
+            .unwrap();
+        let c = source
+            .discovery_page(&plan, b.next_cursor.as_deref(), 1)
+            .await
+            .unwrap();
+        assert!(c.next_cursor.is_none());
+        assert!(
+            a.notices
+                .iter()
+                .any(|n| n.code == "publication_offset_window")
+        );
+        let requests = requests.await.unwrap();
+        for (index, request) in requests.iter().enumerate() {
+            assert_eq!(param(request, "offset"), Some(index.to_string()));
+            assert!(param(request, "cursor").is_none());
+            assert_eq!(param(request, "sort").as_deref(), Some("published"));
+            assert_eq!(param(request, "order").as_deref(), Some(order));
+            assert_eq!(
+                param(request, "query.bibliographic").as_deref(),
+                Some("asthma")
+            );
+            assert_eq!(
+                param(request, "filter").as_deref(),
+                Some("from-pub-date:2020-01-01")
+            );
+            assert_eq!(param(request, "rows").as_deref(), Some("1"));
+        }
+        let changed = source
+            .plan_discovery(&DiscoveryRequest {
+                sort: DiscoverySort::CitationCount,
+                ..crossref_request()
+            })
+            .unwrap();
+        assert_eq!(
+            source
+                .discovery_page(&changed, a.next_cursor.as_deref(), 1)
+                .await
+                .unwrap_err()
+                .kind,
+            SourceFailureKind::CursorExpired
+        );
+    }
+}
+#[tokio::test]
+async fn crossref_offset_window_exhaustion_fails_before_http_without_claiming_completion() {
+    use base64::Engine;
+    let source = crossref_source("http://127.0.0.1:1".into());
+    let plan = source
+        .plan_discovery(&DiscoveryRequest {
+            sort: DiscoverySort::Newest,
+            ..crossref_request()
+        })
+        .unwrap();
+    // A cursor generated after the last full page is a continuation capability,
+    // not proof that the source was exhausted. No request may cross offset+rows.
+    for offset in [10000, 9999] {
+        let plan = if offset == 9999 {
+            source
+                .plan_discovery(&DiscoveryRequest {
+                    page_size: 3,
+                    sort: DiscoverySort::Newest,
+                    ..crossref_request()
+                })
+                .unwrap()
+        } else {
+            plan.clone()
+        };
+        let token=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({"source":"crossref_offset","fingerprint":plan.fingerprint,"offset":offset,"initial_total":20000})).unwrap());
+        let error = source
+            .discovery_page(&plan, Some(&token), plan.page_size)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, SourceFailureKind::Capacity);
+        assert!(!error.retryable);
+    }
+    let legacy=base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&serde_json::json!({"source":"crossref","fingerprint":plan.fingerprint,"cursor":"legacy","obtained":1})).unwrap());
+    let error = source
+        .discovery_page(&plan, Some(&legacy), 1)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SourceFailureKind::CursorExpired);
+    assert!(error.retryable);
+}
+#[tokio::test]
+async fn crossref_changing_totals_and_new_provider_tokens_are_observed_without_premature_stop() {
+    let (url, requests) = server(vec![
+        json(crossref_list(1, &["10.1000/a"], Some("first+/="))),
+        json(crossref_list(2, &["10.1000/b"], Some("second+/="))),
+        json(crossref_list(2, &[], None)),
+    ])
+    .await;
+    let source = crossref_source(url);
+    let plan = source.plan_discovery(&crossref_request()).unwrap();
+    let a = source.discovery_page(&plan, None, 1).await.unwrap();
+    assert!(
+        a.next_cursor.is_some(),
+        "a provider continuation remains meaningful when its reported total is reached"
+    );
+    let b = source
+        .discovery_page(&plan, a.next_cursor.as_deref(), 1)
+        .await
+        .unwrap();
+    assert!(b.notices.iter().any(|n| n.code == "source_total_changed"));
+    let c = source
+        .discovery_page(&plan, b.next_cursor.as_deref(), 1)
+        .await
+        .unwrap();
+    assert!(c.next_cursor.is_none());
+    let requests = requests.await.unwrap();
+    assert_eq!(param(&requests[1], "cursor").as_deref(), Some("first+/="));
+    assert_eq!(param(&requests[2], "cursor").as_deref(), Some("second+/="));
+    for request in requests {
+        assert_eq!(param(&request, "sort").as_deref(), Some("score"));
+        assert!(param(&request, "offset").is_none());
+        assert_eq!(
+            param(&request, "query.bibliographic").as_deref(),
+            Some("asthma")
+        );
+    }
+}
+#[tokio::test]
+async fn subscription_crossref_window_uses_indexed_cursor_order_and_keeps_publication_filters() {
+    use bib_base::{subscription_plan, subscriptions::*};
+    let (url, requests) = server(vec![
+        json(crossref_list(2, &["10.1000/a"], Some("next-indexed"))),
+        json(crossref_list(2, &["10.1000/b"], None)),
+    ])
+    .await;
+    let source = crossref_source(url);
+    let input = DiscoveryRequest {
+        query: "year:2020..2022".into(),
+        sources: vec!["crossref".into()],
+        sort: DiscoverySort::Newest,
+        page_size: 1,
+        ..Default::default()
+    };
+    let window = SubscriptionWindow {
+        kind: SubscriptionWindowKind::CrossrefIndexed,
+        from_ms: 1_728_000_000_000,
+        through_ms: 1_728_000_000_999,
+    };
+    let plan = subscription_plan::plan(&input, "crossref", Some(&window)).unwrap();
+    assert!(
+        !plan
+            .notices
+            .iter()
+            .any(|n| n.code == "publication_offset_window")
+    );
+    assert!(
+        plan.notices
+            .iter()
+            .any(|n| n.code == "subscription_scan_order")
+    );
+    assert!(
+        plan.notices
+            .iter()
+            .any(|n| n.code == "no_text_relevance" && n.message.contains("indexed asc"))
+    );
+    let a = source.discovery_page(&plan, None, 1).await.unwrap();
+    source
+        .discovery_page(&plan, a.next_cursor.as_deref(), 1)
+        .await
+        .unwrap();
+    for request in requests.await.unwrap() {
+        assert_eq!(param(&request, "sort").as_deref(), Some("indexed"));
+        assert_eq!(param(&request, "order").as_deref(), Some("asc"));
+        assert!(param(&request, "offset").is_none());
+        let filter = param(&request, "filter").unwrap();
+        assert!(filter.contains("from-pub-date:2020-01-01,until-pub-date:2022-12-31"));
+        assert!(filter.contains("from-index-date:"));
+        assert!(filter.contains("until-index-date:"));
+    }
+}
+
+#[tokio::test]
+async fn crossref_empty_terminal_token_does_not_make_a_complete_full_page_invalid() {
+    let (url, requests) = server(vec![json(crossref_list(1, &["10.1000/a"], Some("")))]).await;
+    let source = crossref_source(url);
+    let plan = source.plan_discovery(&crossref_request()).unwrap();
+    let page = source.discovery_page(&plan, None, 1).await.unwrap();
+    assert_eq!(page.articles.len(), 1);
     assert!(page.next_cursor.is_none());
     requests.await.unwrap();
 }

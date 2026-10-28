@@ -37,6 +37,7 @@ pub mod client;
 pub mod convert;
 pub mod error;
 pub mod query;
+pub mod relation_types;
 pub mod types;
 
 pub use client::PaperSearchFilter;

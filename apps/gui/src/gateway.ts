@@ -84,7 +84,7 @@ export async function gatewayRequest(
   const signal = options.signal;
   signal?.throwIfAborted();
   const id = options.requestId ?? (signal ? newGatewayRequestId() : undefined);
-  const search = /^\/bib\/(search\/(v2|export)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
+  const search = /^\/bib\/(search\/(v2|export|explore|snapshots)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
   const discoveryCreate = method.toUpperCase() === "POST" && path === "/bib/search/sessions";
   const cancel = () => {
     if (!id) return;
@@ -383,6 +383,7 @@ export async function fetchBibFulltextRaw(
 export async function saveTextFile(
   defaultPath: string,
   contents: string,
+  contentType = "text/plain",
 ): Promise<string | null> {
   if (isTauri) {
     const dialog = await import("@tauri-apps/plugin-dialog");
@@ -397,7 +398,7 @@ export async function saveTextFile(
     return path;
   }
 
-  const url = URL.createObjectURL(new Blob([contents], { type: "text/plain" }));
+  const url = URL.createObjectURL(new Blob([contents], { type: contentType }));
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = defaultPath;

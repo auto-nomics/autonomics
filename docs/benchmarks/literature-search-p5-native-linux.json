@@ -1,0 +1,92 @@
+{
+  "schema": "bib-p5-native-qualification-v1",
+  "date": "2026-10-28",
+  "phase": "P5 uncommitted",
+  "status": "real_linux_tauri_webkitgtk_workflows_passed;final_phase_isolation_and_other_gates_open",
+  "execution": {
+    "command": "cd apps/gui && npm run test:bib-p5-native",
+    "build": "CARGO_BUILD_JOBS=2 cargo build -p autonomics-gui --example literature_p5_native_smoke",
+    "strict_clippy": "cargo clippy -p autonomics-gui --example literature_p5_native_smoke -- -D warnings",
+    "native_exit_code": 0,
+    "strict_clippy_exit_code": 0,
+    "javascript_syntax_checks": true,
+    "mock_tauri_bridge": false,
+    "test_mount": "Full BibliographyView with production components, actual Tauri commands, authenticated HTTP API, canonical disk DB and production scheduler",
+    "display": "Owned Xvfb and D-Bus session; actual GTK save dialog driven by xdotool",
+    "isolation": "Fresh owned library, WebView data and XDG data/config/cache directories; user HOME unchanged; deterministic local sources; no upstream requests or provider credentials used"
+  },
+  "verified_workflows": [
+    "native references retain unresolved entries; citation direction; both recommendation pools; fresh SDK graph import",
+    "native IPC capture and immutable preview after canonical metadata change",
+    "native OS Save export dialog and production file writer",
+    "native executed-search subscription, actual scheduler, identity lookup and metadata-preserving import",
+    "native schedule editing and explicit resume/pause",
+    "native limits persistence; view switch preserves durable check; explicit cancellation drops actual pending source future",
+    "native WebView reload preserves rules, history, inbox and immutable snapshot"
+  ],
+  "graph_sdk": {
+    "real_sdk_http_requests": [
+      "/paper/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/references?limit=25&offset=0&fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cvenue%2Cauthors%2CexternalIds%2CpublicationDate%2Cjournal%2CcitationCount%2CisOpenAccess%2CopenAccessPdf%2Ccontexts%2Cintents%2CisInfluential",
+      "/paper/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/citations?limit=25&offset=0&fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cvenue%2Cauthors%2CexternalIds%2CpublicationDate%2Cjournal%2CcitationCount%2CisOpenAccess%2CopenAccessPdf%2Ccontexts%2Cintents%2CisInfluential",
+      "/papers/forpaper/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?from=recent&limit=25&fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cvenue%2Cauthors%2CexternalIds%2CpublicationDate%2Cjournal%2CcitationCount%2CisOpenAccess%2CopenAccessPdf",
+      "/papers/forpaper/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?from=all-cs&limit=25&fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cvenue%2Cauthors%2CexternalIds%2CpublicationDate%2Cjournal%2CcitationCount%2CisOpenAccess%2CopenAccessPdf",
+      "/paper/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb?fields=paperId%2Ctitle%2Cabstract%2Cyear%2Cvenue%2Cauthors%2CexternalIds%2CreferenceCount%2CcitationCount%2CinfluentialCitationCount%2CisOpenAccess%2CopenAccessPdf%2CfieldsOfStudy%2CpublicationTypes%2CpublicationDate%2Cjournal%2Ctldr"
+    ],
+    "seed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "import_singleton": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "provider_origin": "Owned loopback HTTP fixture; no public upstream claim"
+  },
+  "export": {
+    "path": "target/bib-p4-validation/p5-native-UzVAUn/native-snapshot.json",
+    "sha256": "259d8b9e7612b54cb132169c8437dd5b1bcb52adfa12bc81daca42e0299b6e62",
+    "bytes": 2676,
+    "real_os_save_dialog": true,
+    "production_save_bib_export": true,
+    "immutable_after_canonical_update": true
+  },
+  "cancellation": {
+    "actual_pending_source_futures": 1,
+    "actual_dropped_futures": 1,
+    "switching_workspace_does_not_cancel": true,
+    "explicit_ui_cancel_settles_history": true
+  },
+  "artifacts": {
+    "run_receipt": "target/bib-p4-validation/p5-native-UzVAUn/receipt.json",
+    "run_receipt_sha256": "d2c142830055d04f9ce899d53ab451c74f31fac6c1139d9f854dbe27269c8ad2",
+    "sealed_worker": "target/bib-p4-validation/p5-native-final-worker-20261028/worker",
+    "worker_sha256": "d04ec6d42a1ca7ec1554eaf1d35057c3ef8bd539335dcd0b4e9df5f8fdfb2182",
+    "source_manifest": "target/bib-p4-validation/p5-native-final-worker-20261028/source-manifest.json",
+    "source_manifest_sha256": "99331684bf4bff0a2284b811615615f5dd487ac4e14cebeb1a419608172f1659",
+    "all_relevant_archived_sources_match_current": true,
+    "unrelated_archived_source_drift": [
+      "apps/gui/src/features/agent-workspace.tsx"
+    ],
+    "drift_scope": "Unrelated agent workspace is not imported by the test-only BibliographyView mount; its archived snapshot is retained unchanged, current user changes preserved"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-native-final-build.log": "c54aef8925d6f736205583522b70b7aba7f2df19217abee87ba3949fc3bba08e",
+    "target/bib-p4-validation/p5-native-final-run.log": "d2764b506b6855a56a36af931fad5ee4a8a604913b459fa5fd67914d202a7d2f",
+    "target/bib-p4-validation/p5-native-final-clippy.log": "f38398daad186d6170fb84672626f3d267a59d8a3a2c0697b568487b63ebad01"
+  },
+  "earlier_attempts": {
+    "preserved_roots": [
+      "target/bib-p4-validation/p5-native-gLA2ur",
+      "target/bib-p4-validation/p5-native-uq0Kcb",
+      "target/bib-p4-validation/p5-native-SVHEmD",
+      "target/bib-p4-validation/p5-native-6oBbPo"
+    ],
+    "harness_corrections": [
+      "Native HTML dialog has implicit role: query dialog[open] rather than explicit role attribute",
+      "Select all GTK location text before entering full filename, avoiding duplicate suffix"
+    ],
+    "production_changes_for_these_failures": false
+  },
+  "limitations": [
+    "Linux development WebView fixture, not packaged production app or Windows/macOS qualification",
+    "Source pages and graph SDK responses are local deterministic fixtures, not upstream coverage or scientific relevance evaluation",
+    "WebView reload retains state in the same host process; actual process crash/backup scenarios are qualified separately",
+    "Uses combined current P4/P5 production sources; final phase-isolated builds/regressions and staging audit remain pending",
+    "P4 performance and sustained-write semantic availability gates remain open; P4/P5 commits are not complete"
+  ],
+  "process_recovery_qualification": "docs/benchmarks/literature-search-p5-subscription-recovery-linux.json"
+}

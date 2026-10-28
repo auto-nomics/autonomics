@@ -1,0 +1,96 @@
+{
+  "schema": "bib-p5-snapshot-storage-qualification-v1",
+  "date": "2026-10-28",
+  "status": "historical_independent_storage_and_exports_qualification;product_wiring_is_qualified_separately",
+  "source_sha256": {
+    "crates/bib-base/src/search_snapshots.rs": "72409288f42e4e4808f151f6b57bcb318218b61b8e46598483074f156b8baa2e",
+    "crates/bib-base/src/search_snapshot_exports.rs": "dab003080c2325b318d9d551df37f6c17a5a4ff93ebd52a0359b9c849fdf27e9",
+    "crates/bib-base/tests/search_snapshots_workflow.rs": "0bc8bcfaf213049e0493167749000f79720b9ad99197f618fc7da4b8031be4ef",
+    "crates/bib-base/Cargo.toml": "b8baf72e48408228017a3e064f26f6a973449ab9238843426d8bdef53534c93b"
+  },
+  "defaults": {
+    "max_snapshots": 1000,
+    "max_snapshot_bytes": 8388608,
+    "max_total_bytes": 268435456,
+    "max_capture_items": 10000
+  },
+  "validation": {
+    "tests": {
+      "passed": 19,
+      "failed": 0,
+      "command": "TMPDIR=<owned ext4 test directory> CARGO_BUILD_JOBS=2 cargo test -p bib-base --test search_snapshots_workflow",
+      "log": "target/bib-p4-validation/p5-capture-execution-tests.log",
+      "sha256": "6bb88d0c2ac3cedf2e13af0adac0c94c55883f909aec5e68b9c7880651ed1815"
+    },
+    "strict_clippy": {
+      "passed": true,
+      "command": "CARGO_BUILD_JOBS=2 cargo clippy -p bib-base --test search_snapshots_workflow -- -D warnings",
+      "log": "target/bib-p4-validation/p5-capture-execution-clippy.log",
+      "sha256": "7791fc4feb8f1593c46c2c1b3c40b2bd6ad9ee02c3c51ad32021ce14e9d71277"
+    },
+    "development_tree_initial_run": {
+      "passed": false,
+      "failure": "hybrid_http_uses_pinned_provider_hard_filters_evidence_and_bounded_export timed out waiting for maintenance; cause not established",
+      "log": "target/bib-p4-validation/p5-development-tree-tests.log",
+      "sha256": "659475989330ac7640e8897ebe19ea975293fc520bbfe77b76b42bb1c701ef01",
+      "isolated_recheck_passed": true,
+      "isolated_recheck_log": "target/bib-p4-validation/p5-hybrid-http-recheck.log",
+      "isolated_recheck_sha256": "b483f890807f33290b530588f47fe175b3afcbe102d0579a37928c444d8fc9c2",
+      "serialized_full_recheck": "passed"
+    },
+    "development_tree_serialized_recheck": {
+      "passed": 369,
+      "failed": 0,
+      "ignored": 0,
+      "exit_code": 0,
+      "command": "TMPDIR=<owned ext4 test directory> CARGO_BUILD_JOBS=2 cargo test -p bib-base -p api-server --lib --tests -- --include-ignored --test-threads=1",
+      "log": "target/bib-p4-validation/p5-development-tree-serial-tests.log",
+      "sha256": "abfa03926c10ba59bead8749f5243d928b24cffefa3b37afdaa481b76fad3eb2",
+      "scope": "353 existing backend tests plus 16 storage/export tests compiled before the new capture function; current 19-test capture/storage/export target passed separately",
+      "prior_timeout_root_cause": "not_established; isolated retry and full serialized recheck passed; no timeout threshold changed"
+    }
+  },
+  "coverage": [
+    "Real local lexical pages freeze article metadata across edits/deletion and store reopen",
+    "Strict page query/cursor/generation identity and complete metadata",
+    "Discovery sequence, requested-source coverage, partial failures and contribution provenance",
+    "Model digest/profile/generations and execution time window",
+    "Idempotent retry returns original data after source mutation and budget decrease",
+    "Pre-execution intent lookup works without a live expired discovery session",
+    "Independent connections share persisted limits; concurrent writes and same-intent creation are serialized",
+    "Quota rejection does not publish a partial row; explicit delete releases quota",
+    "Opaque list high-water and anchor rejects other stores/history-branch sequence reuse",
+    "Corrupt payload/name detected; explicit checksum delete can recover",
+    "RIS/BibTeX/JSON frozen exports preserve ordering and original JSON metadata",
+    "RIS line controls cannot inject extra records; BibTeX cite keys are unique",
+    "Export output budget rejects instead of truncating",
+    "128 deterministic f64 scores survive storage/read/export bit-exactly with float_roundtrip",
+    "Server-owned capture executes actual hydrated lexical pages, checks each page, and publishes only after complete validation",
+    "Committed server action retries skip both runtime/model preparation and live search",
+    "Whole-page item budget reports actual partial coverage without inventing truncated responses or cursors",
+    "Real mutation between pages and cancelled pending execution publish no snapshot"
+  ],
+  "float_failure_before_fix": {
+    "score": 0.022276978069589726,
+    "observed": "read/export falsely reported a valid snapshot as corrupt",
+    "log_sha256": "ed3dee3a38740a9cc3f1de3217d92fd73c653d92c5c3be8db4f0869429e1cf70",
+    "fix": "P5-only serde_json float_roundtrip dependency feature"
+  },
+  "phase_boundary": {
+    "p4_qualified_source_snapshot": "target/bib-p4-validation/isolated-p4-topic-candidate-20261028",
+    "manifest": "target/bib-p4-validation/p5-boundary-20261028/manifest.json",
+    "manifest_sha256": "b8e119d0c9c7dddcf6e476e473cb858b0ae12b6cb5b06c44671b41dabe315e98",
+    "p5_cargo_delta": "Only the float_roundtrip feature line; P4 dependency additions remain P4",
+    "lib_actor_shared_api_gui_wired": false
+  },
+  "limitations": [
+    "Not an implemented public API or GUI feature yet",
+    "No claim that upstream citation/recommendation behavior was tested",
+    "No complete process-crash or physical backup/restore qualification",
+    "List history-branch test mutates the UUID of a closed fixture, not a full filesystem restore",
+    "Version 1 decoder/migration must be preserved when persisted request/payload schemas evolve",
+    "P4 and P5 remain unfinished; no phase commit created",
+    "Server capture function is independently tested, but public API/model configuration capture and GUI remain unwired"
+  ],
+  "superseded_by": "literature-search-p5-snapshots-product-linux.json"
+}

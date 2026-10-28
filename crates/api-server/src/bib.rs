@@ -55,8 +55,20 @@ struct ApiError {
 type ApiResult = Result<Json<Value>, (StatusCode, Json<ApiError>)>;
 
 pub fn router(shared: BibShared) -> Router {
+    // The final injected gateway is now fixed. Resume explicitly enabled durable
+    // rules on host startup, independently of whether the GUI opens this view.
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let startup = shared.clone();
+        runtime.spawn(async move {
+            if let Err(error) = startup.subscription_service().await {
+                tracing::error!(%error, "bibliography subscription scheduler startup failed");
+            }
+        });
+    }
     Router::new()
         .merge(crate::discovery::router())
+        .merge(crate::snapshots::router())
+        .merge(crate::subscriptions::router())
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))
         .route("/articles/unfiled", get(list_unfiled_articles))
@@ -155,6 +167,10 @@ pub fn router(shared: BibShared) -> Router {
         .route("/export", get(export))
         .route("/search/external", get(search_external))
         .route("/search/v2", post(search_local_v2))
+        .route(
+            "/search/explore",
+            post(explore_literature).layer(axum::middleware::from_fn(crate::snapshots::no_cache)),
+        )
         .route("/search/parse", post(parse_search_query))
         .route("/search/cancel", post(cancel_search_request))
         .route("/search/export", post(export_search))
@@ -395,6 +411,68 @@ async fn cancellable_search<T>(
         .map_err(|_| bib_base::Error::InvalidSearchQuery("invalid request ID".into()))?;
     let mut guard = shared.search_cancellations.register(id)?;
     tokio::select! {biased; _=guard.cancelled()=>Err(bib_base::Error::SearchCancelled),result=future=>result}
+}
+
+async fn explore_literature(
+    State(shared): State<Arc<BibShared>>,
+    headers: HeaderMap,
+    Json(input): Json<bib_base::literature_exploration::ExplorationRequest>,
+) -> Response {
+    use bib_base::literature_exploration::{ExplorationError, explore};
+    use bib_types::discovery::SourceFailureKind;
+    let guard = if let Some(id) = headers.get("x-search-request-id") {
+        let id = match id.to_str() {
+            Ok(id) => id,
+            Err(_) => return error(StatusCode::BAD_REQUEST, "invalid request ID").into_response(),
+        };
+        match shared.search_cancellations.register(id) {
+            Ok(guard) => Some(guard),
+            Err(failure) => return search_error(failure).into_response(),
+        }
+    } else {
+        None
+    };
+    let result = if let Some(mut guard) = guard {
+        tokio::select! {biased;
+            _=guard.cancelled()=>return search_error(bib_base::Error::SearchCancelled).into_response(),
+            result=explore(&shared.s2,input)=>result,
+        }
+    } else {
+        explore(&shared.s2, input).await
+    };
+    match result {
+        Ok(page) => Json(page).into_response(),
+        Err(ExplorationError::Invalid(message)) => {
+            error(StatusCode::BAD_REQUEST, message).into_response()
+        }
+        Err(ExplorationError::CursorExpired) => error(
+            StatusCode::CONFLICT,
+            "Exploration cursor expired; restart this list",
+        )
+        .into_response(),
+        Err(ExplorationError::Upstream(failure)) => {
+            let status = match failure.kind {
+                SourceFailureKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+                SourceFailureKind::Timeout => StatusCode::GATEWAY_TIMEOUT,
+                SourceFailureKind::InvalidQuery | SourceFailureKind::Unsupported => {
+                    StatusCode::BAD_REQUEST
+                }
+                SourceFailureKind::AuthRequired => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::BAD_GATEWAY,
+            };
+            let mut response = (
+                status,
+                Json(json!({"error":failure.message,"failure":failure})),
+            )
+                .into_response();
+            if let Some(seconds) = failure.retry_after_seconds {
+                if let Ok(value) = seconds.to_string().parse() {
+                    response.headers_mut().insert(header::RETRY_AFTER, value);
+                }
+            }
+            response
+        }
+    }
 }
 
 async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult {

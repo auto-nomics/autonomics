@@ -4,6 +4,7 @@ use crate::discovery_sources::{
 };
 use bib_types::{Identifier, SearchExpr, SearchField, discovery::*};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+const OFFSET_WINDOW: u32 = 10_000;
 type Result<T> = std::result::Result<T, SourceFailure>;
 fn unsupported(message: &str) -> SourceFailure {
     SourceFailure::new(SourceFailureKind::Unsupported, message, false)
@@ -18,7 +19,7 @@ fn doi(value: &str) -> Option<String> {
     crate::discovery_merge::identifier_key(&Identifier::doi(value)).map(|key| key[4..].to_owned())
 }
 pub(crate) fn capabilities(client: &crossref::CrossrefClient) -> SourceCapabilities {
-    let mut notes=vec!["DOI and metadata filters are exact source constraints. Text requires explicit approximate matching or native query; Crossref does not enforce Boolean/phrase semantics. OA, review and clinical-trial filters are unsupported.".into(),"Cursor pages are not a stable snapshot. SDK clones share a serial connection and endpoint-specific pacing; quota is not inferred from request-rate headers.".into()];
+    let mut notes=vec!["DOI and metadata filters are exact source constraints. Text requires explicit approximate matching or native query; Crossref does not enforce Boolean/phrase semantics. OA, review and clinical-trial filters are unsupported.".into(),"Publication-date order uses offset pages within the first 10000 records; relevance/citation/index-date order uses cursors. Neither is a stable snapshot. Narrow searches to traverse more publication-ordered records. SDK clones share a serial connection and endpoint-specific pacing; quota is not inferred from request-rate headers.".into()];
     for limit in client.observed_rate_limits() {
         notes.push(format!(
             "Last advertised {} rate: {} requests / {} seconds; upstream concurrency {:?}.",
@@ -44,7 +45,7 @@ pub(crate) fn capabilities(client: &crossref::CrossrefClient) -> SourceCapabilit
             DiscoverySort::Oldest,
             DiscoverySort::CitationCount,
         ],
-        pagination: SourcePagination::Cursor,
+        pagination: SourcePagination::CursorOrOffset,
         max_page_size: 100,
         credentials_configured: client.has_api_token(),
         authentication: SourceAuthentication::Optional,
@@ -323,7 +324,8 @@ pub(crate) fn configure_sort(
     });
     let (sort, order) = match sort {
         DiscoverySort::Relevance if has_text => ("score", "desc"),
-        DiscoverySort::Relevance | DiscoverySort::Newest => ("published", "desc"),
+        DiscoverySort::Relevance => ("indexed", "desc"),
+        DiscoverySort::Newest => ("published", "desc"),
         DiscoverySort::Oldest => ("published", "asc"),
         DiscoverySort::CitationCount => ("is-referenced-by-count", "desc"),
     };
@@ -332,15 +334,33 @@ pub(crate) fn configure_sort(
     Ok(())
 }
 pub(crate) fn notices(params: &BTreeMap<String, String>) -> Vec<SourceNotice> {
-    let mut notices=vec![SourceNotice{code:"cursor_semantics".into(),message:"Crossref cursor pages may drift as metadata changes; totals are provider-reported, not a stable snapshot.".into()}];
+    let mut notices=vec![SourceNotice{code:"cursor_semantics".into(),message:"Crossref result pages may drift as metadata changes; totals are provider-reported, not a stable snapshot.".into()}];
     if params.iter().any(|(key, value)| {
         (key == "query" || key.starts_with("query.")) && !value.trim().is_empty()
     }) {
         notices.push(SourceNotice{code:"approximate_text".into(),message:"Crossref text fields are fuzzy relevance hints. Boolean joins and exact phrases are not enforced; title hints use the broader bibliographic field. Exact identifiers and metadata filters remain constraints.".into()});
     } else if !params.contains_key("doi") {
-        notices.push(SourceNotice{code:"no_text_relevance".into(),message:"Without a text query, source ordering uses the requested date/citation sort; default relevance falls back to publication date descending.".into()});
+        notices.push(SourceNotice{code:"no_text_relevance".into(),message:format!("No text relevance is available. Actual source order: {} {}. Default relevance without text uses index date, not publication date.", params.get("sort").map(String::as_str).unwrap_or("provider default"), params.get("order").map(String::as_str).unwrap_or("provider default"))});
+    }
+    if publication_order(params) {
+        notices.push(SourceNotice { code: "publication_offset_window".into(), message: "Crossref publication-date sorting cannot use cursors. This order uses offset pages within the first 10000 records; narrow the query to traverse further. A partial result range is not a complete upstream scan.".into() });
     }
     notices
+}
+fn publication_order(params: &BTreeMap<String, String>) -> bool {
+    params.get("sort").is_some_and(|v| {
+        matches!(
+            v.as_str(),
+            "issued" | "published" | "published-print" | "published-online"
+        )
+    })
+}
+fn expired_mode() -> SourceFailure {
+    SourceFailure::new(
+        SourceFailureKind::CursorExpired,
+        "Crossref pagination mode differs from the frozen sort; replay the same query/ordering from its first page",
+        true,
+    )
 }
 fn failure(error: crossref::CrossrefError, continuation: bool) -> SourceFailure {
     use crossref::CrossrefError as E;
@@ -424,24 +444,43 @@ pub(crate) async fn page(
             notices: plan.notices.clone(),
         });
     }
-    let (raw_cursor, obtained) = if let Some(cursor) = cursor {
-        let ProviderCursor::Crossref {
-            cursor, obtained, ..
-        } = cursor_decode(cursor, plan)?
-        else {
-            return Err(SourceFailure::new(
-                SourceFailureKind::CursorExpired,
-                "invalid Crossref cursor",
-                false,
-            ));
-        };
-        (cursor, obtained)
-    } else {
-        ("*".into(), 0)
+    let offset_mode = publication_order(&plan.parameters);
+    let (raw_cursor, obtained, initial_total) = match (offset_mode, cursor) {
+        (true, Some(cursor)) => match cursor_decode(cursor, plan)? {
+            ProviderCursor::CrossrefOffset {
+                offset,
+                initial_total,
+                ..
+            } => (None, u64::from(offset), Some(initial_total)),
+            _ => return Err(expired_mode()),
+        },
+        (true, None) => (None, 0, None),
+        (false, Some(cursor)) => match cursor_decode(cursor, plan)? {
+            ProviderCursor::Crossref {
+                cursor,
+                obtained,
+                initial_total,
+                ..
+            } => (Some(cursor), obtained, initial_total),
+            _ => return Err(expired_mode()),
+        },
+        (false, None) => (Some("*".into()), 0, None),
     };
-    let mut query = crossref::client::WorksQuery::new()
-        .with_rows(u32::from(page_size))
-        .with_cursor(&raw_cursor);
+    // Elasticsearch's result window bounds offset + rows. Do not change a
+    // cursor-bound page size or silently switch ordering to squeeze in a tail.
+    if offset_mode && obtained.saturating_add(u64::from(page_size)) > u64::from(OFFSET_WINDOW) {
+        return Err(SourceFailure::new(
+            SourceFailureKind::Capacity,
+            "Crossref publication-order offset window exhausted (10000 records); narrow the search instead of treating the obtained range as complete",
+            false,
+        ));
+    }
+    let mut query = crossref::client::WorksQuery::new().with_rows(u32::from(page_size));
+    query = if let Some(raw) = &raw_cursor {
+        query.with_cursor(raw)
+    } else {
+        query.with_offset(obtained as u32)
+    };
     for (key, value) in &plan.parameters {
         query = match key.as_str() {
             "query" => query.with_query(value),
@@ -491,23 +530,45 @@ pub(crate) async fn page(
         ));
     }
     let end = obtained.saturating_add(count as u64);
-    let has_more = count == usize::from(page_size) && end < message.total_results;
-    let next_cursor = if has_more {
+    let initial_total = initial_total.unwrap_or(message.total_results);
+    let has_more = count == usize::from(page_size)
+        && (end < message.total_results
+            || (!offset_mode
+                && message
+                    .next_cursor
+                    .as_ref()
+                    .is_some_and(|value| !value.is_empty())));
+    let next_cursor = if !has_more {
+        None
+    } else if offset_mode {
+        Some(cursor_encode(ProviderCursor::CrossrefOffset {
+            fingerprint: plan.fingerprint.clone(),
+            offset: end as u32,
+            initial_total,
+        })?)
+    } else {
         let raw = message
             .next_cursor
-            .filter(|cursor| !cursor.is_empty())
+            .filter(|value| !value.is_empty())
             .ok_or_else(|| bad_response("Crossref omitted continuation for a full page"))?;
         Some(cursor_encode(ProviderCursor::Crossref {
             fingerprint: plan.fingerprint.clone(),
             cursor: raw,
             obtained: end,
+            initial_total: Some(initial_total),
         })?)
-    } else {
-        None
     };
     let mut executed = plan.parameters.clone();
-    executed.insert("cursor".into(), raw_cursor);
+    if let Some(raw) = raw_cursor {
+        executed.insert("cursor".into(), raw);
+    } else {
+        executed.insert("offset".into(), obtained.to_string());
+    }
     executed.insert("rows".into(), page_size.to_string());
+    let mut notices = plan.notices.clone();
+    if initial_total != message.total_results {
+        notices.push(SourceNotice { code: "source_total_changed".into(), message: format!("Crossref total changed from {initial_total} to {} during traversal; these pages are not an upstream snapshot.", message.total_results) });
+    }
     Ok(SourcePage {
         source: "crossref".into(),
         articles: message
@@ -519,7 +580,7 @@ pub(crate) async fn page(
         next_cursor,
         executed_parameters: executed,
         query_translation: None,
-        notices: plan.notices.clone(),
+        notices,
     })
 }
 
@@ -551,7 +612,7 @@ mod tests {
             result.parameters["filter"],
             "from-pub-date:2020-01-01,until-pub-date:2024-12-31,type:journal-article,type:book"
         );
-        assert_eq!(result.parameters["sort"], "published");
+        assert_eq!(result.parameters["sort"], "indexed");
         let result = plan(&request("doi:10.1000/a OR doi:10.1000/b")).unwrap();
         assert_eq!(result.parameters["filter"], "doi:10.1000/a,doi:10.1000/b");
         assert!(plan(&request("doi:10.1000/a AND doi:10.1000/b")).is_err());
@@ -629,7 +690,7 @@ mod tests {
         ]
         .into();
         configure_sort(&mut params, DiscoverySort::Relevance).unwrap();
-        assert_eq!(params["sort"], "published");
+        assert_eq!(params["sort"], "indexed");
         assert!(
             !notices(&params)
                 .iter()
@@ -665,5 +726,26 @@ mod tests {
             );
             input.native.as_mut().unwrap().parameters.remove(key);
         }
+    }
+    #[test]
+    fn publication_sort_keeps_its_meaning_and_discloses_the_offset_window() {
+        for (sort, order) in [
+            (DiscoverySort::Newest, "desc"),
+            (DiscoverySort::Oldest, "asc"),
+        ] {
+            let mut input = request("year:2020");
+            input.sort = sort;
+            let planned = plan(&input).unwrap();
+            assert_eq!(planned.parameters["sort"], "published");
+            assert_eq!(planned.parameters["order"], order);
+            assert!(
+                planned
+                    .notices
+                    .iter()
+                    .any(|n| n.code == "publication_offset_window")
+            );
+        }
+        let cap = capabilities(&crossref::CrossrefClient::new());
+        assert_eq!(cap.pagination, SourcePagination::CursorOrOffset);
     }
 }

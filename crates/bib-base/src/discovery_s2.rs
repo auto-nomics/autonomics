@@ -634,7 +634,7 @@ fn failure(error: S2Error, continuation: bool) -> SourceFailure {
         }
     }
 }
-fn valid(paper: &Paper) -> bool {
+pub(crate) fn valid(paper: &Paper) -> bool {
     paper.paper_id.len() == 40
         && paper.paper_id.bytes().all(|b| b.is_ascii_hexdigit())
         && paper
@@ -643,7 +643,7 @@ fn valid(paper: &Paper) -> bool {
             .is_some_and(|title| !title.trim().is_empty())
         && paper.year.is_none_or(|year| (1..=9999).contains(&year))
 }
-fn exact(paper: &Paper, id: &str) -> bool {
+pub(crate) fn exact(paper: &Paper, id: &str) -> bool {
     if id.len() == 40 {
         return paper.paper_id.eq_ignore_ascii_case(id);
     }

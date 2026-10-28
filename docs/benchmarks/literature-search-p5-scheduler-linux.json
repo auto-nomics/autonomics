@@ -1,0 +1,107 @@
+{
+  "schema": "bib-subscription-scheduler-qualification-v1",
+  "phase": "P5 uncommitted",
+  "status": "scheduler_resource_wait_api_and_later_gui_native_qualified;final_phase_gates_open",
+  "implemented": [
+    "Bounded host-owned scheduler, default two simultaneous rules; final injected gateway/session resources reused",
+    "Enabled persisted rules resume on HTTP/native router host construction without opening subscription GUI; paused rules never start automatically",
+    "Scheduler task retains no handle to itself; last handle drop closes channel, cancels active requests and drains durable settlement",
+    "Manual check UUID acknowledgement, retained retry under full concurrency, explicit durable run cancellation that cannot release a later owner",
+    "Persistent resource epoch captured before failing operations; unchanged exhausted resources block manual and scheduled claims",
+    "Actual policy changes, history/inbox deletion and freed rule space wake resource waiters; unchanged policy saves do not; wake is consumed exactly once on a new claim",
+    "Due candidates filter paused, blocked and live-owned rules before LIMIT; resource recovery is eligible before ordinary nextDue",
+    "Same-writer-transaction quota change/deletion and resource epoch; independent connections share wait/recovery and restart retains it",
+    "Authenticated rules/history/inbox/limits API, no-store route middleware, 128KiB JSON limit and 15-second acknowledgement deadline independent of durable source/run deadlines"
+  ],
+  "tests": {
+    "execution_and_scheduler": {
+      "passed": 15,
+      "log": "target/bib-p4-validation/p5-subscription-scheduler-final-tests.log"
+    },
+    "resource_wait": {
+      "passed": 7,
+      "log": "target/bib-p4-validation/p5-subscription-resource-wait-final-tests.log",
+      "note": "Supersedes six-test resource target in earlier combined log; do not count twice"
+    },
+    "run_history_and_scans": {
+      "passed": 7,
+      "log": "target/bib-p4-validation/p5-subscription-scheduler-final-tests.log"
+    },
+    "storage": {
+      "passed": 21,
+      "log": "target/bib-p4-validation/p5-subscription-scheduler-final-tests.log"
+    },
+    "http": {
+      "passed": 4,
+      "log": "target/bib-p4-validation/p5-subscription-api-final-tests.log"
+    },
+    "targeted_total": 54,
+    "failed": 0,
+    "ignored": 0
+  },
+  "strict_clippy": {
+    "passed": true,
+    "packages": [
+      "bib-base",
+      "api-server"
+    ],
+    "all_targets": true,
+    "log": "target/bib-p4-validation/p5-subscription-scheduler-final-clippy.log"
+  },
+  "full_backend": {
+    "status": "passed",
+    "exit_code": 0,
+    "passed": 461,
+    "failed": 0,
+    "ignored": 0,
+    "targets_including_doctests": 25,
+    "includes_doctests": 3,
+    "include_ignored": true,
+    "node": "24.19.0",
+    "log": "target/bib-p4-validation/p5-subscription-scheduler-full-backend-tests.log",
+    "log_sha256": "5beba1cd5cb921140d9955df98e7b4c8efbd4f9f07c3970138f2370974e0fe4d",
+    "scope": "Current combined P4/P5 root backend source; not final phase-isolated source qualification"
+  },
+  "source_sha256": {
+    "crates/bib-base/src/subscriptions.rs": "197d71e9143c1bb1f54b9f131f2992f20332e5ef8f2e5b3ba90a3fe5ffd0fb9f",
+    "crates/bib-base/src/subscription_execution.rs": "e41aa9df2f32207ede0a7b8dd6413f9fb864ec87358877d6fea0db367ff0f40a",
+    "crates/bib-base/src/subscription_scheduler.rs": "9ad40422c20cd079b06e389ac7e1be613414732a5acb1052e8b66af4f1a2984c",
+    "crates/bib-base/src/subscription_store.rs": "ffd2d34c825d8f3db71efacbdc901b4f3c74c2a22c1d6aea4714beb026467215",
+    "crates/bib-base/src/subscription_store/pages.rs": "3318fbc076e0d78753e8618a5504cbf57fbcc38987f9c6a441a9ed25846c3d0b",
+    "crates/bib-base/src/subscription_store/runs.rs": "44751e4f0c3fa3a69aa7828ffb0c48643400202fb7c916be57c9ffc383a8d09b",
+    "crates/bib-base/src/subscription_store/scheduling.rs": "c350f5629882f48f857e740e720704452d1592767f8887ab4d338f7718f191fd",
+    "crates/bib-base/src/shared.rs": "04afaa789964e90884debb35285e9792e32edda09789dcf410cf70a8efa4950b",
+    "crates/bib-base/src/lib.rs": "7428f01da11dc093d8b05e0d3c405dad58e8b8e07f8765e33a9e5083de0ea2e2",
+    "crates/bib-base/tests/subscription_execution_workflow.rs": "eb741f5bf10fa2c7fa010b15d5dc64bc121144ed7238e0fd11bf835e41751555",
+    "crates/bib-base/tests/subscription_resource_wait_workflow.rs": "b84535f006fd56947ddcd6821a928adcb1d14ef7c2302e4cc7fdc1c54d8c9360",
+    "crates/bib-base/tests/subscription_runs_workflow.rs": "eeaa1350099719daaa202cd72b1e3177aad3d39940a6f196e216a490d801a187",
+    "crates/bib-base/tests/subscription_store_workflow.rs": "333d2bc30efd4b90d0ab1c224cc0f13e23f41a67acb33620a4eb355f8a2e3b87",
+    "crates/api-server/src/subscriptions.rs": "d59eed0ca30cb7ea3bf5b36e5604dc671974e17e7f6f5bd1ea4a1958edac0561",
+    "crates/api-server/src/bib.rs": "6651c610d92a55cec5b80325f07eab14a839641f3d917970fa12c55a3ff41430",
+    "crates/api-server/src/lib.rs": "5526b986acfe9c48a28b0e0036e7209956238c8b0eea5f391247b22bfa025989",
+    "crates/api-server/tests/subscriptions.rs": "5b1d0d4d51abf1d534654621b690630632cc920bd81b10ccc0717ba6281b3aee"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-subscription-scheduler-final-tests.log": "52b7bdcfe6330db51a32a0de9115ac240cbd77e9de58abb4b4257a8fe3ef367e",
+    "target/bib-p4-validation/p5-subscription-resource-wait-final-tests.log": "d15a06a88f4b9330a2b0ec127b448fdda3f34703e9c3f334ccec756625d10305",
+    "target/bib-p4-validation/p5-subscription-api-final-tests.log": "604ced5dfbe411c0ea34a407b6ab3b648f53b8e48bbd7c14a3f73dcdf77c188d",
+    "target/bib-p4-validation/p5-subscription-scheduler-final-clippy.log": "495f4b97fd3bb6806cd6d66bc4be9102f504240529538a0ab3f61dae80dbc054"
+  },
+  "pending": [
+    "Subscription GUI rules/inbox/history/limits and source-identity relookup into explicit import preview",
+    "Current Crossref cursor/sort compatibility and actual source HTTP contracts",
+    "Scheduler cross-process kill, backup/restore and native GUI qualification",
+    "Final phase-isolated qualification, source/staging audit and P5 commit"
+  ],
+  "limitations": [
+    "Sources are injected local fixtures, not real external subscription traffic",
+    "50 backend targeted tests plus four HTTP tests do not replace current full regression or GUI qualification",
+    "Request-deadline middleware is implemented; no slow-client deadline timing measurement in these four HTTP cases",
+    "No automatic canonical article import, emails or external messages",
+    "Global success requires all source targets; budget/failure/incomplete results must not be shown as successful no-new-results"
+  ],
+  "later_gui_qualification": "docs/benchmarks/literature-search-p5-subscriptions-gui-linux.json",
+  "later_source_compatibility_qualification": "docs/benchmarks/literature-search-p5-source-compat-linux.json",
+  "later_process_recovery_qualification": "docs/benchmarks/literature-search-p5-subscription-recovery-linux.json",
+  "later_native_qualification": "docs/benchmarks/literature-search-p5-native-linux.json"
+}

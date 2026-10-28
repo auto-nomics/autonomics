@@ -73,6 +73,8 @@ pub enum SourcePagination {
     None,
     Offset,
     Cursor,
+    /// Some source orderings require bounded offset paging, others use cursors.
+    CursorOrOffset,
     History,
 }
 

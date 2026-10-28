@@ -15,7 +15,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoverySessionError {
@@ -75,6 +75,74 @@ struct Resources {
     bytes: AtomicUsize,
 }
 impl Resources {
+    async fn acquire(
+        &self,
+        name: &str,
+    ) -> std::result::Result<(OwnedSemaphorePermit, OwnedSemaphorePermit), SourceFailure> {
+        let source = self.source(name);
+        loop {
+            if source.blocked.load(Ordering::Acquire) {
+                return Err(SourceFailure::new(
+                    SourceFailureKind::RateLimited,
+                    "source retry window exceeds the process clock range",
+                    false,
+                ));
+            }
+            let cooldown = *source.cooldown.lock().unwrap();
+            if let Some(until) = cooldown {
+                tokio::time::sleep(until.saturating_duration_since(Instant::now())).await;
+            }
+            let source_permit = source
+                .permits
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("source semaphore stays open");
+            let global_permit = self
+                .permits
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("global semaphore stays open");
+            if source.blocked.load(Ordering::Acquire) {
+                return Err(SourceFailure::new(
+                    SourceFailureKind::RateLimited,
+                    "source retry window exceeds the process clock range",
+                    false,
+                ));
+            }
+            if source
+                .cooldown
+                .lock()
+                .unwrap()
+                .is_some_and(|until| until > Instant::now())
+            {
+                drop(global_permit);
+                drop(source_permit);
+                continue;
+            }
+            return Ok((source_permit, global_permit));
+        }
+    }
+    fn failure_delay(&self, name: &str, failure: &SourceFailure, attempt: usize) -> Duration {
+        let delay = self
+            .limits
+            .retry_backoff
+            .saturating_mul(1u32 << (attempt - 1))
+            .max(Duration::from_secs(
+                failure.retry_after_seconds.unwrap_or(0),
+            ));
+        if failure.kind == SourceFailureKind::RateLimited {
+            let source = self.source(name);
+            if let Some(until) = Instant::now().checked_add(delay) {
+                let mut cooldown = source.cooldown.lock().unwrap();
+                *cooldown = Some(cooldown.map(|old| old.max(until)).unwrap_or(until));
+            } else {
+                source.blocked.store(true, Ordering::Release);
+            }
+        }
+        delay
+    }
     fn source(&self, name: &str) -> Arc<SourceResources> {
         self.sources
             .lock()
@@ -260,6 +328,72 @@ impl Default for DiscoverySessions {
     }
 }
 impl DiscoverySessions {
+    /// One persistent-background page, using the exact same global/source
+    /// permits and cooldown as interactive sessions. Persistence and retry
+    /// scheduling belong to the caller; dropping the future cancels queued I/O.
+    pub async fn execute_planned_page(
+        &self,
+        gateway: Arc<LiteratureGateway>,
+        plan: SourcePlan,
+        cursor: Option<String>,
+        deadline: Instant,
+    ) -> std::result::Result<SourcePage, SourceFailure> {
+        let timeout = || {
+            SourceFailure::new(
+                SourceFailureKind::Timeout,
+                "source page deadline expired, including queue and cooldown time",
+                true,
+            )
+        };
+        if Instant::now() >= deadline {
+            return Err(timeout());
+        }
+        let provider = gateway
+            .discovery_sources()
+            .into_iter()
+            .find(|p| p.name() == plan.source)
+            .ok_or_else(|| {
+                SourceFailure::new(
+                    SourceFailureKind::Unsupported,
+                    "source is not registered",
+                    false,
+                )
+            })?;
+        if !(1..=100).contains(&plan.page_size) {
+            return Err(SourceFailure::new(
+                SourceFailureKind::InvalidQuery,
+                "invalid planned page size",
+                false,
+            ));
+        }
+        let operation = async {
+            let (_source, _global) = self.inner.resources.acquire(&plan.source).await?;
+            if Instant::now() >= deadline {
+                return Err(timeout());
+            }
+            let result = provider
+                .discovery_page(&plan, cursor.as_deref(), plan.page_size)
+                .await;
+            if let Err(error) = &result {
+                self.inner.resources.failure_delay(&plan.source, error, 1);
+            }
+            result
+        };
+        match tokio::time::timeout_at(
+            deadline.into(),
+            std::panic::AssertUnwindSafe(operation).catch_unwind(),
+        )
+        .await
+        {
+            Err(_) => Err(timeout()),
+            Ok(Err(_)) => Err(SourceFailure::new(
+                SourceFailureKind::InvalidResponse,
+                "source provider panicked",
+                false,
+            )),
+            Ok(Ok(result)) => result,
+        }
+    }
     pub fn source_runtime(&self) -> Vec<DiscoverySourceRuntime> {
         let mut status = self
             .inner
@@ -790,6 +924,40 @@ impl DiscoverySessions {
             sequence: state.sequence,
         })
     }
+    /// Capture user-visible source status and candidates under one session
+    /// lock. Independent snapshot/results calls could mix distinct sequences.
+    pub fn capture_obtained(
+        &self,
+        id: &str,
+        expected_sequence: u64,
+        order: DiscoveryResultOrder,
+        max_items: usize,
+    ) -> Result<(DiscoverySessionSnapshot, DiscoveryResultPage)> {
+        if !(1..=10_000).contains(&max_items) {
+            return Err(DiscoverySessionError::Invalid(
+                "capture limit must be 1..10000".into(),
+            ));
+        }
+        let session = self.get(id)?;
+        let state = session.state.lock().unwrap();
+        if state.sequence != expected_sequence {
+            return Err(DiscoverySessionError::Conflict(
+                "discovery results changed; refresh before saving".into(),
+            ));
+        }
+        let (candidates, total) = state.candidates.results(None, order, 0, max_items);
+        let end = candidates.len();
+        Ok((
+            session.snapshot(&state),
+            DiscoveryResultPage {
+                candidates,
+                obtained_candidates: total,
+                offset: 0,
+                next_offset: (end < total).then_some(end),
+                sequence: state.sequence,
+            },
+        ))
+    }
     pub fn candidate(&self, id: &str, candidate: &str) -> Result<DiscoveryCandidate> {
         let session = self.get(id)?;
         let state = session.state.lock().unwrap();
@@ -898,49 +1066,8 @@ impl Job {
     }
     async fn operation(&self, deadline: Instant) -> std::result::Result<SourcePage, SourceFailure> {
         let resources = &self.session.resources;
-        let source = resources.source(&self.plan.source);
         for attempt in 1..=resources.limits.max_attempts {
-            if source.blocked.load(Ordering::Acquire) {
-                return Err(SourceFailure::new(
-                    SourceFailureKind::RateLimited,
-                    "source retry window exceeds the process clock range",
-                    false,
-                ));
-            }
-            let (_source, _global) = loop {
-                if source.blocked.load(Ordering::Acquire) {
-                    return Err(SourceFailure::new(
-                        SourceFailureKind::RateLimited,
-                        "source retry window exceeds the process clock range",
-                        false,
-                    ));
-                }
-                let cooldown = *source.cooldown.lock().unwrap();
-                if let Some(until) = cooldown {
-                    tokio::time::sleep(until.saturating_duration_since(Instant::now())).await;
-                }
-                let source_permit = source
-                    .permits
-                    .acquire()
-                    .await
-                    .expect("source semaphore stays open");
-                let global_permit = resources
-                    .permits
-                    .acquire()
-                    .await
-                    .expect("global semaphore stays open");
-                if source
-                    .cooldown
-                    .lock()
-                    .unwrap()
-                    .is_some_and(|until| until > Instant::now())
-                {
-                    drop(global_permit);
-                    drop(source_permit);
-                    continue;
-                }
-                break (source_permit, global_permit);
-            };
+            let (_source, _global) = resources.acquire(&self.plan.source).await?;
             if !self.publish_attempt(attempt, None) {
                 return Err(SourceFailure::new(
                     SourceFailureKind::Cancelled,
@@ -957,21 +1084,7 @@ impl Job {
             match result {
                 Ok(page) => return Ok(page),
                 Err(failure) => {
-                    let backoff = resources
-                        .limits
-                        .retry_backoff
-                        .saturating_mul(1u32 << (attempt - 1));
-                    let delay = backoff.max(Duration::from_secs(
-                        failure.retry_after_seconds.unwrap_or(0),
-                    ));
-                    if failure.kind == SourceFailureKind::RateLimited {
-                        if let Some(until) = Instant::now().checked_add(delay) {
-                            let mut cooldown = source.cooldown.lock().unwrap();
-                            *cooldown = Some(cooldown.map(|old| old.max(until)).unwrap_or(until));
-                        } else {
-                            source.blocked.store(true, Ordering::Release);
-                        }
-                    }
+                    let delay = resources.failure_delay(&self.plan.source, &failure, attempt);
                     if !failure.retryable
                         || attempt == resources.limits.max_attempts
                         || delay >= deadline.saturating_duration_since(Instant::now())
@@ -1329,6 +1442,79 @@ mod tests {
             DiscoverySessionPhase::Cancelled
         );
         assert_eq!(source.calls(), 1);
+    }
+    #[tokio::test]
+    async fn persistent_pages_share_interactive_slots_and_queue_deadlines() {
+        let gate = Arc::new(Notify::new());
+        let source = MockSource::new(
+            "arxiv",
+            vec![
+                Step::Hold(gate.clone(), page("arxiv", &["one"], None)),
+                Step::Page(page("arxiv", &["two"], None)),
+            ],
+        );
+        let manager = DiscoverySessions::default();
+        let gateway = gateway(vec![source.clone()]);
+        let interactive = manager
+            .create(gateway.clone(), request(&["arxiv"]))
+            .unwrap();
+        wait_until(|| source.calls() == 1).await;
+        let plan = source.plan_discovery(&request(&["arxiv"])).unwrap();
+        let error = manager
+            .execute_planned_page(
+                gateway.clone(),
+                plan.clone(),
+                None,
+                Instant::now() + Duration::from_millis(30),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, SourceFailureKind::Timeout);
+        assert_eq!(source.calls(), 1);
+        gate.notify_one();
+        idle(&manager, &interactive.id).await;
+        let result = manager
+            .execute_planned_page(gateway, plan, None, Instant::now() + Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert_eq!(result.articles.len(), 1);
+        assert_eq!(source.calls(), 2);
+    }
+    #[tokio::test]
+    async fn persistent_rate_limits_block_interactive_and_background_retries() {
+        let mut error =
+            SourceFailure::new(SourceFailureKind::RateLimited, "provider cooldown", true);
+        error.retry_after_seconds = Some(60);
+        let source = MockSource::new("arxiv", vec![Step::Fail(error)]);
+        let manager = DiscoverySessions::default();
+        let gateway = gateway(vec![source.clone()]);
+        let plan = source.plan_discovery(&request(&["arxiv"])).unwrap();
+        let result = manager
+            .execute_planned_page(
+                gateway.clone(),
+                plan.clone(),
+                None,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(result.kind, SourceFailureKind::RateLimited);
+        let interactive = manager
+            .create(gateway.clone(), request(&["arxiv"]))
+            .unwrap();
+        let result = manager
+            .execute_planned_page(
+                gateway,
+                plan,
+                None,
+                Instant::now() + Duration::from_millis(30),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(result.kind, SourceFailureKind::Timeout);
+        assert_eq!(source.calls(), 1);
+        assert!(manager.source_runtime()[0].cooldown_remaining_ms > 0);
+        manager.cancel(&interactive.id, None).unwrap();
     }
     #[tokio::test]
     async fn fast_source_delivers_before_slow_source_and_cancellation_keeps_results() {

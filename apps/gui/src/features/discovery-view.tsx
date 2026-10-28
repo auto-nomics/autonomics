@@ -6,6 +6,8 @@ import { Input } from "@/components/ui/input";
 import { AdvancedSearchBuilder } from "./advanced-search-builder";
 import { VirtualArticleList } from "./virtual-article-list";
 import { useDiscovery } from "./use-discovery";
+import { SubscribeSearchButton } from "./subscriptions";
+import { SaveSnapshotButton } from "./search-snapshots";
 import { useDiscoveryPresence } from "./use-discovery-presence";
 import type { SearchExpr } from "./bib-search-model";
 import type { DiscoveryAcquisition, DiscoveryCandidate, DiscoveryImportRequest, DiscoveryImportResult, DiscoveryOrder, DiscoveryPreview, DiscoveryRequest, DiscoverySelection, SourceCapabilities } from "./discovery-model";
@@ -217,6 +219,8 @@ export function DiscoveryView() {
       <div className="flex min-h-0 flex-col rounded border">
         <div className="flex flex-wrap items-center gap-2 border-b p-2 text-xs">
           <span role="status">{discovery.creating ? "Starting search…" : `${discovery.session?.merged_candidates ?? 0} obtained candidates`}</span>
+          {discovery.session && <SubscribeSearchButton key={`subscribe:${discovery.session.id}`} request={discovery.session.request} />}
+          {discovery.session && <SaveSnapshotButton key={discovery.session.id} execution={{ kind: "discovery", session_id: discovery.session.id, sequence: discovery.session.sequence, order: discovery.filter.order }} disabled={discovery.creating} />}
           <select aria-label="Discovery result source" className="rounded border bg-background p-1" value={discovery.filter.source} onChange={event => discovery.changeFilter(event.target.value, discovery.filter.order)}><option value="">All sources</option>{discovery.session?.sources.map(source => <option key={source.source} value={source.source}>{source.source}</option>)}</select>
           <select aria-label="Discovery result order" className="rounded border bg-background p-1" value={discovery.filter.order} onChange={event => discovery.changeFilter(discovery.filter.source, event.target.value as DiscoveryOrder)}><option value="first_seen">First obtained</option><option value="relevance">Combined source rank</option><option value="newest">Newest obtained</option><option value="source_rank">Source rank</option></select>
           <Button size="xs" variant="outline" disabled={!sessionId || discovery.loadingResults} onClick={() => { discovery.refresh(); presence.refresh(); }}>{discovery.updatesPending ? "Show updated results" : "Refresh results"}</Button>

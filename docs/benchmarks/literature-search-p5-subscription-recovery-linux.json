@@ -1,0 +1,113 @@
+{
+  "schema": "bib-subscription-process-recovery-qualification-v1",
+  "phase": "P5 uncommitted",
+  "status": "three_real_process_scenarios_and_later_actual_native_passed;final_phase_gates_open",
+  "production_api_scheduler_and_store": true,
+  "source_pages_are_injected_fixtures": true,
+  "provider_requests_or_external_messages": false,
+  "receipt": "target/bib-p4-validation/subscription-process-recovery-v2-20261028/receipt.json",
+  "receipt_sha256": "c1c6021693400c408d45fa593e13480fb0230e1696eb54089252f23dfddf8fc7",
+  "sealed_worker": "target/bib-p4-validation/p5-subscription-recovery-worker-v2-20261028/receipt.json",
+  "worker_sha256": "15293f2e0829a39a3e5366cf1e225767e2146e1b15247c23d672683618516e76",
+  "scenarios": {
+    "crash_restore": {
+      "passed": true,
+      "deliberate_sigkill": true,
+      "restart_to_complete_seconds": 30.31101363900234,
+      "prior_run_interrupted": true,
+      "higher_epoch_takeover": true,
+      "resumed_exact_committed_cursor": true,
+      "observed_lease_deadline_respected": true,
+      "preexpiry_idle_observation": true,
+      "frozen_scan_and_plan_preserved": true,
+      "closed_backup_files": 7,
+      "closed_family_hashes_equal": true,
+      "idempotent_action_survived_restore": true,
+      "deleted_notification_not_resurrected": true,
+      "read_flag_preserved": true,
+      "canonical_article_count": 0
+    },
+    "suspended_owner_handoff": {
+      "passed": true,
+      "two_processes_shared_canonical_db": true,
+      "takeover_after_observed_lease_deadline": true,
+      "old_owner_resumed_before_source_run_timeout": true,
+      "old_pending_source_future_cancelled": true,
+      "old_run_not_overwritten_after_resume": true,
+      "no_duplicate_notifications_or_new_old_owner_requests": true
+    },
+    "quota_restart": {
+      "passed": true,
+      "wait_survived_process_restart": true,
+      "unchanged_wait_prevented_automatic_and_manual_io": true,
+      "history_not_spammed": true,
+      "changed_policy_resumed_before_hourly_due": true,
+      "quota_failure_page_was_atomic": true,
+      "canonical_article_count": 0
+    }
+  },
+  "verification": [
+    "SIGKILL of owned host with first page committed and second page reserved/pending; next owner waits past observed durable lease expiry and resumes exact cursor",
+    "Old running attempt becomes Interrupted, pending records released; newer lease epoch completes frozen scan without duplicate notifications",
+    "Close complete DB family, copy all seven files, verify byte hashes before reopening; restore rule/history/read flags and retained idempotent actions",
+    "Replay after restore matches deleted notification without resurrecting it; no automatic canonical article import",
+    "SIGSTOP/SIGCONT of owned old process; second process shares canonical DB, takes over expired lease and commits; resumed old request is cancelled before source/run timeout",
+    "Persisted quota wait survives a fresh process, blocks manual and scheduled I/O without history spam; resource policy change resumes before ordinary nextDue"
+  ],
+  "source_sha256": {
+    "Cargo.lock": "ad147664bc85699394a7e4076b91586b7af5369ee81efad89885c880462a671c",
+    "crates/api-server/Cargo.toml": "9908184565f75e9202b19d5f0fbec8fe3d7d202fadacbce042bb0f2d0e664715",
+    "crates/api-server/examples/subscription_recovery_host.rs": "bf2273f24e058fddd884970a09eaf5bce76aeed997fd63a897c2dae4fed9fc6d",
+    "scripts/qualify_bib_subscription_recovery.py": "36248234c6becc7a46015deb178e17bbaca536205b000948a46d8fd4fe8862ed",
+    "crates/bib-base/src/subscription_execution.rs": "ead63f86bf915a887dce3445a57c7fd5bb927ad1237476cd9b5df37c77b7212b",
+    "crates/bib-base/src/subscription_scheduler.rs": "9ad40422c20cd079b06e389ac7e1be613414732a5acb1052e8b66af4f1a2984c",
+    "crates/bib-base/src/subscription_store.rs": "ffd2d34c825d8f3db71efacbdc901b4f3c74c2a22c1d6aea4714beb026467215",
+    "crates/bib-base/src/subscription_store/runs.rs": "44751e4f0c3fa3a69aa7828ffb0c48643400202fb7c916be57c9ffc383a8d09b",
+    "crates/bib-base/src/subscription_store/pages.rs": "3318fbc076e0d78753e8618a5504cbf57fbcc38987f9c6a441a9ed25846c3d0b",
+    "crates/bib-base/src/subscription_store/scheduling.rs": "c350f5629882f48f857e740e720704452d1592767f8887ab4d338f7718f191fd",
+    "crates/api-server/src/subscriptions.rs": "d59eed0ca30cb7ea3bf5b36e5604dc671974e17e7f6f5bd1ea4a1958edac0561",
+    "crates/bib-base/src/shared.rs": "04afaa789964e90884debb35285e9792e32edda09789dcf410cf70a8efa4950b"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-subscription-recovery-host-final-build.log": "c5df39cf4e95b61835c6f3a97018d966a7b066dfd8efb5505b8cc16abd5ba55d",
+    "target/bib-p4-validation/p5-subscription-recovery-v2-host-build.log": "d7d5692754bcbe6bfbf3d73b44a020770646013bb95b424388190be598ee0fe6",
+    "target/bib-p4-validation/p5-subscription-process-recovery.log": "9d94600957143ee5e382bdd960b7b3db51facbbc414270bdfecda6a5149e2786",
+    "target/bib-p4-validation/p5-subscription-process-recovery-v2.log": "fca313329a475f6af606c0340dcf3fd7902733e7dffa9d0fe119f4bc408884d6",
+    "target/bib-p4-validation/p5-subscription-recovery-final-clippy.log": "c5fd68656aa870e4f9385972ebe5ef615d8eb721e5488729a2d287dc6ca78ab7",
+    "target/bib-p4-validation/p5-subscription-recovery-v2-host-clippy.log": "eabc4ec24b18c899a5bde96747ed58d581babcb99b0d76822eeb26f34b9cee48"
+  },
+  "strict_checks": {
+    "all_bib_api_targets": true,
+    "latest_fixture_example": true,
+    "python_bytecode_compile": true
+  },
+  "lockfile_audit": "Only api-server references already locked turso as a fixture dev dependency; no package versions or sources changed",
+  "current_production_backend_regression": {
+    "passed": 468,
+    "failed": 0,
+    "ignored": 0,
+    "log": "target/bib-p4-validation/p5-crossref-compat-full-backend-tests.log",
+    "scope": "Regression source precedes fixture-only dev dependency and host observation helpers; production API/scheduler/store source unchanged"
+  },
+  "pending": [
+    "Actual native Tauri/WebKitGTK P5 GUI workflows",
+    "Final phase-isolated source build/regression and staging audit; P4/P5 commits",
+    "Remaining source and P4 performance/sustained-availability scope as required by phase plan"
+  ],
+  "limitations": [
+    "Local source page fixtures, not real provider matching/reliability tests",
+    "Kill occurs while waiting on a source after a prior committed page; no hardware power-loss or exhaustive syscall-boundary crash claim",
+    "Backup includes the closed test DB family; no attachment VFS was populated in these subscription scenarios",
+    "Restore verifies retained subscription state and deduplication; no broad system backup product claim"
+  ],
+  "platform": "Linux; owned POSIX SIGKILL/SIGSTOP/SIGCONT fixture processes",
+  "source_hash_scope": "Critical fixture/API/scheduler/store files archived with worker; complete phase-source isolation remains a separate pending gate",
+  "post_run_audit": {
+    "owned_bootstrap_processes": 7,
+    "owned_processes_remaining": 0,
+    "old_future_drop_at_ms": 1793195925564,
+    "old_run_deadline_ms": 1793196015074,
+    "drop_precedes_deadline": true
+  },
+  "later_native_qualification": "docs/benchmarks/literature-search-p5-native-linux.json"
+}

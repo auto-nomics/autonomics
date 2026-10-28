@@ -1,0 +1,174 @@
+{
+  "schema": "bib-p5-exploration-qualification-v1",
+  "date": "2026-10-28",
+  "status": "citation_and_recommendation_list_api_gui_locally_qualified;P5_incomplete",
+  "source_sha256": {
+    "crates/semantic-scholar/src/client.rs": "de243f7d29e3dc8f964fc9d8a68c82f094da42d6fda93060999a739ad82bbb60",
+    "crates/semantic-scholar/src/lib.rs": "8d0d0e0bd975ce4746842a2b0ddf3d35d83e25bc1866a4f850a897cc9fcf2b29",
+    "crates/semantic-scholar/src/relation_types.rs": "dbd979409053a7bf532837e5285fa14f15de8a893a7ba2f73132ba22b6bc9795",
+    "crates/semantic-scholar/tests/exploration_contract.rs": "69846561a3e3c32d76ad5c66e9e83d1f2e509bb960941aa99b92fd6ce7b12482",
+    "crates/bib-base/src/lib.rs": "020477bbe463bd2ee1d0b64d770eda4ff2c31b0504a766bd6d1f7c5506cb3d3a",
+    "crates/bib-base/src/discovery_s2.rs": "42edc6134b20a352796f4922417aacd7a97c953a26179e8a7c16e7cbf41240d6",
+    "crates/bib-base/src/literature_exploration.rs": "b650e77439f601e04eb0d651f9159ff57f2e021377c93c32cc2e670ec749cb53",
+    "crates/bib-base/tests/literature_exploration_workflow.rs": "f8f7b2f24643ac898c761a7e58849e6a8f54b82d42e9dd7b903f25aff13b4f4b",
+    "crates/api-server/src/bib.rs": "bac60198ad88e4b517a00c3573f412976a39fb8e6019c2f9d6e13be04f9455b6",
+    "crates/api-server/tests/exploration.rs": "28f010fd6c676574c4cfaade958b33f758a8a81bbfec371b87307ba919b8e082",
+    "apps/gui/src/features/literature-exploration.tsx": "c52a1cbf1cf40b59d0d7afc481381bb9a53f13923c8c0206cd0ac12664142ab6",
+    "apps/gui/src/features/bibliography.tsx": "83987ef4ea74c4cce91d1d643b67d45f7b879e760b5538436c96935a47640daa",
+    "apps/gui/src/gateway.ts": "36194571df91a4b465aa310688bfcd44d79e302ed3b8ed11ac20283c97366f5e",
+    "apps/gui/tests/literature-exploration.html": "cc3d62d929b830de71a9cf974c7db1cc4d905a42c2b16c7f66c2ca0eb98662c4",
+    "apps/gui/tests/literature-exploration-mount.tsx": "5a39544422d7467589efb95c92f45ffde47272e0a24bd1e23408c1c1a903415b",
+    "apps/gui/tests/literature-exploration.mjs": "e0084169136f7a5bd2a4ec254be9d97a9b06ae7eae927bca55614b1de29a1814",
+    "apps/gui/src/features/exploration-import.tsx": "4f6681d6c1e926c613f285d81d6cb4f60e54969ba95fd5cba7bb9fc5d111bcdc"
+  },
+  "validation": {
+    "sdk": {
+      "passed": 33,
+      "failed": 0,
+      "log": "target/bib-p4-validation/p5-sdk-exploration-tests.log",
+      "sha256": "8bbc2f1a68301c1d7c1f32fdbecb453bfea775536967c53b55d7d6dc6b0c4a9f"
+    },
+    "library": {
+      "passed": 9,
+      "failed": 0,
+      "log": "target/bib-p4-validation/p5-exploration-wired-tests.log",
+      "sha256": "2793bb0f065671fe8192aaf2ed91f79bc7ea0c5b1dcecf0fb9191af23ccc3fa9"
+    },
+    "http_route": {
+      "passed": 6,
+      "failed": 0,
+      "log": "target/bib-p4-validation/p5-exploration-import-api-tests.log",
+      "sha256": "5459cd5a40c0da4534c3651fa6ca809e222e6660c4f232dbd59858b1896e6e4b"
+    },
+    "strict_clippy_sdk": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-sdk-exploration-clippy.log",
+      "sha256": "c9feec285f120ca629c299657a68260dd0cc4040f48c09bfaba906822bb3f406"
+    },
+    "strict_clippy_library": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-exploration-wired-clippy.log",
+      "sha256": "22c58f0f544059c492a39e7fc60a933dbb56d92f9ba4c4c359f5bdd2c9cef5f0"
+    },
+    "strict_clippy_api": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-exploration-api-clippy.log",
+      "sha256": "35c9ae552a87999cad16057f25601d41d065d526aac769e24fed42907c66a3ac"
+    },
+    "typescript": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-exploration-import-qualified-types.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "gui": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-exploration-import-browser-tests.log",
+      "sha256": "7d4d6547c224884a891b21a1102934b5022ca78495d9e8a4804ce7c2f9795945"
+    },
+    "full_backend_recheck": {
+      "passed": 394,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p5-snapshots-tail-full-backend-tests.log",
+      "sha256": "53407aac1740c11418d7007a1114f251625fdd8cf5a2ca6826113527d7b0e6ae",
+      "scope": "Product backend including snapshots, before new P4 item-key migration; sixth exploration API test separately qualified"
+    },
+    "import_api_strict_clippy": {
+      "passed": true,
+      "log": "target/bib-p4-validation/p5-import-p4-key-probe-clippy.log",
+      "sha256": "eb5f2f10ee9a0c62f4a73b51fa15d4ddf3f1388a9c10341fe779ec7d2db910a6"
+    },
+    "previous_full_backend_recheck": {
+      "passed": 386,
+      "failed": 0,
+      "ignored": 0,
+      "log": "target/bib-p4-validation/p5-exploration-full-backend-tests.log",
+      "sha256": "65177536fc8bce5bf1f4c6335ac134ccc38c04d34c2cd0db063197e20e7d4348",
+      "scope": "Exploration candidate compiled before snapshot API/shared-store wiring; does not qualify later snapshot changes"
+    }
+  },
+  "gui_transports": [
+    {
+      "mode": "browser_fetch",
+      "requests": 8,
+      "viewport": {
+        "width": 480,
+        "height": 900
+      },
+      "screenshot": "target/bib-p4-validation/p5-exploration-browser.png",
+      "screenshot_sha256": "eb1a5ac4ec2b8a6c0559ea911aee40f47a40510fe85f4bc57d2f2c78ed79cc1c",
+      "import_requests": 10
+    },
+    {
+      "mode": "simulated_desktop_bridge",
+      "requests": 8,
+      "viewport": {
+        "width": 480,
+        "height": 900
+      },
+      "screenshot": "target/bib-p4-validation/p5-exploration-bridge.png",
+      "screenshot_sha256": "eb1a5ac4ec2b8a6c0559ea911aee40f47a40510fe85f4bc57d2f2c78ed79cc1c",
+      "import_requests": 10
+    }
+  ],
+  "contract": {
+    "page_size": "1..100",
+    "deadline_ms": {
+      "default": 15000,
+      "min": 100,
+      "max": 120000,
+      "covers_shared_pacing_and_lookup": true
+    },
+    "hidden_automatic_retries": 0,
+    "max_http_requests_per_page": 2,
+    "shared_client": "BibShared.s2 clone retains transport/pacing/cooldown",
+    "unresolved_rows": "kept with raw position and metadata, no article or fabricated edge",
+    "cursor_binding": [
+      "canonical_seed",
+      "kind",
+      "recommendation_pool",
+      "page_size",
+      "fields",
+      "source"
+    ],
+    "upstream_snapshot": false,
+    "recommendation_pools": [
+      "recent",
+      "all-cs"
+    ],
+    "recommendations_create_citation_edges": false,
+    "seed_lookup": "reuse P3 identifier normalization and exact returned-identity verification",
+    "route": "POST /api/v1/bib/search/explore",
+    "cancellation": "existing x-search-request-id registry; 499 on cancel"
+  },
+  "coverage": [
+    "Null/missing paper identities preserve raw graph positions and provider next; null whole paper is explicit unresolved",
+    "Resolved identities have validated metadata; wrong direction and inconsistent windows fail",
+    "Explicit reference and citing edge direction, source and retrieval timestamp",
+    "Exact DOI lookup verified before graph traversal; mismatched identity rejected",
+    "Cursor seed/kind/page-size isolation and no recommendation continuation",
+    "429 preserves Retry-After, classified errors hide upstream raw body",
+    "One overall deadline includes shared cooldown; no hidden automatic retry",
+    "API cancellation of waiting provider returns 499",
+    "GUI lazy loading, independent cached lists/scroll, pagination and explicit recommendation pools",
+    "GUI rate-limit error preserves old results; refresh can recover",
+    "GUI seed switch cancels request, late response cannot overwrite new item; missing identifier has visible explanation",
+    "GUI import review performs fresh exact discovery by canonical provider ID, previews strong-ID matches, and submits only session selections/fingerprints",
+    "GUI source conflict clears preview, refreshes candidate fingerprint and requires preview again before commit",
+    "Actual graph HTTP -> exact native discovery -> import preview/commit test preserves existing manual title/tag and avoids a duplicate record"
+  ],
+  "phase_boundary": {
+    "manifest": "target/bib-p4-validation/p5-boundary-20261028/manifest.json",
+    "sha256": "b8e119d0c9c7dddcf6e476e473cb858b0ae12b6cb5b06c44671b41dabe315e98",
+    "p4_jobs_use_unchanged_archived_binaries": true,
+    "p4_commit_must_stage_saved_baselines": true
+  },
+  "limitations": [
+    "Local HTTP and GUI fixtures only; no live upstream coverage or relevance score",
+    "Simulated desktop bridge does not qualify actual Tauri IPC or native window behavior",
+    "Persistent browsing state after unmount remains pending",
+    "Snapshot API/GUI has separate local qualification; durable subscriptions remain unfinished",
+    "No phase commit created; P4 full capacity/Chinese quality jobs still running"
+  ],
+  "later_native_qualification": "docs/benchmarks/literature-search-p5-native-linux.json"
+}

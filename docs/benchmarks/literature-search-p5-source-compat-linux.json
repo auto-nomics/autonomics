@@ -1,0 +1,101 @@
+{
+  "schema": "bib-source-compatibility-qualification-v1",
+  "phase": "P5 uncommitted",
+  "status": "crossref_paging_and_frozen_cursor_replay_qualified;full_regression_running",
+  "implemented": [
+    "Crossref capability cursor_or_offset describes both supported traversal modes",
+    "Newest/oldest publication order uses published desc/asc with offset; text relevance and citation order retain cursor modes",
+    "Filter-only default relevance explicitly discloses indexed desc instead of sending prohibited published-plus-cursor requests",
+    "Publication offset+rows must remain within the supported 10000-result window; next-page attempt fails Capacity before HTTP instead of silently ending or changing page size/order",
+    "Plan fingerprints and cursor variants reject changed queries/sorts/page size and old incompatible provider cursor modes",
+    "Every page retains all query/filter/sort/row parameters and uses the returned provider token; changed totals are disclosed and do not override a valid continuation",
+    "Empty terminal cursor is accepted when a complete full page reaches the reported total",
+    "Subscription Crossref windows keep publication constraints but rederive notices and execute indexed ascending closed-window traversal",
+    "Expired provider cursors are replayable background failures with durable retry time, same frozen scan/window and retained seen identities"
+  ],
+  "local_tests": {
+    "source_http": 25,
+    "execution_and_scheduler": 16,
+    "subscription_resource_wait": 7,
+    "subscription_runs": 7,
+    "subscription_store": 21,
+    "pure_crossref_planner": 7,
+    "unique_total": 83,
+    "failed": 0,
+    "ignored": 0,
+    "scope_note": "Final source/executor log supersedes the earlier 24/16 targets; other subscription targets retained from earlier combined run; seven pure tests have 225 filtered, not passed"
+  },
+  "strict_clippy": {
+    "passed": true,
+    "packages": [
+      "bib-base",
+      "api-server"
+    ],
+    "all_targets": true,
+    "log": "target/bib-p4-validation/p5-crossref-compat-clippy.log"
+  },
+  "public_crossref": {
+    "passed": true,
+    "receipt": "target/bib-p4-validation/p5-crossref-public-contract.json",
+    "source_and_binary_receipt": "target/bib-p4-validation/p5-crossref-public-contract-source.json",
+    "archived_binary": "target/bib-p4-validation/p5-crossref-public-contract-worker",
+    "scope": "Two public exact DOIs; real production adapter/SDK; no library content or provider credentials; public probe precedes the later empty-token guard refinement, separately covered by final local source tests",
+    "observed_requests": 7
+  },
+  "public_openalex": {
+    "passed": true,
+    "receipt": "target/bib-p4-validation/p5-openalex-public-id-contract.json",
+    "scope": "Single direct public API exact-ID/initial cursor request, not production SDK or authenticated continuation/paid date-filter qualification"
+  },
+  "primary_sources": [
+    "https://community.crossref.org/t/changes-to-cursors-filtering-and-sorting-in-the-rest-api/16246",
+    "https://www.crossref.org/documentation/retrieve-metadata/rest-api/tips-for-using-the-crossref-rest-api/",
+    "https://help.openalex.org/api/authentication/",
+    "https://help.openalex.org/api/filtering/"
+  ],
+  "full_backend": {
+    "status": "passed",
+    "exit_code": 0,
+    "passed": 468,
+    "failed": 0,
+    "ignored": 0,
+    "targets_including_doctests": 25,
+    "include_ignored": true,
+    "log": "target/bib-p4-validation/p5-crossref-compat-full-backend-tests.log",
+    "log_sha256": "4a6322c456f3aa5ff06669dde389d6541eca83e3a26124c2ee5260d0185ad6f8",
+    "scope": "Current Crossref/production subscription code; fixture-only Turso dev dependency and recovery host subsequently built and checked independently"
+  },
+  "source_sha256": {
+    "crates/bib-types/src/discovery.rs": "efda12e3e6eb137884553351da628c4aa91cd2f959cdc509e6a92fa89eb0ea59",
+    "crates/bib-base/src/discovery_crossref.rs": "41ed6a6716012c9013de0b8f9cc8c26b0d16d82de6aa038c05e9f61513ab1be3",
+    "crates/bib-base/src/discovery_sources.rs": "3312a3289fad579fba1518e56f40b2e421dab06dca51cc153027714c4adde319",
+    "crates/bib-base/src/subscription_plan.rs": "bde62bfa9e63a5670e6bd72ab768a89279f683e5c3f6debbabea854749e24455",
+    "crates/bib-base/src/subscription_execution.rs": "ead63f86bf915a887dce3445a57c7fd5bb927ad1237476cd9b5df37c77b7212b",
+    "crates/bib-base/tests/discovery_sources.rs": "40768beff8ab06c5728beb4d649421aac261d46ff7788df00b47ff4b0d9b63ca",
+    "crates/bib-base/tests/subscription_execution_workflow.rs": "82199d997a17234a7272b599553fb676d9eddea6989b24e6b67a9fc1f0217eae",
+    "crates/bib-base/examples/crossref_source_contract.rs": "a653fbe937c4d6af936b386785a5dc878a851b01664fe67e27e569ce69d30890"
+  },
+  "logs_sha256": {
+    "target/bib-p4-validation/p5-crossref-compat-source-tests.log": "02bd9127fb8a6ea890d66ad64822cdb5b425e08627e5a7106de7239990726da9",
+    "target/bib-p4-validation/p5-crossref-compat-final-source-tests.log": "1ce4a6ef508ed5a66d5bf163d3d4df5f8bad954e5e0ec1e7ca26aa1526502f48",
+    "target/bib-p4-validation/p5-crossref-compat-unit-tests.log": "9b4015fc450127275e225ab0598f4023eee8ead96d6b3693db3ee7ce7901d440",
+    "target/bib-p4-validation/p5-crossref-compat-clippy.log": "255527eae9e40bb999288533a4ebfbdb7d5d666cdccd144048ee0ee11b6f4842",
+    "target/bib-p4-validation/p5-crossref-public-probe-build.log": "6d2df6394611cb6c35394425b833f2717b0309b8419b8f77ab3549afa999ab03",
+    "target/bib-p4-validation/p5-crossref-public-contract.json": "8c97b6bc0873ccf7f756c5abc2ec6cab24bda415248b51fe28208f4ca9cd6ff0",
+    "target/bib-p4-validation/p5-openalex-public-id-contract.json": "4cde5c9ae2303af55757eb643b001df84ca942babd86b4b38f03ee46686ffe4a",
+    "target/bib-p4-validation/p5-crossref-public-contract-source.json": "6240ef6dac39a2f3999263c5cc3944fbbf6753c3260ee0ae3080a8f905ac248e"
+  },
+  "pending": [
+    "Final phase-isolated source qualification",
+    "Actual native P5 GUI qualification; process recovery completed in linked receipt",
+    "Remaining source public/HTTP integration scopes as required; no general upstream reliability or paid entitlements inferred",
+    "Final source/staging audit and phase commit"
+  ],
+  "limitations": [
+    "Offset order and cursor results are mutable upstream; no stable-snapshot or universal completeness claim",
+    "Supported publication-date traversal is bounded, disclosed and fails explicitly if further records are outside the window",
+    "Local mock transports and eight-or-fewer small public Crossref calls are not broad provider-availability tests",
+    "P4 functional 100k receipt is complete but performance and sustained availability gates remain separate"
+  ],
+  "later_process_recovery_qualification": "docs/benchmarks/literature-search-p5-subscription-recovery-linux.json"
+}
