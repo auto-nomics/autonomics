@@ -198,7 +198,9 @@ pub fn router_with_bib(
     let session: Router = Router::new()
         .route(
             "/api/session",
-            post(auth::login).get(auth::session_status).delete(auth::logout),
+            post(auth::login)
+                .get(auth::session_status)
+                .delete(auth::logout),
         )
         .with_state(auth);
     Router::new()

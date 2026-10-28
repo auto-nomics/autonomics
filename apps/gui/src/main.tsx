@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import "./app.css";
 import {
@@ -20,8 +20,12 @@ import type {
 } from "@/types";
 import {
   AgentView,
+  SpawnAgentDialog,
   type DisplaySettings,
 } from "@/features/agent";
+import { layoutSideOpen, readAgentLayout } from "@/features/agent-layout";
+import { AgentWorkspace } from "@/features/agent-workspace";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { BibliographyView } from "@/features/bibliography";
 import { ConfigView } from "@/features/config";
 import { KmsView } from "@/features/kms";
@@ -60,7 +64,20 @@ function convertMessage(message: any): ChatItem[] {
     if (block.type === "text") text += block.text ? `${text ? "\n" : ""}${block.text}` : "";
     else if (block.type === "thinking") output.push(makeItem("thinking", block.thinking ?? "", "thinking"));
     else if (block.type === "tool_use") output.push(makeItem("tool", `${block.name}: ${JSON.stringify(block.input)}`, "tool_call"));
-    else if (block.type === "tool_result") output.push(makeItem("tool", `${block.is_error ? "ERR" : "OK"} ${block.content ?? ""}`, "tool_result"));
+    else if (block.type === "tool_result") {
+      // Backend content is ToolResultContent: a string, an arbitrary JSON
+      // value, or a list of text/image blocks. Text blocks join; images
+      // leave a marker; other values serialize so the renderer can parse.
+      const content = block.content;
+      const resultText = typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content.map((item: any) => (item?.type === "text" ? item.text : `[${item?.type ?? "block"}]`)).join("\n")
+          : content == null
+            ? ""
+            : JSON.stringify(content);
+      output.push(makeItem("tool", `${block.is_error ? "ERR" : "OK"} ${resultText}`, "tool_result"));
+    }
   }
   pushText();
   return output;
@@ -106,6 +123,36 @@ export default function App() {
   });
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Workspace hosting: the center column is a single AgentWorkspace
+  // instance that portals into the agent view's slot and, once the user
+  // switches to another view, into a floating panel instead.
+  const [dockedSlot, setDockedSlot] = useState<HTMLDivElement | null>(null);
+  const [spawnOpen, setSpawnOpen] = useState(false);
+  // ≥ md: sidebars are resizable panels; below it they are drawers. The
+  // flags start from the persisted panel layout so a reload keeps both.
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const savedLayout = useMemo(() => readAgentLayout(), []);
+  const [leftOpen, setLeftOpen] = useState(() => isDesktop && layoutSideOpen(savedLayout, "agents"));
+  const [rightOpen, setRightOpen] = useState(() => isDesktop && layoutSideOpen(savedLayout, "inspector"));
+
+  // Viewport crossings reset the sidebars: drawers closed on mobile, panels
+  // open on desktop. The first run is skipped so the restored layout — not
+  // the default — stays in charge on initial load.
+  const crossedOnceRef = useRef(false);
+  useEffect(() => {
+    if (!crossedOnceRef.current) {
+      crossedOnceRef.current = true;
+      return;
+    }
+    setLeftOpen(isDesktop);
+    setRightOpen(isDesktop);
+  }, [isDesktop]);
+
+  // Stable callback ref for the workspace slot; the guard avoids the
+  // detach/attach churn a fresh closure would cause on every render.
+  const onSlotChange = useCallback((slot: HTMLDivElement | null) => {
+    setDockedSlot((current) => (current === slot ? current : slot));
+  }, []);
 
   const stateRef = useRef({ agents, sessions, activeAgent, activeSessions });
   stateRef.current = { agents, sessions, activeAgent, activeSessions };
@@ -270,7 +317,12 @@ export default function App() {
         nextActiveSessions[agent] = latestSession(agentSessions);
       }
       const nextAgents = snapshot.agents;
-      const nextAgent = nextAgents[0]?.path ?? "";
+      // Reconnects re-run hydrate; keep the agent the user selected if it
+      // still exists instead of snapping back to the first one.
+      const previous = stateRef.current.activeAgent;
+      const nextAgent = nextAgents.some((agent) => agent.path === previous)
+        ? previous
+        : nextAgents[0]?.path ?? "";
       stateRef.current = {
         agents: nextAgents,
         sessions: snapshot.sessions,
@@ -569,7 +621,8 @@ export default function App() {
         </nav>
         <div className="flex shrink-0 items-center gap-2">
           <Badge variant={connected ? "default" : "destructive"}>
-            {connected ? "Gateway 已连接" : "已断开"}
+            <span className="hidden sm:inline">{connected ? "Gateway 已连接" : "已断开"}</span>
+            <span className="sm:hidden">{connected ? "已连接" : "断开"}</span>
           </Badge>
           <Button
             size="sm"
@@ -595,17 +648,20 @@ export default function App() {
           sessions={sessions[activeAgent] ?? []}
           statuses={statuses}
           messages={messages[activeAgent] ?? []}
-          streaming={streaming[activeAgent] ?? null}
           plan={plans[activeAgent] ?? null}
           usage={usage[activeAgent] ?? null}
           display={display}
           promptHistory={promptHistories[activeAgent] ?? []}
           rawMessages={rawMessages[`${activeAgent}:${activeSessionId}`] ?? []}
-          draft={draft}
-          busy={busy}
+          leftOpen={leftOpen}
+          rightOpen={rightOpen}
+          isDesktop={isDesktop}
+          onSetLeft={setLeftOpen}
+          onSetRight={setRightOpen}
+          onSlotChange={onSlotChange}
+          onSpawn={() => setSpawnOpen(true)}
           onDraftChange={setDraft}
           onSelectAgent={selectAgent}
-          onSendMessage={() => void sendMessage()}
           onCancel={() => void gatewayRequest("POST", `/agents/${activeAgent}/cancel`).catch((cause) => window.alert(String(cause)))}
           onCompact={() => void gatewayRequest("POST", `/agents/${activeAgent}/compact`).catch((cause) => window.alert(String(cause)))}
           onShutdown={(path) => void shutdownAgent(path)}
@@ -630,6 +686,38 @@ export default function App() {
           {view === "dag" && <DagView activeAgent={activeAgent} />}
         </section>
       )}
+
+      <SpawnAgentDialog
+        open={spawnOpen}
+        onOpenChange={setSpawnOpen}
+        busy={busy}
+        onSpawnAgent={spawnAgent}
+      />
+
+      {/* Rendered outside the view switch so its state survives; docks
+          back into the agent view's slot when the view returns. */}
+      <AgentWorkspace
+        mode={view === "agent" ? (dockedSlot ? "docked" : "standby") : "floating"}
+        dockedSlot={dockedSlot}
+        agents={agents}
+        activeAgent={activeAgent}
+        statuses={statuses}
+        messages={messages[activeAgent] ?? []}
+        streaming={streaming[activeAgent] ?? null}
+        usage={usage[activeAgent] ?? null}
+        display={display}
+        draft={draft}
+        busy={busy}
+        leftOpen={leftOpen}
+        rightOpen={rightOpen}
+        onDraftChange={setDraft}
+        onSendMessage={() => void sendMessage()}
+        onSelectAgent={selectAgent}
+        onShutdown={(path) => void shutdownAgent(path)}
+        onSpawn={() => setSpawnOpen(true)}
+        onToggleLeft={() => setLeftOpen((current) => !current)}
+        onToggleRight={() => setRightOpen((current) => !current)}
+      />
     </main>
   );
 }

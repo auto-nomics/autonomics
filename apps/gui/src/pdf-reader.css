@@ -1,5 +1,4 @@
 .zotero-pdf-reader {
-  --reader-rail-width: 52px;
   --reader-resizer-width: 5px;
   --reader-sidebar-width: clamp(250px, 23vw, 360px);
   --reader-page-filter: none;
@@ -16,7 +15,7 @@
   z-index: 38;
   display: grid;
   grid-template-columns:
-    calc(var(--reader-rail-width) + var(--reader-sidebar-width) + var(--reader-resizer-width))
+    calc(var(--reader-sidebar-width) + var(--reader-resizer-width))
     minmax(0, 1fr);
   overflow: hidden;
   background: #0f1113;
@@ -31,12 +30,11 @@
 }
 .zotero-pdf-reader.sidebar-closed {
   grid-template-columns:
-    var(--reader-rail-width)
+    0
     minmax(0, 1fr);
 }
 .zotero-pdf-reader.sidebar-closed .reader-sidebar-shell {
   grid-template-columns:
-    var(--reader-rail-width)
     0
     0;
 }
@@ -50,10 +48,12 @@
   pointer-events: none;
 }
 
+.reader-backdrop { display: none; }
+.reader-mobile-bar { display: none; }
+
 .reader-sidebar-shell {
   display: grid;
   grid-template-columns:
-    var(--reader-rail-width)
     minmax(0, 1fr)
     var(--reader-resizer-width);
   grid-template-rows: minmax(0, 1fr);
@@ -62,30 +62,6 @@
   overflow: hidden;
   background: #101215;
 }
-
-.reader-rail {
-  display: grid;
-  align-content: start;
-  gap: 3px;
-  padding: 8px 6px;
-  border-right: 1px solid #23262b;
-  background: #0c0e10;
-}
-.reader-rail-button {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: #9298a0;
-  cursor: pointer;
-  transition: background .16s ease, color .16s ease;
-}
-.reader-rail-button svg { width: 19px; height: 19px; }
-.reader-rail-button:hover { background: #1d2024; color: #dcdddf; }
-.reader-rail-button.active { background: #262a35; color: #fff; }
 
 .reader-sidebar {
   position: relative;
@@ -101,17 +77,13 @@
 .reader-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   min-width: 0;
-  padding: 8px 8px 8px 12px;
+  padding: 6px 8px;
   border-bottom: 1px solid #26292e;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  color: #9aa0a7;
 }
 .reader-sidebar-header button {
+  flex: none;
   width: 22px;
   height: 22px;
   border: 0;
@@ -121,6 +93,30 @@
   cursor: pointer;
 }
 .reader-sidebar-header button:hover { background: #222529; color: #fff; }
+.reader-rail {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+.reader-rail-button {
+  display: grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #9298a0;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.reader-rail-button svg { width: 16px; height: 16px; }
+.reader-rail-button:hover { background: #1d2024; color: #dcdddf; }
+.reader-rail-button.active { background: #262a35; color: #fff; }
 .reader-sidebar-body { min-height: 0; overflow: hidden; }
 .reader-sidebar-pane {
   height: 100%;
@@ -238,24 +234,51 @@
   position: fixed;
   z-index: 180;
   display: flex;
-  gap: 4px;
-  padding: 5px;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 6px;
   border: 1px solid #33363b;
   border-radius: 6px;
   background: #15171a;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
 }
 .reader-selection-popup[hidden] { display: none; }
-.reader-selection-popup button {
-  padding: 4px 6px;
+.reader-selection-popup .reader-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #00000066;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.reader-selection-popup .reader-swatch:hover { outline: 2px solid #899bff; outline-offset: 1px; }
+.reader-selection-popup .reader-swatch[data-color="yellow"] { background: #ffd400; }
+.reader-selection-popup .reader-swatch[data-color="red"] { background: #ff6666; }
+.reader-selection-popup .reader-swatch[data-color="green"] { background: #5fb236; }
+.reader-selection-popup .reader-swatch[data-color="blue"] { background: #2ea8e5; }
+.reader-selection-popup .reader-swatch[data-color="purple"] { background: #a28ae5; }
+.reader-selection-popup .reader-swatch[data-color="magenta"] { background: #e56eee; }
+.reader-selection-popup .reader-swatch[data-color="orange"] { background: #f19837; }
+.reader-selection-popup .reader-swatch[data-color="gray"] { background: #aaaaaa; }
+.reader-popup-divider {
+  align-self: stretch;
+  margin: 1px 3px;
+  background: #33363b;
+}
+.reader-selection-popup .reader-popup-action {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 0;
   border-radius: 4px;
-  background: #26292e;
+  background: transparent;
   color: #dcdddf;
   cursor: pointer;
-  font-size: 11px;
 }
-.reader-selection-popup button:hover { background: #31353b; }
+.reader-selection-popup .reader-popup-action:hover { background: #31353b; }
+.reader-selection-popup .reader-popup-action svg { width: 14px; height: 14px; }
 .reader-search-field {
   width: 120px;
   padding: 5px 6px;
@@ -496,12 +519,151 @@
   .zotero-pdf-reader,
   .zotero-pdf-reader.sidebar-closed {
     grid-template-columns:
-      calc(var(--reader-rail-width) + var(--reader-sidebar-width) + var(--reader-resizer-width))
+      calc(var(--reader-sidebar-width) + var(--reader-resizer-width))
       minmax(0, 1fr);
   }
   .zotero-pdf-reader.sidebar-closed {
-    grid-template-columns: var(--reader-rail-width) minmax(0, 1fr);
+    grid-template-columns: 0 minmax(0, 1fr);
   }
+}
+
+/* Mobile: the sidebar becomes an overlay drawer; desktop keeps the tiled
+   side-by-side layout. The shell leaves the grid flow so opening it never
+   relayouts the rendered pages. */
+@media (max-width: 768px) {
+  .zotero-pdf-reader,
+  .zotero-pdf-reader.sidebar-closed {
+    --reader-sidebar-width: min(320px, 86vw);
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reader-backdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    background: rgba(0, 0, 0, .45);
+  }
+  .zotero-pdf-reader.sidebar-closed .reader-backdrop { display: none; }
+  .reader-sidebar-shell {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 5;
+    width: calc(var(--reader-sidebar-width) + var(--reader-resizer-width));
+    max-width: 88vw;
+    box-shadow: 10px 0 28px rgba(0, 0, 0, .42);
+    transition: transform .2s ease;
+  }
+  .zotero-pdf-reader.sidebar-closed .reader-sidebar-shell {
+    grid-template-columns:
+      minmax(0, 1fr)
+      0;
+    transform: translateX(-105%);
+  }
+  .reader-sidebar-resizer { display: none; }
+
+  /* Immersive reading: chrome hides until a single tap on the content brings
+     the top bar and bottom control bar back. PDF reader only; the text
+     reader keeps its always-visible toolbar. Both bars overlay the pages, so
+     showing them never relayouts the document. The top bar carries nothing
+     but the back button — every other control lives in the bottom bar or the
+     sidebar drawer. */
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    gap: 8px;
+    min-height: 0;
+    padding: 6px 10px;
+    background: rgba(20, 22, 26, .94);
+    transform: translateY(-110%);
+    transition: transform .2s ease;
+  }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]).chrome-visible .reader-toolbar { transform: none; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar > *:not(.reader-tool-right),
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right > *:not([data-action="close"]) { display: none; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right { margin-left: 0; gap: 0; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="close"] {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+  }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="close"] svg { display: none; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="close"]::before {
+    content: "";
+    width: 11px;
+    height: 11px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    margin-left: 3px;
+  }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]):not(.chrome-visible) .reader-status { display: none; }
+
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-mobile-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    padding: 10px 14px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(16, 18, 21, .96);
+    border-top: 1px solid #26292e;
+    transform: translateY(110%);
+    transition: transform .2s ease;
+  }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]).chrome-visible .reader-mobile-bar { transform: none; }
+  .reader-mobile-slider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .reader-page-slider {
+    flex: 1;
+    min-width: 0;
+    height: 18px;
+    accent-color: #6c7bff;
+    cursor: pointer;
+  }
+  .reader-mobile-page {
+    font-size: 12px;
+    color: #c8cdd6;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .reader-mobile-actions {
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .reader-mobile-actions::-webkit-scrollbar { display: none; }
+  .reader-mobile-actions button {
+    flex: none;
+    display: grid;
+    justify-items: center;
+    gap: 3px;
+    min-width: 52px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #c8cdd6;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .reader-mobile-actions button svg { width: 20px; height: 20px; }
+  .reader-mobile-actions button:hover { background: #1d2024; color: #eceded; }
+  .reader-mobile-actions button[aria-pressed="true"] { background: #262a35; color: #fff; }
 }
 
 /* PDF.js lays out unrotated coordinates and delegates page rotation to CSS. */

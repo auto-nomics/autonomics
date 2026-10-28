@@ -93,6 +93,8 @@ const READER_RAIL_LABELS: Record<ReaderPane, string> = {
 
 const THEME_DARK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
 const THEME_LIGHT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>`;
+const NOTE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3"/><path d="M21 15h-5a2 2 0 0 0-2 2v6"/></svg>`;
+const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
 
 const TOOLBAR_ICONS: Record<string, string> = {
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
@@ -116,6 +118,13 @@ function toolbarButton(action: string, label: string, icon: string, text = "", e
   return `<button type="button" data-action="${action}" title="${label}" aria-label="${label}" ${extra}>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOOLBAR_ICONS[icon]}</svg>
     ${text ? `<span class="reader-tool-label">${text}</span>` : ""}
+  </button>`;
+}
+
+function mobileActionButton(action: string, label: string, icon: string) {
+  return `<button type="button" data-action="${action}" title="${label}" aria-label="${label}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOOLBAR_ICONS[icon]}</svg>
+    <span>${label}</span>
   </button>`;
 }
 
@@ -184,6 +193,8 @@ class ZoteroStylePdfReader {
   private pages: HTMLDivElement;
   private pageNumberInput: HTMLInputElement;
   private pageCountElement: HTMLSpanElement;
+  private pageSlider: HTMLInputElement;
+  private mobilePageLabel: HTMLSpanElement;
   private zoomLabel: HTMLSpanElement;
   private statusElement: HTMLSpanElement;
   private outlinePane: HTMLElement;
@@ -200,6 +211,10 @@ class ZoteroStylePdfReader {
   private searchResults: Array<{ page: number; count: number }> = [];
   private activePane: ReaderPane = "thumbnails";
   private sidebarOpen = true;
+  private chromeVisible = false;
+  private chromePointers = new Set<number>();
+  private chromeTapStart: { x: number; y: number; time: number } | null = null;
+  private programmaticScrollUntil = 0;
   private pdfTheme: ReaderTheme;
   private readingArea: HTMLDivElement;
   private appearancePopup: HTMLDivElement;
@@ -227,23 +242,23 @@ class ZoteroStylePdfReader {
     this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
     this.root.dataset.pdfTheme = this.pdfTheme;
     this.root.innerHTML = `
+      <div class="reader-backdrop" data-action="close-sidebar-backdrop"></div>
       <aside class="reader-sidebar-shell">
-        <nav class="reader-rail" aria-label="PDF sidebar">
-          ${(["thumbnails", "outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
-            <button
-              type="button"
-              class="reader-rail-button${pane === this.activePane ? " active" : ""}"
-              data-pane="${pane}"
-              title="${READER_RAIL_LABELS[pane]}"
-              aria-label="${READER_RAIL_LABELS[pane]}"
-            >
-              ${READER_RAIL_ICONS[pane]}
-            </button>
-          `).join("")}
-        </nav>
         <div class="reader-sidebar">
           <div class="reader-sidebar-header">
-            <span data-output="sidebar-title">Pages</span>
+            <nav class="reader-rail" aria-label="PDF sidebar">
+              ${(["thumbnails", "outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
+                <button
+                  type="button"
+                  class="reader-rail-button${pane === this.activePane ? " active" : ""}"
+                  data-pane="${pane}"
+                  title="${READER_RAIL_LABELS[pane]}"
+                  aria-label="${READER_RAIL_LABELS[pane]}"
+                >
+                  ${READER_RAIL_ICONS[pane]}
+                </button>
+              `).join("")}
+            </nav>
             <button type="button" data-action="close-sidebar" title="Close sidebar">✕</button>
           </div>
           <div class="reader-sidebar-body">
@@ -314,18 +329,40 @@ class ZoteroStylePdfReader {
         </header>
         <div class="reader-page-area">
           <div class="reader-pages"></div>
-        <div class="reader-selection-popup" data-output="selection-popup" hidden>
-          <button type="button" data-color="yellow">Highlight</button>
-          <button type="button" data-color="green">Green</button>
-          <button type="button" data-color="red">Red</button>
-          <button type="button" data-action="add-note">Note</button>
-          <button type="button" data-action="copy-selection">Copy</button>
+        <div class="reader-selection-popup" data-output="selection-popup" hidden role="toolbar" aria-label="Selection actions">
+          <button type="button" class="reader-swatch" data-color="yellow" title="Yellow" aria-label="Yellow highlight"></button>
+          <button type="button" class="reader-swatch" data-color="red" title="Red" aria-label="Red highlight"></button>
+          <button type="button" class="reader-swatch" data-color="green" title="Green" aria-label="Green highlight"></button>
+          <button type="button" class="reader-swatch" data-color="blue" title="Blue" aria-label="Blue highlight"></button>
+          <button type="button" class="reader-swatch" data-color="purple" title="Purple" aria-label="Purple highlight"></button>
+          <button type="button" class="reader-swatch" data-color="magenta" title="Magenta" aria-label="Magenta highlight"></button>
+          <button type="button" class="reader-swatch" data-color="orange" title="Orange" aria-label="Orange highlight"></button>
+          <button type="button" class="reader-swatch" data-color="gray" title="Gray" aria-label="Gray highlight"></button>
+          <span class="reader-popup-divider" aria-hidden="true"></span>
+          <button type="button" class="reader-popup-action" data-action="add-note" title="Add note" aria-label="Add note">${NOTE_ICON}</button>
+          <button type="button" class="reader-popup-action" data-action="copy-selection" title="Copy" aria-label="Copy">${COPY_ICON}</button>
         </div>
           <div class="reader-status">
             <span data-output="status">Opening PDF…</span>
           </div>
         </div>
       </main>
+      <div class="reader-mobile-bar" role="toolbar" aria-label="Reader controls">
+        <div class="reader-mobile-slider">
+          <input class="reader-page-slider" data-input="page-slider" type="range" min="1" max="1" value="1" aria-label="Page position" />
+          <span class="reader-mobile-page" data-output="mobile-page">1 / 0</span>
+        </div>
+        <div class="reader-mobile-actions">
+          ${mobileActionButton("m-sidebar", "Sidebar", "sidebar")}
+          ${mobileActionButton("m-zoom-out", "Zoom out", "minus")}
+          ${mobileActionButton("m-zoom-in", "Zoom in", "plus")}
+          ${mobileActionButton("m-fit-width", "Fit width", "width")}
+          ${mobileActionButton("m-highlight", "Highlight", "highlight")}
+          ${mobileActionButton("m-note", "Note", "note")}
+          ${mobileActionButton("m-search", "Search", "search")}
+          ${mobileActionButton("m-theme", "Theme", "appearance")}
+        </div>
+      </div>
     `;
     document.body.append(this.root);
     this.toast = new Toast(this.root);
@@ -337,6 +374,8 @@ class ZoteroStylePdfReader {
     this.pages = this.select(".reader-pages");
     this.pageNumberInput = this.select<HTMLInputElement>('[data-input="page"]');
     this.pageCountElement = this.select('[data-output="page-count"]');
+    this.pageSlider = this.select('[data-input="page-slider"]');
+    this.mobilePageLabel = this.select('[data-output="mobile-page"]');
     this.zoomLabel = this.select('[data-output="zoom"]');
     this.statusElement = this.select('[data-output="status"]');
     this.outlinePane = this.select<HTMLElement>('.reader-sidebar-pane[data-pane="outline"]');
@@ -658,11 +697,15 @@ class ZoteroStylePdfReader {
 
   private applyTheme() {
     this.root.dataset.pdfTheme = this.pdfTheme;
-    const button = this.root.querySelector<HTMLButtonElement>('[data-action="toggle-theme"]');
-    if (button) {
-      button.innerHTML = this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON;
-      button.title = this.pdfTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
-      button.setAttribute("aria-label", button.title);
+    const icon = this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON;
+    const title = this.pdfTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+    for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="toggle-theme"], [data-action="m-theme"]')) {
+      // Replace only the icon so labelled mobile buttons keep their text.
+      const svg = button.querySelector("svg");
+      if (svg) svg.outerHTML = icon;
+      else button.innerHTML = icon;
+      button.title = title;
+      button.setAttribute("aria-label", title);
     }
   }
 
@@ -702,6 +745,7 @@ class ZoteroStylePdfReader {
     action("reading-mode", () => void this.toggleReadingMode());
     action("text-options", () => this.toggleAppearancePopup());
     action("close-sidebar", () => this.setSidebarOpen(false));
+    action("close-sidebar-backdrop", () => this.setSidebarOpen(false));
     action("tool-highlight", () => {
       const selected = this.anchor;
       this.setAnnotationTool(this.annotationTool === "highlight" ? "pointer" : "highlight");
@@ -730,6 +774,36 @@ class ZoteroStylePdfReader {
     action("close-sidebar", () => this.setSidebarOpen(false));
     action("add-note", () => this.addNote());
     action("copy-selection", () => void this.copySelection(true));
+    action("m-sidebar", () => this.setSidebarOpen(true));
+    action("m-zoom-out", () => void this.setZoom(this.zoom / 1.2));
+    action("m-zoom-in", () => void this.setZoom(this.zoom * 1.2));
+    action("m-fit-width", () => {
+      this.fitMode = "width";
+      void this.refit();
+    });
+    action("m-highlight", () => {
+      const selected = this.anchor;
+      this.setAnnotationTool(this.annotationTool === "highlight" ? "pointer" : "highlight");
+      if (this.annotationTool === "highlight" && selected) void this.addHighlight("#ffd400");
+    });
+    action("m-note", () => {
+      const selected = this.anchor;
+      this.setAnnotationTool(this.annotationTool === "note" ? "pointer" : "note");
+      if (this.annotationTool === "note" && selected) this.addNote(selected);
+    });
+    action("m-search", () => {
+      this.selectPane("search");
+      this.setSidebarOpen(true);
+      this.searchInput.focus();
+    });
+    action("m-theme", () => {
+      if (this.readingEnabled) this.changeReadingAppearance({ theme: this.readingAppearance.theme === "dark" ? "light" : "dark" });
+      else this.toggleTheme();
+    });
+
+    this.pageSlider.addEventListener("input", () => {
+      void this.gotoPage(Number(this.pageSlider.value));
+    });
 
     this.selectionPopup.querySelectorAll<HTMLButtonElement>("[data-color]").forEach((button) => {
       button.addEventListener("click", () => void this.addHighlight(button.dataset.color ?? "yellow"));
@@ -770,11 +844,11 @@ class ZoteroStylePdfReader {
       resizer.setPointerCapture(event.pointerId);
       resizer.classList.add("dragging");
       const move = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
       };
       const finish = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
         window.localStorage.setItem(READER_SIDEBAR_WIDTH_KEY, String(width));
         resizer.classList.remove("dragging");
@@ -787,7 +861,45 @@ class ZoteroStylePdfReader {
       resizer.addEventListener("pointercancel", finish);
     });
 
-    this.pageArea.addEventListener("scroll", () => this.updateCurrentFromScroll());
+    this.pageArea.addEventListener("scroll", () => {
+      this.updateCurrentFromScroll();
+      if (this.chromeVisible && Date.now() >= this.programmaticScrollUntil) this.setChromeVisible(false);
+    });
+    this.readingArea.addEventListener("scroll", () => {
+      if (this.chromeVisible && Date.now() >= this.programmaticScrollUntil) this.setChromeVisible(false);
+    });
+    // Mobile immersive reading: a quick single tap on the content toggles the
+    // control bars. Drags, long presses, pinch gestures, tool taps and taps on
+    // overlays are left to their own handlers.
+    this.root.addEventListener("pointerdown", (event) => {
+      this.chromePointers.add(event.pointerId);
+      this.chromeTapStart = this.chromePointers.size === 1
+        ? { x: event.clientX, y: event.clientY, time: Date.now() }
+        : null;
+    });
+    this.root.addEventListener("pointerup", (event) => {
+      const start = this.chromeTapStart;
+      const singleTap = this.chromePointers.size === 1 && start !== null;
+      this.chromePointers.delete(event.pointerId);
+      this.chromeTapStart = null;
+      if (!singleTap || !start) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) return;
+      if (Date.now() - start.time > 350) return;
+      const target = event.target as HTMLElement;
+      if (target.closest(
+        "button, input, a, select, textarea, .reader-toolbar, .reader-sidebar-shell, .reader-backdrop, "
+        + ".reader-mobile-bar, .reader-selection-popup, .reader-annotation, .reader-annotation-inspector, "
+        + ".reader-appearance-popup, .reader-reflow-settings",
+      )) return;
+      if (this.annotationHitAt(event.clientX, event.clientY)) return;
+      if (this.annotationTool !== "pointer") return;
+      if (!window.getSelection()?.isCollapsed) return;
+      this.setChromeVisible(!this.chromeVisible);
+    });
+    this.root.addEventListener("pointercancel", (event) => {
+      this.chromePointers.delete(event.pointerId);
+      this.chromeTapStart = null;
+    });
     this.pageArea.addEventListener("pointerdown", event => this.placeNote(event));
     this.pageArea.addEventListener("mouseup", event => {
       if (event.button === 0 && this.annotationTool !== "note") window.setTimeout(() => this.finishTextSelection(), 0);
@@ -961,6 +1073,8 @@ class ZoteroStylePdfReader {
     this.pageCount = this.document.numPages;
     this.pageCountElement.textContent = `/ ${this.pageCount.toLocaleString()}`;
     this.pageNumberInput.max = String(this.pageCount);
+    this.pageSlider.max = String(this.pageCount);
+    this.mobilePageLabel.textContent = `1 / ${this.pageCount.toLocaleString()}`;
     this.currentPage = 1;
 
     this.pageObserver = new IntersectionObserver((entries) => {
@@ -1156,6 +1270,16 @@ class ZoteroStylePdfReader {
   private openHighlightNote(id: string) {
     this.setAnnotationTool("pointer");
     this.annotationInspector.select(id);
+  }
+
+  // Page annotations are pointer-events:none paint layers, so tap targets
+  // never land on them — hit-test by geometry instead.
+  private annotationHitAt(x: number, y: number): boolean {
+    for (const node of this.pageArea.querySelectorAll(".reader-annotation, .reader-highlight-note-indicator")) {
+      const box = node.getBoundingClientRect();
+      if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return true;
+    }
+    return false;
   }
 
   private annotationDisplayBox(
@@ -1403,7 +1527,9 @@ class ZoteroStylePdfReader {
     this.annotationTool = tool;
     this.root.dataset.annotationTool = tool;
     for (const name of ["highlight", "note"] as const) {
-      this.root.querySelector(`[data-action="tool-${name}"]`)?.setAttribute("aria-pressed", String(tool === name));
+      for (const selector of [`[data-action="tool-${name}"]`, `[data-action="m-${name}"]`]) {
+        this.root.querySelector(selector)?.setAttribute("aria-pressed", String(tool === name));
+      }
     }
     this.annotationInspector.close();
     if (tool === "highlight") this.toast.show("Drag across text to highlight it", "info");
@@ -1438,7 +1564,10 @@ class ZoteroStylePdfReader {
   private async addHighlight(color: string) {
     if (!this.anchor || this.savingHighlights.has(this.anchor)) return;
     const anchor = this.anchor;
-    color = ({ yellow: "#ffd400", green: "#5fb236", red: "#ff6666" } as Record<string, string>)[color] ?? color;
+    color = ({
+      yellow: "#ffd400", green: "#5fb236", red: "#ff6666", blue: "#2ea8e5",
+      purple: "#a28ae5", magenta: "#e56eee", orange: "#f19837", gray: "#aaaaaa",
+    } as Record<string, string>)[color] ?? color;
     this.savingHighlights.add(anchor);
     try {
       for (const target of [{ page: anchor.page, rects: anchor.rects }, ...(anchor.extraPages ?? [])]) {
@@ -1596,8 +1725,6 @@ class ZoteroStylePdfReader {
     this.root.querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.pane === name);
     });
-    const title = this.root.querySelector("[data-output=sidebar-title]");
-    if (title) title.textContent = READER_RAIL_LABELS[pane];
     this.outlinePane.hidden = name !== "outline";
     this.thumbnailsPane.hidden = name !== "thumbnails";
     this.annotationPane.hidden = name !== "annotations";
@@ -1611,6 +1738,13 @@ class ZoteroStylePdfReader {
     this.root.classList.toggle("sidebar-closed", !open);
     window.localStorage.setItem(READER_SIDEBAR_OPEN_KEY, open ? "1" : "0");
     window.setTimeout(() => void this.refit(), 170);
+  }
+
+  // Mobile immersive mode: the chrome (top toolbar + bottom control bar) is
+  // shown only while this class is present. Purely presentational on desktop.
+  private setChromeVisible(visible: boolean) {
+    this.chromeVisible = visible;
+    this.root.classList.toggle("chrome-visible", visible);
   }
 
   private async destinationPage(destination: any): Promise<number> {
@@ -1629,6 +1763,9 @@ class ZoteroStylePdfReader {
 
   private async gotoPage(page: number) {
     const target = Math.min(Math.max(1, Math.floor(page || 1)), this.pageCount);
+    // Scrolling triggered by our own navigation must not collapse the
+    // just-opened mobile control bars.
+    this.programmaticScrollUntil = Date.now() + 600;
     if (this.readingEnabled) {
       this.readingView?.gotoPage(target);
       this.setCurrentPage(target, true);
@@ -1645,6 +1782,8 @@ class ZoteroStylePdfReader {
   private setCurrentPage(page: number, updateInput = true) {
     this.currentPage = page;
     if (updateInput) this.pageNumberInput.value = String(page);
+    this.pageSlider.value = String(page);
+    this.mobilePageLabel.textContent = `${page.toLocaleString()} / ${this.pageCount.toLocaleString()}`;
     this.thumbnailsPane
       .querySelectorAll<HTMLButtonElement>(".reader-thumbnail")
       .forEach((button) => {

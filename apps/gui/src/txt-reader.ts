@@ -180,23 +180,23 @@ class ZoteroStyleTxtReader {
     this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
     this.root.dataset.readerKind = "txt";
     this.root.innerHTML = `
+      <div class="reader-backdrop" data-action="close-sidebar-backdrop"></div>
       <aside class="reader-sidebar-shell">
-        <nav class="reader-rail" aria-label="Text sidebar">
-          ${(["outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
-            <button
-              type="button"
-              class="reader-rail-button${pane === this.activePane ? " active" : ""}"
-              data-pane="${pane}"
-              title="${READER_RAIL_LABELS[pane]}"
-              aria-label="${READER_RAIL_LABELS[pane]}"
-            >
-              ${READER_RAIL_ICONS[pane]}
-            </button>
-          `).join("")}
-        </nav>
         <div class="reader-sidebar">
           <div class="reader-sidebar-header">
-            <span data-output="sidebar-title">Outline</span>
+            <nav class="reader-rail" aria-label="Text sidebar">
+              ${(["outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
+                <button
+                  type="button"
+                  class="reader-rail-button${pane === this.activePane ? " active" : ""}"
+                  data-pane="${pane}"
+                  title="${READER_RAIL_LABELS[pane]}"
+                  aria-label="${READER_RAIL_LABELS[pane]}"
+                >
+                  ${READER_RAIL_ICONS[pane]}
+                </button>
+              `).join("")}
+            </nav>
             <button type="button" data-action="close-sidebar" title="Close sidebar">✕</button>
           </div>
           <div class="reader-sidebar-body">
@@ -515,6 +515,7 @@ class ZoteroStyleTxtReader {
     action("width-full", () => this.changeAppearance({ pageWidth: "full" }));
     action("sidebar", () => this.setSidebarOpen(!this.sidebarOpen));
     action("close-sidebar", () => this.setSidebarOpen(false));
+    action("close-sidebar-backdrop", () => this.setSidebarOpen(false));
     action("toggle-theme", () => {
       this.changeAppearance({ theme: this.appearance.theme === "dark" ? "light" : "dark" });
     });
@@ -566,11 +567,11 @@ class ZoteroStyleTxtReader {
       resizer.setPointerCapture(event.pointerId);
       resizer.classList.add("dragging");
       const move = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
       };
       const finish = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX - 58));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
         window.localStorage.setItem(READER_SIDEBAR_WIDTH_KEY, String(width));
         resizer.classList.remove("dragging");
@@ -627,8 +628,6 @@ class ZoteroStyleTxtReader {
     this.root.querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.pane === name);
     });
-    const title = this.root.querySelector("[data-output=sidebar-title]");
-    if (title) title.textContent = READER_RAIL_LABELS[pane];
     this.outlinePane.hidden = name !== "outline";
     this.annotationPane.hidden = name !== "annotations";
     this.infoPane.hidden = name !== "info";

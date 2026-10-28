@@ -296,7 +296,10 @@ async fn session_login_rejects_a_wrong_token() {
         .unwrap();
     assert_eq!(response.status(), 401);
     assert!(
-        response.headers().get(reqwest::header::SET_COOKIE).is_none(),
+        response
+            .headers()
+            .get(reqwest::header::SET_COOKIE)
+            .is_none(),
         "a rejected login must not set a cookie"
     );
 
