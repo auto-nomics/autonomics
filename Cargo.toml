@@ -103,7 +103,7 @@ members = [
   "crates/evolution-core",
   "crates/skills",
   "crates/plugin-rsi",
-  "crates/text-embedding", "crates/browser-use",
+  "crates/text-embedding", "crates/browser-use", "crates/wiki",
 ]
 resolver = "3"
 
