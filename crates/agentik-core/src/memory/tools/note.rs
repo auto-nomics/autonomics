@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::{KmsAgentHandle, KnowledgeEvent, redact_secrets};
+use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend, redact_secrets};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -21,11 +21,11 @@ pub struct MemoryNoteInput {
 }
 
 pub struct MemoryNoteTool {
-    backend: Arc<KmsAgentHandle>,
+    backend: Arc<MemoryBackend>,
 }
 
 impl MemoryNoteTool {
-    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
+    pub fn new(backend: Arc<MemoryBackend>) -> Self {
         Self { backend }
     }
 }
@@ -44,16 +44,10 @@ impl ToolFunction for MemoryNoteTool {
         }
         let note = self
             .backend
-            .store()
-            .insert_note(&note_slug(input.slug.as_deref()), &content)
+            .store
+            .insert_note(MEMORY_SCOPE_ID, &note_slug(input.slug.as_deref()), &content)
             .await
             .map_err(store_error)?;
-        self.backend
-            .submit_knowledge_event(KnowledgeEvent::MemoryNoteCreated { note_id: note.id })
-            .await
-            .map_err(|error| ToolError::ExecutionFailed {
-                source: Box::new(error),
-            })?;
         Ok(ToolResult::success_json(serde_json::json!({
             "id": note.id,
             "slug": note.slug,
@@ -85,24 +79,22 @@ mod tests {
     use std::sync::Arc;
 
     use crate::memory::{
-        EmptyMemorySource, KmsAgentHandle, MemoryConfig, MemoryStore, TursoKmsStorage,
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn queues_redacted_note() {
-        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(
-            KmsAgentHandle::new(
-                MemoryConfig::new(),
-                Arc::clone(&store),
-                Arc::new(EmptyMemorySource),
-            )
-            .await,
-        );
+        let store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(MemoryBackend::new(
+            MemoryConfig::new(),
+            Arc::clone(&store),
+            None,
+        ));
 
-        let result = MemoryNoteTool::new(Arc::clone(&backend))
+        let result = MemoryNoteTool::new(backend)
             .run(MemoryNoteInput {
                 content: "token=abc\nPrefer concise summaries.".into(),
                 slug: Some("User Preference!".into()),
@@ -111,9 +103,8 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("user-preference"));
 
-        let notes = store.list_pending_notes().await.unwrap();
+        let notes = store.list_pending_notes(MEMORY_SCOPE_ID).await.unwrap();
         assert_eq!(notes.len(), 1);
         assert!(notes[0].content.contains("REDACTED"));
-        backend.system().shutdown();
     }
 }

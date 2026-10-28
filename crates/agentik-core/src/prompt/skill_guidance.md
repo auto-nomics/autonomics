@@ -1,6 +1,6 @@
-## Skill library — use it, then remember
+## Skill library — use it, then feed it
 
-You have a skill library that grows from real work, and a knowledge memory that preserves what you learn. **Skill use is the default behavior, not an optional courtesy** — every skill encodes corrections someone already paid for, so bypassing it requires justification. The two-way contract: consume before improvising, remember when you learn.
+You have a skill library that grows from real work: every skill in it was distilled from recorded evidence, and your observations are the raw material for new ones. **Skill use is the default behavior, not an optional courtesy** — every skill encodes corrections someone already paid for, so bypassing it requires justification. The two-way contract: consume before improvising, contribute when you learn.
 
 ### Before any work — consult first
 
@@ -11,20 +11,21 @@ Treat `skill_search` as a **mandatory first step** for every user message, not o
 - Skills marked `[workflow]` bundle executable DAG templates. `skill_workflows` shows each template's parameters; `skill_run_workflow` instantiates one into the session DAG. Prefer a bundled template over hand-assembling an equivalent graph — assembly from primitives is the exception, not the norm.
 - The only justified reason to skip `skill_search` is a single-word trivial lookup (e.g. "what time is it"). Anything substantive: search first.
 
-### While you work — record durable knowledge
+### While you work — record evidence
 
-Every failure whose fix you just found is future knowledge:
+Every failure whose fix you just found is future skill material:
 
-- Call `memory_note` **at the moment of learning**. Put the component or interface, exact error text when relevant, and the reusable fix or caveat in one concise note; use a stable slug such as `dag-node-failure`. Record the fix, never the transcript.
-- Verified recipes and caveats are equally valuable — a caveat is knowledge about where a usual approach breaks.
-- `skill_evolve` remains the explicit cycle for evidence captured by evaluation and internal observation paths. It does not consume every memory note, so do not call it merely because you just used `memory_note`.
+- Call `evo_observe` **at the moment of learning**: kind `failure` with the node kind and the exact error text (these two fields anchor automatic routing and clustering), a one-line summary naming the component, and the reusable fix as the body. Record the fix, never the transcript.
+- Verified recipes and caveats (`recipe` / `caveat`) are equally valuable — a caveat is knowledge about where a usual approach breaks.
+- The same failure pattern recorded three times becomes a skill automatically: the loop distills it from the recorded evidence and installs it, so precision in what you record is precision in what the library learns.
+- After recording several observations, `skill_evolve` runs one distillation cycle immediately. It is cheap, idempotent, and installs what it writes (each revision archives the previous version).
 
 ### After you work — close the loop
 
 Skill use is not just consumption; it is a feedback channel:
 
-- At the end of substantive tasks, note which skills you used and which you bypassed. If a bypass turned out wrong, record the reusable correction with `memory_note`.
-- If a skill you followed turned out wrong or stale, **say so in your answer** and record the correction with `memory_note`.
+- At the end of substantive tasks, note which skills you used and which you bypassed. A bypass that turned out wrong is **not** a personal failure — it is a `candidate-skill-gap` observation that the next distillation cycle can promote.
+- If a skill you followed turned out wrong or stale, **say so in your answer** and record the correction as an observation: the evolution loop revises auto-distilled skills from new evidence.
 
 ### Judgement
 

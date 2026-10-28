@@ -26,8 +26,8 @@
 //! - [`proposals`] — the change records the loop writes and applies
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
-//! - [`tools`] — skill discovery and authoring tools; evidence capture stays
-//!   on evaluation and host-owned observation paths
+//! - [`tools`] — skill discovery and authoring tools; the runtime layers the
+//!   unified `evo_observe` entry over this crate's shared observation store
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
@@ -65,11 +65,11 @@ pub use evolution::{
 };
 pub use evolution_core::cluster::Cluster;
 pub use format::SkillMeta;
-pub use inject::{SkillIndexEntry, prompt_section, prompt_section_from_indices};
+pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
 pub use proposals::{ApplyOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
-pub use tools::{skill_registrations, skill_registrations_with_kms};
+pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};
 
 /// Resolve the default skills state directory: `$AUTONOMICS_STATE_DIR`

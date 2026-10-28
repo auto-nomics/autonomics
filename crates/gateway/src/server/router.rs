@@ -13,7 +13,7 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, gui, hydration, kms, lifecycle, model_config, plugin_environments, plugins,
+    agents, events, gui, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
     sessions, settings, skills, storage,
 };
 
@@ -28,20 +28,6 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/state", get(hydration::get_state))
         .route("/profiles", get(hydration::get_profiles))
         .route("/events", get(events::get_events))
-        .route("/kms/workers", get(kms::get_worker_statuses))
-        .route("/kms/evidence", get(kms::list_evidence))
-        .route("/kms/knowledge", get(kms::list_knowledge))
-        .route("/kms/skills", get(kms::list_skills))
-        .route("/kms/skills/{name}", get(kms::get_skill_detail))
-        .route("/kms/skill-proposals", get(kms::list_skill_proposals))
-        .route(
-            "/kms/skill-proposals/{id}/approve",
-            post(kms::approve_skill_proposal),
-        )
-        .route(
-            "/kms/skill-proposals/{id}/reject",
-            post(kms::reject_skill_proposal),
-        )
         // ── agents (live) ──
         .route(
             "/agents",
@@ -148,11 +134,26 @@ pub fn api_router(state: GatewayState) -> Router {
             "/plugins/environments/{id}",
             delete(plugin_environments::delete_environment),
         )
+        // ── observations ──
+        .route(
+            "/evolution/observations",
+            get(observations::list_observations),
+        )
+        .route("/evolution/clusters", get(observations::list_clusters))
         // ── skills ──
         .route("/skills/library", get(skills::list_skill_library))
         .route(
             "/skills/library/{name}",
             get(skills::get_skill_library_detail),
+        )
+        .route("/skills/evolution", get(skills::get_skill_evolution_status))
+        .route(
+            "/skills/evolution/trigger",
+            post(skills::trigger_skill_evolution),
+        )
+        .route(
+            "/skills/evolution/proposals",
+            get(skills::list_skill_proposals),
         )
         .with_state(state)
 }

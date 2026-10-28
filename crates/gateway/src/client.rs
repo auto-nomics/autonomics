@@ -218,49 +218,6 @@ impl GatewayClient {
         self.get("/gateway/status").await
     }
 
-    pub async fn kms_worker_statuses(&self) -> Result<Vec<KmsWorkerStatusView>> {
-        self.get("/kms/workers").await
-    }
-
-    pub async fn kms_evidence(&self) -> Result<Vec<KmsEvidenceView>> {
-        self.get("/kms/evidence").await
-    }
-
-    pub async fn kms_knowledge(&self) -> Result<Vec<KmsKnowledgeNodeView>> {
-        self.get("/kms/knowledge").await
-    }
-
-    pub async fn kms_skills(&self) -> Result<Vec<KmsSkillLibraryView>> {
-        self.get("/kms/skills").await
-    }
-
-    pub async fn kms_skill_detail(&self, name: &str) -> Result<KmsSkillDetailView> {
-        self.get(&format!("/kms/skills/{}", encode_segment(name)))
-            .await
-    }
-
-    pub async fn kms_skill_proposals(&self) -> Result<Vec<KmsSkillProposalView>> {
-        self.get("/kms/skill-proposals").await
-    }
-
-    pub async fn approve_kms_skill_proposal(&self, id: Uuid) -> Result<KmsSkillProposalDecision> {
-        self.send(
-            reqwest::Method::POST,
-            &format!("/kms/skill-proposals/{id}/approve"),
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
-    pub async fn reject_kms_skill_proposal(&self, id: Uuid) -> Result<KmsSkillProposalDecision> {
-        self.send(
-            reqwest::Method::POST,
-            &format!("/kms/skill-proposals/{id}/reject"),
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
     /// Probe variant: `Ok(None)` when the daemon is unreachable (connection
     /// refused / timeout / non-gateway responder).
     pub async fn gateway_status_opt(&self) -> Result<Option<GatewayStatus>> {
@@ -709,6 +666,39 @@ impl GatewayClient {
     pub async fn skill_library_detail(&self, name: &str) -> Result<SkillLibraryDetail> {
         self.get(&format!("/skills/library/{}", encode_segment(name)))
             .await
+    }
+
+    /// Dashboard snapshot: service state, counts, proposals by
+    /// status, library generation.
+    pub async fn skill_evolution_status(&self) -> Result<SkillEvolutionStatus> {
+        self.get("/skills/evolution").await
+    }
+
+    /// Recorded evolution evidence, newest first, with full bodies.
+    pub async fn observations(&self) -> Result<Vec<ObservationView>> {
+        self.get("/evolution/observations").await
+    }
+
+    /// Surfaced observation clusters (recurring patterns), largest
+    /// first, with hydrated member summaries.
+    pub async fn clusters(&self) -> Result<Vec<ClusterView>> {
+        self.get("/evolution/clusters").await
+    }
+
+    /// Run one evolution cycle now. The cycle installs what it
+    /// writes — there is no review gate.
+    pub async fn trigger_skill_evolution(&self) -> Result<SkillEvolutionReport> {
+        self.send(
+            reqwest::Method::POST,
+            "/skills/evolution/trigger",
+            None::<&serde_json::Value>,
+        )
+        .await
+    }
+
+    /// Proposal listing, past-cap overflow first.
+    pub async fn skill_proposals(&self) -> Result<Vec<SkillProposalView>> {
+        self.get("/skills/evolution/proposals").await
     }
 }
 

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::storage::{AgentStorage, StorageError};
-use agentik_kms::{Error, MemorySessionRecord, MemorySource, TursoKmsStorage};
+use agentik_memory::{Error, MemorySessionRecord, MemorySource, TursoMemoryStorage};
 
 pub(crate) fn storage_error(error: StorageError) -> Error {
     Error::Source(error.to_string())
@@ -54,7 +54,7 @@ impl MemorySource for AgentStorageMemorySource {
     }
 }
 
-/// Wrap the core storage object into the source expected by `agentik-kms`.
+/// Wrap the core storage object into the source expected by `agentik-memory`.
 pub fn agent_storage_memory_source(storage: Arc<dyn AgentStorage>) -> Arc<dyn MemorySource> {
     Arc::new(AgentStorageMemorySource(storage))
 }
@@ -63,7 +63,10 @@ pub fn agent_storage_memory_source(storage: Arc<dyn AgentStorage>) -> Arc<dyn Me
 mod tests {
     use std::sync::Arc;
 
-    use agentik_kms::{KmsAgentHandle, KnowledgeEvent, MemoryConfig, MemoryStore, TursoKmsStorage};
+    use agentik_memory::{
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
+        run_memory_pipeline,
+    };
     use agentik_sdk::AgentMessageExt;
     use agentik_sdk::model::Model;
     use agentik_sdk::provider::client::MockApiClient;
@@ -74,9 +77,7 @@ mod tests {
     use crate::testing::dummy_model_info;
 
     #[tokio::test]
-    async fn pipeline_dispatches_extraction_and_skips_unchanged_sources() {
-        let agent_id = Uuid::new_v4();
-        let session_id = Uuid::new_v4();
+    async fn pipeline_extracts_consolidates_and_skips_unchanged_sources() {
         let mut mock = MockApiClient::new();
         mock.expect_request()
             .times(1)
@@ -95,39 +96,14 @@ mod tests {
             .withf(|messages, _, _| {
                 messages
                     .iter()
-                    .any(|message| message.log_summary().contains("Route each knowledge update"))
-            })
-            .returning(move |_, _, _| {
-                Ok(AgentMessageExt::assistant_text(format!(
-                    r#"{{"routes":[{{"update_id":"session:{session_id}","action":"create_new","anchor_path":null,"target_path":"/engineering/testing/verification","reason":"testing guidance","confidence":0.9}}]}}"#
-                )))
-            });
-        mock.expect_request()
-            .times(1)
-            .withf(|messages, _, _| {
-                messages
-                    .iter()
-                    .any(|message| message.log_summary().contains("Rewrite only the target nodes"))
+                    .any(|message| message.log_summary().contains("Consolidate raw session"))
             })
             .returning(|_, _, _| {
                 Ok(AgentMessageExt::assistant_text(
-                    r#"{"nodes":[{"knowledge_path":"/engineering/testing/verification","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"semantic_updates":[]}"#,
+                    r##"{"entries":[{"entry_type":"workflow","title":"Verification workflow","body_md":"Run targeted tests before cargo check.","confidence":0.92}],"summary":"v1\n\nRun tests for workflow changes.","semantic_updates":[{"subject":"agent runtime","predicate":"uses","object":"Turso memory","content":"Persistent memory is stored in Turso.","confidence":0.9}]}"##,
                 ))
             });
-        mock.expect_request()
-            .times(1)
-            .withf(|messages, _, _| {
-                messages.iter().any(|message| {
-                    message
-                        .log_summary()
-                        .contains("Summarize the active knowledge tree")
-                })
-            })
-            .returning(|_, _, _| {
-                Ok(AgentMessageExt::assistant_text(
-                    r#"{"summary":"v1\n\nRun targeted tests."}"#,
-                ))
-            });
+
         let model = Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
             dummy_model_info("memory-test"),
             mock,
@@ -135,12 +111,14 @@ mod tests {
         let storage: Arc<dyn crate::storage::AgentStorage> =
             Arc::new(crate::TursoAgentStorage::open_in_memory().await.unwrap());
         let source = agent_storage_memory_source(storage.clone());
-        let memory_store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
+        let memory_store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
         let mut config = MemoryConfig::new();
         config.min_idle_hours = 0;
-        let memory = Arc::new(KmsAgentHandle::new(config, memory_store, source).await);
-        memory.system().model_slot().store(model.load_full());
+        let memory = Arc::new(MemoryBackend::new(config, memory_store.clone(), None));
 
+        let agent_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
         storage.start_session(agent_id, session_id).await.unwrap();
         storage
             .append_message(session_id, &AgentMessageExt::user("always run tests"))
@@ -148,41 +126,35 @@ mod tests {
             .unwrap();
         storage.end_session(session_id).await.unwrap();
 
-        memory
-            .submit_knowledge_event(KnowledgeEvent::AgentStarted { agent_id })
-            .await
-            .unwrap();
-        memory
-            .submit_knowledge_event(KnowledgeEvent::AgentStarted { agent_id })
-            .await
-            .unwrap();
+        run_memory_pipeline(agent_id, source.clone(), memory.clone(), model.clone()).await;
+        run_memory_pipeline(agent_id, source, memory.clone(), model).await;
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut rows = memory.store().list_stage1_outputs(10).await.unwrap();
-        while rows.is_empty() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "session extract worker never ran"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            rows = memory.store().list_stage1_outputs(10).await.unwrap();
-        }
+        let rows = memory
+            .store
+            .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
+            .await
+            .unwrap();
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].raw_memory.contains("verified tests"));
-        while memory
-            .store()
-            .list_knowledge(10)
+        let entries = memory
+            .store
+            .list_entries(MEMORY_SCOPE_ID, 10)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].body_md.contains("targeted tests"));
+        let summary = memory
+            .store
+            .get_summary(MEMORY_SCOPE_ID)
             .await
             .unwrap()
-            .iter()
-            .all(|node| node.structural)
-        {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "consolidation worker never ran"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        memory.system().shutdown();
+            .unwrap();
+        assert!(summary.summary_md.starts_with("v1\n"));
+        let observations = memory
+            .store
+            .list_observations(MEMORY_SCOPE_ID, "candidate", 10)
+            .await
+            .unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].predicate, "uses");
     }
 }

@@ -4,7 +4,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 
-use crate::memory::KmsAgentHandle;
+use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -27,11 +27,11 @@ pub struct MemorySearchInput {
 }
 
 pub struct MemorySearchTool {
-    backend: Arc<KmsAgentHandle>,
+    backend: Arc<MemoryBackend>,
 }
 
 impl MemorySearchTool {
-    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
+    pub fn new(backend: Arc<MemoryBackend>) -> Self {
         Self { backend }
     }
 }
@@ -47,16 +47,16 @@ impl ToolFunction for MemorySearchTool {
         if input.queries.iter().any(String::is_empty) {
             return Ok(ToolResult::error("memory search queries must not be empty"));
         }
-        let nodes = self
+        let entries = self
             .backend
-            .store()
-            .list_knowledge(MAX_SEARCH_RESULTS * 10)
+            .store
+            .list_entries(MEMORY_SCOPE_ID, MAX_SEARCH_RESULTS * 10)
             .await
             .map_err(store_error)?;
         let notes = self
             .backend
-            .store()
-            .list_pending_notes()
+            .store
+            .list_pending_notes(MEMORY_SCOPE_ID)
             .await
             .map_err(store_error)?;
         let require_all = input.match_mode.as_deref().unwrap_or("any") == "all";
@@ -66,23 +66,16 @@ impl ToolFunction for MemorySearchTool {
             .clamp(1, MAX_SEARCH_RESULTS);
 
         let mut matches = Vec::new();
-        for node in nodes {
-            let haystack = format!(
-                "{}\n{}\n{}",
-                node.knowledge_path.as_str(),
-                node.title,
-                node.body_md
-            )
-            .to_lowercase();
+        for entry in entries {
+            let haystack = format!("{}\n{}", entry.title, entry.body_md).to_lowercase();
             if matches_queries(&input.queries, &haystack, require_all) {
                 matches.push(serde_json::json!({
-                    "kind": "knowledge_node",
-                    "id": node.id,
-                    "knowledge_path": node.knowledge_path.as_str(),
-                    "title": node.title,
-                    "structural": node.structural,
-                    "snippet": snippet(&node.body_md, &input.queries),
-                    "updated_at": node.updated_at,
+                    "kind": "entry",
+                    "id": entry.id,
+                    "entry_type": entry.entry_type,
+                    "title": entry.title,
+                    "snippet": snippet(&entry.body_md, &input.queries),
+                    "updated_at": entry.updated_at,
                 }));
                 if matches.len() >= max_results {
                     break;
@@ -157,35 +150,36 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        EmptyMemorySource, KmsAgentHandle, Knowledge, KnowledgePath, MemoryConfig, MemoryStore,
-        TursoKmsStorage,
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry, MemoryStore, TursoMemoryStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn search_entries_and_pending_notes() {
-        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(
-            KmsAgentHandle::new(
-                MemoryConfig::new(),
-                Arc::clone(&store),
-                Arc::new(EmptyMemorySource),
-            )
-            .await,
-        );
+        let store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(MemoryBackend::new(
+            MemoryConfig::new(),
+            Arc::clone(&store),
+            None,
+        ));
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
+                MEMORY_SCOPE_ID,
                 "source",
-                vec![Knowledge::leaf(
-                    KnowledgePath::new(["engineering", "testing", "verification"]),
-                    "Verification workflow".into(),
-                    "Always run targeted tests before cargo check.".into(),
-                    0.9,
-                    "source",
-                    now,
-                )],
+                vec![MemoryEntry {
+                    id: Uuid::new_v4(),
+                    scope_id: MEMORY_SCOPE_ID,
+                    entry_type: "workflow".into(),
+                    title: "Verification workflow".into(),
+                    body_md: "Always run targeted tests before cargo check.".into(),
+                    status: "active".into(),
+                    confidence: 0.9,
+                    created_at: now,
+                    updated_at: now,
+                }],
                 "v1\n\nRun tests.",
                 Vec::new(),
                 Vec::new(),
@@ -193,7 +187,11 @@ mod tests {
             .await
             .unwrap();
         store
-            .insert_note("pending-note", "Remember release checklist")
+            .insert_note(
+                MEMORY_SCOPE_ID,
+                "pending-note",
+                "Remember release checklist",
+            )
             .await
             .unwrap();
 
@@ -207,7 +205,6 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("Verification workflow"));
 
-        let system = backend.system();
         let result = MemorySearchTool::new(backend)
             .run(MemorySearchInput {
                 queries: vec!["checklist".into()],
@@ -217,6 +214,5 @@ mod tests {
             .await
             .unwrap();
         assert!(result.text_content().contains("pending_note"));
-        system.shutdown();
     }
 }

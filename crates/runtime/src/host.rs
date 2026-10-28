@@ -45,7 +45,6 @@ mod bundles;
 mod commands;
 mod delegation;
 mod gc;
-mod kms_bridge;
 mod persistence;
 mod relay;
 mod shared_infra;
@@ -224,9 +223,6 @@ impl RuntimeHost {
 
     /// Set the current model (for spawning agents from tools).
     pub fn set_model(&mut self, model: Arc<ArcSwapOption<Model>>) {
-        if let Some(model) = model.load_full() {
-            self.infra.kms.model_slot().store(Some(model));
-        }
         self.model = Some(model);
     }
 

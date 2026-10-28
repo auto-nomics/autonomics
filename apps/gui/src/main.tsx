@@ -24,14 +24,13 @@ import {
 } from "@/features/agent";
 import { BibliographyView } from "@/features/bibliography";
 import { ConfigView } from "@/features/config";
-import { KmsView } from "@/features/kms";
 import { DagView } from "@/features/dag";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-type View = "agent" | "config" | "bib" | "kms" | "dag";
+type View = "agent" | "config" | "bib" | "dag";
 type MessageMap = Record<string, ChatItem[]>;
 type RawMessageMap = Record<string, BackendMessage[]>;
 type PromptHistoryMap = Record<string, string[]>;
@@ -556,7 +555,7 @@ export default function App() {
     <main className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
       <header className="flex h-13 items-center justify-between gap-2 border-b bg-muted px-3">
         <nav className="flex min-w-0 items-center gap-1 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {(["agent", "config", "bib", "kms", "dag"] as View[]).map((item) => (
+          {(["agent", "config", "bib", "dag"] as View[]).map((item) => (
             <Button
               key={item}
               size="sm"
@@ -626,7 +625,6 @@ export default function App() {
       ) : (
         <section className="flex min-h-0 flex-col p-3">
           {view === "config" && <ConfigView activeAgent={activeAgent} />}
-          {view === "kms" && <KmsView />}
           {view === "dag" && <DagView activeAgent={activeAgent} />}
         </section>
       )}

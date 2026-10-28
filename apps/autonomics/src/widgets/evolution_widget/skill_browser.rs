@@ -1,10 +1,6 @@
 //! Two-column skill library browser.
 
-use std::collections::HashMap;
-
-use gateway::proto::{
-    KmsSkillLibraryView, KmsSkillProposalView, SkillLibraryDetail, SkillLibraryView,
-};
+use gateway::proto::{SkillLibraryDetail, SkillLibraryView};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -12,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget, Wrap},
 };
-use uuid::Uuid;
 
 /// Which pane owns the vertical keys (j/k, ↑/↓).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -32,13 +27,6 @@ pub struct SkillBrowserState {
     /// proposed-but-not-installed rows, sorted builtin → global →
     /// workspace → proposed.
     pub library: Vec<SkillLibraryView>,
-    /// Pending/terminal KMS proposals by skill name. The value is the id
-    /// used by the human approve/reject endpoints.
-    pub proposal_ids: HashMap<String, Uuid>,
-    /// Preloaded detail documents for KMS proposals.
-    pub proposal_details: HashMap<String, SkillLibraryDetail>,
-    /// Change signature used by the lightweight dashboard poll.
-    pub proposal_generation: u64,
     pub selected: usize,
     /// Which pane the vertical keys act on; ←/→ (h/l) switch it.
     pub focus: PanelFocus,
@@ -94,61 +82,6 @@ impl SkillBrowserState {
         self.detail_error = None;
         self.error = None;
     }
-
-    /// Replace the browser snapshot with KMS projections and governance rows.
-    pub fn set_kms_library(
-        &mut self,
-        skills: Vec<KmsSkillLibraryView>,
-        proposals: Vec<KmsSkillProposalView>,
-    ) {
-        let all_proposals = proposals.clone();
-        let mut proposal_details = HashMap::new();
-        let mut proposal_ids = HashMap::new();
-        let mut proposal_rows = HashMap::new();
-        for proposal in proposals {
-            let name = proposal.skill_name.clone();
-            proposal_details.insert(name.clone(), proposal_detail(&proposal));
-            proposal_ids.insert(name.clone(), proposal.id);
-            proposal_rows.insert(name.clone(), proposal);
-        }
-
-        let mut library = Vec::new();
-        for skill in skills {
-            let name = skill.skill_name.clone();
-            let proposal = proposal_rows.remove(&name);
-            let mut row = active_skill_row(skill);
-            if let Some(proposal) = proposal {
-                row.proposal_status = Some(proposal.status.clone());
-                row.proposal_update = true;
-            }
-            library.push(row);
-        }
-        for proposal in proposal_rows.into_values() {
-            let name = proposal.skill_name.clone();
-            proposal_details.insert(name.clone(), proposal_detail(&proposal));
-            proposal_ids.insert(name, proposal.id);
-            library.push(proposed_skill_row(&proposal));
-        }
-        library.sort_by(|a, b| {
-            let pending = |status: &Option<String>| (status.as_deref() != Some("pending")) as u8;
-            pending(&a.proposal_status)
-                .cmp(&pending(&b.proposal_status))
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        self.set_library(library);
-        self.proposal_generation = proposal_details.len() as u64 * 1_000
-            + all_proposals
-                .iter()
-                .filter(|proposal| proposal.status == "approved")
-                .count() as u64
-                * 10
-            + all_proposals
-                .iter()
-                .filter(|proposal| proposal.status == "rejected")
-                .count() as u64;
-        self.proposal_ids = proposal_ids;
-        self.proposal_details = proposal_details;
-    }
     /// Focus the left (list) pane.
     pub fn focus_list(&mut self) {
         self.focus = PanelFocus::List;
@@ -196,17 +129,6 @@ impl SkillBrowserState {
         self.library.get(self.selected)
     }
 
-    pub fn selected_proposal_id(&self) -> Option<Uuid> {
-        let row = self.selected_skill()?;
-        (row.proposal_status.as_deref() == Some("pending"))
-            .then(|| self.proposal_ids.get(&row.name).copied())
-            .flatten()
-    }
-
-    pub fn proposal_detail(&self, name: &str) -> Option<SkillLibraryDetail> {
-        self.proposal_details.get(name).cloned()
-    }
-
     /// The detail document for the selected row, when the fetched
     /// detail actually belongs to it (stale replies read as "still
     /// loading").
@@ -226,93 +148,6 @@ impl SkillBrowserState {
     /// keeps the selection scrolled into view.
     fn sync_list_state(&mut self) {
         self.list_state.select(self.selected_row());
-    }
-}
-
-fn active_skill_row(skill: KmsSkillLibraryView) -> SkillLibraryView {
-    SkillLibraryView {
-        name: skill.skill_name,
-        tier: skill.tier,
-        tags: skill.tags,
-        description: skill.description,
-        installed: true,
-        proposal_status: None,
-        proposal_update: false,
-        usage_gets: 0,
-        usage_search_hits: 0,
-        usage_runs: 0,
-        usage_evals: 0,
-        usage_last_used: 0,
-    }
-}
-
-fn proposed_skill_row(proposal: &KmsSkillProposalView) -> SkillLibraryView {
-    SkillLibraryView {
-        name: proposal.skill_name.clone(),
-        tier: "proposed".to_string(),
-        tags: Vec::new(),
-        description: proposal.title.clone(),
-        installed: false,
-        proposal_status: Some(proposal.status.clone()),
-        proposal_update: false,
-        usage_gets: 0,
-        usage_search_hits: 0,
-        usage_runs: 0,
-        usage_evals: 0,
-        usage_last_used: 0,
-    }
-}
-
-fn proposal_detail(proposal: &KmsSkillProposalView) -> SkillLibraryDetail {
-    let workflows = proposal
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.relative_path.starts_with("workflow/"))
-        .map(|artifact| {
-            artifact
-                .relative_path
-                .trim_start_matches("workflow/")
-                .trim_end_matches(".toml")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    let evals = proposal
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.relative_path.starts_with("evals/"))
-        .map(|artifact| {
-            artifact
-                .relative_path
-                .trim_start_matches("evals/")
-                .trim_end_matches(".toml")
-                .to_string()
-        })
-        .collect::<Vec<_>>();
-    SkillLibraryDetail {
-        name: proposal.skill_name.clone(),
-        tier: "KMS revision".to_string(),
-        tags: Vec::new(),
-        description: proposal.rationale.clone(),
-        installed: false,
-        body: proposal.body_md.clone(),
-        workflows,
-        evals,
-        proposal: Some(gateway::proto::SkillProposalView {
-            name: proposal.skill_name.clone(),
-            status: proposal.status.clone(),
-            authored_by: "kms".to_string(),
-            update: proposal.approved_skill_version_id.is_some(),
-            rationale: proposal.rationale.clone(),
-            cluster_hash: proposal.content_hash.clone(),
-            observation_count: proposal.source_evidence_ids.len(),
-            created_at: proposal.created_at,
-        }),
-        evidence_count: proposal.source_evidence_ids.len(),
-        usage_gets: 0,
-        usage_search_hits: 0,
-        usage_runs: 0,
-        usage_evals: 0,
-        usage_last_used: 0,
     }
 }
 
@@ -348,7 +183,7 @@ impl SkillBrowserWidget {
             let lines = vec![
                 Line::styled("no skills in the library", dim),
                 Line::styled(
-                    "install packs or let KMS evidence distill a governed proposal",
+                    "install packs (autonomics-skills install) or let the loop distill one",
                     dim,
                 ),
             ];
@@ -604,9 +439,9 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
                 ""
             };
             let status_note = match proposal.status.as_str() {
-                "pending" => " — human approval required",
-                "approved" => " — promoted to an active skill version",
-                _ => " — terminal; no skill version is created",
+                "pending" => " — past install cap, next cycle applies it",
+                "approved" => " — promoted to the library",
+                _ => " — cluster consumed, will not re-propose",
             };
             let status_line = if proposal.update {
                 format!("update {status_note} · {kind_note}")

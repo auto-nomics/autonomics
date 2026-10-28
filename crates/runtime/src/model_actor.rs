@@ -422,22 +422,11 @@ pub fn start(
     storage: Arc<dyn ModelStorage>,
     events: mpsc::UnboundedSender<ModelEvent>,
 ) -> ModelHandle {
-    let slot = Arc::new(ArcSwapOption::empty());
-    start_with_model_slot(storage, events, slot)
-}
-
-/// Start the model worker while publishing to a caller-owned slot. The KMS
-/// worker owns such a slot before the model actor exists, so both must share
-/// one installation point.
-pub fn start_with_model_slot(
-    storage: Arc<dyn ModelStorage>,
-    events: mpsc::UnboundedSender<ModelEvent>,
-    slot: Arc<ArcSwapOption<Model>>,
-) -> ModelHandle {
     // Capacity 64: model-config traffic is human-paced; a bounded
     // channel surfaces a stuck worker as dropped commands instead of
     // unbounded memory.
     let (tx, rx) = mpsc::channel::<ModelCommand>(64);
+    let slot = Arc::new(ArcSwapOption::empty());
     let worker = ModelWorker {
         tx: tx.clone(),
         storage,

@@ -200,34 +200,9 @@ pub fn spawn_model_event_bridge(
     });
 }
 
-/// Bridge resident KMS worker state changes onto the frontend event stream.
-pub fn spawn_kms_worker_event_bridge(
-    mut rx: tokio::sync::broadcast::Receiver<agentik_core::memory::KnowledgeWorkerEvent>,
-    hub: EventHub,
-) {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    hub.publish(EventKind::Notice(GatewayNotice::KmsWorkerChanged {
-                        status: event.into(),
-                    }));
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
-                    tracing::warn!(missed, "KMS worker event bridge lagged");
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentik_core::memory::{
-        KnowledgeJobKind, KnowledgeWorkerEvent, KnowledgeWorkerState, KnowledgeWorkerStatus,
-    };
 
     fn agent_envelope_text(seq: u64, text: &str) -> Arc<Envelope> {
         Arc::new(Envelope {
@@ -300,28 +275,6 @@ mod tests {
         let (events, complete) = hub.replay_after(last - 1);
         assert!(complete);
         assert_eq!(events.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn kms_worker_events_are_published_as_notices() {
-        let hub = EventHub::new();
-        let (tx, rx) = tokio::sync::broadcast::channel(8);
-        let mut subscriber = hub.subscribe();
-        spawn_kms_worker_event_bridge(rx, hub.clone());
-        tx.send(KnowledgeWorkerEvent {
-            worker: KnowledgeJobKind::ConsolidateKnowledge,
-            state: KnowledgeWorkerState::Running,
-            status: KnowledgeWorkerStatus::default(),
-            at_ms: 123,
-        })
-        .unwrap();
-
-        let envelope = subscriber.recv().await.unwrap();
-        assert_eq!(envelope.kind.event_name(), "notice");
-        assert!(matches!(
-            envelope.kind,
-            EventKind::Notice(GatewayNotice::KmsWorkerChanged { .. })
-        ));
     }
 
     #[test]

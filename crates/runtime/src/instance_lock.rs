@@ -11,7 +11,7 @@
 //!
 //! Frontends that only *talk* to the running host (the thin-client TUI,
 //! web, desktop) never call `RuntimeHost::open` and are unaffected. The
-//! standalone `bib` / `cache` CLI subcommands open the databases
+//! standalone `kms` / `bib` / `cache` CLI subcommands open the databases
 //! read-mostly and have coexisted with a running TUI for a long time; the
 //! lock deliberately does not try to cover them.
 //!

@@ -126,11 +126,9 @@ impl App {
             CommandAction::SkillEvolutionPanel => {
                 self.open_skill_evolution();
             }
-            CommandAction::KnowledgeWikiPanel => {
-                self.open_knowledge_wiki();
-            }
             CommandAction::SkillEvolve => {
-                self.open_skill_evolution();
+                // The cycle installs what it writes; no gate to pick.
+                self.trigger_skill_evolution();
             }
             CommandAction::OpenSessions => {
                 self.open_session_picker();

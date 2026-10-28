@@ -1413,7 +1413,7 @@ if config.enable_writing() {
 
 ## 13. 与 KMS 的集成
 
-`Claim` 系统与 `agentik-kms`（统一知识管理系统）形成闭环：
+`Claim` 系统与 `kms`（知识管理系统）形成闭环：
 
 ```
 阅读阶段：文献 → Annotation → KMS Entity/Knowledge
@@ -1426,7 +1426,7 @@ if config.enable_writing() {
 /// 将文档中的声明同步到 KMS。
 pub fn sync_claims_to_kms(
     doc: &Document,
-    kms: &agentik_kms::TursoKmsStorage,
+    kms: &kms::Storage,
 ) -> Result<()> {
     for claim in doc.all_claims() {
         // 每个声明创建/更新一个 KMS Entity
@@ -1438,7 +1438,7 @@ pub fn sync_claims_to_kms(
 pub fn recommend_citations_from_kms(
     doc: &Document,
     block_id: &BlockId,
-    kms: &agentik_kms::TursoKmsStorage,
+    kms: &kms::Storage,
 ) -> Vec<CitationRecommendation> { ... }
 ```
 

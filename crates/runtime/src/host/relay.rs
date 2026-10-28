@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use agentik_core::memory::KmsAgentHandle;
+use agentik_core::memory::MemoryBackend;
 use agentik_core::profile::AgentKind;
 use agentik_sdk::model::Model;
 use arc_swap::ArcSwapOption;
@@ -68,7 +68,7 @@ pub(super) struct AgentEntry {
     /// access to the moved AgentHandle.
     pub(super) model: Arc<ArcSwapOption<Model>>,
     /// Shared memory backend — same Arc as the agent's runtime.
-    pub(super) memory: Arc<KmsAgentHandle>,
+    pub(super) memory: Arc<MemoryBackend>,
     /// Set when the host enqueues an inbound message but the target agent has
     /// not yet emitted `TurnStarted`. This closes the Idle-status race where
     /// several peer messages could queue before the runtime status caught up.

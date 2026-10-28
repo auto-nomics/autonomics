@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use super::TursoAgentStorage;
 use crate::memory::MemoryStage1Record;
-use crate::memory::{MemoryStore, TursoKmsStorage};
+use crate::memory::{MEMORY_SCOPE_ID, MemoryStore, TursoMemoryStorage};
 use crate::storage::AgentStorage;
 use agentik_sdk::AgentMessageExt;
 
@@ -22,60 +22,90 @@ fn stage1(session_id: Uuid, source_hash: &str, raw_memory: &str) -> MemoryStage1
 
 #[tokio::test]
 async fn memory_stage1_claims_are_lease_and_hash_idempotent() {
-    let store = TursoKmsStorage::open_in_memory().await.unwrap();
+    let store = TursoMemoryStorage::open_in_memory().await.unwrap();
     let session_id = Uuid::new_v4();
     let lease_until = crate::memory::now_ms() + 3_600_000;
 
     assert!(
         store
-            .claim_stage1(session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         !store
-            .claim_stage1(session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     store
-        .complete_stage1(stage1(session_id, "hash-a", "raw"))
+        .complete_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-a", "raw"))
         .await
         .unwrap();
     assert!(
         !store
-            .claim_stage1(session_id, "hash-a", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-a", lease_until)
             .await
             .unwrap()
     );
     assert!(
         store
-            .claim_stage1(session_id, "hash-b", lease_until)
+            .claim_stage1(MEMORY_SCOPE_ID, session_id, "hash-b", lease_until)
             .await
             .unwrap()
     );
     store
-        .complete_stage1(stage1(session_id, "hash-b", "raw-b"))
+        .complete_stage1(MEMORY_SCOPE_ID, stage1(session_id, "hash-b", "raw-b"))
         .await
         .unwrap();
 
-    let rows = store.list_stage1_outputs(10).await.unwrap();
+    let rows = store
+        .list_stage1_outputs(MEMORY_SCOPE_ID, 10)
+        .await
+        .unwrap();
     assert_eq!(rows.len(), 1);
 }
 
 #[tokio::test]
 async fn memory_phase2_lock_is_singleton_and_source_idempotent() {
-    let store = TursoKmsStorage::open_in_memory().await.unwrap();
+    let store = TursoMemoryStorage::open_in_memory().await.unwrap();
     let lease_until = crate::memory::now_ms() + 3_600_000;
 
-    assert!(store.claim_phase2("input-a", lease_until).await.unwrap());
-    assert!(!store.claim_phase2("input-a", lease_until).await.unwrap());
+    assert!(
+        store
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .await
+            .unwrap()
+    );
     store
-        .complete_phase2("input-a", Vec::new(), "v1\n\ntest", Vec::new(), Vec::new())
+        .complete_phase2(
+            MEMORY_SCOPE_ID,
+            "input-a",
+            Vec::new(),
+            "v1\n\ntest",
+            Vec::new(),
+            Vec::new(),
+        )
         .await
         .unwrap();
-    assert!(!store.claim_phase2("input-a", lease_until).await.unwrap());
-    assert!(store.claim_phase2("input-b", lease_until).await.unwrap());
+    assert!(
+        !store
+            .claim_phase2(MEMORY_SCOPE_ID, "input-a", lease_until)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .claim_phase2(MEMORY_SCOPE_ID, "input-b", lease_until)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

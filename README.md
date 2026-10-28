@@ -71,9 +71,8 @@ Node registry + scheduler
               read-only mounts, immutable panel bundles
               artifact publication to VFS
 
-Self-improvement and knowledge substrate (agents draft · gates validate · humans promote):
-  skills     evaluation/internal observations → deterministic distill → human approve
-  knowledge  memory_note → knowledge pipeline → Wiki tree
+Self-improvement substrate (agents draft · gates validate · humans promote):
+  skills     evo_observe → deterministic distill → proposal → human approve
   plugin RSI requests → dev workspaces → validation gates → install/publish
   environments  /environments/dev image authoring → build → smoke → catalog
 
@@ -104,7 +103,7 @@ A skill is a directory with a `SKILL.md` (YAML frontmatter + operational body), 
 
 The evolution loop has no auxiliary LLM anywhere:
 
-1. **Observe** — evaluation failures and internal evidence paths record content-addressed observations (duplicates are no-ops). Agents record reusable lessons separately with `memory_note`, feeding the unified knowledge pipeline.
+1. **Observe** — `evo_observe` records durable failures, recipes, and caveats as content-addressed observations (duplicates are no-ops). Eval failures are captured automatically.
 2. **Route** — each observation is routed to the skill domain, the plugin domain, both, or triage, anchored on the DAG node address.
 3. **Distill** — pure code clusters anchored observations by node kind and normalized error signature; three occurrences of the same pattern synthesize a conservative skill proposal that only ever cites recorded fixes, never invents advice.
 4. **Review** — proposals stage in `~/.autonomics/skill-proposals/` and are approved or rejected from the TUI skill-evolution dashboard or the gateway API. Auto-approval is off by default, and agent-authored proposals are never auto-approved.
@@ -138,7 +137,7 @@ Two mechanisms make the system trustworthy for biomedical work:
 | Statistical genetics | `evalue`, `lcmm` | Mendelian randomization, E-value analysis, latent-class mixed models, and related ports. |
 | Regression discontinuity | `rdrobust`, `rdpower`, `rdmulti`, `rddensity`, `rdlocrand` | Local-polynomial RD estimation, power and sample-size calculations, multi-cutoff designs, manipulation testing, and local randomization inference. |
 | Scientific data clients | `eutils`, `allen-brain`, `cellxgene`, `hca`, `hcl`, `scea`, `scp`, `hubmap`, `tabula-sapiens`, `tisch`, `htan`, `kpmp`, `nemo`, `opengwas`, `gwascatalog-sdk`, `opentargets`, `chembl`, `uniprot`, `string-sdk`, `enrichr-sdk`, `kegg`, `reactome`, `ensembl`, `rcsb`, `alphafold`, `interpro`, `pubchem`, `protocolio`, `clinicaltrials`, `nhanes` | SDKs, agent tools, and selected DAG source nodes for PubMed/Entrez/GEO, Allen Brain Cell Types, NeMO Analytics, CZ CELLxGENE Discover, Human Cell Atlas, Human Cell Landscape, Single Cell Expression Atlas, Broad Single Cell Portal, HuBMAP, Tabula Sapiens, TISCH2, Human Tumor Atlas Network, Kidney Precision Medicine Project, OpenGWAS, GWAS Catalog, Open Targets, ChEMBL, UniProt, STRING, Enrichr, KEGG, Reactome, Ensembl, RCSB, AlphaFold, InterPro, PubChem, protocols.io, ClinicalTrials.gov, and NHANES. |
-| Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `agentik-kms` | Unified literature search and full-text management, the evidence channel on DAG edges, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
+| Literature, writing, and knowledge | `arxiv`, `biorxiv`, `openalex`, `crossref`, `embase`, `europepmc`, `semantic-scholar`, `bib-types`, `bib-base`, `writing-types`, `writing-base`, `kms`, `kms-tools` | Unified literature search and full-text management, the evidence channel on DAG edges, content-addressed documents, BibTeX/RIS/Markdown/CSL export, LaTeX AST operations, citation resolution, compilation, and knowledge-tree tools. |
 | Interfaces | `apps/autonomics`, `gateway`, `headless`, `api-server`, `ascii-dag-core` | Resident gateway daemon, streaming terminal chat and DAG view, headless CLI execution, bibliography CLI/API/frontend, and the TUI DAG renderer. |
 
 The default `data-engine` build enables all node-bundle Cargo features. A library consumer can disable default features and select only needed `bundle-*` features.
@@ -328,7 +327,7 @@ Scientific API credentials must be present in the process environment. The repos
 - `MINERU_API_KEY` for PDF full-text extraction
 - `HUGGING_FACE_TOKEN` or `HF_TOKEN` for the data catalog; S3/OSS credentials are needed only for optional non-catalog VFS backends
 
-By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, `AUTONOMICS_WRITING_DB`, and `AUTONOMICS_KNOWLEDGE_DB` to relocate state.
+By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, `AUTONOMICS_WRITING_DB`, and `AUTONOMICS_KMS_DB` to relocate state.
 
 ### Use the local HTTP API
 
