@@ -46,7 +46,7 @@ try {
     for (const rotation of [0, 90, 180, 270]) {
       // With the sidebar closed these widths produce exactly 100% fit width.
       const pageWidth = rotation % 180 ? 792 : 612;
-      const page = await browser.newPage({ viewport: { width: pageWidth + 96, height: 1100 }, deviceScaleFactor: dpr });
+      const page = await browser.newPage({ viewport: { width: pageWidth + 44, height: 1100 }, deviceScaleFactor: dpr });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       let annotations = [];
@@ -136,6 +136,28 @@ try {
       await ready();
       assert.equal(await page.locator('.reader-text-layer span').count(), 1, 'Stale text layers after rapid zoom');
       assert.ok(!(await page.locator('[data-output=status]').textContent()).includes('failed'));
+      if (dpr === 1 && rotation === 0) {
+        await page.evaluate(async () => {
+          const host = document.createElement('div'); host.id = 'reader-host';
+          Object.assign(host.style, { position: 'relative', width: '500px', height: '600px' }); document.body.append(host);
+          const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
+          await openPdfReader({ articleId: 'regression', title: 'Hosted PDF', host, onReference: reference => { window.readerReference = reference; } });
+        });
+        await ready();
+        const hosted = page.locator('.zotero-pdf-reader[data-hosted]');
+        const bounds = await hosted.boundingBox(), hostBounds = await page.locator('#reader-host').boundingBox();
+        assert.ok(Math.abs(bounds.width - hostBounds.width) < 1 && Math.abs(bounds.height - hostBounds.height) < 1);
+        assert.equal(await hosted.getAttribute('role'), 'region'); assert.equal(await hosted.getAttribute('aria-modal'), null);
+        await page.evaluate(() => {
+          const span = document.querySelector('.reader-text-layer span'); const range = document.createRange(); range.selectNodeContents(span);
+          getSelection().removeAllRanges(); getSelection().addRange(range);
+          document.querySelector('.reader-page-wrapper').dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        });
+        await page.waitForFunction(() => !document.querySelector('.reader-selection-popup').hidden);
+        await hosted.locator('[data-action=add-selection-context]').evaluate(button => button.click());
+        const reference = await page.evaluate(() => window.readerReference);
+        assert.equal(reference.page, 1); assert.equal(reference.text, 'Alignment regression test');
+      }
       assert.deepEqual(errors, []);
       await page.close();
       console.log(`PASS DPR=${dpr}, rotation=${rotation}: 100%, zoom, glyph bounds, highlights, rapid zoom`);

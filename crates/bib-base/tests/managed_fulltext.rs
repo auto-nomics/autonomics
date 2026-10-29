@@ -59,7 +59,7 @@ async fn repairs_inline_text_without_replacing_attachment_identity_or_annotation
         .bib
         .add_annotation(
             "paper",
-            AnnotationKind::Note,
+            AnnotationKind::Comment,
             "Keep this note",
             None,
             None,
@@ -138,7 +138,7 @@ async fn downloaded_pdf_becomes_a_new_preferred_attachment_preserving_old_text_a
         .bib
         .add_annotation(
             "paper",
-            AnnotationKind::Note,
+            AnnotationKind::Comment,
             "Old text note",
             None,
             None,

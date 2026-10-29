@@ -1,3 +1,4 @@
+import { AddToContext } from "@/features/context/context-basket";
 import { useEffect, useRef, useState } from "react";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ export function SearchEvidencePanel({ articleId, request, generation, onOpen }: 
       {evidence.semantic_evidence && evidence.semantic_evidence.snippet !== evidence.snippet && <p className="break-words text-muted-foreground">Related passage: {evidence.semantic_evidence.snippet}</p>}
       {evidence.semantic_evidence && !evidence.highlight_ranges.length && <p className="text-muted-foreground">Selected by semantic similarity; no literal keyword match is implied.</p>}
       {evidence.attachment_key || evidence.annotation_id ? <Button size="xs" variant="secondary" onClick={() => onOpen(evidence)}>{evidence.attachment_key ? "Open evidence" : "Show note"}</Button> : <p className="text-muted-foreground">Shown in entry details.</p>}
+      <AddToContext resource={{ kind: "evidence", id: JSON.stringify([articleId, evidence.item_key, evidence.attachment_key, evidence.annotation_key, evidence.matched_field, evidence.page, evidence.snippet]), title: `${fieldLabel[evidence.matched_field] ?? "Match"}${evidence.page ? ` · Page ${evidence.page}` : ""}`, scope: "检索命中片段（非全文）", source: `bib:${articleId} · ${evidence.attachment_key ?? evidence.annotation_key ?? evidence.item_key}${evidence.page ? ` · 第 ${evidence.page} 页` : ""}`, revision: evidence.content_revision, content: JSON.stringify(evidence, null, 2) }} />
       {evidence.location_status === "text_search" && <p className="text-muted-foreground">Opens the matching attachment and locates this text.</p>}
     </div>)}
     {current && state.page.next_cursor && <Button size="xs" variant="ghost" disabled={state.loading} onClick={() => void load(state.page.next_cursor)}>More evidence</Button>}

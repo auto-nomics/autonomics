@@ -50,6 +50,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/gui/package-lock.json
+      # The gateway embeds the GUI with include_str! (crates/gateway/gui-dist),
+      # so the bundle must be rebuilt and synced before cargo runs; otherwise
+      # the binary would ship the committed snapshot, which may lag apps/gui.
+      - name: Build GUI bundle and sync into gateway
+        run: |
+          npm ci --prefix apps/gui
+          npm --prefix apps/gui run build:gateway
       - name: Build release binary
         run: cargo build --release --locked -p autonomics --target "$TARGET"
         env:

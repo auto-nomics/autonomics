@@ -513,6 +513,7 @@
 .reader-text-layer.selecting .reader-text-boundary { top: 0; }
 .reader-page-area.reader-selecting .reader-annotation { pointer-events: none; }
 .reader-status { padding: 8px 16px 16px; color: #8d9197; font-size: 12px; }
+.zotero-pdf-reader[data-reading-mode="true"] .reader-status { display: none; }
 @keyframes reader-render { to { background-position: -200% 0; } }
 
 @media (max-width: 1180px) {
@@ -566,9 +567,9 @@
   /* Immersive reading: chrome hides until a single tap on the content brings
      the top bar and bottom control bar back. PDF reader only; the text
      reader keeps its always-visible toolbar. Both bars overlay the pages, so
-     showing them never relayouts the document. The top bar carries nothing
-     but the back button — every other control lives in the bottom bar or the
-     sidebar drawer. */
+     showing them never relayouts the document. The top bar carries only the
+     back button and the Reading Mode toggle in its top-right corner — every
+     other control lives in the bottom bar or the sidebar drawer. */
   .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar {
     position: absolute;
     top: 0;
@@ -584,9 +585,10 @@
   }
   .zotero-pdf-reader:not([data-reader-kind="txt"]).chrome-visible .reader-toolbar { transform: none; }
   .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar > *:not(.reader-tool-right),
-  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right > *:not([data-action="close"]) { display: none; }
-  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right { margin-left: 0; gap: 0; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right > *:not([data-action="close"]):not([data-action="reading-mode"]) { display: none; }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-tool-right { flex: 1; justify-content: space-between; margin-left: 0; gap: 4px; }
   .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="close"] {
+    order: -1;
     display: grid;
     place-items: center;
     width: 38px;
@@ -603,6 +605,15 @@
     transform: rotate(45deg);
     margin-left: 3px;
   }
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="reading-mode"] {
+    display: inline-flex;
+    align-items: center;
+    height: 38px;
+    padding: 0 10px;
+  }
+  /* The narrow-container rules hide tool labels; restore this one so the
+     toggle reads "Read" / "PDF" instead of showing an ambiguous icon. */
+  .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-toolbar [data-action="reading-mode"] .reader-tool-label { display: inline; }
   .zotero-pdf-reader:not([data-reader-kind="txt"]):not(.chrome-visible) .reader-status { display: none; }
 
   .zotero-pdf-reader:not([data-reader-kind="txt"]) .reader-mobile-bar {
@@ -974,3 +985,11 @@
 }
 .reader-highlight-note-indicator:focus-visible { outline: 2px solid #929bff; outline-offset: 2px; }
 .reader-page-area.reader-selecting .reader-highlight-note-indicator { pointer-events: none; }
+
+/* Hosted readers occupy the editor pane, keeping the activity bar and Agent
+   auxiliary pane usable. Standalone readers retain their full-window layout. */
+.zotero-pdf-reader[data-hosted] {
+  position: absolute;
+  --reader-sidebar-width: clamp(230px, 25%, 320px);
+}
+.zotero-pdf-reader[data-hosted] .reader-toolbar { overflow-x: auto; }

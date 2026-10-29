@@ -108,7 +108,7 @@ try {
   assert.equal(annotations.length, 2, 'Failed note retains draft without creating a mark');
   fail = false; await page.getByRole('button', { name: 'Save note', exact: true }).click();
   await page.waitForSelector('.reader-note-marker');
-  assert.equal(annotations.length, 3); assert.equal(annotations[2].kind, 'note'); assert.equal(annotations[2].page, 1);
+  assert.equal(annotations.length, 3); assert.equal(annotations[2].kind, 'comment'); assert.equal(annotations[2].page, 1);
   const pin = await page.locator('.reader-note-marker').boundingBox();
   assert.ok(Math.abs(pin.x + pin.width / 2 - point.x) < 1 && Math.abs(pin.y + pin.height / 2 - point.y) < 1, 'Pin must be placed at the clicked PDF coordinate');
   await page.waitForSelector('.reader-note-content');

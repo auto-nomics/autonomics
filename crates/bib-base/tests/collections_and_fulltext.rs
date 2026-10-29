@@ -297,7 +297,7 @@ async fn article_refresh_preserves_related_records() {
     db.upsert_collection(&renamed_collection).await.unwrap();
     db.add_annotation(
         "a1",
-        AnnotationKind::Note,
+        AnnotationKind::Comment,
         "Keep this note",
         None,
         None,
@@ -1001,7 +1001,7 @@ async fn search_finds_annotation_content() {
     // Add a note mentioning PRS.
     db.add_annotation(
         "a1",
-        AnnotationKind::Note,
+        AnnotationKind::Comment,
         "This paper is relevant to polygenic risk score (PRS) benchmarking.",
         None,
         None,

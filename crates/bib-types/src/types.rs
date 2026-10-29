@@ -336,22 +336,21 @@ pub enum ArticleSource {
 // Annotation
 // ---------------------------------------------------------------------------
 
-/// The kind of user-added annotation.
+/// The kind of user-added annotation. User-written remarks are `Comment`
+/// — an excerpt quoted from the source text is `Highlight`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationKind {
-    /// A free-text note attached to the article.
-    Note,
     /// A highlighted excerpt from the text.
     Highlight,
-    /// A comment or critique.
+    /// A user-written remark, observation, or critique.
+    #[serde(alias = "note")]
     Comment,
 }
 
 impl AnnotationKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Note => "note",
             Self::Highlight => "highlight",
             Self::Comment => "comment",
         }
@@ -360,13 +359,14 @@ impl AnnotationKind {
     pub fn from_str(s: &str) -> Self {
         match s {
             "highlight" => Self::Highlight,
-            "comment" => Self::Comment,
-            _ => Self::Note,
+            // "note" is the retired kind: rows written before remarks were
+            // unified with comments; read them back as comments.
+            _ => Self::Comment,
         }
     }
 }
 
-/// A user-created note, highlight, or comment on an article.
+/// A user-created highlight or comment on an article.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     /// Internal annotation ID.

@@ -632,7 +632,7 @@ export function AgentView(props: AgentViewProps) {
   );
 
   return (
-    <section className={cn("flex min-h-0", !isDesktop && "relative flex-1 flex-col")}>
+    <section className={cn("flex min-h-0 flex-1", !isDesktop && "relative flex-col")}>
       {isDesktop ? (
         <ResizablePanelGroup
           orientation="horizontal"

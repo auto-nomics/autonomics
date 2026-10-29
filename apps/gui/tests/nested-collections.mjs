@@ -101,6 +101,18 @@ try {
   await page.getByRole('menuitem',{name:'Restore collection',exact:true}).click();
   await page.waitForFunction(()=>!document.querySelector('[data-slot=context-menu-content]'));
   assert.equal(collections.find(c=>c.id==='child').deleted,false);
+  const filter=page.getByLabel('Filter collections');
+  await filter.fill('single');
+  await tree.getByRole('treeitem',{name:'Single cell',exact:true}).waitFor();
+  assert.ok(await tree.getByRole('treeitem',{name:'Research',exact:true}).isVisible(),'matching leaves keep their ancestors visible');
+  assert.equal(await tree.getByRole('treeitem',{name:'Evidence',exact:true}).count(),0,'non-matching collections are hidden');
+  await filter.fill('');
+  await tree.getByRole('treeitem',{name:'Evidence',exact:true}).waitFor();
+  await filter.fill('zzz-no-match');
+  await page.getByText('No matching collections').waitFor();
+  await filter.press('Escape');
+  await tree.getByRole('treeitem',{name:'Research',exact:true}).waitFor();
+  assert.equal(await page.getByText('No matching collections').count(),0,'Escape clears the filter');
   assert.deepEqual(errors,[]);
   await page.screenshot({path:'/tmp/autonomics-collections.png',fullPage:true});
   console.log('Nested collections: hierarchy, recursive query, create, move, trash and restore passed');

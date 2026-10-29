@@ -91,7 +91,7 @@ async fn boolean_exclusions_apply_to_whole_articles_and_notes_keep_distinct_keys
     let first = db
         .add_annotation(
             "a",
-            AnnotationKind::Note,
+            AnnotationKind::Comment,
             "quartzmarker",
             None,
             None,
@@ -103,7 +103,7 @@ async fn boolean_exclusions_apply_to_whole_articles_and_notes_keep_distinct_keys
     let second = db
         .add_annotation(
             "a",
-            AnnotationKind::Note,
+            AnnotationKind::Comment,
             "rubymarker",
             None,
             None,

@@ -3,7 +3,7 @@ import { escapeHtml } from '@/lib/markdown';
 import { AnnotationHoverCard } from './annotation-hover-card';
 
 export type ReaderAnnotation = {
-  id: string; content: string; kind?: string; page?: number; color?: string;
+  id: string; content: string; kind?: "highlight" | "comment"; page?: number; color?: string;
   comment?: string; tags?: string[];
   rects?: Array<{ left: number; top: number; width: number; height: number; space?: string; text_range?: ReadingTextRange }>;
 };
@@ -114,7 +114,7 @@ export class AnnotationInspector {
     this.popup.dataset.annotationId = annotation.id;
     this.popup.innerHTML = `
       <header><span class="reader-annotation-icon" aria-hidden="true">A</span><span>Page ${Number(annotation.page ?? 1)}</span><button type="button" class="reader-annotation-more" aria-label="Annotation options" aria-expanded="false">•••</button></header>
-      ${annotation.kind === 'note' || annotation.kind === 'comment' ? `<p class="reader-note-content">${escapeHtml(annotation.content)}</p>` : ''}
+      ${annotation.kind === 'comment' ? `<p class="reader-note-content">${escapeHtml(annotation.content)}</p>` : ''}
       <textarea aria-label="Annotation comment" placeholder="Add comment" rows="3">${escapeHtml(comment)}</textarea>
       <div class="reader-annotation-tags"></div>
       <input class="reader-annotation-tag-input" aria-label="Add annotation tags" placeholder="Add tags…" />

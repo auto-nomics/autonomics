@@ -270,7 +270,7 @@ try {
   await page.getByRole('button', { name: 'Save note', exact: true }).click();
   await page.waitForSelector('.reader-reflow-highlight.reader-note-marker');
   assert.equal(annotations.length, beforeTools + 2);
-  assert.equal(annotations.at(-1).kind, 'note');
+  assert.equal(annotations.at(-1).kind, 'comment');
   assert.equal(annotations.at(-1).rects[0].space, 'pdf');
   // Real four-page figure/table fixture: crops use original PDF rendering,
   // not an empty image placeholder or flattened mathematical text.

@@ -394,6 +394,14 @@ impl BibCore {
             )
             .await?;
         }
+        // The `note` annotation kind was retired: user-written remarks are
+        // `comment` now (an excerpt quoted from the text is `highlight`).
+        // Idempotent — no-ops once no legacy rows remain.
+        conn.execute(
+            "UPDATE annotations SET kind = 'comment' WHERE kind = 'note'",
+            turso::params![],
+        )
+        .await?;
 
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;

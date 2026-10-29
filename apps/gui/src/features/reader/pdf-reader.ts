@@ -1,4 +1,4 @@
-import { annotationPath, structurePath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget } from "./reader-target";
+import { annotationPath, structurePath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget, type ReaderWorkspaceOptions } from "./reader-target";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
@@ -95,6 +95,7 @@ const THEME_DARK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
 const THEME_LIGHT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>`;
 const NOTE_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3"/><path d="M21 15h-5a2 2 0 0 0-2 2v6"/></svg>`;
 const COPY_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+const CONTEXT_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/></svg>`;
 
 const TOOLBAR_ICONS: Record<string, string> = {
   sidebar: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
@@ -140,6 +141,8 @@ export async function openPdfReader(options: {
   expectedHash?: string | null;
   search?: ReaderSearchTarget;
   sessionToken?: number;
+  host?: HTMLElement;
+  onReference?: ReaderWorkspaceOptions["onReference"];
 }): Promise<PdfReaderHandle> {
   const token = options.sessionToken ?? beginReaderSession();
   // Right-click entry points may not know the stored format; sniff the served
@@ -154,7 +157,7 @@ export async function openPdfReader(options: {
     options.title,
     options.article ?? null,
     raw,
-    options.attachmentKey ?? undefined, options.search, token,
+    options.attachmentKey ?? undefined, options.search, token, options,
   );
   const handle: PdfReaderHandle = {
     close: () => reader.destroy(),
@@ -205,6 +208,10 @@ class ZoteroStylePdfReader {
   private searchPane: HTMLElement;
   private searchInput: HTMLInputElement;
   private selectionPopup: HTMLDivElement;
+  // Touch selection never fires mouseup, so the popup must be driven by
+  // selectionchange for non-mouse pointers; see handleSelectionChange.
+  private lastPointerType = "mouse";
+  private selectionChangeTimer: number | null = null;
   private annotations: any[] = [];
   private anchor: SelectionAnchor | null = null;
   private textCache = new Map<number, string>();
@@ -234,12 +241,13 @@ class ZoteroStylePdfReader {
     private readonly sessionToken: number,
     private readonly attachmentKey?: string,
     private readonly initialSearch?: ReaderSearchTarget,
+    private readonly workspace: ReaderWorkspaceOptions = {},
   ) {
     this.pdfTheme = this.readTheme();
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
-    this.root.setAttribute("role","dialog");this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
-    this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
+    this.root.setAttribute("role",this.workspace.host ? "region" : "dialog");if (!this.workspace.host) this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
+    this.root.addEventListener("keydown",event=>{ if (!this.workspace.host) trapReaderFocus(event,this.root); });
     this.root.dataset.pdfTheme = this.pdfTheme;
     this.root.innerHTML = `
       <div class="reader-backdrop" data-action="close-sidebar-backdrop"></div>
@@ -314,6 +322,7 @@ class ZoteroStylePdfReader {
             ${toolbarButton("tool-highlight", "Highlight text", "highlight", "", 'class="reader-highlight-tool" aria-pressed="false"')}
             ${toolbarButton("tool-note", "Add note", "note", "", 'aria-pressed="false"')}
             ${toolbarButton("copy-selection-toolbar", "Copy selection", "copy")}
+            ${this.workspace.onReference ? toolbarButton("add-context", "加入当前会话", "note") : ""}
             ${toolbarButton("tool-clear", "Clear selection", "clear")}
           </div>
           <div class="reader-tool-right" role="group" aria-label="Reading options">
@@ -341,6 +350,7 @@ class ZoteroStylePdfReader {
           <span class="reader-popup-divider" aria-hidden="true"></span>
           <button type="button" class="reader-popup-action" data-action="add-note" title="Add note" aria-label="Add note">${NOTE_ICON}</button>
           <button type="button" class="reader-popup-action" data-action="copy-selection" title="Copy" aria-label="Copy">${COPY_ICON}</button>
+          ${this.workspace.onReference ? `<button type="button" class="reader-popup-action" data-action="add-selection-context" title="加入当前会话" aria-label="加入当前会话">${CONTEXT_ICON}</button>` : ""}
         </div>
           <div class="reader-status">
             <span data-output="status">Opening PDF…</span>
@@ -364,7 +374,8 @@ class ZoteroStylePdfReader {
         </div>
       </div>
     `;
-    document.body.append(this.root);
+    if (this.workspace.host) this.root.dataset.hosted = "true";
+    (this.workspace.host ?? document.body).append(this.root);
     this.toast = new Toast(this.root);
     this.alertDialog = new AlertDialog(this.root);
     this.noteComposer = new NoteComposer(this.root);
@@ -426,9 +437,9 @@ class ZoteroStylePdfReader {
     title: string,
     article: BibArticle | null = null,
     fulltext: { bytes: Uint8Array; contentType: string },
-    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(),
+    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(), workspace: ReaderWorkspaceOptions = {},
   ): Promise<ZoteroStylePdfReader> {
-    const reader = new ZoteroStylePdfReader(articleId, title, article, sessionToken, attachmentKey, initialSearch);
+    const reader = new ZoteroStylePdfReader(articleId, title, article, sessionToken, attachmentKey, initialSearch, workspace);
     if (!registerReaderSession(sessionToken, () => reader.destroy())) {reader.destroy();throw new DOMException("Reader opening superseded", "AbortError");}
     try {
       if (reader.destroyed) return reader;
@@ -757,6 +768,14 @@ class ZoteroStylePdfReader {
       if (this.annotationTool === "note" && selected) this.addNote(selected);
     });
     action("copy-selection-toolbar", () => void this.copySelection());
+    const addReference = () => {
+      if (!this.anchor?.text) { this.toast.show("请先选择要引用的文本", "info"); return; }
+      this.workspace.onReference?.({ text: this.anchor.text, page: this.anchor.page });
+      this.toast.show("已加入当前会话引用");
+    };
+    action("add-context", addReference);
+    action("add-selection-context", addReference);
+
     action("tool-clear", () => {
       this.setAnnotationTool("pointer");
       window.getSelection()?.removeAllRanges();
@@ -844,11 +863,11 @@ class ZoteroStylePdfReader {
       resizer.setPointerCapture(event.pointerId);
       resizer.classList.add("dragging");
       const move = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - this.root.getBoundingClientRect().left));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
       };
       const finish = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - this.root.getBoundingClientRect().left));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
         window.localStorage.setItem(READER_SIDEBAR_WIDTH_KEY, String(width));
         resizer.classList.remove("dragging");
@@ -922,6 +941,8 @@ class ZoteroStylePdfReader {
 
     this.root.addEventListener("wheel", this.handleWheelZoom, { passive: false });
     document.addEventListener("keydown", this.handleToolEscape);
+    document.addEventListener("pointerdown", this.handlePointerType, true);
+    document.addEventListener("selectionchange", this.handleSelectionChange);
     this.readingArea.addEventListener("pointerdown", event => this.placeNote(event));
     this.readingArea.addEventListener("mouseup", event => {
       if (event.button === 0 && this.annotationTool !== "note") window.setTimeout(() => this.finishTextSelection(), 0);
@@ -954,6 +975,22 @@ class ZoteroStylePdfReader {
     if (event.key !== "Escape" || this.destroyed) return;
     this.noteComposer.close();
     this.setAnnotationTool("pointer");
+  };
+
+  private readonly handlePointerType = (event: PointerEvent) => {
+    this.lastPointerType = event.pointerType || "mouse";
+  };
+
+  // Touch/pen selection (long-press, drag handles) emits no mouseup; settle
+  // the selectionchange stream briefly, then refresh the popup. The mouse
+  // keeps its mouseup-driven path untouched.
+  private readonly handleSelectionChange = () => {
+    if (this.lastPointerType === "mouse") return;
+    if (this.selectionChangeTimer !== null) window.clearTimeout(this.selectionChangeTimer);
+    this.selectionChangeTimer = window.setTimeout(() => {
+      this.selectionChangeTimer = null;
+      if (!this.destroyed) this.finishTextSelection();
+    }, 250);
   };
 
   private readonly handleWheelZoom = (event: WheelEvent) => {
@@ -1229,7 +1266,7 @@ class ZoteroStylePdfReader {
     if (!viewport) return;
     for (const annotation of this.annotations) {
       if (Number(annotation.page) !== page || !Array.isArray(annotation.rects)) continue;
-      const isNote = annotation.kind === "note" || annotation.kind === "comment";
+      const isNote = annotation.kind === "comment";
       if (!isNote && annotation.kind !== "highlight") continue;
       const boxes = (isNote ? annotation.rects.slice(0, 1) : annotation.rects)
         .map((rect: PdfAnnotationRect) => this.annotationDisplayBox(rect, viewport))
@@ -1545,7 +1582,7 @@ class ZoteroStylePdfReader {
     }
   }
 
-  private async saveAnnotation(input: { content: string; kind: string; page: number; rects: PdfAnnotationRect[]; color?: string }): Promise<ReaderAnnotation | null> {
+  private async saveAnnotation(input: { content: string; kind: "highlight" | "comment"; page: number; rects: PdfAnnotationRect[]; color?: string }): Promise<ReaderAnnotation | null> {
     try {
       const response = await gatewayRequest("POST", annotationPath(this.articleId, this.attachmentKey), input);
       if (this.destroyed) return null;
@@ -1628,7 +1665,7 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     this.noteComposer.open(point ?? target, async content => {
-      const annotation = await this.saveAnnotation({ content, kind: "note", page: target.page, rects: target.rects, color: "#ffd400" });
+      const annotation = await this.saveAnnotation({ content, kind: "comment", page: target.page, rects: target.rects, color: "#ffd400" });
       if (!annotation) return false;
       this.toast.show("Note saved");
       this.annotationInspector.select(annotation.id);
@@ -2013,6 +2050,9 @@ class ZoteroStylePdfReader {
     if (this.relayoutTimer !== null) window.clearTimeout(this.relayoutTimer);
     this.root.removeEventListener("wheel", this.handleWheelZoom);
     document.removeEventListener("keydown", this.handleToolEscape);
+    document.removeEventListener("pointerdown", this.handlePointerType, true);
+    document.removeEventListener("selectionchange", this.handleSelectionChange);
+    if (this.selectionChangeTimer !== null) window.clearTimeout(this.selectionChangeTimer);
     this.textSelection.destroy();
     this.resizeObserver?.disconnect();
     this.pageObserver?.disconnect();

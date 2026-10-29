@@ -265,7 +265,7 @@ export class ReadingModeView {
     const origin = this.container.getBoundingClientRect();
     const fragment = document.createDocumentFragment();
     for (const annotation of this.annotations) {
-      const isNote = annotation.kind === 'note' || annotation.kind === 'comment';
+      const isNote = annotation.kind === 'comment';
       if (annotation.kind !== 'highlight' && !isNote) continue;
       const range = this.annotationRange(annotation);
       if (!range) continue;

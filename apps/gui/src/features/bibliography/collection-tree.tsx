@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder, Library, Inbox, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, Library, Inbox, Plus, Search, Trash2, X } from "lucide-react";
 import type { BibCollection } from "@/types";
-import { collectionDescendants, collectionPath, collectionRows } from "./collection-tree-model";
+import { collectionDescendants, collectionFilter, collectionPath, collectionRows, type CollectionRow } from "./collection-tree-model";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
 import { Dialog as ConfirmDialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -31,10 +31,24 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const composingFilter = useRef(false);
   const tree = useRef<HTMLDivElement>(null);
   const modal = useRef<HTMLDialogElement>(null);
   const trashNode: BibCollection = { id: "@trash", name: "Trash", article_ids: [], direct_article_count: collections.filter(c => c.deleted).length, deleted: true };
-  const rows = [...collectionRows(collections, expanded), { collection: trashNode, depth: 1, hasChildren: true }, ...(expanded.has("@trash") ? collectionRows(collections, expanded, true).map(row => ({ ...row, depth: row.depth + 1 })) : [])];
+  // Filtering is view-only: dialogs and drop targets still see every collection.
+  const visibility = collectionFilter(collections, filter);
+  const visibleIds = visibility?.visible;
+  const pool = visibleIds ? collections.filter(c => visibleIds.has(c.id)) : collections;
+  const filterExpanded = visibility ? new Set([...expanded, ...visibility.expanded]) : expanded;
+  // While filtering, the Trash section only appears when it holds matches, opening automatically.
+  const showTrash = !visibility || pool.some(c => c.deleted);
+  const trashExpanded = expanded.has("@trash") || Boolean(visibility && pool.some(c => c.deleted));
+  const rows = [
+    ...collectionRows(pool, filterExpanded),
+    ...(showTrash ? [{ collection: trashNode, depth: 1, hasChildren: true } as CollectionRow] : []),
+    ...(showTrash && trashExpanded ? collectionRows(pool, filterExpanded, true).map(row => ({ ...row, depth: row.depth + 1 })) : []),
+  ];
   const focusId = rows.some(row => row.collection.id === focused) ? focused : rows.some(row => row.collection.id === selected) ? selected : rows[0]?.collection.id;
   const pending = collections.find(c => c.id === dialog?.id);
   const excluded = dialog?.id ? collectionDescendants(collections, dialog.id) : new Set<string>();
@@ -105,8 +119,24 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
     if (articleId && parentId) try { await action({ method: "POST", path: `/bib/collections/${encodeURIComponent(parentId)}/articles`, body: { article_id: articleId } }); } catch { /* error is visible */ }
   }
   return <>
-    <div className="flex items-center justify-between px-2 py-1">
-      <span className="text-xs text-muted-foreground">Collections</span>
+    <div className="flex items-center gap-1 px-2 py-1">
+      <div className="relative min-w-0 flex-1">
+        <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          aria-label="Filter collections"
+          placeholder="Filter collections"
+          value={filter}
+          className="h-7 pl-7 pr-6 text-xs"
+          onChange={event => { if (!composingFilter.current) setFilter(event.target.value); }}
+          onCompositionStart={() => { composingFilter.current = true; }}
+          onCompositionEnd={event => { composingFilter.current = false; setFilter(event.currentTarget.value); }}
+          onKeyDown={event => {
+            if (event.key === "Escape") setFilter("");
+            if (event.key === "ArrowDown" && rows[0]) { event.preventDefault(); focus(rows[0].collection.id); }
+          }}
+        />
+        {filter && <button type="button" tabIndex={-1} aria-label="Clear collection filter" className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={() => setFilter("")}><X className="size-3" /></button>}
+      </div>
       <Button size="icon-xs" variant="ghost" aria-label="New collection" onClick={() => open("create", null)}><Plus /></Button>
     </div>
     <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", !selected && "bg-accent")} onClick={() => onSelect(null)} onDragOver={e => e.preventDefault()} onDrop={e => void drop(e, null)}><Library className="size-4" />All Articles<span className="ml-auto">{total}</span></button>
@@ -148,6 +178,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
           </>}
         </ContextMenuContent>
       </ContextMenu>)}
+      {visibility && !pool.length && <p className="px-2 py-1 text-xs text-muted-foreground">No matching collections</p>}
     </div>
 
     <ConfirmDialog open={emptyTrashOpen} onOpenChange={(open) => { if (!busy) setEmptyTrashOpen(open); }}>

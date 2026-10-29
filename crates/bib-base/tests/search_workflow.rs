@@ -252,7 +252,7 @@ async fn fulltext_annotation_library_and_type_filters_have_explicit_semantics() 
     let db = fixture().await;
     db.add_annotation(
         "a",
-        bib_types::AnnotationKind::Note,
+        bib_types::AnnotationKind::Comment,
         "evidence",
         None,
         None,

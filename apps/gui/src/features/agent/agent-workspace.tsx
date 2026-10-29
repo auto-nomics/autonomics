@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowUp,
   Brain,
+  Cpu,
   GitFork,
   CheckCircle2,
   ChevronDown,
@@ -13,14 +14,15 @@ import {
   PanelRightOpen,
   Plus,
   Search,
-  Sparkles,
   Terminal,
   Wrench,
   X,
   XCircle,
 } from "lucide-react";
+import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
+import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
 import { renderMarkdown } from "@/lib/markdown";
-import type { AgentInfo, ChatItem } from "@/types";
+import type { AgentInfo, ChatItem, ModelRow } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -54,8 +56,8 @@ import {
 } from "./agent";
 import { ToolPayloadPreview, ToolPayloadView, parseMaybeJson } from "./agent-json";
 
-/** Where the workspace renders: docked in the agent view's center
- *  column, floating over any other view, or briefly standby until the
+/** Where the workspace renders: docked in the main or auxiliary workbench
+ *  pane, floating over another view, or briefly standby until the
  *  docked slot mounts. The component instance survives mode changes —
  *  only the portal target moves — so transcript state never resets. */
 export type AgentWorkspaceMode = "standby" | "docked" | "floating";
@@ -124,35 +126,29 @@ function groupTraceSteps(messages: ChatItem[]): TranscriptBlock[] {
 
 /** Chat-shaped placeholders shown while a session's history loads; the
  *  block shapes mirror real transcript rows (user bubbles right, assistant
- *  avatar + text left, trace lines indented) so the swap-in is calm. */
+ *  text left, trace lines at the same edge) so the swap-in is calm. */
 function TranscriptSkeleton() {
   return (
     <>
       <div className="flex justify-end" aria-hidden>
         <Skeleton className="h-9 w-2/5 rounded-2xl rounded-br-md" />
       </div>
-      <div className="flex gap-2.5" aria-hidden>
-        <Skeleton className="mt-0.5 size-6 shrink-0 rounded-lg" />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-3 w-full max-w-md" />
-          <Skeleton className="h-3 w-3/4" />
-        </div>
+      <div className="flex flex-col gap-1.5" aria-hidden>
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="h-3 w-full max-w-md" />
+        <Skeleton className="h-3 w-3/4" />
       </div>
-      <div className="ml-8.5 flex items-center gap-2" aria-hidden>
+      <div className="flex items-center gap-2" aria-hidden>
         <Skeleton className="size-3.5 rounded-sm" />
         <Skeleton className="h-3 w-44" />
       </div>
       <div className="flex justify-end" aria-hidden>
         <Skeleton className="h-12 w-1/3 rounded-2xl rounded-br-md" />
       </div>
-      <div className="flex gap-2.5" aria-hidden>
-        <Skeleton className="mt-0.5 size-6 shrink-0 rounded-lg" />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Skeleton className="h-3 w-20" />
-          <Skeleton className="h-3 w-full max-w-lg" />
-          <Skeleton className="h-3 w-2/3" />
-        </div>
+      <div className="flex flex-col gap-1.5" aria-hidden>
+        <Skeleton className="h-3 w-20" />
+        <Skeleton className="h-3 w-full max-w-lg" />
+        <Skeleton className="h-3 w-2/3" />
       </div>
     </>
   );
@@ -171,10 +167,21 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
   const isStreaming = message.id === streamingId;
 
   if (message.role === "user") {
+    const attached = parseContextMessage(message.text);
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm whitespace-pre-wrap sm:max-w-[75%]">
-          {message.text}
+          {attached?.text ?? message.text}
+          {attached && <details className="mt-2 whitespace-normal border-t pt-2 text-xs">
+            <summary className="cursor-pointer">随消息发送的引用（{attached.resources.length}）</summary>
+            <div className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto">
+              {attached.resources.map((resource, index) => <details key={index}>
+                <summary className="cursor-pointer">{contextKindLabel[resource.kind]} · {resource.title}</summary>
+                <p className="break-all text-muted-foreground">{resource.scope} · {resource.source}</p>
+                <pre className="mt-1 whitespace-pre-wrap break-words">{resource.content}</pre>
+              </details>)}
+            </div>
+          </details>}
         </div>
       </div>
     );
@@ -182,27 +189,22 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
 
   if (message.role === "assistant") {
     return (
-      <div className="group flex gap-2.5">
-        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-          <Sparkles className="size-3.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="mb-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="font-medium">{isStreaming ? "Generating…" : "Assistant"}</span>
-            {isStreaming && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />}
-            <span>{formatTime(message.time)}</span>
-            {message.usage && <span className="truncate">{message.usage}</span>}
-            <button
-              type="button"
-              className="ml-auto shrink-0 opacity-0 transition hover:text-foreground group-hover:opacity-100"
-              onClick={() => onCopy(message.text)}
-            >
-              <Copy className="size-3" />
-            </button>
-          </div>
-          <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
-          {isStreaming && <span className="mt-1 inline-block h-4 w-2 animate-pulse bg-foreground/70 align-text-bottom" />}
+      <div className="group min-w-0">
+        <div className="mb-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+          <span className="font-medium">{isStreaming ? "Generating…" : "Assistant"}</span>
+          {isStreaming && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />}
+          <span>{formatTime(message.time)}</span>
+          {message.usage && <span className="truncate">{message.usage}</span>}
+          <button
+            type="button"
+            className="ml-auto shrink-0 opacity-0 transition hover:text-foreground group-hover:opacity-100"
+            onClick={() => onCopy(message.text)}
+          >
+            <Copy className="size-3" />
+          </button>
         </div>
+        <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+        {isStreaming && <span className="mt-1 inline-block h-4 w-2 animate-pulse bg-foreground/70 align-text-bottom" />}
       </div>
     );
   }
@@ -325,8 +327,16 @@ export type AgentWorkspaceProps = {
   draft: string;
   busy: string | null;
   rightOpen: boolean;
+  /** Cached catalog rows (all providers) for the composer model switcher. */
+  modelCatalog: ModelRow[];
+  /** Fetches the catalog once; the switcher awaits it before opening so
+   *  the list never shows a stale empty state. */
+  onLoadModelCatalog: () => Promise<void>;
+  /** Hot-swaps the agent's model to a `provider:model` spec. */
+  onChangeModel: (path: string, spec: string) => Promise<void>;
   onDraftChange: (value: string) => void;
-  onSendMessage: () => void;
+  onSendMessage: (context?: string) => void;
+  showInspectorToggle?: boolean;
   onSelectAgent: (path: string) => void;
   onShutdown: (path: string) => void;
   onSpawn: () => void;
@@ -335,6 +345,8 @@ export type AgentWorkspaceProps = {
 };
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {
+  const basket = useContextBasket();
+  const sendMessage = () => props.onSendMessage(serializeContext(basket?.resources ?? []));
   const {
     mode,
     dockedSlot,
@@ -349,11 +361,15 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     draft,
     busy,
     rightOpen,
+    modelCatalog,
   } = props;
 
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem(FLOAT_COLLAPSED_KEY) === "true"; } catch { return false; }
   });
+  useEffect(() => {
+    if (basket?.revealVersion) setCollapsed(false);
+  }, [basket?.revealVersion]);
   const [floatBody, setFloatBody] = useState<HTMLDivElement | null>(null);
   // Floating-shell position; null anchors the default bottom-right corner.
   const [floatPos, setFloatPos] = useState<FloatPos | null>(readFloatPos);
@@ -489,6 +505,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  // Set when the catalog fetch fails; the open list shows the error
+  // instead of an empty-state that would read as "no models exist".
+  const [modelPickerError, setModelPickerError] = useState<string | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -509,6 +529,24 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const docked = mode === "docked";
   const activeInfo = agents.find((agent) => agent.path === activeAgent);
   const running = statusLabel(statuses[activeAgent]);
+  const currentModelSpec = activeInfo?.model ?? null;
+  const currentModelShort = currentModelSpec
+    ? (currentModelSpec.split(":").filter(Boolean).pop() ?? currentModelSpec)
+    : null;
+
+  const toggleModelPicker = async () => {
+    if (modelPickerOpen) {
+      setModelPickerOpen(false);
+      return;
+    }
+    setModelPickerError(null);
+    try {
+      await props.onLoadModelCatalog();
+    } catch (cause) {
+      setModelPickerError(String(cause));
+    }
+    setModelPickerOpen(true);
+  };
 
   const toggleExpand = useCallback((id: number, open: boolean) => {
     setExpanded((current) => ({ ...current, [id]: open }));
@@ -642,7 +680,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <div className="min-w-0 flex-1 [&>div]:p-0">
                 <CommandInput autoFocus placeholder="输入以切换 agent，Esc 返回" />
               </div>
-              {docked && (
+              {docked && props.showInspectorToggle !== false && (
                 <Button
                   size="icon-sm"
                   variant="ghost"
@@ -713,7 +751,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               </Button>
             </div>
             <Button size="icon-sm" variant="ghost" aria-label="View agent DAG" title="View agent DAG" disabled={!activeAgent} onClick={props.onOpenDag}><GitFork /></Button>
-            {docked && (
+            {docked && props.showInspectorToggle !== false && (
               <Button
                 size="icon-sm"
                 variant="ghost"
@@ -774,7 +812,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                       />
                     );
                     return "trace" in block ? (
-                      <Trace key={block.trace[0].id} className="ml-8.5">
+                      // Trace lists start at the same edge as assistant
+                      // text — the avatar indent they used to clear is gone.
+                      <Trace key={block.trace[0].id}>
                         {block.trace.map(renderItem)}
                       </Trace>
                     ) : (
@@ -799,15 +839,74 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             )}
           </div>
 
+          <ContextBasket />
           <form
-            className="shrink-0 border-t bg-muted p-2 sm:p-3"
+            className="relative shrink-0 border-t bg-muted p-2 sm:p-3"
             onSubmit={(event) => {
               event.preventDefault();
-              props.onSendMessage();
+              sendMessage();
             }}
           >
+            {/* Model switcher: floats above the composer card so the
+                textarea keeps focus-relevant layout; the list reuses the
+                same Command shape as the agent picker. */}
+            {modelPickerOpen && (
+              <div className="absolute inset-x-2 bottom-full z-30 mb-2 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:inset-x-3">
+                <Command
+                  loop
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.stopPropagation();
+                      setModelPickerOpen(false);
+                    }
+                  }}
+                >
+                  <div className="flex h-9 items-center gap-1.5 border-b px-1.5">
+                    <Cpu className="size-3.5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1 [&>div]:p-0">
+                      <CommandInput autoFocus placeholder="搜索模型，Enter 切换，Esc 关闭" />
+                    </div>
+                  </div>
+                  <CommandList className="max-h-64">
+                    {modelPickerError ? (
+                      <div className="p-4 text-xs text-destructive">模型目录加载失败: {modelPickerError}</div>
+                    ) : (
+                      <>
+                        {!modelCatalog.length && (
+                          <div className="p-4 text-center text-sm text-muted-foreground">
+                            模型目录为空，请先在「设置 → 模型」中添加
+                          </div>
+                        )}
+                        <CommandGroup>
+                          {modelCatalog.map((model) => {
+                            const spec = `${model.provider_name}:${model.model_name}`;
+                            const active = spec === currentModelSpec;
+                            return (
+                              <CommandItem
+                                key={spec}
+                                value={`${model.model_name} ${model.provider_name}`}
+                                data-checked={active ? "true" : undefined}
+                                onSelect={() => {
+                                  setModelPickerOpen(false);
+                                  if (!active) void props.onChangeModel(activeAgent, spec);
+                                }}
+                              >
+                                <span className="truncate">{model.model_name}</span>
+                                <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">
+                                  {model.provider_name}
+                                </span>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </>
+                    )}
+                  </CommandList>
+                </Command>
+              </div>
+            )}
             {/* Card-style composer: borderless textarea with a floating
-                round send button, meta row below (hints / streaming). */}
+                round send button, meta row below (model / hints / streaming). */}
             <div className="rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
               <div className="flex items-end gap-2 px-2.5 pt-2">
                 <Textarea
@@ -815,9 +914,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   rows={1}
                   onChange={(event) => props.onDraftChange(event.target.value)}
                   onKeyDown={(event) => {
-                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send") {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send" && busy !== "session") {
                       event.preventDefault();
-                      props.onSendMessage();
+                      sendMessage();
                     }
                   }}
                   placeholder="输入消息…"
@@ -827,7 +926,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   type="submit"
                   size="icon"
                   className="mb-0.5 shrink-0 rounded-full"
-                  disabled={!draft.trim() || busy === "send"}
+                  disabled={!draft.trim() || busy === "send" || busy === "session"}
                   aria-label="发送"
                   title="发送（Ctrl+Enter）"
                 >
@@ -835,6 +934,21 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                 </Button>
               </div>
               <div className="flex items-center gap-2 px-2.5 pb-2 pt-1 text-[11px] text-muted-foreground">
+                <button
+                  type="button"
+                  onClick={() => void toggleModelPicker()}
+                  aria-expanded={modelPickerOpen}
+                  aria-label="切换模型"
+                  title={currentModelSpec ? `当前模型 ${currentModelSpec}，点击切换` : "选择模型"}
+                  className={cn(
+                    "flex max-w-[45%] shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-0.5 transition hover:border-border hover:bg-background",
+                    modelPickerOpen && "border-border bg-background",
+                  )}
+                >
+                  <Cpu className="size-3 shrink-0" />
+                  <span className="truncate">{currentModelShort ?? "选择模型"}</span>
+                  <ChevronDown className={cn("size-3 shrink-0 transition-transform", modelPickerOpen && "rotate-180")} />
+                </button>
                 <span className="truncate">Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史</span>
                 {streaming && (
                   <span className="ml-auto flex shrink-0 items-center gap-1.5">

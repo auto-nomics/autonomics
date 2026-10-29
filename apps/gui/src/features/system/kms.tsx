@@ -1,3 +1,5 @@
+import { AddToContext } from "@/features/context/context-basket";
+import { evidenceContext, knowledgeContext } from "@/features/context/context-model";
 import { useCallback, useEffect, useState } from "react";
 import { gatewayRequest, gatewayRequestOptional } from "@/gateway";
 import { renderMarkdown } from "@/lib/markdown";
@@ -182,7 +184,7 @@ export function KmsView() {
           </TabsList>
           <Button size="sm" variant="secondary" onClick={() => void load()}>Refresh</Button>
         </div>
-        <TabsContent value="skills" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
+        <TabsContent value="skills" className="grid min-h-0 grid-cols-1 md:grid-cols-[minmax(140px,28%)_minmax(0,1fr)] gap-3">
           <Card className="min-h-0 p-0!">
             <ScrollArea className="h-full p-1.5">
             {rows.map((item) => (
@@ -203,6 +205,7 @@ export function KmsView() {
           <Card className="min-h-0 p-0!">
             <ScrollArea className="h-full p-4">
             <h3 className="text-base font-medium">{row?.name ?? "No skill selected"}</h3>
+            {row && <AddToContext resource={{ kind: "skill", id: row.name, title: row.name, scope: "技能说明与正文", source: `skills:${row.name}`, content: `${row.description}\n\n${detail?.body || row.proposal?.body_md || ""}` }} />}
             {row && (
               <pre className="mt-2 text-xs whitespace-pre-wrap text-muted-foreground">
                 {[
@@ -227,7 +230,7 @@ export function KmsView() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="wiki" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
+        <TabsContent value="wiki" className="grid min-h-0 grid-cols-1 md:grid-cols-[minmax(140px,28%)_minmax(0,1fr)] gap-3">
           <Card className="min-h-0 p-0!">
             <ScrollArea className="h-full p-1.5">
             {knowledge.map((node) => {
@@ -252,6 +255,7 @@ export function KmsView() {
             {knowledgeNode ? (
               <>
                 <h3 className="text-base font-medium">{knowledgeNode.title}</h3>
+                <AddToContext resource={knowledgeContext(knowledgeNode)} />
                 <pre className="mt-2 text-xs whitespace-pre-wrap text-muted-foreground">
                   {`${knowledgeNode.path}\n${knowledgeNode.structural ? "section" : "article"} · ${knowledgeNode.status} · confidence ${knowledgeNode.confidence.toFixed(2)}\ncreated ${formatUnixTime(knowledgeNode.created_at)} · updated ${formatUnixTime(knowledgeNode.updated_at)}`}
                 </pre>
@@ -263,7 +267,7 @@ export function KmsView() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="evidence" className="grid min-h-0 grid-cols-[320px_minmax(0,1fr)] gap-3">
+        <TabsContent value="evidence" className="grid min-h-0 grid-cols-1 md:grid-cols-[minmax(140px,28%)_minmax(0,1fr)] gap-3">
           <Card className="min-h-0 p-0!">
             <ScrollArea className="h-full p-1.5">
             {evidence.map((item) => (
@@ -286,6 +290,7 @@ export function KmsView() {
             {evidenceItem ? (
               <>
                 <h3 className="text-base font-medium">{evidenceItem.summary}</h3>
+                <AddToContext resource={evidenceContext(evidenceItem)} />
                 <pre className="mt-2 text-xs whitespace-pre-wrap text-muted-foreground">
                   {[
                     `ID: ${evidenceItem.id}`,

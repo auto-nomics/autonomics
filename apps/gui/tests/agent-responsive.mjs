@@ -56,7 +56,7 @@ try {
     await page.goto(origin);
     const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('[data-group]').count(), 1, 'desktop renders one resizable group');
+    assert.equal(await page.locator('[data-group]').count(), 2, 'desktop renders workbench and inspector groups');
     assert.equal(await page.locator('[data-separator]').count(), 1, 'desktop renders one handle');
     assert.equal(await page.locator('[data-panel]#agents').count(), 0, 'agents sidebar is retired');
     const dockedInFloat = await composer.evaluate(node => Boolean(node.closest('.fixed')));
@@ -109,7 +109,7 @@ try {
     await page.goto(origin);
     const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('[data-group]').count(), 0, 'mobile must not render the resizable group');
+    assert.equal(await page.locator('[data-group]').count(), 1, 'mobile renders only the outer workbench group');
     assert.equal(await page.locator('[data-slot=sheet-content]').count(), 0, 'no drawer initially');
 
     // Agents switch through the tab bar now; no drawer involved.

@@ -11,17 +11,21 @@
 //!
 //! # Tool inventory
 //!
-//! | Tool                   | Purpose                                                |
-//! |------------------------|--------------------------------------------------------|
-//! | `bib_delete`           | Remove articles (id- or identifier-based; dry-run safe). |
-//! | `bib_create_collection`| Create a new collection.                                |
-//! | `bib_add_to_collection`| Add one or more articles to a collection + roles.       |
-//! | `bib_list_collection`  | List collections or articles within one.                |
-//! | `bib_search_library`   | Fielded lexical search across local library (multi-query). |
-//! | `bib_get_article`      | Batch metadata plus full-text file references.          |
-//! | `bib_request_fulltext` | Mark an article as needing full-text upload.            |
-//! | `bib_add_note`         | Append a note / highlight / comment to an article.       |
-//! | `bib_export`           | Render citation formats and write them to the agent VFS. |
+//! | Tool                        | Purpose                                                |
+//! |-----------------------------|--------------------------------------------------------|
+//! | `bib_delete`                | Remove articles (id- or identifier-based; dry-run safe). |
+//! | `bib_create_collection`     | Create a new collection.                                |
+//! | `bib_manage_collection`     | Rename / move / trash / restore / erase a collection subtree. |
+//! | `bib_empty_trash`           | Permanently erase all trashed collections (dry-run safe). |
+//! | `bib_add_to_collection`     | Add one or more articles to a collection + roles.       |
+//! | `bib_remove_from_collection`| Remove one or more articles from a collection.          |
+//! | `bib_list_collection`       | List collections or articles within one.                |
+//! | `bib_search_library`        | Fielded lexical search across local library (multi-query). |
+//! | `bib_get_article`           | Batch metadata plus full-text file references.          |
+//! | `bib_request_fulltext`      | Mark an article as needing full-text upload.            |
+//! | `bib_add_note`              | Append a highlight / comment to an article.               |
+//! | `bib_read_figure`           | Read a figure image out of stored full text.             |
+//! | `bib_export`                | Render citation formats and write them to the agent VFS. |
 
 use std::sync::Arc;
 
@@ -159,6 +163,112 @@ impl ToolFunction for BibManageCollectionTool {
         Ok(AgentToolResult::success_json(
             serde_json::json!({"affected_ids":affected}),
         ))
+    }
+}
+
+// ===========================================================================
+// bib_empty_trash — batch-erase every trashed collection subtree
+// ===========================================================================
+
+#[tool(
+    name = "bib_empty_trash",
+    description = "Permanently erase every trashed collection at once — the agent-side \
+                  equivalent of the library GUI's \"Empty trash\". Only trashed roots are \
+                  erased: each erase cascades over its whole trashed subtree, so nested \
+                  collections are covered automatically. Articles, attachments and notes \
+                  are preserved; only the collections and their membership rows are removed. \
+                  Safety: pass `confirm=true` to actually erase; the default `confirm=false` \
+                  runs as a dry-run that reports what would be erased without modifying \
+                  the database. A no-op when the trash is empty."
+)]
+pub struct BibEmptyTrashInput {
+    #[desc = "Pass true to permanently erase the trash. Default false = dry-run preview."]
+    pub confirm: Option<bool>,
+}
+
+pub struct BibEmptyTrashTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibEmptyTrashTool {
+    type Input = BibEmptyTrashInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        use crate::collections::CollectionChange;
+        let confirm = input.confirm.unwrap_or(false);
+        let collections = self
+            .bib
+            .list_collections_including_deleted(None, true)
+            .await
+            .map_err(box_error)?;
+        let trashed: Vec<&bib_types::Collection> =
+            collections.iter().filter(|c| c.deleted).collect();
+        let trashed_count = trashed.len();
+        let trashed_ids: std::collections::HashSet<&String> =
+            trashed.iter().map(|c| &c.id).collect();
+        // Erase roots only: erase cascades over the trashed subtree, and
+        // touching an already-erased descendant afterwards would fail NotFound.
+        let roots: Vec<&bib_types::Collection> = trashed
+            .into_iter()
+            .filter(|c| c.parent_id.as_ref().is_none_or(|p| !trashed_ids.contains(p)))
+            .collect();
+
+        let mut erased_ids: Vec<String> = Vec::new();
+        let mut failures: Vec<serde_json::Value> = Vec::new();
+        if confirm {
+            for root in &roots {
+                match self
+                    .bib
+                    .change_collection(&root.id, CollectionChange::Erase)
+                    .await
+                {
+                    Ok(ids) => erased_ids.extend(ids),
+                    Err(e) => failures.push(serde_json::json!({
+                        "collection_id": root.id,
+                        "name": root.name,
+                        "error": e.to_string(),
+                    })),
+                }
+            }
+        }
+
+        let roots_json: Vec<serde_json::Value> = roots
+            .iter()
+            .map(|c| serde_json::json!({"collection_id": c.id, "name": c.name}))
+            .collect();
+        let message = if !confirm {
+            if roots.is_empty() {
+                "Trash is empty; nothing to erase.".to_owned()
+            } else {
+                format!(
+                    "Dry run: the trash holds {} collection(s) across {} root subtree(s). \
+                     Pass confirm=true to erase them permanently.",
+                    trashed_count,
+                    roots.len()
+                )
+            }
+        } else if failures.is_empty() {
+            format!(
+                "Erased {} collection(s) from the trash. Articles, attachments and notes remain in the library.",
+                erased_ids.len()
+            )
+        } else {
+            format!(
+                "Erased {} collection(s); {} root subtree(s) failed and remain in the trash.",
+                erased_ids.len(),
+                failures.len()
+            )
+        };
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "confirm": confirm,
+            "trashed_collections": trashed_count,
+            "roots": roots_json,
+            "erased": erased_ids,
+            "failed": failures,
+            "message": message,
+        })))
     }
 }
 
@@ -361,6 +471,100 @@ impl BibAddToCollectionTool {
                 error: Some(e.to_string()),
             },
         }
+    }
+}
+
+// ===========================================================================
+// bib_remove_from_collection — batch membership removal
+// ===========================================================================
+
+#[tool(
+    name = "bib_remove_from_collection",
+    description = "Remove one or more articles from a collection. Only the membership is \
+                  deleted — the articles themselves stay in the library (use `bib_delete` \
+                  to remove articles entirely). This is the counterpart of \
+                  `bib_add_to_collection`; adding an article again later re-inserts it \
+                  with fresh role/note values. Articles that are not members are reported \
+                  as `was_member:false` instead of failing the batch. Removing from a \
+                  trashed collection is rejected."
+)]
+pub struct BibRemoveFromCollectionInput {
+    #[desc = "Collection ID (from bib_create_collection or bib_list_collection)"]
+    pub collection_id: String,
+    #[desc = "Article IDs to remove. Pass a list — even for a single article use a one-element list."]
+    pub article_ids: Vec<String>,
+}
+
+pub struct BibRemoveFromCollectionTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for BibRemoveFromCollectionTool {
+    type Input = BibRemoveFromCollectionInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        if input.article_ids.is_empty() {
+            return Err(ToolError::ExecutionFailed {
+                source: "at least one article id is required".into(),
+            });
+        }
+
+        // One membership lookup up front: lets non-members be reported as
+        // `was_member:false` instead of silently passing as removed.
+        let members: std::collections::HashSet<String> = self
+            .bib
+            .list_collection_articles(&input.collection_id, None, None)
+            .await
+            .map_err(box_error)?
+            .into_iter()
+            .map(|a| a.article_id)
+            .collect();
+
+        let mut results = Vec::with_capacity(input.article_ids.len());
+        for id in &input.article_ids {
+            let was_member = members.contains(id);
+            let outcome = if was_member {
+                self.bib.remove_from_collection(&input.collection_id, id).await
+            } else {
+                Ok(())
+            };
+            let error = outcome.err().map(|e| e.to_string());
+            results.push(serde_json::json!({
+                "article_id": id,
+                "removed": was_member && error.is_none(),
+                "was_member": was_member,
+                "error": error,
+            }));
+        }
+
+        let total = results.len();
+        let removed = results
+            .iter()
+            .filter(|r| r["removed"] == serde_json::Value::Bool(true))
+            .count();
+        let not_member = results
+            .iter()
+            .filter(|r| r["was_member"] == serde_json::Value::Bool(false))
+            .count();
+        let failed = results
+            .iter()
+            .filter(|r| r["error"].is_string())
+            .count();
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "collection_id": input.collection_id,
+            "total": total,
+            "removed": removed,
+            "not_member": not_member,
+            "failed": failed,
+            "results": results,
+            "message": format!(
+                "{removed} removed, {not_member} not a member, {failed} failed \
+                 out of {total} articles in collection '{}'.",
+                input.collection_id
+            ),
+        })))
     }
 }
 
@@ -1011,16 +1215,18 @@ impl ToolFunction for BibRequestFulltextTool {
 
 #[tool(
     name = "bib_add_note",
-    description = "Add a note, highlight, or comment to an article in the library. \
-                  Useful for recording observations, key findings, or critique while \
-                  reading a paper."
+    description = "Add a highlight or comment to an article in the library. A \
+                  `highlight` is an excerpt quoted from the paper (optionally \
+                  anchored to a PDF page/selection via `page`+`rects`); a \
+                  `comment` is your own observation, key finding, or critique. \
+                  Both are searchable alongside the article's text."
 )]
 pub struct BibAddNoteInput {
     #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
     pub article_id: String,
-    #[desc = "Annotation type: \"note\", \"highlight\", or \"comment\". Default: note"]
+    #[desc = "Annotation type: \"highlight\" (excerpt quoted from the paper) or \"comment\" (your own remark). Default: comment"]
     pub kind: Option<String>,
-    #[desc = "The annotation content (note text, highlighted excerpt, or comment)"]
+    #[desc = "The annotation content: the quoted excerpt for a highlight, your remark for a comment"]
     pub content: String,
     #[desc = "PDF page number (1-based) if the annotation is anchored to a page"]
     pub page: Option<u32>,
@@ -1041,10 +1247,37 @@ impl ToolFunction for BibAddNoteTool {
     type Input = BibAddNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let kind = match input.kind.as_deref().map(|s| s.to_lowercase()).as_deref() {
+        // Only two kinds exist: quoted excerpts (highlight) and user
+        // remarks (comment). Legacy "note" callers — remarks, back when
+        // note was its own kind — fold into comment; anything else is a
+        // hard error rather than a silent default.
+        let kind = match input
+            .kind
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            None | Some("comment") | Some("note") => bib_types::AnnotationKind::Comment,
             Some("highlight") => bib_types::AnnotationKind::Highlight,
-            Some("comment") => bib_types::AnnotationKind::Comment,
-            _ => bib_types::AnnotationKind::Note,
+            Some(other) => {
+                return Err(ToolError::ValidationFailed {
+                    message: format!(
+                        "unknown annotation kind `{other}`: expected \"highlight\" or \"comment\""
+                    ),
+                });
+            }
+        };
+        // A `rects` payload that fails to parse must not be silently
+        // dropped — the annotation would lose its anchor without the
+        // caller knowing.
+        let rects = match input.rects {
+            Some(value) => Some(serde_json::from_str(&value).map_err(|error| {
+                ToolError::ValidationFailed {
+                    message: format!("invalid `rects` JSON: {error}"),
+                }
+            })?),
+            None => None,
         };
 
         let ann = self
@@ -1055,9 +1288,7 @@ impl ToolFunction for BibAddNoteTool {
                 &input.content,
                 input.page,
                 input.color,
-                input
-                    .rects
-                    .and_then(|value| serde_json::from_str(&value).ok()),
+                rects,
                 input.attachment_key.as_deref(),
             )
             .await
@@ -1572,7 +1803,9 @@ pub fn bib_library_registrations(
     vec![
         R::from(BibCreateCollectionTool { bib: bib.clone() }),
         R::from(BibManageCollectionTool { bib: bib.clone() }),
+        R::from(BibEmptyTrashTool { bib: bib.clone() }),
         R::from(BibAddToCollectionTool { bib: bib.clone() }),
+        R::from(BibRemoveFromCollectionTool { bib: bib.clone() }),
         R::from(BibListCollectionTool { bib: bib.clone() }),
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
@@ -1935,7 +2168,7 @@ mod tests {
         bib.upsert_article(&art).await.unwrap();
         bib.add_annotation(
             &art.id,
-            bib_types::AnnotationKind::Note,
+            bib_types::AnnotationKind::Comment,
             "stale note",
             None,
             None,
@@ -1978,6 +2211,173 @@ mod tests {
             0
         );
     }
+
+    // ── bib_remove_from_collection ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_remove_from_collection_batch() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let mut art = bib_types::Article::new("doi:10.1/remove-a", "Member paper");
+        art.identifiers
+            .push(bib_types::Identifier::doi("10.1/remove-a"));
+        bib.upsert_article(&art).await.unwrap();
+        let stray = bib_types::Article::new("doi:10.1/remove-b", "Non-member paper");
+        bib.upsert_article(&stray).await.unwrap();
+        let col = bib_types::Collection::new("col-remove", "remove-target");
+        bib.upsert_collection(&col).await.unwrap();
+        bib.add_to_collection(
+            &col.id,
+            &art.id,
+            ArticleRole::Referenced,
+            AddedBy::Agent,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let tool = BibRemoveFromCollectionTool { bib: bib.clone() };
+        let input = BibRemoveFromCollectionInput {
+            collection_id: col.id.clone(),
+            article_ids: vec![art.id.clone(), stray.id.clone()],
+        };
+        let result = tool.run(input).await.unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(json["removed"].as_u64(), Some(1));
+        assert_eq!(json["not_member"].as_u64(), Some(1));
+        assert_eq!(json["failed"].as_u64(), Some(0));
+        assert_eq!(json["results"][0]["removed"], serde_json::Value::Bool(true));
+        assert_eq!(
+            json["results"][1]["was_member"],
+            serde_json::Value::Bool(false)
+        );
+
+        // Membership is gone; the articles themselves remain in the library.
+        assert_eq!(
+            bib.list_collection_articles(&col.id, None, None)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(bib.article_count().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_remove_rejects_empty_input() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let tool = BibRemoveFromCollectionTool { bib };
+        let err = tool
+            .run(BibRemoveFromCollectionInput {
+                collection_id: "col".into(),
+                article_ids: vec![],
+            })
+            .await;
+        assert!(err.is_err());
+    }
+
+    // ── bib_empty_trash ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_empty_trash_dry_run_then_confirm() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let art = bib_types::Article::new("doi:10.1/trash-keep", "Survivor paper");
+        bib.upsert_article(&art).await.unwrap();
+        let parent = bib_types::Collection::new("col-trash-root", "trashed root");
+        bib.upsert_collection(&parent).await.unwrap();
+        let mut child = bib_types::Collection::new("col-trash-kid", "trashed child");
+        child.parent_id = Some(parent.id.clone());
+        bib.upsert_collection(&child).await.unwrap();
+        bib.add_to_collection(
+            &child.id,
+            &art.id,
+            ArticleRole::Referenced,
+            AddedBy::Agent,
+            None,
+        )
+        .await
+        .unwrap();
+        bib.change_collection(&parent.id, crate::collections::CollectionChange::Trash)
+            .await
+            .unwrap();
+
+        let tool = BibEmptyTrashTool { bib: bib.clone() };
+
+        // Dry run previews the root subtree without touching the database.
+        let dry = tool.run(BibEmptyTrashInput { confirm: None }).await.unwrap();
+        let json = match dry.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+        assert_eq!(json["confirm"], serde_json::Value::Bool(false));
+        assert_eq!(json["trashed_collections"].as_u64(), Some(2));
+        assert_eq!(json["roots"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            json["roots"][0]["collection_id"].as_str(),
+            Some(parent.id.as_str())
+        );
+        assert!(json["erased"].as_array().unwrap().is_empty());
+        assert_eq!(
+            bib.list_collections_including_deleted(None, true)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Confirm erases the whole subtree but preserves the articles.
+        let sure = tool
+            .run(BibEmptyTrashInput {
+                confirm: Some(true),
+            })
+            .await
+            .unwrap();
+        let json = match sure.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+        assert_eq!(json["confirm"], serde_json::Value::Bool(true));
+        let erased: Vec<&str> = json["erased"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(erased.contains(&parent.id.as_str()));
+        assert!(erased.contains(&child.id.as_str()));
+        assert_eq!(json["failed"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            bib.list_collections_including_deleted(None, true)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(bib.article_count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_empty_trash_is_noop_when_empty() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let tool = BibEmptyTrashTool { bib: bib.clone() };
+        let result = tool
+            .run(BibEmptyTrashInput {
+                confirm: Some(true),
+            })
+            .await
+            .unwrap();
+        let json = match result.content {
+            ToolResultContent::Json(v) => v,
+            _ => panic!("expected JSON"),
+        };
+        assert_eq!(json["trashed_collections"].as_u64(), Some(0));
+        assert!(json["erased"].as_array().unwrap().is_empty());
+    }
+
     // ── bib_read_figure ──────────────────────────────────────────────────
 
     async fn figure_tool_with_seeded_storage() -> (

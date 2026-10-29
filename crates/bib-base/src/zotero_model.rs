@@ -947,14 +947,12 @@ pub(crate) async fn sync_annotation_item(
     let item_id = if let Some(attachment) = attachment {
         let annotation_type = match annotation.kind {
             AnnotationKind::Highlight => 1,
-            AnnotationKind::Note | AnnotationKind::Comment => 2,
+            AnnotationKind::Comment => 2,
         };
         let annotation_item = insert_item(conn, ITEM_TYPE_ANNOTATION).await?;
         let (text, comment) = match annotation.kind {
             AnnotationKind::Comment => (None, Some(annotation.content.clone())),
-            AnnotationKind::Highlight | AnnotationKind::Note => {
-                (Some(annotation.content.clone()), None)
-            }
+            AnnotationKind::Highlight => (Some(annotation.content.clone()), None),
         };
         let normalized_text = text.as_deref().map(str::to_lowercase);
         let normalized_comment = comment.as_deref().map(str::to_lowercase);
@@ -1979,7 +1977,7 @@ mod tests {
         let note = base
             .add_annotation(
                 "doi:10.1/note",
-                bib_types::AnnotationKind::Note,
+                bib_types::AnnotationKind::Comment,
                 "child note",
                 None,
                 None,

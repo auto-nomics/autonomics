@@ -122,3 +122,36 @@ review remains read-only until the newer daemon endpoints are available.
 
 The remaining major TUI-only area is deep authoring/editing of DAG graphs; the GUI
 currently provides the same read-only runtime snapshot view.
+
+
+## Research workbench and conversation references
+
+The activity rail opens Agent, Bibliography, Knowledge and Settings in the central
+work area. Bibliography and Knowledge stay mounted after their first visit, so
+selections, searches and scroll positions survive module navigation. On wide
+screens the Agent assistant docks in a resizable auxiliary pane. Its width and
+placement are remembered; the header also offers floating and hidden modes.
+Below 1100px, a docked assistant uses the existing floating shell.
+
+PDF/TXT readers opened from the workbench stay inside the literature editor,
+leaving the Agent pane available. Standalone reader entry points retain their
+full-window behavior.
+
+Use **加入当前会话** on a paper, search hit, reader text selection, knowledge
+node, evidence record or skill to explicitly add a reference. The basket above
+the composer shows the current Agent/session and supports preview, removal,
+replacement and clear. Adding a reference reveals the assistant, including a
+previously collapsed floating shell. Each Agent/session has an independent
+basket, held in memory for this application lifetime (reloading clears it).
+
+References are snapshots: papers include metadata/abstract, search hits include
+matched snippets, selections include only selected text and location, and KMS
+records include their displayed body and provenance. Browsing does not change
+references. Re-adding an object updates its snapshot. Each message appends the
+basket as labeled JSON reference data in the existing user-message text; no new
+backend API is required. References stay selected after sending, including on
+failure; clear or remove them to stop attaching them to subsequent messages.
+
+Run `npm run test:workbench` for the complete mocked-gateway browser workflow,
+including hosted reading, session isolation, request payloads, failed sends,
+module continuity, pane resizing and responsive placement.

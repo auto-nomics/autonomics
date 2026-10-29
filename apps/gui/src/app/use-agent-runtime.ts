@@ -15,6 +15,7 @@ import type {
   BackendMessage,
   ChatItem,
   GatewayFrame,
+  ModelRow,
   SessionInfo,
   StateSnapshot,
   StoredAgent,
@@ -114,19 +115,23 @@ export function useAgentRuntime() {
   });
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Model catalog for the composer switcher; fetched lazily on first open.
+  const [modelCatalog, setModelCatalog] = useState<ModelRow[]>([]);
+  const modelCatalogLoaded = useRef(false);
 
   const stateRef = useRef({ agents, sessions, activeAgent, activeSessions });
   stateRef.current = { agents, sessions, activeAgent, activeSessions };
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
+  const sessionActivationPending = useRef(false);
 
   const appendMessage = useCallback((agent: string, item: ChatItem) => {
     setMessages((current) => ({ ...current, [agent]: [...(current[agent] ?? []), item] }));
   }, []);
 
-  const loadHistory = useCallback(async (agentPath: string) => {
+  const loadHistory = useCallback(async (agentPath: string, explicitSessionId?: string) => {
     const info = stateRef.current.agents.find((agent) => agent.path === agentPath);
-    const sessionId = stateRef.current.activeSessions[agentPath]
+    const sessionId = explicitSessionId ?? stateRef.current.activeSessions[agentPath]
       ?? latestSession(stateRef.current.sessions[agentPath] ?? []);
     if (!info?.agent_id || !sessionId) return;
     // Only the latest in-flight load per agent may clear the flag, so a
@@ -142,6 +147,7 @@ export function useAgentRuntime() {
       );
       const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
         .flatMap(convertMessage);
+      if (historyLoadSeq.current[agentPath] !== seq) return;
       setMessages((current) => ({ ...current, [agentPath]: history }));
       setRawMessages((current) => ({
         ...current,
@@ -370,13 +376,13 @@ export function useAgentRuntime() {
     void hydrate();
   }, [hydrate]);
 
-  const sendMessage = async () => {
+  const sendMessage = async (context = "") => {
     const text = draft.trim();
-    if (!text || !activeAgent || busy === "send") return;
+    if (!text || !activeAgent || busy === "send" || sessionActivationPending.current) return;
     setBusy("send");
     setDraft("");
     try {
-      await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text });
+      await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text: text + context });
       // The transcript entry and prompt-history entry both arrive via the
       // UserMessageAcknowledged event; echoing them here rendered the
       // message twice.
@@ -500,6 +506,34 @@ export function useAgentRuntime() {
     await gatewayRequest("GET", `/agents/${activeAgent}/sessions`);
   };
 
+  /** Model catalog for the composer switcher; fetched once, on first open. */
+  const loadModelCatalog = useCallback(async () => {
+    if (modelCatalogLoaded.current) return;
+    modelCatalogLoaded.current = true;
+    try {
+      const catalog = await gatewayRequest("GET", "/model-config");
+      setModelCatalog(catalog?.models ?? []);
+    } catch (cause) {
+      modelCatalogLoaded.current = false;
+      throw cause;
+    }
+  }, []);
+
+  /** Hot-swaps an agent's model (`provider:model` spec); the daemon also
+   *  persists the preference and broadcasts `agent_model_changed`, which
+   *  keeps every workspace in sync — the local update only covers a
+   *  missed event and is idempotent with the reducer. */
+  const setAgentModel = async (path: string, spec: string) => {
+    try {
+      await gatewayRequest("PUT", `/agents/${path}/model`, { spec });
+      setAgents((current) => current.map((agent) => agent.path === path
+        ? { ...agent, model: spec }
+        : agent));
+    } catch (cause) {
+      appendMessage(path, makeItem("error", `切换模型失败: ${String(cause)}`));
+    }
+  };
+
   const toggleDisplay = async (key: keyof DisplaySettings) => {
     const next = !display[key];
     setDisplay((current) => ({ ...current, [key]: next }));
@@ -512,13 +546,20 @@ export function useAgentRuntime() {
   };
 
   const activateSession = async (agentPath: string, sessionId: string) => {
-    setActiveSessions((current) => ({ ...current, [agentPath]: sessionId }));
-    setMessages((current) => ({ ...current, [agentPath]: [] }));
+    if (sessionActivationPending.current || busy === "send") return;
+    sessionActivationPending.current = true;
+    setBusy("session");
     try {
       await gatewayRequest("POST", `/agents/${agentPath}/sessions/${sessionId}/activate`);
-      if (agentPath === activeAgent) void loadHistory(agentPath);
+      stateRef.current = { ...stateRef.current, activeSessions: { ...stateRef.current.activeSessions, [agentPath]: sessionId } };
+      setActiveSessions((current) => ({ ...current, [agentPath]: sessionId }));
+      setMessages((current) => ({ ...current, [agentPath]: [] }));
+      if (agentPath === stateRef.current.activeAgent) void loadHistory(agentPath, sessionId);
     } catch (cause) {
       window.alert(String(cause));
+    } finally {
+      sessionActivationPending.current = false;
+      setBusy(null);
     }
   };
 
@@ -569,5 +610,9 @@ export function useAgentRuntime() {
     setDraft,
     busy,
     sendMessage,
+    // model switching
+    modelCatalog,
+    loadModelCatalog,
+    setAgentModel,
   };
 }

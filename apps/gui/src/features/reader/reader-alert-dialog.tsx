@@ -11,6 +11,8 @@ export class ReaderAlertDialog {
   private pending: ((confirmed: boolean) => void) | null = null;
 
   constructor(container: HTMLElement) {
+    // Portaled dialogs must not create an extra row in the reader grid.
+    this.host.style.display = "contents";
     container.append(this.host);
     this.root = createRoot(this.host);
   }

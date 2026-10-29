@@ -60,8 +60,9 @@ try {
   assert.equal(dockedInFloat, false, 'workspace must not be floating while on the agent view');
   await composer.fill('draft persists');
 
-  // Switch away: the same workspace instance becomes a floating panel.
+  // Floating is now an explicit choice; the default is a docked assistant.
   await page.getByRole('button', { name: 'Bibliography' }).click();
+  await page.getByLabel('Agent 显示方式').selectOption('floating');
   await composer.waitFor({ state: 'visible' });
   const floating = await composer.evaluate(node => Boolean(node.closest('.fixed')));
   assert.equal(floating, true, 'workspace must float over the bibliography view');

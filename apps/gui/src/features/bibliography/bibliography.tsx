@@ -1,3 +1,5 @@
+import { AddToContext, useContextBasket } from "@/features/context/context-basket";
+import { articleContext } from "@/features/context/context-model";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   BookOpen,
@@ -346,8 +348,8 @@ export function BibliographyView() {
   const [discoveryMounted, setDiscoveryMounted] = useState(false);
   const [snapshotsMounted, setSnapshotsMounted] = useState(false);
   const [subscriptionsMounted, setSubscriptionsMounted] = useState(false);
-  return <div className="flex min-h-0 flex-1 flex-col gap-2">
-    <nav aria-label="Bibliography workspace" className="flex flex-wrap gap-1">
+  return <div className="flex min-h-0 flex-1 flex-col">
+    <nav aria-label="Bibliography workspace" className="flex min-h-9 shrink-0 flex-wrap items-center gap-0.5 border-b px-1.5">
       <Button size="sm" variant={workspace === "library" ? "secondary" : "ghost"} aria-current={workspace === "library" ? "page" : undefined} onClick={() => setWorkspace("library")}>Library</Button>
       <Button size="sm" variant={workspace === "discover" ? "secondary" : "ghost"} aria-current={workspace === "discover" ? "page" : undefined} onClick={() => { setDiscoveryMounted(true); setWorkspace("discover"); }}>Discover</Button>
       <Button size="sm" variant={workspace === "snapshots" ? "secondary" : "ghost"} aria-current={workspace === "snapshots" ? "page" : undefined} onClick={() => { setSnapshotsMounted(true); setWorkspace("snapshots"); }}>Snapshots</Button>
@@ -361,14 +363,28 @@ export function BibliographyView() {
 }
 
 function LibraryView() {
+  const contextBasket = useContextBasket();
+  const contextBasketRef = useRef(contextBasket);
+  contextBasketRef.current = contextBasket;
   const [initial] = useState(readSearchLocation);
   const keywordHistory=useQueryHistory();
   const topicHistory=useQueryHistory("autonomics.bib.topicHistory.v1");
   const [columns,setColumns]=useState(readResultColumns);
   const [showSnippets,setShowSnippets]=useState(()=>{try{return localStorage.getItem("autonomics.bib.snippets")!=="false";}catch{return true;}});
-  const [wideColumns,setWideColumns]=useState(()=>window.matchMedia("(min-width:768px)").matches);
-  useEffect(()=>{const media=window.matchMedia("(min-width:768px)");const update=()=>setWideColumns(media.matches);media.addEventListener("change",update);return()=>media.removeEventListener("change",update);},[]);
-  useEffect(()=>{try{localStorage.setItem("autonomics.bib.columns.v1",JSON.stringify(columns));localStorage.setItem("autonomics.bib.snippets",String(showSnippets));}catch{/* Optional display preferences. */}},[columns,showSnippets]);
+  const libraryContainer = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    const element = libraryContainer.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width > 0) setContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const wideColumns = containerWidth >= 760;
+  const roomy = containerWidth >= 1180;
+
   const [locationError, setLocationError] = useState(initial.error);
   const [collections, setCollections] = useState<BibCollection[]>([]);
   const [articles, setArticles] = useState<BibArticle[]>([]);
@@ -603,7 +619,7 @@ function LibraryView() {
     setAttachmentsOpen(true);
     setDetail(null);
     if (!articleId) { setDetailLoading(false); return; }
-    if (!window.matchMedia("(min-width: 1280px)").matches) setDetailsOpen(true);
+    setDetailsOpen(true);
     setDetailLoading(true);
     void gatewayRequest("GET", `/bib/articles/${encodeURIComponent(articleId)}`, undefined, { signal: abort.signal })
       .then((response) => { if (requestId === detailSequence.current) setDetail(response as BibDetail); })
@@ -705,12 +721,24 @@ function LibraryView() {
   };
 
   const readerRef = useRef<{ close: () => void } | null>(null);
+  const libraryAlive = useRef(true);
+  useEffect(() => {
+    libraryAlive.current = true;
+    return () => { libraryAlive.current = false; readerRef.current?.close(); };
+  }, []);
   const openReaderFor = (article: BibArticle, format?: string | null, attachmentKey?: string | null, search?: import("@/features/reader/reader-target").ReaderSearchTarget, expectedHash?: string | null) => {
     readerRef.current?.close();
     readerRef.current = null;
     const openReader = format === "txt" ? openTxtReader : openPdfReader;
-    void openReader({ articleId: article.id, title: article.title, article, attachmentKey, search, expectedHash })
-      .then((handle) => { readerRef.current = handle; })
+    void openReader({ articleId: article.id, title: article.title, article, attachmentKey, search, expectedHash,
+      host: contextBasket ? libraryContainer.current ?? undefined : undefined,
+      onReference: contextBasket ? selection => {
+        const basket = contextBasketRef.current;
+        if (!basket?.available) { window.alert("请先选择 Agent 会话"); return; }
+        basket.add({ kind: "evidence", id: JSON.stringify([article.id, attachmentKey, selection.page, selection.start, selection.end, selection.text]), title: `${article.title} · 选中文本`, scope: "阅读器选中文本（非全文）", source: `bib:${article.id}${attachmentKey ? ` · ${attachmentKey}` : ""}${selection.page ? ` · 第 ${selection.page} 页` : ""}${selection.start !== undefined ? ` · 字符 ${selection.start}–${selection.end}` : ""}`, content: selection.text });
+      } : undefined,
+    })
+      .then((handle) => { if (libraryAlive.current) readerRef.current = handle; else handle.close(); })
       .catch((cause) => {if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(String(cause));});
   };
   const openEvidence = async (evidence: SearchEvidence) => {
@@ -805,7 +833,7 @@ function LibraryView() {
   };
 
   return (
-    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 xl:grid-cols-[216px_minmax(0,1fr)_336px] xl:grid-rows-1">
+    <div ref={libraryContainer} className={cn("relative isolate grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden", roomy && "grid-cols-[216px_minmax(0,1fr)_336px] grid-rows-1")}>
       {advancedOpen && <AdvancedSearchBuilder query={queryDraft} expression={queryDraft === query ? expression : null} onClose={() => setAdvancedOpen(false)} onApply={(expr,text) => {setExpression(expr);setQuery(text);setQueryDraft(text);setAdvancedOpen(false);}} />}
       {(libraryOpen || detailsOpen) && (
         <button
@@ -815,14 +843,14 @@ function LibraryView() {
             setLibraryOpen(false);
             setDetailsOpen(false);
           }}
-          className="fixed inset-0 z-30 bg-black/50 outline-none xl:hidden"
+          className={cn("absolute inset-0 z-30 bg-black/50 outline-none", roomy && "hidden")}
         />
       )}
       <aside
         className={cn(
-          "relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card",
-          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:left-0 max-xl:z-[35] max-xl:w-[min(88vw,300px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
-          libraryOpen ? "max-xl:translate-x-0" : "max-xl:-translate-x-full",
+          "relative flex min-h-0 flex-col overflow-hidden border-r bg-card",
+          !roomy && "absolute top-0 bottom-0 left-0 z-[35] w-[min(88%,300px)] shadow-2xl transition-transform",
+          !roomy && !libraryOpen && "-translate-x-full",
         )}
       >
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
@@ -833,16 +861,14 @@ function LibraryView() {
               size="icon-xs"
               variant="ghost"
               aria-label="Close library"
-              className="xl:hidden"
+              className={cn(roomy && "hidden")}
               onClick={() => setLibraryOpen(false)}
             >
               <X />
             </Button>
           </div>
         </div>
-        {/* Same radius-clip guard as the results list: the selected
-            collection row's background sits within the inherited radius. */}
-        <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5" viewportClassName="rounded-none">
+        <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5">
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
           <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
@@ -850,13 +876,13 @@ function LibraryView() {
         </ScrollArea>
       </aside>
 
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+      <section className="flex min-h-0 flex-col overflow-hidden bg-card">
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
           <Button
             size="icon-sm"
             variant="ghost"
             aria-label="Open library"
-            className="xl:hidden"
+            className={cn(roomy && "hidden")}
             onClick={() => setLibraryOpen(true)}
           >
             <PanelLeft />
@@ -900,7 +926,7 @@ function LibraryView() {
             size="icon-sm"
             variant="ghost"
             aria-label="Open entry details"
-            className="xl:hidden"
+            className={cn(roomy && "hidden")}
             onClick={() => setDetailsOpen(true)}
           >
             <PanelRight />
@@ -967,10 +993,7 @@ function LibraryView() {
           </div>
         </div>
 
-        {/* Full-bleed row backgrounds reach the viewport top; without this
-            the inherited panel radius bites rounded corners out of the
-            first row (visible whenever it is selected/expanded). */}
-        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="rounded-none focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
+        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
           {loading && !visibleArticles.length && (
             <div className="space-y-px">
               {Array.from({ length: 10 }).map((_, index) => (
@@ -1105,9 +1128,9 @@ function LibraryView() {
 
       <aside
         className={cn(
-          "relative flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card",
-          "max-xl:fixed max-xl:top-13 max-xl:bottom-0 max-xl:right-0 max-xl:z-[35] max-xl:w-[min(94vw,360px)] max-xl:rounded-none max-xl:shadow-2xl max-xl:transition-transform",
-          detailsOpen ? "max-xl:translate-x-0" : "max-xl:translate-x-full",
+          "relative flex min-h-0 flex-col overflow-hidden border-l bg-card",
+          !roomy && "absolute top-0 bottom-0 right-0 z-[35] w-[min(94%,360px)] shadow-2xl transition-transform",
+          !roomy && !detailsOpen && "translate-x-full",
         )}
       >
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
@@ -1120,7 +1143,7 @@ function LibraryView() {
               size="icon-xs"
               variant="ghost"
               aria-label="Close entry details"
-              className="xl:hidden"
+              className={cn(roomy && "hidden")}
               onClick={() => setDetailsOpen(false)}
             >
               <X />
@@ -1139,6 +1162,7 @@ function LibraryView() {
             <div className="grid h-full place-items-center text-sm text-muted-foreground">Select an item</div>
           ) : (
             <div className="space-y-3">
+              <AddToContext resource={articleContext(selected)} />
               {searchActive && indexGeneration && resultContext===JSON.stringify(currentRequest) && articles.some(article=>article.id===selected.id) && <SearchEvidencePanel articleId={selected.id} request={currentRequest} generation={indexGeneration} onOpen={evidence => void openEvidence(evidence)} />}
               <Section title="Attachment Info" count={attachments.length}>
                 {!detailLoading && attachments.length ? (

@@ -868,7 +868,7 @@ async fn unicode_annotation_windows_keep_real_object_and_byte_offsets() {
         .unwrap();
     let text = "免疫细胞中的基因表达和调控机制需要结合具体实验分析。".repeat(5);
     let annotation = core
-        .add_annotation("a", AnnotationKind::Note, &text, None, None, None, None)
+        .add_annotation("a", AnnotationKind::Comment, &text, None, None, None, None)
         .await
         .unwrap();
     let mut rows = core

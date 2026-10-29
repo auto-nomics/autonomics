@@ -1,4 +1,4 @@
-import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget } from "./reader-target";
+import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget, type ReaderWorkspaceOptions } from "./reader-target";
 import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
 import { escapeHtml } from "@/lib/markdown";
 import type { BibArticle } from "@/types";
@@ -111,6 +111,8 @@ export async function openTxtReader(options: {
   expectedHash?: string | null;
   search?: ReaderSearchTarget;
   sessionToken?: number;
+  host?: HTMLElement;
+  onReference?: ReaderWorkspaceOptions["onReference"];
 }): Promise<TxtReaderHandle> {
   const token = options.sessionToken ?? beginReaderSession();
   const bytes = options.bytes ?? await fetchBibFulltextRaw(options.articleId, options.attachmentKey, options.expectedHash);
@@ -119,7 +121,7 @@ export async function openTxtReader(options: {
     options.articleId,
     options.title,
     options.article ?? null,
-    bytes, options.attachmentKey ?? undefined, options.search, token,
+    bytes, options.attachmentKey ?? undefined, options.search, token, options,
   );
   const handle: TxtReaderHandle = {
     close: () => reader.destroy(),
@@ -162,6 +164,10 @@ class ZoteroStyleTxtReader {
   private searchPane: HTMLElement;
   private searchInput: HTMLInputElement;
   private selectionPopup: HTMLDivElement;
+  // Touch selection never fires mouseup; selectionchange drives the popup
+  // for non-mouse pointers instead.
+  private lastPointerType = "mouse";
+  private selectionChangeTimer: number | null = null;
   private appearancePopup: HTMLDivElement;
   private statusElement: HTMLSpanElement;
   private progressElement: HTMLSpanElement;
@@ -176,12 +182,13 @@ class ZoteroStyleTxtReader {
     private readonly sessionToken: number,
     private readonly attachmentKey?: string,
     private readonly initialSearch?: ReaderSearchTarget,
+    private readonly workspace: ReaderWorkspaceOptions = {},
   ) {
     this.appearance = this.readAppearance();
     this.root = document.createElement("div");
     this.root.className = "zotero-pdf-reader";
-    this.root.setAttribute("role","dialog");this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
-    this.root.addEventListener("keydown",event=>trapReaderFocus(event,this.root));
+    this.root.setAttribute("role",this.workspace.host ? "region" : "dialog");if (!this.workspace.host) this.root.setAttribute("aria-modal","true");this.root.setAttribute("aria-label",title);this.root.tabIndex=-1;
+    this.root.addEventListener("keydown",event=>{ if (!this.workspace.host) trapReaderFocus(event,this.root); });
     this.root.dataset.readerKind = "txt";
     this.root.innerHTML = `
       <div class="reader-backdrop" data-action="close-sidebar-backdrop"></div>
@@ -253,6 +260,7 @@ class ZoteroStyleTxtReader {
             ${toolbarButton("tool-highlight", "Highlight selection", "highlight", "", 'class="reader-highlight-tool"')}
             ${toolbarButton("tool-note", "Add note", "note")}
             ${toolbarButton("copy-selection-toolbar", "Copy selection", "copy")}
+            ${this.workspace.onReference ? toolbarButton("add-context", "加入当前会话", "note") : ""}
             ${toolbarButton("tool-clear", "Clear selection", "clear")}
           </div>
           <div class="reader-tool-right" role="group" aria-label="Reading options">
@@ -278,10 +286,12 @@ class ZoteroStyleTxtReader {
         <button type="button" data-color="red">Red</button>
         <button type="button" data-action="add-note">Note</button>
         <button type="button" data-action="copy-selection">Copy</button>
+          ${this.workspace.onReference ? '<button type="button" data-action="add-selection-context">加入当前会话</button>' : ""}
       </div>
       <div class="reader-appearance-popup" role="dialog" aria-label="Text appearance" hidden></div>
     `;
-    document.body.append(this.root);
+    if (this.workspace.host) this.root.dataset.hosted = "true";
+    (this.workspace.host ?? document.body).append(this.root);
     this.toast = new Toast(this.root);
     this.alertDialog = new ReaderAlertDialog(this.root);
     this.noteComposer = new NoteComposer(this.root);
@@ -334,9 +344,9 @@ class ZoteroStyleTxtReader {
     title: string,
     bibArticle: BibArticle | null = null,
     fulltext?: { bytes: Uint8Array; contentType: string },
-    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(),
+    attachmentKey?: string, initialSearch?: ReaderSearchTarget, sessionToken = beginReaderSession(), workspace: ReaderWorkspaceOptions = {},
   ): Promise<ZoteroStyleTxtReader> {
-    const reader = new ZoteroStyleTxtReader(articleId, title, bibArticle, sessionToken, attachmentKey, initialSearch);
+    const reader = new ZoteroStyleTxtReader(articleId, title, bibArticle, sessionToken, attachmentKey, initialSearch, workspace);
     if (!registerReaderSession(sessionToken, () => reader.destroy())) {reader.destroy();throw new DOMException("Reader opening superseded", "AbortError");}
     try {
       const raw = fulltext ?? await fetchBibFulltextRaw(articleId, attachmentKey);
@@ -537,6 +547,14 @@ class ZoteroStyleTxtReader {
     });
     action("tool-note", () => void this.addNote());
     action("copy-selection-toolbar", () => void this.copySelection());
+    const addReference = () => {
+      if (!this.anchor?.text) { this.toast.show("请先选择要引用的文本", "info"); return; }
+      this.workspace.onReference?.({ text: this.anchor.text, start: this.anchor.start, end: this.anchor.end });
+      this.toast.show("已加入当前会话引用");
+    };
+    action("add-context", addReference);
+    action("add-selection-context", addReference);
+
     action("tool-clear", () => {
       window.getSelection()?.removeAllRanges();
       this.hideSelectionPopup();
@@ -573,11 +591,11 @@ class ZoteroStyleTxtReader {
       resizer.setPointerCapture(event.pointerId);
       resizer.classList.add("dragging");
       const move = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - this.root.getBoundingClientRect().left));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
       };
       const finish = (pointerEvent: PointerEvent) => {
-        const width = Math.min(560, Math.max(230, pointerEvent.clientX));
+        const width = Math.min(560, Math.max(230, pointerEvent.clientX - this.root.getBoundingClientRect().left));
         this.root.style.setProperty("--reader-sidebar-width", `${width}px`);
         window.localStorage.setItem(READER_SIDEBAR_WIDTH_KEY, String(width));
         resizer.classList.remove("dragging");
@@ -598,6 +616,15 @@ class ZoteroStyleTxtReader {
     }, { signal, passive: true });
     this.container.addEventListener("mouseup", () => window.setTimeout(() => this.captureSelection(), 0), { signal });
     this.container.addEventListener("keyup", () => this.captureSelection(), { signal });
+    document.addEventListener("pointerdown", event => { this.lastPointerType = event.pointerType || "mouse"; }, { signal, capture: true });
+    document.addEventListener("selectionchange", () => {
+      if (this.lastPointerType === "mouse") return;
+      if (this.selectionChangeTimer !== null) window.clearTimeout(this.selectionChangeTimer);
+      this.selectionChangeTimer = window.setTimeout(() => {
+        this.selectionChangeTimer = null;
+        if (!this.destroyed) this.captureSelection();
+      }, 250);
+    }, { signal });
     this.container.addEventListener("mousedown", (event) => {
       const target = event.target as HTMLElement;
       if (!target.closest(".reader-selection-popup")) this.hideSelectionPopup();
@@ -1107,6 +1134,7 @@ class ZoteroStyleTxtReader {
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    if (this.selectionChangeTimer !== null) window.clearTimeout(this.selectionChangeTimer);
     if (this.frame) cancelAnimationFrame(this.frame);
     this.annotationInspector.destroy();
     this.resizeObserver?.disconnect();

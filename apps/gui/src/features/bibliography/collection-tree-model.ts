@@ -27,6 +27,27 @@ export function collectionDescendants(collections: BibCollection[], id: string):
   return result;
 }
 
+/** Names matching the filter plus every ancestor that keeps them reachable;
+ *  expanded additionally auto-reveals nested matches while the filter is active.
+ *  Returns null when the query is empty, meaning no filtering. */
+export function collectionFilter(collections: BibCollection[], query: string): { visible: Set<string>; expanded: Set<string> } | null {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return null;
+  const byId = new Map(collections.map(c => [c.id, c]));
+  const visible = new Set<string>();
+  const expanded = new Set<string>();
+  for (const c of collections) {
+    if (!c.name.toLocaleLowerCase().includes(needle)) continue;
+    let current: BibCollection | undefined = c;
+    while (current && !visible.has(current.id)) {
+      visible.add(current.id);
+      expanded.add(current.id);
+      current = current.parent_id ? byId.get(current.parent_id) : undefined;
+    }
+  }
+  return { visible, expanded };
+}
+
 export function collectionRows(collections: BibCollection[], expanded: Set<string>, deleted = false): CollectionRow[] {
   const nodes = collections.filter(c => Boolean(c.deleted) === deleted);
   const ids = new Set(nodes.map(c => c.id));

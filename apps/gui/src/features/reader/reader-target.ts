@@ -1,3 +1,7 @@
+export type ReaderWorkspaceOptions = {
+  host?: HTMLElement;
+  onReference?: (selection: { text: string; page?: number; start?: number; end?: number }) => void;
+};
 export type ReaderSearchTarget = { query?: string; page?: number | null; annotationId?: string | null };
 export function readerBase(articleId: string, attachmentKey?: string | null) {
   const base = `/bib/articles/${encodeURIComponent(articleId)}`;

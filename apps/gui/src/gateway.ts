@@ -53,7 +53,7 @@ function normalizeApiPath(path: string): string {
   const pathname = queryStart < 0 ? trimmed : trimmed.slice(0, queryStart);
   const query = queryStart < 0 ? "" : trimmed.slice(queryStart);
   const agents = pathname.match(
-    /^\/agents\/(.+?)((?:\/(?:messages|cancel|compact|config|dag|model|sessions))(?:\/.*)?)$/,
+    /^\/agents\/(.+?)((?:\/(?:messages|cancel|compact|config|dag|model|sessions|shutdown))(?:\/.*)?)$/,
   );
   if (!agents) return trimmed;
   const agentPath = agents[1].includes("%")

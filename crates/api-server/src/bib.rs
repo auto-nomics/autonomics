@@ -2025,8 +2025,7 @@ async fn add_annotation(
     }
     let kind = match input.kind.as_deref().map(str::to_ascii_lowercase) {
         Some(ref kind) if kind == "highlight" => AnnotationKind::Highlight,
-        Some(ref kind) if kind == "comment" => AnnotationKind::Comment,
-        _ => AnnotationKind::Note,
+        _ => AnnotationKind::Comment,
     };
     let annotation = shared
         .bib
@@ -2138,8 +2137,7 @@ async fn add_attachment_annotation(
     }
     let kind = match input.kind.as_deref().map(str::to_ascii_lowercase) {
         Some(ref kind) if kind == "highlight" => AnnotationKind::Highlight,
-        Some(ref kind) if kind == "comment" => AnnotationKind::Comment,
-        _ => AnnotationKind::Note,
+        _ => AnnotationKind::Comment,
     };
     let annotation = shared
         .bib

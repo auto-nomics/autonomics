@@ -108,3 +108,8 @@ jobs:
       - run: npm --prefix apps/gui run test:bib-workflow
       - run: npm --prefix apps/gui run test:bib-discovery
       - run: npm --prefix apps/gui run build
+      # Repo builds embed crates/gateway/gui-dist via include_str!, so the
+      # committed snapshot must match a fresh build of apps/gui. Re-sync and
+      # fail on drift; release.yml rebuilds the bundle itself instead.
+      - run: node apps/gui/scripts/sync-gateway-dist.mjs
+      - run: git diff --exit-code -- crates/gateway/gui-dist
