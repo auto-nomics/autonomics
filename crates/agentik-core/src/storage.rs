@@ -211,7 +211,7 @@ pub struct AgentRuntimeOverrides {
     pub reasoning_effort: Option<agentik_types::ReasoningEffort>,
 }
 
-pub use agentik_kms::AgentRuntimeConfig;
+pub use agentik_memory::AgentRuntimeConfig;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Error

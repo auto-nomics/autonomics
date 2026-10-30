@@ -1,7 +1,6 @@
 //! Bridge between gateway events and TUI application state.
 
 use super::history::messages_to_chatlines;
-
 use super::*;
 
 fn registered_agent_id(info: &gateway::proto::HostEventView) -> Option<uuid::Uuid> {
@@ -11,104 +10,8 @@ fn registered_agent_id(info: &gateway::proto::HostEventView) -> Option<uuid::Uui
     }
 }
 
-fn kms_proposal_generation(proposals: &[gateway::proto::KmsSkillProposalView]) -> u64 {
-    proposals.len() as u64 * 1_000
-        + proposals
-            .iter()
-            .filter(|proposal| proposal.status == "approved")
-            .count() as u64
-            * 10
-        + proposals
-            .iter()
-            .filter(|proposal| proposal.status == "rejected")
-            .count() as u64
-}
-
-fn evidence_row(
-    evidence: gateway::proto::KmsEvidenceView,
-) -> crate::widgets::evolution_widget::observation_browser::EvidenceRow {
-    crate::widgets::evolution_widget::observation_browser::EvidenceRow {
-        id: evidence.id,
-        created_at: evidence.last_seen_at,
-        kind: format!("{} · {}", evidence.status, evidence.evidence_kind),
-        source: format!("{} · {}", evidence.source_kind, evidence.source_id),
-        summary: format!("{} ×{}", evidence.summary, evidence.occurrence_count),
-        body: evidence.body,
-        node_kind: evidence.anchor_path,
-        error: evidence.error,
-    }
-}
-
-fn kms_dashboard_status(
-    workers: &[gateway::proto::KmsWorkerStatusView],
-    skills: &[gateway::proto::KmsSkillLibraryView],
-    proposals: &[gateway::proto::KmsSkillProposalView],
-    observations: usize,
-) -> crate::widgets::evolution_widget::KmsDashboardStatus {
-    let mut skills_workspace = 0;
-
-    let mut skills_global = 0;
-
-    let mut skills_builtin = 0;
-
-    let mut skills_auto = 0;
-
-    for skill in skills {
-        match skill.tier.as_str() {
-            "workspace" => skills_workspace += 1,
-            "builtin" => skills_builtin += 1,
-            _ => skills_global += 1,
-        }
-
-        if skill.tags.iter().any(|tag| tag == "auto") {
-            skills_auto += 1;
-        }
-    }
-
-    let proposal_worker = workers
-        .iter()
-        .find(|worker| worker.worker == "propose_skill_revision");
-
-    crate::widgets::evolution_widget::KmsDashboardStatus {
-        service_enabled: true,
-        generation: skills.len() as u64 * 1_000_000 + kms_proposal_generation(proposals),
-        sweep_interval_secs: None,
-        observations,
-        skills_workspace,
-        skills_global,
-        skills_builtin,
-        skills_auto,
-        proposals_pending: proposals
-            .iter()
-            .filter(|proposal| proposal.status == "pending")
-            .count(),
-        proposals_applied: proposals
-            .iter()
-            .filter(|proposal| proposal.status == "approved")
-            .count(),
-        phase: if workers.iter().any(|worker| worker.running) {
-            "distilling".to_string()
-        } else {
-            "idle".to_string()
-        },
-        phase_queued: 0,
-        phase_triggers: Vec::new(),
-        phase_elapsed_ms: 0,
-        cycles_completed: proposal_worker
-            .map(|worker| worker.total_executed)
-            .unwrap_or_default(),
-        last_cycle_at: proposal_worker.and_then(|worker| worker.last_run_at),
-        last_cycle_duration_ms: None,
-        last_triggers: Vec::new(),
-        last_error: proposal_worker.and_then(|worker| worker.last_error.clone()),
-        dropped_commands: 0,
-        cycle_skipped_empty: 0,
-    }
-}
-
 impl App {
     /// Dispatch one SSE frame from the gateway pump.
-
     pub(super) fn handle_gateway_frame(&mut self, frame: gateway::client::GatewayFrame) {
         use gateway::client::{FrameInner, GatewayFrame};
 
@@ -127,26 +30,20 @@ impl App {
             } => self.handle_gateway_notice(notice),
             GatewayFrame::Lag { .. } => {
                 // Frames were dropped (frozen consumer beyond the replay
-
                 // ring). Folded deltas may be stale — reconcile from a
-
                 // fresh `/state` snapshot.
-
                 tracing::warn!("gateway stream lagged; re-hydrating from /state");
-
                 self.state
                     .toasts
                     .info("Gateway stream lag", Some("Re-syncing state…".into()));
 
                 self.spawn_reconcile("lag");
             }
-
             GatewayFrame::Disconnected => {
                 self.state
                     .toasts
                     .info("Gateway disconnected", Some("Reconnecting…".into()));
             }
-
             GatewayFrame::Reconnected => {
                 self.state
                     .toasts
@@ -158,12 +55,9 @@ impl App {
     }
 
     /// Translate a daemon-side lifecycle notice into the matching
-
     /// application event.
-
     fn handle_gateway_notice(&mut self, notice: gateway::proto::GatewayNotice) {
         use gateway::proto::GatewayNotice;
-
         match notice {
             GatewayNotice::ModelChanged { spec, reason } => {
                 self.handle_app_event(crate::app_event::AppEvent::ActiveModelChanged {
@@ -171,15 +65,9 @@ impl App {
                     reason,
                 });
             }
-
-            GatewayNotice::KmsWorkerChanged { status } => {
-                self.handle_app_event(crate::app_event::AppEvent::KmsWorkerStatusChanged(status));
-            }
-
             GatewayNotice::ChatgptLogin { result } => {
                 self.handle_app_event(crate::app_event::AppEvent::ChatgptLoginCompleted { result });
             }
-
             GatewayNotice::CatalogFetched {
                 provider,
                 result: Ok(count),
@@ -189,7 +77,6 @@ impl App {
                     result: Ok(count),
                 });
             }
-
             GatewayNotice::CatalogFetched {
                 provider,
                 result: Err(error),
@@ -203,9 +90,7 @@ impl App {
     }
 
     /// Route one agent event to the matching session tab — the same
-
     /// routing the fat-client loop performed on `host.recv_any()`.
-
     fn route_agent_event(&mut self, agent_name: String, event: AgentEvent) {
         let target_idx = if !agent_name.is_empty() {
             self.state
@@ -218,7 +103,6 @@ impl App {
         };
 
         let is_session_list = matches!(event, AgentEvent::SessionList { .. });
-
         if matches!(
             event,
             AgentEvent::SessionActivated { .. }
@@ -226,15 +110,14 @@ impl App {
                 | AgentEvent::SessionClosed { .. }
                 | AgentEvent::SessionList { .. }
         ) {
-            // The backend restore emits no PlanUpdate for the context's
-            // plan, so fetch it here (guarded by plan_requested).
+
+            // The backend restore emits no PlanUpdate for the activated
+            // session's plan, so fetch it here (guarded by plan_requested).
             let activated = match &event {
                 AgentEvent::SessionActivated { id, .. } => Some(*id),
                 _ => None,
             };
-
             state::apply_session_event(&mut self.state, event, target_idx);
-
             if let Some(session_id) = activated {
                 self.spawn_plan_load_for(target_idx, session_id);
             }
@@ -264,37 +147,26 @@ impl App {
     }
 
     /// Apply an internal [`AppEvent`] to state.
-
     pub(super) fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
         match event {
             crate::app_event::AppEvent::AgentRecordsLoaded(records) => {
                 self.state.agent_profile_picker.set_records(&records);
-
                 self.state.agent_profile_picker.open();
-
                 tracing::info!(count = records.len(), "agent records loaded for picker");
             }
-
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
                 self.state.agent_profile_picker.remove_by_id(agent_id);
-
                 // If this agent's leaf is currently open, close it too — all
-
                 // stored data has been erased so there's nothing to resume.
-
                 self.close_agent_leaf_by_id(agent_id);
-
                 tracing::info!(%agent_id, "agent removed from picker after deletion");
             }
-
             crate::app_event::AppEvent::AgentRenamed { agent_id, new_path } => {
                 self.state
                     .agent_profile_picker
                     .apply_rename(agent_id, new_path.clone());
-
                 tracing::info!(%agent_id, new_path = %new_path, "agent renamed in picker");
             }
-
             crate::app_event::AppEvent::HistoryLoaded {
                 agent_id,
                 session_id,
@@ -317,7 +189,6 @@ impl App {
                     .sessions
                     .iter()
                     .position(|s| s.agent_id == agent_id);
-
                 let Some(session_idx) = session_idx else {
                     tracing::warn!(%agent_id, "plan loaded for unknown agent");
                     return;
@@ -332,13 +203,11 @@ impl App {
                     // announced) — buffer into the pending state.
                     _ => &mut agent_session.pending_tab_state,
                 };
-
                 if plan.revision > ts.plan.revision {
                     ts.plan = state::PlanState {
                         steps: plan.update.plan,
                         revision: plan.revision,
                     };
-
                     self.dirty = true;
 
                     tracing::info!(
@@ -349,32 +218,22 @@ impl App {
                     );
                 }
             }
-
             crate::app_event::AppEvent::AgentSpawned {
                 profile_name,
                 result,
             } => match result {
                 Ok(name) => {
                     // The daemon has already registered the agent and sent
-
                     // the AgentRegistered host frame (or will shortly). The
-
                     // apply_host_event handler creates the session tab and
-
                     // requests the session list. Here we just log success.
-
                     tracing::info!(profile = %profile_name, agent = %name, "agent spawned and registered with daemon");
                 }
-
                 Err(e) => {
                     // Clear the focus flag so a stale request doesn't
-
                     // mis-attach to a later, unrelated registration.
-
                     self.state.pending_focus_agent_name = None;
-
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
-
                     self.state.toasts.error("Agent creation failed", Some(e));
                 }
             },
@@ -385,10 +244,8 @@ impl App {
 
             crate::app_event::AppEvent::ModelCatalogLoaded(catalog) => {
                 Self::load_model_config(&catalog, &mut self.state.model_config_state);
-
                 if let Some(spec) = catalog.active_model.clone() {
                     self.state.active_model_spec = Some(spec.clone());
-
                     if let Some((provider, name)) = spec.rsplit_once(':') {
                         self.state.active_model_display = catalog
                             .models
@@ -402,39 +259,26 @@ impl App {
                     }
                 }
             }
-
             crate::app_event::AppEvent::ActiveModelChanged { spec, reason } => {
                 tracing::info!(spec = ?spec, reason = %reason, "daemon active model changed");
-
                 self.spawn_catalog_reload();
             }
-
-            crate::app_event::AppEvent::KmsWorkerStatusChanged(status) => {
-                tracing::debug!(                    worker = %status.worker,                    state = %status.state,                    "KMS worker state changed"                );
-
-                self.state.apply_kms_worker_status(status);
-            }
-
             crate::app_event::AppEvent::RemoteCatalogFetched {
                 provider_name,
                 result,
             } => match result {
                 Ok(count) => {
                     self.spawn_catalog_reload();
-
                     self.state.toasts.success(
                         "Catalogue refreshed",
                         Some(format!("{provider_name}: {count} models")),
                     );
                 }
-
                 Err(e) => {
                     tracing::warn!(provider = %provider_name, error = %e, "remote catalogue fetch failed");
-
                     self.state.toasts.error("Fetch failed", Some(e));
                 }
             },
-
             crate::app_event::AppEvent::ChatgptLoginUrl(url) => {
                 // Authorize URL: copy to the clipboard (keeping the
                 // lease) and best-effort open the browser.
@@ -442,24 +286,19 @@ impl App {
                 match crate::clipboard_copy::copy_to_clipboard(&url) {
                     Ok(lease) => {
                         self.clipboard_lease = lease;
-
                         let opened = Self::open_in_browser(&url);
-
                         let hint = if opened {
                             "Authorize URL copied; finish OpenAI authorization in the opened browser"
                         } else {
                             "Authorize URL copied to the clipboard; paste it into a browser to authorize"
                         };
-
                         tracing::info!(
                             "chatgpt login: authorize url dispatched (browser={opened})"
                         );
-
                         self.state
                             .toasts
                             .info("ChatGPT login", Some(hint.to_string()));
                     }
-
                     Err(e) => {
                         tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");
 
@@ -472,16 +311,13 @@ impl App {
                     }
                 }
             }
-
             crate::app_event::AppEvent::ChatgptLoginCompleted { result } => match result {
                 Ok(info) => {
                     tracing::info!(
                         email = info.email.as_deref().unwrap_or("unknown"),
                         "chatgpt login persisted by daemon"
                     );
-
                     self.spawn_catalog_reload();
-
                     self.state.toasts.success(
                         "ChatGPT login succeeded",
                         Some(format!(
@@ -491,21 +327,17 @@ impl App {
                         )),
                     );
                 }
-
                 Err(e) => {
                     tracing::warn!(error = %e, "chatgpt login failed");
 
                     self.state.toasts.error("ChatGPT login failed", Some(e));
                 }
             },
-
             crate::app_event::AppEvent::DagSnapshotLoaded(result) => match result {
                 Ok(snapshot) => {
                     self.state.dag_snapshot = Some(snapshot);
-
                     self.state.dag_view_error = None;
                 }
-
                 Err(error) => {
                     self.state.dag_view_error = Some(error);
                 }
@@ -522,10 +354,8 @@ impl App {
             }
             crate::app_event::AppEvent::ModelInfoLoaded { agent, info } => {
                 self.model_info_pending.remove(&agent);
-
                 if let Some(info) = info {
                     self.agent_model_cache.insert(agent, info);
-
                     self.dirty = true;
 
                     // The cached value is already the provider-exact spec:
@@ -535,200 +365,143 @@ impl App {
                     self.sync_model_config_marker();
                 }
             }
-
             crate::app_event::AppEvent::ModelSwapFailed { agent, error } => {
                 self.state
                     .toasts
                     .error("Model swap failed", Some(format!("[{agent}] {error}")));
             }
-
             crate::app_event::AppEvent::SkillEvolutionLoaded {
-                workers,
-                knowledge,
-                skills,
-                proposals,
-                evidence,
+                status,
+                library,
+                observations,
+                clusters,
             } => {
-                match workers {
-                    Ok(workers) => {
+                match status {
+                    Ok(status) => {
                         let dashboard = &mut self.state.skill_evolution;
-
-                        dashboard.status = Some(kms_dashboard_status(
-                            &workers,
-                            skills.as_deref().unwrap_or_default(),
-                            proposals.as_deref().unwrap_or_default(),
-                            evidence
-                                .as_deref()
-                                .map(<[gateway::proto::KmsEvidenceView]>::len)
-                                .unwrap_or_default(),
-                        ));
-
+                        dashboard.seen_generation = status.generation;
+                        dashboard.seen_cycles_completed = status.cycles_completed;
+                        dashboard.status = Some(status);
                         dashboard.error = None;
                     }
-
                     Err(e) => {
                         self.state.skill_evolution.error = Some(e);
                     }
                 }
-
-                match (skills, proposals) {
-                    (Ok(skills), Ok(proposals)) => {
-                        let proposal_generation = kms_proposal_generation(&proposals);
-
-                        self.state
-                            .skill_evolution
-                            .skills
-                            .set_kms_library(skills, proposals);
-
-                        if let Some(status) = &mut self.state.skill_evolution.status {
-                            status.generation =
-                                self.state.skill_evolution.skills.library.len() as u64 * 1_000_000
-                                    + proposal_generation;
-                        }
-
+                match library {
+                    Ok(library) => {
+                        self.state.skill_evolution.skills.set_library(library);
                         self.fetch_skill_detail();
                     }
-
-                    (Err(error), _) | (_, Err(error)) => {
-                        self.state.skill_evolution.skills.error = Some(error);
-                    }
+                    Err(error) => self.state.skill_evolution.skills.error = Some(error),
                 }
-
-                match evidence {
-                    Ok(evidence) => self
+                match observations {
+                    Ok(observations) => self
                         .state
                         .skill_evolution
                         .observations
-                        .set_observations(evidence.into_iter().map(evidence_row).collect()),
+                        .set_observations(observations),
                     Err(error) => self.state.skill_evolution.observations.error = Some(error),
                 }
-
-                match knowledge {
-                    Ok(knowledge) => self.state.skill_evolution.wiki.set_nodes(knowledge),
-                    Err(error) => self.state.skill_evolution.wiki.error = Some(error),
+                match clusters {
+                    Ok(clusters) => self
+                        .state
+                        .skill_evolution
+                        .observations
+                        .set_clusters(clusters),
+                    // Clusters are a derived view over the same
+                    // observations: a failure degrades to the flat
+                    // list rather than an error banner.
+                    Err(_) => {}
                 }
             }
-
             crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
                 let dashboard = &mut self.state.skill_evolution.skills;
-
                 dashboard.apply_detail(name, result);
             }
-
-            crate::app_event::AppEvent::SkillProposalDecision { approved, result } => {
-                match result {
-                    Ok(decision) => {
-                        let verb = if approved { "approved" } else { "rejected" };
-
-                        let summary = format!(
-                            "{verb} {} ({})",
-                            decision.skill_name,
-                            decision
-                                .skill_version_id
-                                .map(|id| format!("version {id}"))
-                                .unwrap_or_else(|| "no version".to_string())
-                        );
-
-                        self.state.skill_evolution.last_report = Some(summary.clone());
-
+            crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
+                Ok(report) => {
+                    // An explicit RunCycle against an empty pool
+                    // still runs the cycle body (the operator asked
+                    // for it); the report comes back with zero
+                    // clusters. Show an info toast instead of a
+                    // success one so the operator can tell the cycle
+                    // was a no-op from causes (nothing recorded yet)
+                    // other than "wrote N".
+                    let empty_run = report.triggers.is_empty()
+                        && report.clusters_considered == 0
+                        && report.skipped.is_empty();
+                    let summary = if empty_run {
+                        "no observations to distill — record one with evo_observe".to_string()
+                    } else {
+                        format!(
+                            "{} written, {} updated, {} installed, {} deferred",
+                            report.proposals_written.len(),
+                            report.updated_existing.len(),
+                            report.installed.len(),
+                            report.deferred,
+                        )
+                    };
+                    self.state.skill_evolution.last_report = Some(summary.clone());
+                    if empty_run {
                         self.state
                             .toasts
-                            .success("KMS skill proposal", Some(summary));
-
-                        self.refresh_skill_evolution();
-                    }
-
-                    Err(e) => {
+                            .info("Skill evolution cycle", Some(summary));
+                    } else {
                         self.state
                             .toasts
-                            .error("KMS skill proposal decision", Some(e));
+                            .success("Skill evolution cycle", Some(summary));
                     }
+                    self.refresh_skill_evolution();
                 }
-            }
-
-            crate::app_event::AppEvent::KmsDashboardStatusPolled { workers, proposals } => {
-                let (Ok(workers), Ok(proposals)) = (workers, proposals) else {
-                    return;
-                };
-
+                Err(e) => {
+                    self.state.toasts.error("Skill evolution cycle", Some(e));
+                }
+            },
+            crate::app_event::AppEvent::SkillEvolutionStatusPolled { status } => {
+                // Lighter than a full load: status fields only, plus an
+                // auto-refresh when generation or cycle counts advanced
+                // (a cycle's writes have invalidated the cached library /
+                // observations / proposal listings).
+                let Ok(status) = status else { return };
                 let dashboard = &mut self.state.skill_evolution;
-
-                let Some(prev) = dashboard.status.as_ref() else {
-                    return;
-                };
-
-                let skills_count = prev.skills_workspace + prev.skills_global + prev.skills_builtin;
-
-                let generation =
-                    skills_count as u64 * 1_000_000 + kms_proposal_generation(&proposals);
-
-                let mut next = prev.clone();
-
-                next.phase = if workers.iter().any(|worker| worker.running) {
-                    "distilling".to_string()
-                } else {
-                    "idle".to_string()
-                };
-
-                next.proposals_pending = proposals
-                    .iter()
-                    .filter(|proposal| proposal.status == "pending")
-                    .count();
-
-                next.proposals_applied = proposals
-                    .iter()
-                    .filter(|proposal| proposal.status == "approved")
-                    .count();
-
-                let advanced = prev.generation != generation;
-
-                next.generation = generation;
-
-                dashboard.status = Some(next);
-
+                let advanced = dashboard.status.as_ref().map(|prev| prev.generation)
+                    != Some(status.generation)
+                    || dashboard.seen_cycles_completed != status.cycles_completed;
+                dashboard.status = Some(status);
                 if advanced && dashboard.visible {
                     self.refresh_skill_evolution();
                 }
             }
-
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
                 result,
             } => match result {
                 Ok(()) => {
                     tracing::info!("saved provider config: {provider_name}");
-
                     self.spawn_catalog_reload();
                 }
-
                 Err(e) => {
                     tracing::error!("failed to save provider config: {e}");
-
                     self.state.toasts.error("Save failed", Some(e));
                 }
             },
-
             crate::app_event::AppEvent::ModelSaved {
                 provider_name,
                 result,
             } => match result {
                 Ok(()) => {
                     tracing::info!("saved custom model: {provider_name}");
-
                     self.spawn_catalog_reload();
-
                     self.state
                         .toasts
                         .success("Custom model saved", Some(provider_name));
                 }
-
                 Err(e) => {
                     tracing::error!("failed to save custom model: {e}");
-
                     self.state.toasts.error("Model save failed", Some(e));
                 }
             },
-
             crate::app_event::AppEvent::ModelDeleted {
                 provider_name,
                 model_name,
@@ -736,37 +509,29 @@ impl App {
             } => match result {
                 Ok(()) => {
                     tracing::info!("deleted custom model: {provider_name}:{model_name}");
-
                     self.spawn_catalog_reload();
-
                     self.state.toasts.success(
                         "Custom model deleted",
                         Some(format!("{provider_name}:{model_name}")),
                     );
                 }
-
                 Err(e) => {
                     tracing::error!("failed to delete custom model: {e}");
-
                     self.state.toasts.error("Model delete failed", Some(e));
                 }
             },
-
             crate::app_event::AppEvent::EmbeddingConfigLoaded { result } => {
                 self.handle_embedding_config_event(result, false);
             }
-
             crate::app_event::AppEvent::EmbeddingConfigSaved { result } => {
                 self.handle_embedding_config_event(result, true);
             }
-
             crate::app_event::AppEvent::AgentConfigLoaded { agent, result } => {
                 if self.state.agent_config.visible && self.state.agent_config.agent_path == agent {
                     match result {
                         Ok(view) => self.state.agent_config.loaded(view),
                         Err(error) => {
                             self.state.agent_config.failed();
-
                             self.state
                                 .toasts
                                 .error("Agent config load failed", Some(error));
@@ -774,32 +539,23 @@ impl App {
                     }
                 }
             }
-
             crate::app_event::AppEvent::AgentConfigSaved { agent, result } => {
                 if self.state.agent_config.visible && self.state.agent_config.agent_path == agent {
                     match result {
                         Ok(view) => {
                             self.state.agent_config.saved(view);
-
                             self.state.toasts.success(
                                 "Agent config saved",
                                 Some(format!("{agent}: runtime settings updated")),
                             );
-
                             // The reasoning-effort override changes what
-
                             // the status bar shows — refetch the agent's
-
                             // model info so it reflects the new setting.
-
                             self.agent_model_cache.remove(&agent);
-
                             self.refresh_agent_model_info(&agent);
                         }
-
                         Err(error) => {
                             self.state.agent_config.failed();
-
                             self.state
                                 .toasts
                                 .error("Agent config save failed", Some(error));
@@ -807,7 +563,6 @@ impl App {
                     }
                 }
             }
-
             crate::app_event::AppEvent::AgentUpserted(info) => {
                 if !self.state.sessions.iter().any(|s| s.name == info.path) {
                     self.state.sessions.push(state::AgentSession {
@@ -816,14 +571,11 @@ impl App {
                         context: None,
                         pending_tab_state: Default::default(),
                     });
-
                     self.refresh_agent_model_info(&info.path);
                 }
             }
-
             crate::app_event::AppEvent::SessionListKnown { agent, sessions } => {
                 self.apply_session_list(&agent, sessions);
-
                 if let Some(idx) = self.state.sessions.iter().position(|s| s.name == agent) {
                     self.spawn_history_loads_for(idx);
                 }
@@ -832,116 +584,89 @@ impl App {
     }
 
     /// Apply a [`gateway::proto::HostEventView`] (agent registered /
-
     /// unregistered / status changed) by keeping the TUI's session list in
-
     /// sync with the daemon's agent registry. This is the key bridge that
-
     /// makes tool-spawned agents visible in the TUI.
-
     pub(super) fn apply_host_event(&mut self, event: gateway::proto::HostEventView) {
         match event {
             gateway::proto::HostEventView::AgentRegistered { path, info } => {
                 let name = path.clone();
-
                 // Check if the TUI already knows about this agent.
-
                 if self.state.sessions.iter().any(|s| s.name == name) {
                     return;
                 }
-
                 // Did the user explicitly ask to land on this leaf?
-
                 // Matches by short name (`info.name`) since the spawn
-
                 // was requested with the picker-visible short name.
-
                 let steal_focus = self
                     .state
                     .pending_focus_agent_name
                     .as_deref()
                     .is_some_and(|wanted| wanted == info.name);
-
                 // Add a new session tab for the tool-spawned agent.
-
                 // Do NOT steal focus — the user may be interacting with
-
                 // another agent. The new tab appears but focus stays
-
                 // where the user left it.
-
                 let agent_id =
                     registered_agent_id(&gateway::proto::HostEventView::AgentRegistered {
                         path: path.clone(),
                         info: info.clone(),
                     })
                     .unwrap_or_else(uuid::Uuid::new_v4);
-
                 self.state.sessions.push(state::AgentSession {
                     name: name.clone(),
                     agent_id,
                     context: None,
                     pending_tab_state: Default::default(),
                 });
-
                 if steal_focus {
                     let new_idx = self.state.sessions.len() - 1;
-
                     self.state.active_agent_idx = new_idx;
-
                     self.state.pending_focus_agent_name = None;
-
-                    tracing::info!(                        agent = %name,                        leaf_idx = new_idx,                        "stole focus to user-restored leaf"                    );
+                    tracing::info!(
+                        agent = %name,
+                        leaf_idx = new_idx,
+                        "stole focus to user-restored leaf"
+                    );
                 }
 
                 // Ask the daemon for the agent's session list. The response
-
                 // arrives as `AgentEvent::SessionList` through the event
-
                 // stream and is routed to this session's tab.
-
                 let client = self.client.clone();
-
                 let agent = name.clone();
-
                 self.spawn_client_task("list_sessions", move || async move {
                     let _ = client.list_sessions(&agent).await;
                 });
 
                 // Prefetch the new agent's model info for the render cache.
-
                 self.refresh_agent_model_info(&name);
-
                 tracing::info!(agent = %name, "daemon agent registered to TUI (no focus steal)");
             }
-
             gateway::proto::HostEventView::AgentUnregistered { path } => {
                 self.state.sessions.retain(|s| s.name != path);
-
                 self.agent_model_cache.remove(&path);
-
                 if self.state.active_agent_idx >= self.state.sessions.len() {
                     self.state.active_agent_idx = self.state.sessions.len().saturating_sub(1);
                 }
-
                 tracing::info!(agent = %path, "daemon agent unregistered from TUI");
             }
-
             // Cross-agent runtime status update. The per-session
-
             // `AgentTabState.status` is driven by the agent's own
-
             // `LifecycleChanged` event stream (via the session tab), so
-
             // this arm is a log-only bridge — it does NOT overwrite the
-
             // tab's status, which has finer-grained variants.
             gateway::proto::HostEventView::AgentStatusChanged {
                 path,
                 status,
                 last_event,
             } => {
-                tracing::debug!(                    agent = %path,                    status = %status.tag(),                    last_event = ?last_event,                    "daemon observed agent status change"                );
+                tracing::debug!(
+                    agent = %path,
+                    status = %status.tag(),
+                    last_event = ?last_event,
+                    "daemon observed agent status change"
+                );
             }
 
             // Per-agent model hot-swap observed on the daemon. The TUI's
@@ -958,9 +683,7 @@ impl App {
     }
 
     /// Replay conversation history loaded from the daemon into the TUI's
-
     /// `tab_state.messages` as `ChatLine` entries.
-
     pub(super) fn replay_history(
         &mut self,
         agent_id: uuid::Uuid,
@@ -972,14 +695,12 @@ impl App {
             .sessions
             .iter()
             .position(|s| s.agent_id == agent_id);
-
         let Some(session_idx) = session_idx else {
             tracing::warn!(%agent_id, "history loaded for unknown agent");
             return;
         };
 
         let lines = messages_to_chatlines(messages);
-
         if lines.is_empty() {
             return;
         }
@@ -1005,9 +726,7 @@ impl App {
     }
 
     /// Fold a session list (from hydration or a `SessionList` event that
-
     /// arrived before the agent's sub-sessions existed) into the UI.
-
     pub(super) fn apply_session_list(&mut self, agent_path: &str, sessions: Vec<SessionInfo>) {
         let Some(agent) = self
             .state
@@ -1031,14 +750,11 @@ impl App {
     }
 
     /// Spawn background history loads for all sessions of the agent at
-
     /// `agent_idx` that have empty `tab_state.messages` (plus their plans).
-
     pub(super) fn spawn_history_loads_for(&mut self, agent_idx: usize) {
         let Some(agent_session) = self.state.sessions.get(agent_idx) else {
             return;
         };
-
         let agent_id = agent_session.agent_id;
 
         let to_load: Option<uuid::Uuid> = agent_session
@@ -1083,26 +799,17 @@ impl App {
     }
 
     /// Spawn a per-session plan fetch for the sub-session `session_id` of
-
     /// the agent at `agent_idx`.
-
     ///
-
     /// The backend session restore loads the plan from storage but does NOT
-
     /// emit an `AgentEvent::PlanUpdate`, so the tab's `PlanState` would stay
-
     /// empty. The sub-session is marked `plan_requested` up front so repeat
-
     /// hydrations (every `SessionList`) don't re-fetch.
-
     pub(super) fn spawn_plan_load_for(&mut self, agent_idx: usize, session_id: uuid::Uuid) {
         let Some(agent_session) = self.state.sessions.get(agent_idx) else {
             return;
         };
-
         let agent_id = agent_session.agent_id;
-
         let already_requested = agent_session
             .context
             .as_ref()
@@ -1112,7 +819,6 @@ impl App {
         if already_requested {
             return;
         }
-
         if let Some(agent_session) = self.state.sessions.get_mut(agent_idx) {
             if let Some(context) = agent_session
                 .context
@@ -1122,7 +828,6 @@ impl App {
                 context.plan_requested = true;
             }
         }
-
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
         self.spawn_client_task(&format!("restore_plan::{session_id}"), move || async move {
@@ -1139,43 +844,31 @@ impl App {
     }
 
     /// Spawn history loads for every known agent (hydration).
-
     pub(super) fn spawn_all_history_loads(&mut self) {
         let count = self.state.sessions.len();
-
         for idx in 0..count {
             self.spawn_history_loads_for(idx);
         }
     }
 
     /// Spawn a background task that re-fetches `/state` and reconciles
-
     /// the UI against it (after stream lag or reconnect): unknown agents
-
     /// are added, session lists folded, empty transcripts loaded, and the
-
     /// model catalog refreshed. Agents that disappeared are removed via
-
     /// `AgentUnregistered` host frames, not here.
-
     fn spawn_reconcile(&mut self, reason: &str) {
         let client = self.client.clone();
-
         let tx = self.app_event_tx.clone();
-
         let reason = reason.to_string();
-
         self.spawn_client_task("reconcile_state", move || async move {
             match client.state().await {
                 Ok(snapshot) => {
                     tx.send(crate::app_event::AppEvent::ModelCatalogLoaded(
                         snapshot.model_catalog.clone(),
                     ));
-
                     for info in &snapshot.agents {
                         tx.send(crate::app_event::AppEvent::AgentUpserted(info.clone()));
                     }
-
                     for (agent_path, sessions) in snapshot.sessions {
                         tx.send(crate::app_event::AppEvent::SessionListKnown {
                             agent: agent_path,
@@ -1183,7 +876,6 @@ impl App {
                         });
                     }
                 }
-
                 Err(e) => {
                     tracing::warn!(reason = %reason, error = %e, "reconcile state fetch failed");
                 }
@@ -1192,20 +884,15 @@ impl App {
     }
 
     /// Fire-and-forget catalog reload (after provider/model/catalog
-
     /// changes daemon-side).
-
     pub(super) fn spawn_catalog_reload(&mut self) {
         let client = self.client.clone();
-
         let tx = self.app_event_tx.clone();
-
         self.spawn_client_task("reload_model_config", move || async move {
             match client.model_catalog().await {
                 Ok(catalog) => {
                     tx.send(crate::app_event::AppEvent::ModelCatalogLoaded(catalog));
                 }
-
                 Err(e) => {
                     tracing::warn!(error = %e, "model catalog reload failed");
                 }
@@ -1214,22 +901,15 @@ impl App {
     }
 
     /// Fetch an agent's model info into the render cache (if not cached
-
     /// and not already in flight).
-
     pub(super) fn refresh_agent_model_info(&mut self, agent: &str) {
         if self.agent_model_cache.contains_key(agent) || self.model_info_pending.contains(agent) {
             return;
         }
-
         self.model_info_pending.insert(agent.to_string());
-
         let client = self.client.clone();
-
         let agent = agent.to_string();
-
         let tx = self.app_event_tx.clone();
-
         self.spawn_client_task("agent_model_info", move || async move {
             let info = client
                 .agent_model_info(&agent)
@@ -1240,24 +920,19 @@ impl App {
                     context_length: view.context_length,
                     reasoning_effort: view.reasoning_effort,
                 });
-
             tx.send(crate::app_event::AppEvent::ModelInfoLoaded { agent, info });
         });
     }
 
     /// Helper: spawn a client-call background task on the app runtime.
-
     /// Mirrors the old `agentik_core::supervise::spawn_safe_on_drop`
-
     /// pattern used for host calls.
-
     pub(super) fn spawn_client_task<F, Fut>(&self, name: &str, make: F)
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let task = make();
-
         agentik_core::supervise::spawn_safe_on_drop(&self.runtime_handle, name, task);
     }
 }

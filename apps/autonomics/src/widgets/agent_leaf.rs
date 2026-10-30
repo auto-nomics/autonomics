@@ -81,7 +81,6 @@ pub struct AgentLeaf<'a> {
     pub context_window: Option<u64>,
     /// The reasoning effort the active agent's next request would send.
     pub reasoning_effort: Option<&'a str>,
-    pub kms_activity: Option<&'a str>,
     pub display: &'a DisplaySettings,
 }
 
@@ -221,7 +220,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             model_name: self.active_model,
             reasoning_effort: self.reasoning_effort,
             compact: Some(&ts.compact_state),
-            kms_activity: self.kms_activity,
             frame: ts.frame,
         };
         status_bar.render(layout[3], buf);

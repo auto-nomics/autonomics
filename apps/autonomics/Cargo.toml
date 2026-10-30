@@ -27,6 +27,7 @@ data-catalog = { path = "../../crates/data-catalog" }
 container-runtime = { path = "../../crates/container-runtime" }
 tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
+kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
 ascii-dag-core = { path = "../../crates/ascii-dag-core", default-features = false, features = [
   "std",

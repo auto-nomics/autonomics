@@ -101,11 +101,6 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
                 action: CommandAction::SkillEvolutionPanel,
             },
             LeaderNode::Leaf {
-                key: 'k',
-                label: "Knowledge wiki",
-                action: CommandAction::KnowledgeWikiPanel,
-            },
-            LeaderNode::Leaf {
                 key: 't',
                 label: "Chat-only view",
                 action: CommandAction::ToggleChatOnly,
@@ -297,7 +292,7 @@ mod tests {
         assert_eq!(groups[0].label, "agent");
         assert_eq!(groups[0].children, 6);
         assert_eq!(groups[1].label, "view");
-        assert_eq!(groups[1].children, 8);
+        assert_eq!(groups[1].children, 7);
         // A group prefix lists only leaves.
         let inner = whichkey_rows(&['a']);
         assert!(inner.iter().all(|row| !row.is_group));

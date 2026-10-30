@@ -58,7 +58,7 @@ export type DisplaySettings = {
   collapse_tool_results: boolean;
 };
 
-type View = "agent" | "config" | "bib" | "kms";
+type View = "agent" | "config" | "bib";
 
 type PickerItem = { id: string; role: "user" | "assistant"; text: string };
 
@@ -266,7 +266,6 @@ export function AgentView(props: AgentViewProps) {
     { id: "copy", title: "Copy message", category: "clipboard", keywords: "clipboard transcript text", run: openCopy },
     { id: "model", title: "Select model", category: "config", keywords: "model provider api key activate", run: () => props.onView("config" as View) },
     { id: "bibliography", title: "Bibliography library", category: "research", keywords: "papers articles fulltext collections", run: () => props.onView("bib" as View) },
-    { id: "kms", title: "Evolution dashboard", category: "kms", keywords: "skills wiki evidence governance proposals", run: () => props.onView("kms" as View) },
     { id: "dag", title: "View DAG", category: "data", keywords: "graph pipeline topology node edge", run: () => { if (activeAgent) props.onOpenDag(); else showToast("Select an agent first"); } },
     { id: "thinking", title: "Toggle thinking blocks", category: "view", keywords: "collapse fold reasoning", run: () => props.onToggleDisplay("collapse_thinking") },
     { id: "tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => props.onToggleDisplay("collapse_tool_calls") },

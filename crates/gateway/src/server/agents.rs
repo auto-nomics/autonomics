@@ -234,7 +234,7 @@ pub(crate) async fn get_agent_config(
             GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
         })?;
     let config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
-    let mut effective = state.infra.kms.runtime_config();
+    let mut effective = state.infra.memory.runtime_config();
     if let Some(enabled) = config.runtime.use_memory {
         effective.use_memory = enabled;
     }

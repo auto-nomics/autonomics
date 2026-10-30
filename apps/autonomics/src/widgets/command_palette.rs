@@ -58,7 +58,6 @@ pub enum CommandAction {
     /// trigger/approve/reject).
     SkillEvolutionPanel,
     /// Open the KMS dashboard directly on the knowledge wiki tab.
-    KnowledgeWikiPanel,
     /// Run one skill-evolution cycle now (propose-only unless the
     /// daemon is configured to auto-approve).
     SkillEvolve,
@@ -364,14 +363,8 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::SkillEvolutionPanel,
         },
         Command {
-            title: "Knowledge wiki".into(),
-            keywords: "kms knowledge wiki tree node memory path dashboard".into(),
-            category: "kms".into(),
-            action: CommandAction::KnowledgeWikiPanel,
-        },
-        Command {
-            title: "Review KMS skill proposals".into(),
-            keywords: "kms skills evolve proposals approve reject review governance".into(),
+            title: "Run skill evolution cycle".into(),
+            keywords: "skills evolve distill trigger proposals cycle now".into(),
             category: "skills".into(),
             action: CommandAction::SkillEvolve,
         },

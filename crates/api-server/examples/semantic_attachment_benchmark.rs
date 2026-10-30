@@ -385,7 +385,7 @@ async fn main() -> Result<()> {
         .await?
         .with_file_storage(storage);
     let server = api_server::start(
-        api_server::api_router_with_auth(shared.clone(), Some(TOKEN.into())),
+        api_server::api_router_with_auth(shared.clone(), None, Some(TOKEN.into())),
         "127.0.0.1:0",
     )
     .await?;

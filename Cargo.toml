@@ -2,7 +2,7 @@
 members = [
   "crates/agentik-sdk",
   "crates/agentik-types",
-  "crates/agentik-kms",
+  "crates/agentik-memory",
   "crates/agentik-core",
   "crates/agentik-proc",
   "crates/gwascatalog-sdk",
@@ -80,6 +80,8 @@ members = [
   "crates/europepmc",
   "crates/openalex",
   "crates/semantic-scholar",
+  "crates/kms",
+  "crates/kms-tools",
   "crates/agentik-network",
   "stat_crates/ml",
   "stat_crates/mice",
@@ -103,7 +105,7 @@ members = [
   "crates/evolution-core",
   "crates/skills",
   "crates/plugin-rsi",
-  "crates/text-embedding", "crates/browser-use",
+  "crates/text-embedding", "crates/browser-use", "crates/wiki",
 ]
 resolver = "3"
 
@@ -115,6 +117,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 turso = "0.7.2"
 bollard = "0.21.0"
+pulldown-cmark = "0.13"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

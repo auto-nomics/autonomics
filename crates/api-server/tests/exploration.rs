@@ -43,7 +43,7 @@ async fn app(provider: Router) -> (Router, tokio::task::JoinHandle<()>) {
             .with_reco_base_url(&origin)
             .with_max_retries(0),
     );
-    (api_server::api_router(shared), task)
+    (api_server::api_router(shared, None), task)
 }
 
 #[tokio::test]
@@ -223,7 +223,7 @@ async fn graph_selection_uses_fresh_exact_discovery_and_preserves_curated_librar
         .push(bib_types::Identifier::doi("10.1234/curated"));
     curated.keywords = vec!["manual-tag".into()];
     shared.bib.upsert_article(&curated).await.unwrap();
-    let app = api_server::api_router(shared.clone());
+    let app = api_server::api_router(shared.clone(), None);
     let graph = body(
         app.clone()
             .oneshot(request(input("references"), None))

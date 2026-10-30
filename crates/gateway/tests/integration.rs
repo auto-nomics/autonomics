@@ -5,9 +5,6 @@
 
 use std::time::Duration;
 
-use agentik_core::memory::{
-    Knowledge, KnowledgeEvidenceInput, KnowledgePath, KnowledgeSkillProposalInput, MemoryStore,
-};
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use gateway::client::{EventPump, GatewayClient, GatewayFrame};
@@ -238,28 +235,6 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     gateway_daemon.stop().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn kms_worker_snapshot_exposes_resident_workers() {
-    let gateway_daemon = start_mock_gateway("ok").await;
-    let workers = gateway_daemon.client().kms_worker_statuses().await.unwrap();
-    let mut names = workers
-        .into_iter()
-        .map(|worker| worker.worker)
-        .collect::<Vec<_>>();
-    names.sort();
-    assert_eq!(
-        names,
-        vec![
-            "consolidate_knowledge".to_string(),
-            "diagnose_knowledge_node".to_string(),
-            "ingest_observation".to_string(),
-            "propose_skill_revision".to_string(),
-            "repair_knowledge_node".to_string(),
-            "session_extract".to_string(),
-        ]
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bearer_token_gates_the_api() {
     let gateway_daemon = start_mock_gateway("x").await;
@@ -378,11 +353,12 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 43);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 39);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
         "/api/v1/state",
+        "/api/v1/profiles",
         "/api/v1/agents",
         "/api/v1/agents/{name}/messages",
         "/api/v1/agents/{name}/cancel",
@@ -412,15 +388,12 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/plugins/environments/approve",
         "/api/v1/plugins/environments/{id}",
         "/api/v1/events",
-        "/api/v1/kms/evidence",
-        "/api/v1/kms/knowledge",
-        "/api/v1/kms/skills",
-        "/api/v1/kms/skills/{name}",
-        "/api/v1/kms/skill-proposals",
-        "/api/v1/kms/skill-proposals/{id}/approve",
-        "/api/v1/kms/skill-proposals/{id}/reject",
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
+        "/api/v1/evolution/observations",
+        "/api/v1/skills/evolution",
+        "/api/v1/skills/evolution/trigger",
+        "/api/v1/skills/evolution/proposals",
     ];
     for path in expected_paths {
         assert!(
@@ -457,6 +430,113 @@ async fn swagger_docs_expose_the_gateway_api() {
     gateway_daemon.stop().await;
 }
 
+// ── skill evolution endpoints ─────────────────────────────────────────
+
+/// Poll an async predicate until it holds or the test timeout fires —
+/// the evolution service distills on its own event path, so "who
+/// wrote the proposal" (worker or explicit trigger) is intentionally
+/// racy and the test only asserts observable state.
+async fn eventually<F, Fut>(mut pred: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            if pred().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("condition eventually held");
+}
+
+#[tokio::test]
+async fn skill_evolution_status_trigger_installs_automatically() {
+    let gw = start_mock_gateway("ok").await;
+    let client = gw.client();
+    let manager = gw.infra.skills.clone();
+
+    // Baseline: fresh isolated state, service armed.
+    let status = client.skill_evolution_status().await.unwrap();
+    assert!(status.service_enabled);
+    assert_eq!(status.proposals_pending, 0);
+    assert_eq!(status.proposals_applied, 0);
+
+    // Seed one anchor with three distinct fixes.
+    for body in ["cast the column", "pass format=csv", "validate header"] {
+        manager
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
+                kind: evolution_core::ObservationKind::Failure,
+                source: evolution_core::ObservationSource::Agent,
+                summary: "sql boom".into(),
+                body: body.into(),
+                node_kind: Some("sql".into()),
+                error: Some("syntax error near 42".into()),
+            })
+            .await
+            .unwrap();
+    }
+
+    // Either the event-driven worker or our explicit trigger runs the
+    // cycle; both paths write AND install — no review step exists.
+    let generation_before = status.generation;
+    // Tolerate the startup-sweep race: if the boot drain outlived the
+    // seeding, the startup cycle already installed and this trigger
+    // reports the cluster as consumed — either way the evidence lands.
+    let _ = client.trigger_skill_evolution().await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        let before = generation_before;
+        async move {
+            client
+                .skill_evolution_status()
+                .await
+                .map(|s| s.proposals_applied >= 1 && s.generation > before && s.skills_auto >= 1)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+
+    // Nothing waits for a human: no pending rows remain.
+    let status = client.skill_evolution_status().await.unwrap();
+    assert_eq!(status.proposals_pending, 0);
+    assert!(status.proposals_applied >= 1);
+    assert!(status.skills_auto >= 1);
+
+    // A second anchor installs the same way once a cycle runs (in the
+    // daemon the timer sweep provides one; here we nudge explicitly).
+    for body in ["io a", "io b", "io c"] {
+        manager
+            .observation_hub()
+            .record(evolution_core::ObservationInput {
+                kind: evolution_core::ObservationKind::Failure,
+                source: evolution_core::ObservationSource::Agent,
+                summary: "io crash".into(),
+                body: body.into(),
+                node_kind: Some("file_to_dataframe".into()),
+                error: Some("bad schema at 7".into()),
+            })
+            .await
+            .unwrap();
+    }
+    let _ = client.trigger_skill_evolution().await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_evolution_status()
+                .await
+                .map(|s| s.proposals_applied >= 2)
+                .unwrap_or(false)
+        }
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn skill_library_lists_installed_and_proposed_with_detail() {
     let gw = start_mock_gateway("ok").await;
@@ -471,8 +551,8 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     );
     assert!(library.iter().any(|s| s.tier == "builtin"));
 
-    // Retain the old filesystem proposal view as a compatibility read, but
-    // distillation alone must leave the proposal pending rather than install.
+    // Seed a distillation cycle through the channel; the skill lands
+    // installed, with the applied change record attached.
     for body in ["fix a", "fix b", "fix c"] {
         manager
             .observation_hub()
@@ -487,26 +567,41 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
             .await
             .unwrap();
     }
-    let report = manager.distill().await.unwrap();
-    assert_eq!(report.proposals_written.len(), 1, "{report:?}");
+    let _ = client.trigger_skill_evolution().await.unwrap();
+    eventually(|| {
+        let client = client.clone();
+        async move {
+            client
+                .skill_library()
+                .await
+                .map(|l| {
+                    l.iter().any(|s| {
+                        s.tier == "global" && s.proposal_status.as_deref() == Some("applied")
+                    })
+                })
+                .unwrap_or(false)
+        }
+    })
+    .await;
 
-    // Detail of the proposed row: body + its evidence chain remain visible.
+    // Detail of the installed row: body + the applied change record
+    // with its evidence chain.
     let name = client
         .skill_library()
         .await
         .unwrap()
         .into_iter()
-        .find(|s| s.tier == "proposed" && s.proposal_status.as_deref() == Some("pending"))
+        .find(|s| s.tier == "global" && s.proposal_status.as_deref() == Some("applied"))
         .unwrap()
         .name;
     let detail = client.skill_library_detail(&name).await.unwrap();
-    assert!(!detail.installed);
-    assert_eq!(detail.tier, "proposed");
+    assert!(detail.installed);
+    assert_eq!(detail.tier, "global");
     assert!(!detail.body.is_empty());
     let proposal = detail
         .proposal
         .expect("installed row carries its change record");
-    assert_eq!(proposal.status, "pending");
+    assert_eq!(proposal.status, "applied");
     assert_eq!(proposal.observation_count, 3, "evidence chain size");
     assert_eq!(detail.evidence_count, 3);
 
@@ -516,161 +611,50 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
 }
 
 #[tokio::test]
-async fn kms_skill_proposals_support_human_approval_and_rejection() {
+async fn observations_endpoint_returns_full_evidence_in_stable_order() {
     let gw = start_mock_gateway("ok").await;
     let client = gw.client();
-    let store = gw.infra.kms.store();
-    let evidence = store
-        .upsert_evidence(KnowledgeEvidenceInput {
-            source_kind: "skill_failure".to_string(),
-            source_id: "failure-1".to_string(),
-            evidence_kind: "eval_failure".to_string(),
-            summary: "eval case smoke fails".to_string(),
-            body: "The workflow produced the wrong row count.".to_string(),
-            anchor_path: Some("/procedures/approve-flow".to_string()),
-            error: Some("rows_min mismatch".to_string()),
+    assert!(client.observations().await.unwrap().is_empty());
+    let observation = gw
+        .infra
+        .skills
+        .observation_hub()
+        .record(evolution_core::ObservationInput {
+            kind: evolution_core::ObservationKind::Caveat,
+            source: evolution_core::ObservationSource::Agent,
+            summary: "Header must match".into(),
+            body: "Validate all column names.\nKeep evidence intact.".into(),
+            node_kind: Some("sql".into()),
+            error: Some("missing column".into()),
         })
         .await
         .unwrap();
-    let input = |name: &str, body: &str| KnowledgeSkillProposalInput {
-        skill_name: name.to_string(),
-        title: name.replace('-', " "),
-        body_md: body.to_string(),
-        metadata_json: serde_json::json!({
-            "description": body,
-            "tags": ["kms"]
-        }),
-        node_path: format!("/procedures/{name}"),
-        rationale: "Repeated failures require review.".to_string(),
-        source_evidence_ids: vec!["evidence-1".to_string()],
-        artifacts: vec![agentik_core::memory::KnowledgeSkillArtifactInput {
-            relative_path: "workflow/main.toml".to_string(),
-            content: "description = 'reviewed'\n".to_string(),
-        }],
-    };
-    let approve = store
-        .create_skill_proposal(input("approve-flow", "Approve this revision."))
-        .await
-        .unwrap()
-        .unwrap();
-    let reject = store
-        .create_skill_proposal(input("reject-flow", "Reject this revision."))
-        .await
-        .unwrap()
-        .unwrap();
-
-    let rows = client.kms_skill_proposals().await.unwrap();
-    let evidence_rows = client.kms_evidence().await.unwrap();
-    let evidence_row = evidence_rows
-        .iter()
-        .find(|row| row.id == evidence.id)
-        .unwrap();
-    assert_eq!(evidence_row.status, "pending");
-    assert_eq!(evidence_row.evidence_kind, "eval_failure");
-    assert_eq!(
-        evidence_row.anchor_path.as_deref(),
-        Some("/procedures/approve-flow")
-    );
-    let approve_row = rows.iter().find(|row| row.id == approve.id).unwrap();
-    assert_eq!(approve_row.status, "pending");
-    assert_eq!(approve_row.skill_name, "approve-flow");
-    assert!(approve_row.body_md.contains("Approve this revision."));
-    assert_eq!(approve_row.artifacts[0].relative_path, "workflow/main.toml");
-
-    let approved = client.approve_kms_skill_proposal(approve.id).await.unwrap();
-    assert_eq!(approved.status, "approved");
-    assert!(approved.skill_version_id.is_some());
-    let rejected = client.reject_kms_skill_proposal(reject.id).await.unwrap();
-    assert_eq!(rejected.status, "rejected");
-    assert!(rejected.skill_version_id.is_none());
-
-    let rows = client.kms_skill_proposals().await.unwrap();
-    assert!(
-        rows.iter()
-            .any(|row| row.id == approve.id && row.status == "approved")
-    );
-    assert!(
-        rows.iter()
-            .any(|row| row.id == reject.id && row.status == "rejected")
-    );
-    assert!(
-        client
-            .reject_kms_skill_proposal(reject.id)
-            .await
-            .unwrap_err()
-            .status()
-            == Some(409)
-    );
-
-    let versions = store.list_skill_versions(100).await.unwrap();
-    assert!(
-        versions
-            .iter()
-            .any(|version| version.skill_name == "approve-flow" && version.status == "active")
-    );
-    assert!(
-        !versions
-            .iter()
-            .any(|version| version.skill_name == "reject-flow")
-    );
-
-    let skills = client.kms_skills().await.unwrap();
-    let listed = skills
-        .iter()
-        .find(|skill| skill.skill_name == "approve-flow")
-        .unwrap();
-    assert_eq!(listed.version, 1);
-    assert_eq!(listed.artifact_paths, vec!["workflow/main.toml"]);
-    let detail = client.kms_skill_detail("approve-flow").await.unwrap();
-    assert_eq!(detail.id, approved.skill_version_id.unwrap());
-    assert!(detail.body_md.contains("Approve this revision."));
-    assert_eq!(detail.artifacts[0].content, "description = 'reviewed'");
-    assert_eq!(detail.history.len(), 1);
-    assert!(client.kms_skill_detail("no-such-kms-skill").await.is_err());
-
-    gw.stop().await;
-}
-
-#[tokio::test]
-async fn kms_knowledge_lists_the_durable_wiki_tree() {
-    let gw = start_mock_gateway("ok").await;
-    let client = gw.client();
-    let store = gw.infra.kms.store();
-    let path =
-        KnowledgePath::normalize("/engineering/testing/release-checks").expect("valid wiki path");
-    let created = store
-        .create_knowledge(Knowledge::leaf(
-            path,
-            "Release checks".to_string(),
-            "Run smoke tests before release.".to_string(),
-            0.92,
-            "source-hash",
-            1_700_000_000,
-        ))
+    gw.infra
+        .skills
+        .observation_hub()
+        .record(evolution_core::ObservationInput {
+            kind: evolution_core::ObservationKind::Recipe,
+            source: evolution_core::ObservationSource::Cli,
+            summary: "Second fact".into(),
+            body: "Second body".into(),
+            node_kind: None,
+            error: None,
+        })
         .await
         .unwrap();
-
-    let rows = client.kms_knowledge().await.unwrap();
-    let article = rows
-        .iter()
-        .find(|row| row.id == created.id)
-        .expect("article is listed");
-    assert_eq!(article.path, "/engineering/testing/release-checks");
-    assert_eq!(article.title, "Release checks");
-    assert_eq!(article.status, "active");
-    assert!(!article.structural);
-    assert!(article.body_md.contains("smoke tests"));
-    assert!(article.parent_id.is_some());
+    let rows = client.observations().await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let row = rows.iter().find(|row| row.id == observation.id).unwrap();
+    assert_eq!(row.kind, "caveat");
+    assert_eq!(row.source, "agent");
+    assert_eq!(row.body, observation.body);
+    assert_eq!(row.node_kind.as_deref(), Some("sql"));
+    assert_eq!(row.error.as_deref(), Some("missing column"));
     assert!(
-        rows.iter()
-            .any(|row| row.path == "/engineering" && row.structural)
+        rows.windows(2)
+            .all(|pair| pair[0].created_at > pair[1].created_at
+                || (pair[0].created_at == pair[1].created_at && pair[0].id < pair[1].id))
     );
-    assert!(
-        rows.iter()
-            .any(|row| row.path == "/engineering/testing" && row.structural)
-    );
-
-    gw.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -15,9 +15,6 @@
 
 use std::sync::Arc;
 
-use agentik_core::memory::{
-    KmsSystem, KnowledgeEvent, KnowledgeEvidenceInput, MemoryStore, SkillArtifact,
-};
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
@@ -70,7 +67,6 @@ pub struct SkillEvalInput {
 pub struct SkillRunWorkflowTool {
     pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
-    pub kms: Option<Arc<KmsSystem>>,
 }
 
 #[async_trait]
@@ -78,41 +74,14 @@ impl ToolFunction for SkillRunWorkflowTool {
     type Input = SkillRunWorkflowInput;
 
     async fn run(&self, input: SkillRunWorkflowInput) -> Result<ToolResult, ToolError> {
-        let skill = input.skill.trim().to_string();
-        let workflow = input.workflow.clone().unwrap_or_else(|| "main".to_string());
-        if let Some(system) = &self.kms
-            && let Some(artifacts) = kms_artifacts(system, &skill).await
-        {
-            self.manager.record_usage(&skill, skills::UsageKind::Run);
-            record_skill_usage(system, &skill, skills::UsageKind::Run).await;
-            let relative_path = format!("workflow/{workflow}.toml");
-            let Some(artifact) = artifacts
-                .iter()
-                .find(|artifact| artifact.relative_path == relative_path)
-            else {
-                return Ok(ToolResult::error(format!(
-                    "skill_run_workflow: no workflow {workflow:?} for skill {skill:?}"
-                )));
-            };
-            let template = match skills::workflow::WorkflowTemplate::from_toml(&artifact.content) {
-                Ok(template) => template,
-                Err(error) => {
-                    return Ok(ToolResult::error(format!(
-                        "skill_run_workflow: workflow {workflow:?} of {skill:?}: {error}"
-                    )));
-                }
-            };
-            return self
-                .build_workflow(input, &skill, &workflow, template)
-                .await;
-        }
-
-        let Some(doc) = self.load_doc(&skill) else {
+        let skill = input.skill.trim();
+        let workflow = input.workflow.unwrap_or_else(|| "main".to_string());
+        let Some(doc) = self.load_doc(skill) else {
             return Ok(ToolResult::error(format!(
                 "skill_run_workflow: no skill named {skill:?}"
             )));
         };
-        self.manager.record_usage(&skill, skills::UsageKind::Run);
+        self.manager.record_usage(skill, skills::UsageKind::Run);
         let Some(dir) = doc.dir.clone() else {
             return Ok(ToolResult::error(format!(
                 "skill_run_workflow: skill {skill:?} is builtin and carries no workflows"
@@ -126,19 +95,6 @@ impl ToolFunction for SkillRunWorkflowTool {
                 )));
             }
         };
-        self.build_workflow(input, &skill, &workflow, template)
-            .await
-    }
-}
-
-impl SkillRunWorkflowTool {
-    async fn build_workflow(
-        &self,
-        input: SkillRunWorkflowInput,
-        skill: &str,
-        workflow: &str,
-        template: skills::workflow::WorkflowTemplate,
-    ) -> Result<ToolResult, ToolError> {
         let rendered = match template.render(&input.params) {
             Ok(r) => r,
             Err(e) => {
@@ -202,7 +158,10 @@ impl SkillRunWorkflowTool {
 pub struct SkillEvalTool {
     pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
-    pub kms: Option<Arc<KmsSystem>>,
+    /// The skill-evolution control handle, when the service runs:
+    /// captured eval-failure observations nudge the worker so the
+    /// evidence distills promptly instead of waiting for the sweep.
+    pub control: Option<skills::evolution::SkillControlHandle>,
 }
 
 #[async_trait]
@@ -211,16 +170,6 @@ impl ToolFunction for SkillEvalTool {
 
     async fn run(&self, input: SkillEvalInput) -> Result<ToolResult, ToolError> {
         let skill = input.skill.trim();
-        if let Some(system) = &self.kms
-            && let Some(artifacts) = kms_artifacts(system, skill).await
-        {
-            self.manager.record_usage(skill, skills::UsageKind::Eval);
-            record_skill_usage(system, skill, skills::UsageKind::Eval).await;
-            return self
-                .run_kms_eval(skill, input.eval.as_deref(), &artifacts)
-                .await;
-        }
-
         let Some(doc) = self.load_doc(skill) else {
             return Ok(ToolResult::error(format!(
                 "skill_eval: no skill named {skill:?}"
@@ -275,136 +224,17 @@ impl ToolFunction for SkillEvalTool {
             }
         }
 
-        Ok(self.finish_eval(skill, pairs, kinds, build_errors).await)
-    }
-}
-
-async fn kms_artifacts(system: &Arc<KmsSystem>, skill: &str) -> Option<Vec<SkillArtifact>> {
-    let store = system.store();
-    let versions = store.list_skill_versions(10_000).await.ok()?;
-    let version = versions
-        .into_iter()
-        .find(|version| version.status == "active" && version.skill_name == skill)?;
-    store.list_skill_artifacts(version.id).await.ok()
-}
-
-async fn record_skill_usage(system: &KmsSystem, skill: &str, kind: skills::UsageKind) {
-    let input = KnowledgeEvidenceInput {
-        source_kind: "skill_usage".to_string(),
-        source_id: uuid::Uuid::new_v4().to_string(),
-        evidence_kind: kind.as_str().to_string(),
-        summary: format!("skill {skill} recorded {} usage", kind.as_str()),
-        body: format!(
-            "Skill {skill:?} was used through the runtime ({}). This is fitness \
-             evidence for future procedure consolidation and diagnosis.",
-            kind.as_str()
-        ),
-        anchor_path: Some(format!("/procedures/{skill}")),
-        error: None,
-    };
-    if let Err(error) = system
-        .submit_event(KnowledgeEvent::ObservationRecorded { input })
-        .await
-    {
-        tracing::warn!(skill, kind = kind.as_str(), %error, "cannot queue skill usage evidence");
-    }
-}
-
-impl SkillRunWorkflowTool {
-    fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
-        self.manager.registry().get(skill).unwrap_or_else(|e| {
-            tracing::warn!(skill = skill, error = %e, "skill workflow tool: unreadable skill");
-            None
-        })
-    }
-}
-
-impl SkillEvalTool {
-    async fn run_kms_eval(
-        &self,
-        skill: &str,
-        requested: Option<&str>,
-        artifacts: &[SkillArtifact],
-    ) -> Result<ToolResult, ToolError> {
-        let eval_artifacts = artifacts
-            .iter()
-            .filter(|artifact| {
-                artifact
-                    .relative_path
-                    .strip_prefix("evals/")
-                    .is_some_and(|path| path.ends_with(".toml"))
-            })
-            .collect::<Vec<_>>();
-        if eval_artifacts.is_empty() {
-            return Ok(ToolResult::error(format!(
-                "skill_eval: skill {skill:?} bundles no evals"
-            )));
-        }
-
-        let selected: Vec<&SkillArtifact> =
-            match requested.map(str::trim).filter(|v| !v.is_empty()) {
-                Some(requested) => {
-                    let Some(artifact) = eval_artifacts.iter().copied().find(|artifact| {
-                        artifact.relative_path == format!("evals/{requested}.toml")
-                    }) else {
-                        return Ok(ToolResult::error(format!(
-                            "skill_eval: no eval {requested:?}"
-                        )));
-                    };
-                    vec![artifact]
-                }
-                None => eval_artifacts,
-            };
-
-        let mut pairs = Vec::new();
-        let mut kinds = Vec::new();
-        let mut build_errors = Vec::new();
-        for artifact in selected {
-            let cases = match skills::eval::parse_cases(&artifact.content) {
-                Ok(cases) => cases,
-                Err(error) => {
-                    build_errors.push(format!("eval {}: {error}", artifact.relative_path));
-                    continue;
-                }
-            };
-            for case in cases {
-                let outcome = self.run_kms_case(skill, artifacts, &case).await;
-                match outcome {
-                    Ok((nodes, node_kinds)) => {
-                        pairs.push((case, nodes));
-                        kinds.push(node_kinds);
-                    }
-                    Err(error) => build_errors.push(format!("case {:?}: {error}", case.name)),
-                }
-            }
-        }
-        Ok(self.finish_eval(skill, pairs, kinds, build_errors).await)
-    }
-
-    fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
-        // Same helper shape as the run tool; duplicated rather than
-        // trait-abstracted — two call sites, and the shared state
-        // differs (manager + client).
-        self.manager.registry().get(skill).unwrap_or_else(|e| {
-            tracing::warn!(skill = skill, error = %e, "skill eval tool: unreadable skill");
-            None
-        })
-    }
-
-    async fn finish_eval(
-        &self,
-        skill: &str,
-        pairs: Vec<(skills::EvalCase, Vec<serde_json::Value>)>,
-        kinds: Vec<Vec<(String, String)>>,
-        build_errors: Vec<String>,
-    ) -> ToolResult {
         if pairs.is_empty() {
-            return ToolResult::error(format!(
+            return Ok(ToolResult::error(format!(
                 "skill_eval: no eval case ran. {}",
                 build_errors.join("; ")
-            ));
+            )));
         }
         let report = skills::eval::evaluate_all(&pairs);
+        // Auto-capture: every failed case becomes an anchored
+        // observation, so repeated eval failures feed the
+        // distillation loop without anyone remembering to record
+        // them — the anchor is the first failed check's node kind.
         for (index, case) in report.cases.iter().enumerate() {
             if !case.passed {
                 self.record_eval_failure(skill, case, &kinds[index]).await;
@@ -428,80 +258,36 @@ impl SkillEvalTool {
                 }
             }
         }
-        for error in &build_errors {
-            out.push_str(&format!("\nsetup error: {error}\n"));
+        for e in &build_errors {
+            out.push_str(&format!("\nsetup error: {e}\n"));
         }
         let passed = report.passed && build_errors.is_empty();
         let mut result = ToolResult::success(out);
         if !passed {
             result.is_error = Some(true);
         }
-        result
+        Ok(result)
     }
+}
 
-    async fn run_kms_case(
-        &self,
-        skill: &str,
-        artifacts: &[SkillArtifact],
-        case: &skills::EvalCase,
-    ) -> Result<(Vec<serde_json::Value>, Vec<(String, String)>), String> {
-        let relative_path = format!("workflow/{}.toml", case.workflow);
-        let artifact = artifacts
-            .iter()
-            .find(|artifact| artifact.relative_path == relative_path)
-            .ok_or_else(|| format!("missing workflow {:?}", case.workflow))?;
-        let template = skills::workflow::WorkflowTemplate::from_toml(&artifact.content)
-            .map_err(|e| e.to_string())?;
-        let rendered = template.render(&case.params).map_err(|e| e.to_string())?;
-        let node_kinds = rendered
-            .nodes
-            .iter()
-            .map(|node| (node.id.clone(), node.kind.clone()))
-            .collect::<Vec<_>>();
-        let prefix = format!("{}__", case.name);
-        build_dag(&self.client, &rendered, &prefix)
-            .await
-            .map_err(|e| e.to_string())?;
-        let report = self
-            .client
-            .run_dag(Some(format!("skill:{skill}")))
-            .await
-            .map_err(|e| e.to_string())?;
-        let nodes = report
-            .nodes
-            .iter()
-            .map(|node| {
-                let mut value = serde_json::to_value(node).unwrap_or(serde_json::Value::Null);
-                let stripped = value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|id| id.strip_prefix(&prefix))
-                    .map(str::to_string);
-                if let (Some(rest), Some(object)) = (stripped, value.as_object_mut()) {
-                    object.insert("id".into(), serde_json::Value::String(rest));
-                }
-                value
-            })
-            .collect::<Vec<_>>();
+impl SkillRunWorkflowTool {
+    fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
+        self.manager.registry().get(skill).unwrap_or_else(|e| {
+            tracing::warn!(skill = skill, error = %e, "skill workflow tool: unreadable skill");
+            None
+        })
+    }
+}
 
-        for edge in rendered.edges.iter().rev() {
-            let _ = self
-                .client
-                .delete_edge(
-                    format!("{prefix}{}", edge.from),
-                    edge.from_port,
-                    format!("{prefix}{}", edge.to),
-                    edge.to_port,
-                )
-                .await;
-        }
-        for node in rendered.nodes.iter().rev() {
-            let _ = self
-                .client
-                .remove_node(format!("{prefix}{}", node.id))
-                .await;
-        }
-        Ok((nodes, node_kinds))
+impl SkillEvalTool {
+    fn load_doc(&self, skill: &str) -> Option<skills::SkillDocument> {
+        // Same helper shape as the run tool; duplicated rather than
+        // trait-abstracted — two call sites, and the shared state
+        // differs (manager + client).
+        self.manager.registry().get(skill).unwrap_or_else(|e| {
+            tracing::warn!(skill = skill, error = %e, "skill eval tool: unreadable skill");
+            None
+        })
     }
 
     /// Run one eval case end-to-end: build (prefixed), run, strip the
@@ -574,18 +360,26 @@ impl SkillEvalTool {
         Ok((nodes, node_kinds))
     }
 
-    /// Record one failed eval case as KMS evidence anchored to the skill.
+    /// Record one failed eval case as an anchored observation:
+    /// summary carries the case identity, the body lists the failed
+    /// checks, and the anchor is the first failed check's node kind
+    /// plus its failure reason. Repeated eval failures therefore
+    /// cluster in distillation exactly like manual observations.
     async fn record_eval_failure(
         &self,
         skill: &str,
         case: &skills::eval::CaseResult,
-        _node_kinds: &[(String, String)],
+        node_kinds: &[(String, String)],
     ) {
         let failed: Vec<&skills::eval::CheckResult> =
             case.checks.iter().filter(|c| !c.passed).collect();
         let Some(first) = failed.first() else {
             return;
         };
+        let anchor_kind = node_kinds
+            .iter()
+            .find(|(id, _)| id == &first.node)
+            .map(|(_, kind)| kind.clone());
         let mut body = format!("Eval case {} of skill {skill:?} failed:\n", case.name);
         for check in &failed {
             body.push_str(&format!("- {}: {}\n", check.node, check.reason));
@@ -594,28 +388,28 @@ impl SkillEvalTool {
             "Inspect the eval inputs and the workflow template; a fix here \
              should update the template or its fixtures.",
         );
-        let summary = format!("eval case {} fails for skill {skill}", case.name);
-        if let Some(system) = &self.kms {
-            let input = KnowledgeEvidenceInput {
-                source_kind: "skill_failure".to_string(),
-                source_id: uuid::Uuid::new_v4().to_string(),
-                evidence_kind: "eval_failure".to_string(),
-                summary,
-                body,
-                anchor_path: Some(format!("/procedures/{skill}")),
-                error: Some(first.reason.clone()),
-            };
-            if let Err(error) = system
-                .submit_event(KnowledgeEvent::ObservationRecorded { input })
-                .await
-            {
-                tracing::warn!(
-                    skill,
-                    case = case.name.as_str(),
-                    %error,
-                    "cannot queue KMS eval-failure evidence"
-                );
-            }
+        let input = evolution_core::ObservationInput {
+            kind: evolution_core::ObservationKind::Failure,
+            source: evolution_core::ObservationSource::Eval,
+            summary: format!("eval case {} fails for skill {skill}", case.name),
+            body,
+            node_kind: anchor_kind,
+            error: Some(first.reason.clone()),
+        };
+        if let Err(e) = self.manager.observation_hub().record(input).await {
+            tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
+            return;
+        }
+        // Event-driven evolution: the failure just landed in the
+        // skill-eligible pool (un-routed observations are eligible by
+        // compatibility), so nudge the worker. Best-effort by
+        // contract — see EvolutionTrigger.
+        if let Some(handle) = self.control.as_ref()
+            && !handle.trigger(skills::evolution::EvolutionTrigger::Observation)
+        {
+            tracing::debug!(
+                "skill_eval: evolution channel full or worker gone; the timer sweep will catch up"
+            );
         }
     }
 }
@@ -650,22 +444,23 @@ async fn build_dag(
     Ok(())
 }
 
-/// Build the engine-bound skill tool registrations.
+/// Build the engine-bound skill tool registrations. `control` is the
+/// skill-evolution handle, when the service runs — captured eval
+/// failures nudge the worker through it.
 pub fn skill_workflow_registrations(
     manager: Arc<SkillManager>,
     client: Arc<DataEngineClient>,
-    kms: Option<Arc<KmsSystem>>,
+    control: Option<skills::evolution::SkillControlHandle>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillRunWorkflowTool {
             manager: manager.clone(),
             client: client.clone(),
-            kms: kms.clone(),
         }),
         ToolRegistration::from(SkillEvalTool {
             manager,
             client,
-            kms,
+            control,
         }),
     ]
 }
@@ -752,111 +547,6 @@ node = "b"
         )
     }
 
-    async fn kms_system_with_echo_skill(failing_eval: bool) -> Arc<KmsSystem> {
-        let storage = Arc::new(
-            agentik_core::memory::TursoKmsStorage::open_in_memory()
-                .await
-                .unwrap(),
-        );
-        storage
-            .import_skill_version(agentik_core::memory::KnowledgeSkillVersionInput {
-                skill_name: "kms-echo-flow".to_string(),
-                title: "KMS echo flow".to_string(),
-                body_md: "Workflow and eval are loaded from KMS artifacts.".to_string(),
-                metadata_json: serde_json::json!({
-                    "description": "KMS-backed echo workflow.",
-                    "tags": ["kms"],
-                    "tier": "workspace"
-                }),
-                node_path: "/procedures/kms-echo-flow".to_string(),
-                source_tier: "workspace".to_string(),
-                source_path: None,
-                artifacts: vec![
-                    agentik_core::memory::KnowledgeSkillArtifactInput {
-                        relative_path: "workflow/main.toml".to_string(),
-                        content: r#"
-description = "Chain two echo nodes."
-
-[params]
-label = { type = "string", default = "hello" }
-
-[[node]]
-id = "a"
-kind = "echo"
-spec = {}
-
-[[node]]
-id = "b"
-kind = "echo"
-spec = {}
-
-[[edge]]
-from = "a"
-from_port = 0
-to = "b"
-to_port = 0
-"#
-                        .to_string(),
-                    },
-                    agentik_core::memory::KnowledgeSkillArtifactInput {
-                        relative_path: "evals/smoke.toml".to_string(),
-                        content: if failing_eval {
-                            r#"
-[[case]]
-name = "smoke"
-description = "This check intentionally fails."
-workflow = "main"
-
-[[case.checks]]
-node = "a"
-rows_min = 99
-"#
-                        } else {
-                            r#"
-[[case]]
-name = "smoke"
-description = "Both nodes run."
-workflow = "main"
-
-[[case.checks]]
-node = "a"
-
-[[case.checks]]
-node = "b"
-"#
-                        }
-                        .to_string(),
-                    },
-                ],
-            })
-            .await
-            .unwrap();
-        KmsSystem::new(
-            agentik_core::memory::MemoryConfig::new(),
-            storage,
-            Arc::new(agentik_core::memory::EmptyMemorySource),
-        )
-        .await
-    }
-
-    async fn wait_for_evidence(system: &KmsSystem, evidence_kind: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let evidence = system.store().list_pending_evidence(100).await.unwrap();
-            if evidence
-                .iter()
-                .any(|item| item.evidence_kind == evidence_kind)
-            {
-                return;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "KMS evidence worker never produced {evidence_kind}"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    }
-
     #[tokio::test]
     async fn workflow_instantiation_builds_and_runs_in_the_session_dag() {
         let tmp = tempfile::tempdir().unwrap();
@@ -865,7 +555,6 @@ node = "b"
         let tool = SkillRunWorkflowTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: make_client(),
-            kms: None,
         };
         let out = tool
             .run(SkillRunWorkflowInput {
@@ -884,33 +573,6 @@ node = "b"
     }
 
     #[tokio::test]
-    async fn workflow_instantiation_prefers_kms_artifacts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let kms = kms_system_with_echo_skill(false).await;
-        let tool = SkillRunWorkflowTool {
-            manager: Arc::new(skills::SkillManager::new(tmp.path())),
-            client: make_client(),
-            kms: Some(Arc::clone(&kms)),
-        };
-        let out = tool
-            .run(SkillRunWorkflowInput {
-                skill: "kms-echo-flow".into(),
-                workflow: Some("main".into()),
-                params: serde_json::json!({}),
-                id_prefix: None,
-                run: Some(true),
-            })
-            .await
-            .unwrap();
-        let text = out.text_content();
-        assert!(text.contains("2 node(s), 1 edge(s)"), "{text}");
-        assert!(text.contains("a → main__a"), "{text}");
-        assert!(text.contains("DAG run: OK"), "{text}");
-        wait_for_evidence(&kms, "run").await;
-        kms.shutdown();
-    }
-
-    #[tokio::test]
     async fn evals_run_check_and_clean_up() {
         let tmp = tempfile::tempdir().unwrap();
         write_skill(&tmp.path().join("skills"));
@@ -919,7 +581,7 @@ node = "b"
         let tool = SkillEvalTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: client.clone(),
-            kms: None,
+            control: None,
         };
         let out = tool
             .run(SkillEvalInput {
@@ -946,77 +608,11 @@ node = "b"
     }
 
     #[tokio::test]
-    async fn evals_run_from_kms_artifacts_and_clean_up() {
-        let tmp = tempfile::tempdir().unwrap();
-        let client = make_client();
-        let kms = kms_system_with_echo_skill(false).await;
-        let tool = SkillEvalTool {
-            manager: Arc::new(skills::SkillManager::new(tmp.path())),
-            client: client.clone(),
-            kms: Some(Arc::clone(&kms)),
-        };
-        let out = tool
-            .run(SkillEvalInput {
-                skill: "kms-echo-flow".into(),
-                eval: Some("smoke".into()),
-            })
-            .await
-            .unwrap();
-        let text = out.text_content();
-        assert!(text.contains("PASS"), "{text}");
-        assert!(text.contains("case smoke — pass"), "{text}");
-
-        let view = client.view_dag().await.unwrap_or_default();
-        let leaked = view
-            .lines()
-            .filter(|line| line.contains("smoke__a") || line.contains("smoke__b"))
-            .count();
-        assert_eq!(leaked, 0, "KMS eval nodes leaked into the session: {view}");
-        wait_for_evidence(&kms, "eval").await;
-        kms.shutdown();
-    }
-
-    #[tokio::test]
-    async fn failing_kms_evals_feed_knowledge_evidence() {
-        let tmp = tempfile::tempdir().unwrap();
-        let kms = kms_system_with_echo_skill(true).await;
-        let tool = SkillEvalTool {
-            manager: Arc::new(skills::SkillManager::new(tmp.path())),
-            client: make_client(),
-            kms: Some(Arc::clone(&kms)),
-        };
-        let out = tool
-            .run(SkillEvalInput {
-                skill: "kms-echo-flow".into(),
-                eval: Some("smoke".into()),
-            })
-            .await
-            .unwrap();
-        assert!(out.is_error.unwrap_or(false));
-
-        wait_for_evidence(&kms, "eval").await;
-        wait_for_evidence(&kms, "eval_failure").await;
-        let evidence = kms.store().list_pending_evidence(100).await.unwrap();
-        let failure = evidence
-            .iter()
-            .find(|item| item.evidence_kind == "eval_failure")
-            .expect("eval-failure evidence");
-        assert_eq!(failure.source_kind, "skill_failure");
-        assert_eq!(
-            failure.anchor_path.as_deref(),
-            Some("/procedures/kms-echo-flow")
-        );
-        assert!(failure.error.is_some());
-        kms.shutdown();
-    }
-
-    #[tokio::test]
     async fn missing_skill_and_bad_params_surface_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let run_tool = SkillRunWorkflowTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: make_client(),
-            kms: None,
         };
         let missing = run_tool
             .run(SkillRunWorkflowInput {
@@ -1042,5 +638,126 @@ node = "b"
             .await
             .unwrap();
         assert!(bad_params.is_error.unwrap_or(false));
+    }
+
+    /// A failing eval records an anchored observation through the
+    /// manager; the same failure three times clusters and distills
+    /// into a pending proposal — the RSI loop's smallest full turn.
+    #[tokio::test]
+    async fn failing_evals_feed_the_distillation_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A skill whose check can never pass.
+        let dir = tmp.path().join("skills").join("broken-flow");
+        std::fs::create_dir_all(dir.join("evals")).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: broken-flow\ndescription: A skill whose eval always fails.\n---\nb\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("evals").join("always.toml"),
+            r#"
+[[case]]
+name = "always"
+workflow = "main"
+[[case.checks]]
+node = "a"
+rows_min = 99
+"#,
+        )
+        .unwrap();
+        write_skill(&tmp.path().join("skills"));
+        // Swap the skill identity: reuse the echo workflow, but under
+        // the broken-flow name.
+        std::fs::create_dir_all(dir.join("workflow")).unwrap();
+        std::fs::write(
+            dir.join("workflow").join("main.toml"),
+            r#"
+description = "Echo chain."
+[[node]]
+id = "a"
+kind = "echo"
+spec = {}
+"#,
+        )
+        .unwrap();
+
+        let manager = Arc::new(skills::SkillManager::new(tmp.path()));
+        let tool = SkillEvalTool {
+            manager: manager.clone(),
+            client: make_client(),
+            control: None,
+        };
+        for _ in 0..3 {
+            let out = tool
+                .run(SkillEvalInput {
+                    skill: "broken-flow".into(),
+                    eval: None,
+                })
+                .await
+                .unwrap();
+            assert!(out.is_error.unwrap_or(false));
+        }
+
+        // Three identical failures → one content-hashed observation
+        // (idempotent), so the cluster threshold needs a hand: record
+        // two more variants of the same anchor. The texts mirror the
+        // anchor's shape (same summary, same boilerplate body, a
+        // slightly different reason) the way real repeated eval
+        // failures look — under BM25 weighting, shorthand
+        // near-duplicates that share only the error line fall below
+        // SIMILARITY_THRESHOLD and legitimately stay apart.
+        assert_eq!(
+            manager.observations().await.len(),
+            1,
+            "identical failures dedupe"
+        );
+        for reason in [
+            "output_rows is 1, expected >= 99",
+            "output_rows is missing from the result, expected >= 99",
+        ] {
+            let body = format!(
+                "Eval case always of skill \"broken-flow\" failed:\n- a: {reason}\n\
+                 Inspect the eval inputs and the workflow template; a fix here \
+                 should update the template or its fixtures."
+            );
+            manager
+                .observation_hub()
+                .record(evolution_core::ObservationInput {
+                    kind: evolution_core::ObservationKind::Failure,
+                    source: evolution_core::ObservationSource::Eval,
+                    summary: "eval case always fails for skill broken-flow".into(),
+                    body,
+                    node_kind: Some("echo".into()),
+                    error: Some(reason.into()),
+                })
+                .await
+                .unwrap();
+        }
+
+        let report = manager.distill().await.unwrap();
+        assert_eq!(report.proposals_written.len(), 1, "{report:?}");
+        let name = &report.proposals_written[0];
+        let proposals = manager.proposals();
+        assert_eq!(proposals.list()[0].status, skills::ProposalStatus::Pending);
+        assert!(proposals.validate_dir(name).is_empty());
+
+        // Apply: the skill lands in the global tier and the
+        // generation advances — the loop closed.
+        let generation = manager.generation();
+        let outcome = manager.apply_proposal(name).unwrap();
+        assert!(outcome.destination.ends_with(name.as_str()));
+        assert_eq!(manager.generation(), generation + 1);
+        let names: Vec<String> = manager
+            .registry()
+            .list()
+            .into_iter()
+            .map(|e| e.meta.name)
+            .collect();
+        assert!(names.contains(name));
+
+        // And a second distill pass is a no-op.
+        let again = manager.distill().await.unwrap();
+        assert!(again.proposals_written.is_empty());
     }
 }

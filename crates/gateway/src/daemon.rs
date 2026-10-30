@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::driver::{self, SessionCache};
 use crate::hub::EventHub;
-use crate::hub::{spawn_kms_worker_event_bridge, spawn_model_event_bridge};
+use crate::hub::spawn_model_event_bridge;
 use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
 
@@ -129,14 +129,9 @@ pub async fn run_daemon(
     };
 
     let (model_events, model_event_rx) = mpsc::unbounded_channel();
-    let model_slot = host.infra().kms.model_slot();
-    let models = runtime::model_actor::start_with_model_slot(
-        models_storage,
-        model_events,
-        model_slot.clone(),
-    );
+    let models = runtime::model_actor::start(models_storage, model_events);
     spawn_model_event_bridge(model_event_rx, hub.clone());
-    spawn_kms_worker_event_bridge(host.infra().kms.subscribe_worker_events(), hub.clone());
+    let model_slot = models.model_slot();
     host.set_model(model_slot.clone());
     // Install the startup default before restoring agents — the restore
     // loop skips preference-less agents while the slot is empty.
@@ -188,7 +183,14 @@ pub async fn run_daemon(
     let bib_shared = state.infra.bib.as_ref().clone();
     // Clone for the extraction sweep before the move into the router.
     let sweep_shared = bib_shared.clone();
-    let router = router_with_bib(state, gateway_token.clone(), bib_shared, env_token.clone());
+    let wiki_shared = state.infra.wiki.clone();
+    let router = router_with_bib(
+        state,
+        gateway_token.clone(),
+        bib_shared,
+        wiki_shared,
+        env_token.clone(),
+    );
 
     let server = api_server::server::start(router, &addr)
         .await

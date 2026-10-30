@@ -402,17 +402,6 @@ impl Session {
         if let Some(storage) = &self.shared.storage {
             let _ = storage.end_session(self.id).await;
         }
-        if let Some(memory) = &self.shared.memory {
-            let config = memory.effective_memory_config();
-            if config.generate_memory && config.is_root_agent(&self.shared.path) {
-                let _ = memory
-                    .submit_knowledge_event(crate::memory::KnowledgeEvent::SessionEnded {
-                        agent_id: self.shared.id,
-                        session_id: self.id,
-                    })
-                    .await;
-            }
-        }
     }
 
     /// Resume the session: open WAL session (if not already open), lifecycle → Idle.

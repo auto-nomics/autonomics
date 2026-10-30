@@ -32,7 +32,7 @@ pub(crate) struct AgentShared {
     pub context_provider: Option<Arc<dyn ContextProvider>>,
     pub system_prompt_section: Option<String>,
     pub system_prompt_identity: Option<String>,
-    pub(crate) memory: Option<Arc<crate::memory::KmsAgentHandle>>,
+    pub(crate) memory: Option<Arc<crate::memory::MemoryBackend>>,
     pub tool_registry: Arc<ToolRegistry>,
     /// Shared background-task list — the same Arc baked into the registry's
     /// task tools (`wait_task`, `view_task_results`, `view_task_status`).

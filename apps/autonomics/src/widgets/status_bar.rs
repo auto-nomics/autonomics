@@ -12,10 +12,10 @@ use crate::state::{AgentStatus, CompactState};
 /// 1-row status bar showing agent state and active model, drawn on a
 /// dark-navy background strip spanning the full width.
 ///
-/// Status is left-aligned; kms activity and the context-window readout
-/// follow as separated segments, and the model name is right-aligned on
-/// the same row so both fit in a single line. While compacting, the
-/// status segment expands with live pass details (phase, scale,
+/// Status is left-aligned; the context-window readout follows as a
+/// separated segment, and the model name is right-aligned on the same
+/// row so both fit in a single line. While compacting, the status
+/// segment expands with live pass details (phase, scale,
 /// generated tokens, elapsed seconds).
 pub struct StatusBar<'a> {
     pub status: &'a AgentStatus,
@@ -30,8 +30,6 @@ pub struct StatusBar<'a> {
     pub reasoning_effort: Option<&'a str>,
     /// Live compaction state — consulted only while status is `Compacting`.
     pub compact: Option<&'a CompactState>,
-    /// Resident KMS worker activity, e.g. `2/4 running`.
-    pub kms_activity: Option<&'a str>,
     /// Render tick, drives the compacting spinner.
     pub frame: u64,
 }
@@ -87,22 +85,6 @@ impl Widget for StatusBar<'_> {
                 ),
             ),
         ];
-
-        if let Some(kms_activity) = self.kms_activity {
-            // No separator between the status label and the kms readout —
-            // they read as one left-hand group. The ctx segment keeps its
-            // own separator below.
-            spans.push(Span::styled("  ", bg));
-            spans.push(Span::styled(
-                "kms:",
-                base(Style::default().fg(Color::DarkGray)),
-            ));
-            spans.push(Span::styled(" ", bg));
-            spans.push(Span::styled(
-                kms_activity,
-                base(Style::default().fg(Color::Cyan)),
-            ));
-        }
 
         // Context window usage — shows percentage, bar, and absolute tokens.
         if self.context_used > 0 {

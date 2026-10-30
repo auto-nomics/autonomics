@@ -1,0 +1,234 @@
+//! 验证 `dyn WikiStorage`（supertrait 组合）既能通过 trait object 使用，
+//! 也能通过 blanket impl 自动满足约束。
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use wiki::service::start;
+use wiki::storage::error::Result;
+use wiki::storage::types::{
+    AttachmentMeta, EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
+    WikiAttachmentStorage, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage, WikiStorage,
+};
+
+/// 只实现两个基础 trait，不显式写 `impl WikiStorage for _`。
+struct FakeStorage {
+    entries: std::sync::Mutex<Vec<KnowledgeEntryData>>,
+}
+
+impl FakeStorage {
+    fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl WikiEntryStorage for FakeStorage {
+    async fn create_entry(&self, entry: KnowledgeEntryData) -> Result<()> {
+        self.entries.lock().unwrap().push(entry);
+        Ok(())
+    }
+
+    async fn delete_entry(&self, _id: uuid::Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    async fn get_entry(&self, _id: uuid::Uuid) -> Result<KnowledgeEntryData> {
+        let entries = self.entries.lock().unwrap();
+        entries.first().cloned().ok_or_else(|| "empty".into())
+    }
+
+    async fn find_by_title(&self, title: &str) -> Result<Option<KnowledgeEntryData>> {
+        let entries = self.entries.lock().unwrap();
+        Ok(entries.iter().find(|e| e.title == title).cloned())
+    }
+
+    async fn list_entries(
+        &self,
+        filter: &wiki::storage::types::ListFilter,
+    ) -> Result<Vec<wiki::storage::types::ListEntrySummary>> {
+        let entries = self.entries.lock().unwrap();
+        let wanted: std::collections::HashSet<&str> =
+            filter.tags.iter().map(|t| t.trim()).collect();
+        Ok(entries
+            .iter()
+            .filter(|e| {
+                let since_ok = filter.mtime_since.is_none_or(|s| e.mtime >= s);
+                let until_ok = filter.mtime_until.is_none_or(|u| e.mtime <= u);
+                let tags_ok = wanted.is_empty()
+                    || wanted.iter().all(|w| e.tags.iter().any(|t| t.trim() == *w));
+                since_ok && until_ok && tags_ok
+            })
+            .map(|e| wiki::storage::types::ListEntrySummary {
+                id: e.id.clone(),
+                title: e.title.clone(),
+                alias: e.alias.clone(),
+                tags: e.tags.clone(),
+                ctime: e.ctime,
+                mtime: e.mtime,
+            })
+            .skip(filter.offset)
+            .take(filter.limit)
+            .collect())
+    }
+
+    async fn get_entry_batch(&self, _ids: Vec<uuid::Uuid>) -> Result<Vec<KnowledgeEntryData>> {
+        let entries = self.entries.lock().unwrap();
+        Ok(entries.clone())
+    }
+
+    async fn update_entry(&self, _entry: KnowledgeEntryData) -> Result<()> {
+        Ok(())
+    }
+
+    async fn update_entry_batch(&self, _entries: &[KnowledgeEntryData]) -> Result<()> {
+        Ok(())
+    }
+
+    async fn restore_entry(&self, _id: uuid::Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    async fn purge_entry(&self, _id: uuid::Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> Result<Vec<RecycleItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_versions(&self, _id: uuid::Uuid) -> Result<Vec<EntryVersionSummary>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_version(&self, _id: uuid::Uuid, _version: i64) -> Result<KnowledgeEntryData> {
+        let entries = self.entries.lock().unwrap();
+        entries.first().cloned().ok_or_else(|| "empty".into())
+    }
+}
+
+#[async_trait]
+impl WikiIndexStorage for FakeStorage {
+    async fn get_in_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
+        Ok(ids.iter().map(|_| vec!["in".to_string()]).collect())
+    }
+
+    async fn get_out_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
+        Ok(ids.iter().map(|_| vec!["out".to_string()]).collect())
+    }
+
+    async fn get_mentions(&self, _id: &str) -> Result<Vec<String>> {
+        Ok(vec!["mention".to_string()])
+    }
+}
+
+#[async_trait]
+impl WikiSearchStorage for FakeStorage {
+    /// 朴素标题子串匹配:只验证 trait 组合与 worker 链路,真实 BM25
+    /// 打分在 TursoWikiStorage(见 tests/search.rs)。
+    async fn search_with_filter(
+        &self,
+        query: &str,
+        limit: usize,
+        _filter: &SearchFilter,
+    ) -> Result<Vec<SearchHit>> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.title.contains(query))
+            .take(limit)
+            .map(|entry| SearchHit {
+                entry_id: entry.id.clone(),
+                score: 1.0,
+            })
+            .collect())
+    }
+}
+
+#[async_trait]
+impl WikiAttachmentStorage for FakeStorage {
+    async fn attach_image(
+        &self,
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta> {
+        Ok(AttachmentMeta {
+            id: uuid::Uuid::new_v4().to_string(),
+            entry_id: entry_id.to_string(),
+            filename,
+            mime: "image/png".to_string(),
+            size: data.len() as i64,
+            sha256: String::new(),
+            created_at: 0,
+        })
+    }
+
+    async fn list_attachments(&self, _entry_id: uuid::Uuid) -> Result<Vec<AttachmentMeta>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_attachment(
+        &self,
+        _entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<(AttachmentMeta, Vec<u8>)> {
+        Err(wiki::storage::error::Error::NotFound(
+            attachment_id.to_string(),
+        ))
+    }
+
+    async fn detach_attachment(
+        &self,
+        _entry_id: uuid::Uuid,
+        _attachment_id: uuid::Uuid,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+fn sample_entry() -> KnowledgeEntryData {
+    KnowledgeEntryData {
+        id: "e1".to_string(),
+        title: "title".to_string(),
+        alias: vec![],
+        tags: vec![],
+        content: "body".to_string(),
+        ctime: 0,
+        mtime: 0,
+    }
+}
+
+#[tokio::test]
+async fn dyn_wiki_storage_supports_both_traits() {
+    // blanket impl 让 FakeStorage 自动满足 WikiStorage
+    let store: Arc<dyn WikiStorage> = Arc::new(FakeStorage::new());
+
+    store.create_entry(sample_entry()).await.unwrap();
+    let got = store.get_entry(uuid::Uuid::nil()).await.unwrap();
+    assert_eq!(got.title, "title");
+
+    let one = ["e1".to_string()];
+    let in_links = store.get_in_links_batch(&one).await.unwrap();
+    assert_eq!(in_links, vec![vec!["in".to_string()]]);
+    let out_links = store.get_out_links_batch(&one).await.unwrap();
+    assert_eq!(out_links, vec![vec!["out".to_string()]]);
+}
+
+#[tokio::test]
+async fn worker_accepts_dyn_and_concrete_backends() {
+    // 运行时可替换：`Arc<dyn WikiStorage>` 进 worker
+    let dyn_storage: Arc<dyn WikiStorage> = Arc::new(FakeStorage::new());
+    let dyn_handle = start(dyn_storage);
+    dyn_handle.create_entry(sample_entry()).await.unwrap();
+    let got = dyn_handle.get_entry(uuid::Uuid::nil()).await.unwrap();
+    assert_eq!(got.title, "title");
+
+    // 静态分发：具体后端类型进 worker
+    let concrete = start(Arc::new(FakeStorage::new()));
+    concrete.create_entry(sample_entry()).await.unwrap();
+}

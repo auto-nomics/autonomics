@@ -7,7 +7,10 @@ use std::sync::{Arc, Weak};
 
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
-use agentik_core::memory::{Error as MemoryError, KmsSystem, MemoryConfig, TursoKmsStorage};
+use agentik_core::memory::{
+    Error as MemoryError, MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding,
+    TursoMemoryStorage,
+};
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
 use arc_swap::ArcSwapOption;
@@ -19,9 +22,11 @@ use data_engine::runtime::DataEngineManager;
 use rcsb::RcsbClient;
 use resource_downloader::DownloadManager;
 use vfs::OpendalFileStorage;
+use wiki::service::WikiHandle;
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::error::{Error, Result};
+use crate::memory_kms::KmsMemoryGrounding;
 
 use super::bundles::build_bundle_registry;
 use super::gc::{
@@ -139,7 +144,13 @@ pub struct SharedInfra {
     pub writing: Arc<writing_base::WritingShared>,
     /// Base persistent-memory backend. Each agent gets a clone with its own
     /// resolved runtime overrides while sharing the store and grounding sink.
-    pub kms: Arc<KmsSystem>,
+    pub memory: Arc<MemoryBackend>,
+    /// Optional Turso-backed KMS knowledge service.
+    pub kms: Option<Arc<kms::KmsService>>,
+    /// Wiki 知识库的 worker 控制句柄(附件 blob 落在
+    /// `file_storage` 的 `wiki-attachments` 虚拟目录)。`None` 表示
+    /// `enable_wiki` 关闭 —— agent 不挂 wiki 工具,API 层返回 503。
+    pub wiki: Option<Arc<WikiHandle>>,
     /// The process-wide observation hub — the upstream evidence
     /// ledger shared by skills, plugins, and gateway handlers. Neither
     /// downstream owns it; both resolve the same instance.
@@ -162,6 +173,13 @@ pub struct SharedInfra {
     /// configuration. `None` when disabled — the observation hub then
     /// serves corpus-fitted BM25 vectors.
     pub embedding: Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>,
+    /// The unified skill control handle, when the service is
+    /// enabled. `None` means the loop is disabled at the daemon
+    /// level — every gateway mutation request then returns HTTP
+    /// 503 (the dashboard and the agent skill tools all funnel
+    /// through this handle; the on-demand paths still run cycles
+    /// directly).
+    pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -252,20 +270,18 @@ impl SharedInfra {
         let turso_store = open_agent_storage(config).await?;
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        let kms = open_kms_system(config, &turso_store).await?;
-        super::kms_bridge::spawn_legacy_observation_sync(
-            Arc::clone(&observations),
-            Arc::clone(&kms),
-        );
-        super::kms_bridge::spawn_kms_skill_sync(Arc::clone(&skills), Arc::clone(&kms));
+        let kms = open_kms(config, &turso_store).await?;
+        let memory = open_memory(config, &kms).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
+        let wiki = open_wiki(config, &file_storage).await?;
 
-        // One clustering worker over the shared legacy hub. It remains
-        // available for plugin evidence, while durable skill evolution is
-        // governed by the resident KMS workers.
+        // One clustering worker over the shared hub. Triggers land on
+        // a buffered channel, so callers never block on a slow pass.
         let evolution_handle = Arc::new(evolution_core::worker::start(Arc::clone(&observations)));
         tracing::info!("SharedInfra::open: clustering worker started");
+
+        let skill_evolution = start_skill_evolution(config, &skills);
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
@@ -295,11 +311,14 @@ impl SharedInfra {
             resource_downloader,
             bib,
             writing,
+            memory,
             kms,
+            wiki,
             observations,
             evolution_handle,
             skills,
             embedding,
+            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
             browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
@@ -334,7 +353,7 @@ impl SharedInfra {
 
         let config_json = config.to_json();
         let storage = self.storage.clone();
-        let defaults = self.kms.runtime_config();
+        let defaults = self.memory.runtime_config();
         let runtime_config = agentik_core::AgentRuntimeConfig::new(
             config.runtime.use_memory.unwrap_or(defaults.use_memory),
             config
@@ -342,7 +361,8 @@ impl SharedInfra {
                 .generate_memory
                 .unwrap_or(defaults.generate_memory),
         );
-        let memory = self.kms.agent_handle(runtime_config);
+        let memory = Arc::new(MemoryBackend::clone(&self.memory));
+        memory.set_runtime_config(runtime_config);
 
         let mut builder = Agent::builder()
             .with_model(model.clone())
@@ -356,10 +376,7 @@ impl SharedInfra {
         builder = builder.with_system_prompt_section(crate::config::build_system_prompt(&kind));
         // Skill index: one line per visible skill; bodies load on
         // demand via skill_get. Empty library → no section at all.
-        let skill_section = match super::kms_bridge::kms_skill_prompt_section(&self.kms).await {
-            Some(section) => section,
-            None => skills::prompt_section(&self.skills.registry().list()),
-        };
+        let skill_section = skills::prompt_section(&self.skills.registry().list());
         if !skill_section.is_empty() {
             builder = builder.with_system_prompt_section(skill_section);
         }
@@ -473,9 +490,13 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.extend(skills::skill_registrations_with_kms(
+        tools.push(crate::evolution_tools::evo_observe_registration(
+            Arc::clone(&self.evolution_handle),
+            None,
+        ));
+        tools.extend(skills::skill_registrations(
             self.skills.clone(),
-            Some(self.kms.clone()),
+            self.skill_evolution.clone(),
         ));
         if kind.enable_plugin_rsi() {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
@@ -529,7 +550,7 @@ impl SharedInfra {
         tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
             self.skills.clone(),
             engine_client,
-            Some(self.kms.clone()),
+            self.skill_evolution.clone(),
         ));
 
         if kind.enable_bibliography() {
@@ -560,6 +581,16 @@ impl SharedInfra {
                 ws.engine.clone(),
             );
             tools.extend(writing_tools);
+        }
+
+        if let Some(kms) = self.kms.clone() {
+            tools.extend(kms_tools::kms_readonly_registrations(kms));
+        }
+
+        if let Some(wiki) = self.wiki.clone() {
+            // 与 KMS 同款:普通 agent 只拿读组;写组留给维护路径,
+            // 不经 agent 工具暴露。
+            tools.extend(wiki::tools::wiki_read_registrations(wiki));
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
@@ -848,22 +879,75 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
     Ok(Arc::new(store))
 }
 
-/// Open the dedicated memory knowledge database and build the process-wide
-/// backend.
-async fn open_kms_system(
+/// Open the wiki knowledge db + attachment blob backend, and start the
+/// wiki worker when the runtime feature is enabled. The schema is
+/// initialized unconditionally (idempotent) so the on-disk db always
+/// exists, mirroring `open_kms`.
+async fn open_wiki(
     config: &RuntimeConfig,
-    agent_storage: &Arc<TursoAgentStorage>,
-) -> Result<Arc<KmsSystem>> {
+    file_storage: &Arc<OpendalFileStorage>,
+) -> Result<Option<Arc<WikiHandle>>> {
+    let wiki_db = config.wiki_db_path.clone();
+    tracing::info!(
+        path = %wiki_db.display(),
+        "SharedInfra::open: opening wiki knowledge db"
+    );
+    let blobs = wiki::storage::vfs_blob::VfsBlobStore::new(
+        file_storage.as_ref().clone(),
+        "wiki-attachments",
+    );
+    let storage =
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open(&wiki_db.to_string_lossy())
+            .await
+            .map_err(|error| Error::Other(format!("open wiki storage: {error}")))?
+            .with_blob_store(blobs);
+    if !config.enable_wiki {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(wiki::service::start(Arc::new(storage)))))
+}
+
+/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
+/// and build the service when the feature is enabled.
+async fn open_kms(
+    config: &RuntimeConfig,
+    _turso_store: &Arc<TursoAgentStorage>,
+) -> Result<Option<Arc<kms::KmsService>>> {
+    // Initialize the KMS schema in its own knowledge.db unconditionally;
+    // expose tools and semantic grounding only when the runtime feature
+    // is enabled.
+    let kms_db = config.kms_db_path.clone();
+    tracing::info!(
+        path = %kms_db.display(),
+        "SharedInfra::open: opening KMS knowledge db"
+    );
+    let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
+        Ok(storage) => storage,
+        Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
+    };
+    if !config.enable_kms {
+        return Ok(None);
+    }
+    match kms::KmsService::from_storage(kms_storage).await {
+        Ok(service) => Ok(Some(Arc::new(service))),
+        Err(error) => Err(Error::Other(format!("open KMS: {error}"))),
+    }
+}
+
+/// Open the dedicated memory knowledge database and build the process-wide
+/// backend, with KMS semantic grounding when the service is available.
+async fn open_memory(
+    config: &RuntimeConfig,
+    kms: &Option<Arc<kms::KmsService>>,
+) -> Result<Arc<MemoryBackend>> {
     let started = std::time::Instant::now();
     tracing::info!(
         path = %config.knowledge_db_path.display(),
         "SharedInfra::open: opening memory knowledge db"
     );
-    let store = Arc::new(
-        TursoKmsStorage::open(&config.knowledge_db_path)
-            .await
-            .map_err(MemoryError::from)?,
-    );
+    let store = TursoMemoryStorage::open(&config.knowledge_db_path)
+        .await
+        .map_err(MemoryError::from)?;
     store
         .migrate_from_agent_db(&config.agent_db)
         .await
@@ -873,12 +957,18 @@ async fn open_kms_system(
         "memory knowledge db opened and legacy migration checked"
     );
 
+    let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
+    let grounding: Option<Arc<dyn SemanticGrounding>> = kms
+        .as_ref()
+        .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
-    let source =
-        agentik_core::memory::agent_storage_memory_source(Arc::clone(agent_storage) as Arc<_>);
-    Ok(KmsSystem::new(memory_config, store, source).await)
+    Ok(Arc::new(MemoryBackend::new(
+        memory_config,
+        memory_store,
+        grounding,
+    )))
 }
 
 /// Open the bibliography store + literature gateway once and publish
@@ -921,6 +1011,34 @@ async fn open_writing(
         .await?,
     );
     Ok(writing)
+}
+
+/// Start the unified skill evolution loop when enabled. `None` means
+/// the loop is disabled at the daemon level — every gateway mutation
+/// request then returns HTTP 503.
+fn start_skill_evolution(
+    config: &RuntimeConfig,
+    skills: &Arc<skills::SkillManager>,
+) -> Option<skills::SkillControlHandle> {
+    if !config.enable_skill_evolution {
+        tracing::info!("SharedInfra::open: skill evolution disabled");
+        return None;
+    }
+    let handle = skills::evolution::start(
+        skills.clone(),
+        skills::evolution::EvolutionOptions {
+            policy: skills::evolution::EvolutionPolicy::default(),
+            quiet_window: std::time::Duration::from_millis(500),
+            timer: Some(std::time::Duration::from_secs(
+                config.skill_evolution_interval_secs.max(60),
+            )),
+        },
+    );
+    tracing::info!(
+        interval_secs = config.skill_evolution_interval_secs,
+        "SharedInfra::open: skill evolution service started"
+    );
+    Some(handle)
 }
 
 /// Swap the service's provider into the observation hub. The swap
@@ -1010,7 +1128,9 @@ mod remote_embedding_tests {
         config.bib_db_path = dir.path().join("bib.db");
         config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
+        config.kms_db_path = dir.path().join("kms.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");
+        config.wiki_db_path = dir.path().join("wiki.db");
         config.use_memory = false;
         config.generate_memory = false;
         config.embedding = text_embedding::EmbeddingConfig {
@@ -1081,8 +1201,9 @@ mod plugin_profile_tools_tests {
         config.data_dir = dir.path().join("data");
         config.state_dir = dir.path().join("state");
         config.agent_db = dir.path().join("agent.db");
+        config.kms_db_path = dir.path().join("kms.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");
-        config.bib_db_path = dir.path().join("bib.db");
+        config.wiki_db_path = dir.path().join("wiki.db");
         // Keep the embedding model (network install + ONNX session)
         // out of this test.
         config.embedding.enabled = false;
@@ -1121,7 +1242,7 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "plugin_environments_list")
         );
         assert!(
-            !researcher_tools
+            researcher_tools
                 .iter()
                 .any(|tool| tool.definition.name == "evo_observe")
         );

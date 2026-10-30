@@ -46,7 +46,6 @@ pub struct AgentWorkspace<'a> {
     pub context_window: Option<u64>,
     /// The reasoning effort the active agent's next request would send.
     pub reasoning_effort: Option<&'a str>,
-    pub kms_activity: Option<&'a str>,
     /// Global display settings (collapse toggles).
     pub display: &'a DisplaySettings,
 }
@@ -66,7 +65,6 @@ impl AgentWorkspace<'_> {
             active_model: self.active_model,
             context_window: self.context_window,
             reasoning_effort: self.reasoning_effort,
-            kms_activity: self.kms_activity,
             display: self.display,
         };
         leaf.render_ref(area, buf, tab_state);

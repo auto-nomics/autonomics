@@ -20,6 +20,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tracing.workspace = true
 uuid = { version = "1.23", features = ["v4"] }
 vfs = { path = "../vfs" }
+wiki = { path = "../wiki", features = ["vfs"] }
 
 [dev-dependencies]
 turso.workspace = true

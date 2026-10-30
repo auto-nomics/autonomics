@@ -13,8 +13,8 @@ pub mod types {
     pub use agentik_types::*;
 }
 
+// Re-export
 pub use agentik_types;
-
 pub use agentik_types::{
     AnthropicError, BatchCreateParams, BatchError, BatchList, BatchListParams, BatchRequest,
     BatchRequestBuilder, BatchRequestCounts, BatchResponse, BatchResponseBody, BatchResult,

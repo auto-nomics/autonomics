@@ -2,7 +2,7 @@
 // login/boot screens. All agent state and gateway wiring lives in
 // use-agent-runtime; this component only renders it.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Library, Network, Settings, PanelRight, PanelLeft, LogOut } from "lucide-react";
+import { Bot, Library, Settings, PanelRight, PanelLeft, LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { ContextBasketProvider } from "@/features/context/context-basket";
@@ -10,14 +10,14 @@ import { gatewayRequest } from "@/gateway";
 import { useAgentRuntime } from "@/app/use-agent-runtime";
 import { AgentView, SpawnAgentDialog, AgentWorkspace, layoutSideOpen, readAgentLayout } from "@/features/agent";
 import { BibliographyView } from "@/features/bibliography";
-import { ConfigView, DagView, KmsView } from "@/features/system";
+import { ConfigView, DagView } from "@/features/system";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
-type View = "agent" | "config" | "bib" | "kms";
+type View = "agent" | "config" | "bib";
 
 export function App() {
   const runtime = useAgentRuntime();
@@ -273,8 +273,8 @@ export function App() {
         <nav aria-label="工作台活动栏" className={cn("flex min-h-0 w-full flex-1 flex-col gap-5 overflow-y-auto p-2", railCollapsed && "items-center px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden")}>
           <section className={cn("flex w-full flex-col gap-1", railCollapsed && "items-center")}>
             {!railCollapsed && <h2 className="px-3 pb-1 pt-2 text-xs font-medium text-muted-foreground">工作区</h2>}
-            {([{ id: "agent", label: "Agent", icon: Bot }, { id: "bib", label: "文献与证据", icon: Library }, { id: "kms", label: "知识管理", icon: Network }, { id: "config", label: "设置", icon: Settings }] as const).map(item => (
-              <Button key={item.id} variant={view === item.id ? "secondary" : "ghost"} className={cn("h-9 w-full shrink-0 justify-start gap-2 px-2.5", railCollapsed && "h-9 w-9 min-w-9 justify-center p-0")} aria-label={item.id === "bib" ? "Bibliography" : item.id === "kms" ? "KMS" : item.id === "config" ? "CONFIG" : "Agent"} aria-current={view === item.id ? "page" : undefined} title={railCollapsed ? item.label : undefined} onClick={() => { setView(item.id); if (mobile) closeDrawer(); }}>
+            {([{ id: "agent", label: "Agent", icon: Bot }, { id: "bib", label: "文献与证据", icon: Library }, { id: "config", label: "设置", icon: Settings }] as const).map(item => (
+              <Button key={item.id} variant={view === item.id ? "secondary" : "ghost"} className={cn("h-9 w-full shrink-0 justify-start gap-2 px-2.5", railCollapsed && "h-9 w-9 min-w-9 justify-center p-0")} aria-label={item.id === "bib" ? "Bibliography" : item.id === "config" ? "CONFIG" : "Agent"} aria-current={view === item.id ? "page" : undefined} title={railCollapsed ? item.label : undefined} onClick={() => { setView(item.id); if (mobile) closeDrawer(); }}>
                 <item.icon /><span className={cn("truncate text-xs sm:text-sm", railCollapsed && "sr-only")}>{item.label}</span>
               </Button>
             ))}
@@ -348,7 +348,6 @@ export function App() {
         />
       ) : null}
       {visited.has("bib") && <section aria-label="文献工作区" hidden={view !== "bib"} className={cn("min-h-0 min-w-0 flex-1 flex-col", view === "bib" ? "flex" : "hidden")}><BibliographyView /></section>}
-      {visited.has("kms") && <section aria-label="知识工作区" hidden={view !== "kms"} className={cn("min-h-0 min-w-0 flex-1 flex-col p-3", view === "kms" ? "flex" : "hidden")}><KmsView /></section>}
       {view === "config" && <section className="flex min-h-0 flex-1 flex-col overflow-auto p-3"><ConfigView activeAgent={runtime.activeAgent} /></section>}
       </ResizablePanel>
       {showAuxiliary && <ResizableHandle aria-label="调整 Agent 辅助区宽度" />}

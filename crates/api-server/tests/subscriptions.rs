@@ -68,7 +68,7 @@ async fn setup(hold: bool) -> (BibShared, Arc<Source>, Router) {
     });
     shared.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
     let app =
-        api_server::api_router_with_auth(shared.clone(), Some("subscription-test-token".into()));
+        api_server::api_router_with_auth(shared.clone(), None, Some("subscription-test-token".into()));
     (shared, source, app)
 }
 fn spec() -> Value {
@@ -384,8 +384,11 @@ async fn an_enabled_persisted_rule_resumes_on_host_startup_without_opening_subsc
         hold: AtomicBool::new(false),
     });
     reopened.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
-    let app =
-        api_server::api_router_with_auth(reopened.clone(), Some("subscription-test-token".into()));
+    let app = api_server::api_router_with_auth(
+        reopened.clone(),
+        None,
+        Some("subscription-test-token".into()),
+    );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if reopened

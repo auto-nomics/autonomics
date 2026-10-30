@@ -7,7 +7,7 @@ description = "Domain-agnostic agent runtime. Plug in any AgentContext to specia
 license.workspace = true
 
 [dependencies]
-tokio = { version = "1", features = [
+tokio = { workspace = true, features = [
   "rt",
   "rt-multi-thread",
   "macros",
@@ -17,14 +17,14 @@ tokio = { version = "1", features = [
 uuid = { version = "1.12", features = ["v4", "serde"] }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
-agentik-kms = { path = "../agentik-kms" }
+agentik-memory = { path = "../agentik-memory" }
 agentik-proc = { path = "../agentik-proc" }
-async-trait = "0.1"
-futures = "0.3"
+async-trait.workspace = true
+futures.workspace = true
 thiserror.workspace = true
-tracing = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tracing.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 turso.workspace = true
 regex = "1"
 tokio-util = { version = "0.7", features = ["rt"] }

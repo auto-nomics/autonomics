@@ -180,7 +180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/__fixture/lease/{id}", get(observed_lease))
         .with_state(Arc::new(tokio::sync::Mutex::new(fixture_conn)));
     let server = api_server::start(
-        api_server::api_router_with_auth(shared, Some(TOKEN.into())).merge(fixture_routes),
+        api_server::api_router_with_auth(shared, None, Some(TOKEN.into())).merge(fixture_routes),
         "127.0.0.1:0",
     )
     .await?;

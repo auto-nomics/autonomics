@@ -11,51 +11,44 @@ impl App {
         self.refresh_skill_evolution();
     }
 
-    pub(super) fn open_knowledge_wiki(&mut self) {
-        self.open_skill_evolution();
-        self.state.skill_evolution.active_tab =
-            crate::widgets::evolution_widget::EvolutionTab::Wiki;
-    }
-
     pub(super) fn close_skill_evolution(&mut self) {
         self.state.skill_evolution.close();
     }
 
-    /// Fetch the KMS dashboard snapshot in parallel. The detail document
-    /// for the selected row follows from [`Self::fetch_skill_detail`].
+    /// Fetch the dashboard snapshot (status + unified library in
+    /// parallel). The detail document for the selected row follows
+    /// from [`Self::fetch_skill_detail`] when the data lands.
     pub(super) fn refresh_skill_evolution(&mut self) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_evolution_refresh", move || async move {
-            let (workers, knowledge, skills, proposals, evidence) = tokio::join!(
-                client.kms_worker_statuses(),
-                client.kms_knowledge(),
-                client.kms_skills(),
-                client.kms_skill_proposals(),
-                client.kms_evidence(),
+            let (status, library, observations, clusters) = tokio::join!(
+                client.skill_evolution_status(),
+                client.skill_library(),
+                client.observations(),
+                client.clusters(),
             );
             event_tx.send(crate::app_event::AppEvent::SkillEvolutionLoaded {
-                workers: workers.map_err(|e| e.to_string()),
-                knowledge: knowledge.map_err(|e| e.to_string()),
-                skills: skills.map_err(|e| e.to_string()),
-                proposals: proposals.map_err(|e| e.to_string()),
-                evidence: evidence.map_err(|e| e.to_string()),
+                status: status.map_err(|e| e.to_string()),
+                library: library.map_err(|e| e.to_string()),
+                observations: observations.map_err(|e| e.to_string()),
+                clusters: clusters.map_err(|e| e.to_string()),
             });
         });
     }
 
-    /// Lighter-weight worker/proposal poll fired by the tick thread while
-    /// the dashboard is visible.
+    /// Lighter-weight status-only poll fired by the tick thread while the
+    /// dashboard is visible. Cheap enough to run at ~1 Hz; the runtime
+    /// events handler promotes the fields and re-triggers a full
+    /// refresh when generation / cycle counts have moved.
     pub(super) fn poll_skill_evolution(&mut self) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.state.skill_evolution_poll = Some(std::time::Instant::now());
         self.spawn_client_task("skill_evolution_poll", move || async move {
-            let (workers, proposals) =
-                tokio::join!(client.kms_worker_statuses(), client.kms_skill_proposals());
-            event_tx.send(crate::app_event::AppEvent::KmsDashboardStatusPolled {
-                workers: workers.map_err(|e| e.to_string()),
-                proposals: proposals.map_err(|e| e.to_string()),
+            let status = client.skill_evolution_status().await;
+            event_tx.send(crate::app_event::AppEvent::SkillEvolutionStatusPolled {
+                status: status.map_err(|e| e.to_string()),
             });
         });
     }
@@ -77,18 +70,11 @@ impl App {
             return;
         };
         self.state.skill_evolution.skills.detail_error = None;
-        if let Some(detail) = self.state.skill_evolution.skills.proposal_detail(&name) {
-            self.state
-                .skill_evolution
-                .skills
-                .apply_detail(name, Ok(detail));
-            return;
-        }
         // Event handling ignores replies for a previously selected row.
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("skill_detail_fetch", move || async move {
-            let result = client.kms_skill_detail(&name).await.map(kms_skill_detail);
+            let result = client.skill_library_detail(&name).await;
             event_tx.send(crate::app_event::AppEvent::SkillDetailLoaded {
                 name,
                 result: result.map_err(|e| e.to_string()),
@@ -96,27 +82,16 @@ impl App {
         });
     }
 
-    /// Apply a human decision to the selected pending KMS proposal.
-    pub(super) fn decide_selected_skill_proposal(&mut self, approved: bool) {
-        let Some(id) = self.state.skill_evolution.skills.selected_proposal_id() else {
-            self.state.toasts.info(
-                "KMS skill proposals",
-                Some("select a pending proposal first".to_string()),
-            );
-            return;
-        };
+    /// Trigger one evolution cycle. The cycle installs what it
+    /// writes; the report lands as an event.
+    pub(super) fn trigger_skill_evolution(&mut self) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
-        self.spawn_client_task("kms_skill_proposal_decision", move || async move {
-            let result = if approved {
-                client.approve_kms_skill_proposal(id).await
-            } else {
-                client.reject_kms_skill_proposal(id).await
-            };
-            event_tx.send(crate::app_event::AppEvent::SkillProposalDecision {
-                approved,
-                result: result.map_err(|e| e.to_string()),
-            });
+        self.spawn_client_task("skill_evolution_trigger", move || async move {
+            let result = client.trigger_skill_evolution().await;
+            event_tx.send(crate::app_event::AppEvent::SkillEvolutionTriggered(
+                result.map_err(|e| e.to_string()),
+            ));
         });
     }
 
@@ -131,17 +106,15 @@ impl App {
             KeyCode::Char('g') | KeyCode::Char('G') => self.refresh_skill_evolution(),
             KeyCode::Tab | KeyCode::BackTab => dashboard.switch_tab(),
             KeyCode::Char('1') => dashboard.active_tab = EvolutionTab::Skills,
-            KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Wiki,
-            KeyCode::Char('3') => dashboard.active_tab = EvolutionTab::Observations,
-            KeyCode::Char('a') | KeyCode::Char('A')
-                if dashboard.active_tab == EvolutionTab::Skills =>
-            {
-                self.decide_selected_skill_proposal(true);
+            KeyCode::Char('2') => dashboard.active_tab = EvolutionTab::Observations,
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                self.trigger_skill_evolution();
             }
-            KeyCode::Char('x') | KeyCode::Char('X')
-                if dashboard.active_tab == EvolutionTab::Skills =>
+            // Observations tab: toggle flat list ↔ clustered view.
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if dashboard.active_tab == EvolutionTab::Observations =>
             {
-                self.decide_selected_skill_proposal(false);
+                dashboard.observations.toggle_clustered();
             }
             // ←/→ (h/l) switch the pane that owns the vertical keys.
             KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
@@ -161,49 +134,5 @@ impl App {
             }
             _ => {}
         }
-    }
-}
-
-fn kms_skill_detail(
-    detail: gateway::proto::KmsSkillDetailView,
-) -> gateway::proto::SkillLibraryDetail {
-    gateway::proto::SkillLibraryDetail {
-        name: detail.skill_name,
-        tier: detail.tier,
-        tags: detail.tags,
-        description: detail.description,
-        installed: true,
-        body: detail.body_md,
-        workflows: detail
-            .artifacts
-            .iter()
-            .filter(|artifact| artifact.relative_path.starts_with("workflow/"))
-            .map(|artifact| {
-                artifact
-                    .relative_path
-                    .trim_start_matches("workflow/")
-                    .trim_end_matches(".toml")
-                    .to_string()
-            })
-            .collect(),
-        evals: detail
-            .artifacts
-            .iter()
-            .filter(|artifact| artifact.relative_path.starts_with("evals/"))
-            .map(|artifact| {
-                artifact
-                    .relative_path
-                    .trim_start_matches("evals/")
-                    .trim_end_matches(".toml")
-                    .to_string()
-            })
-            .collect(),
-        proposal: None,
-        evidence_count: 0,
-        usage_gets: 0,
-        usage_search_hits: 0,
-        usage_runs: 0,
-        usage_evals: 0,
-        usage_last_used: 0,
     }
 }

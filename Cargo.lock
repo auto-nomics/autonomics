@@ -72,7 +72,7 @@ dependencies = [
 name = "agentik-core"
 version = "0.1.0"
 dependencies = [
- "agentik-kms",
+ "agentik-memory",
  "agentik-proc",
  "agentik-sdk",
  "agentik-types",
@@ -95,7 +95,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentik-kms"
+name = "agentik-memory"
 version = "0.1.0"
 dependencies = [
  "agentik-sdk",
@@ -384,6 +384,7 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "wiki",
 ]
 
 [[package]]
@@ -980,6 +981,7 @@ dependencies = [
  "headless",
  "ignore",
  "itertools 0.14.0",
+ "kms",
  "nodes-io",
  "opengwas",
  "plugin-rsi",
@@ -5202,6 +5204,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "wiki",
 ]
 
 [[package]]
@@ -7295,6 +7298,38 @@ name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
+
+[[package]]
+name = "kms"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "regex",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "turso",
+ "uuid",
+]
+
+[[package]]
+name = "kms-tools"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "agentik-types",
+ "async-trait",
+ "kms",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "kodama"
@@ -11947,6 +11982,8 @@ dependencies = [
  "futures",
  "gwascatalog-sdk",
  "kegg",
+ "kms",
+ "kms-tools",
  "libc",
  "opengwas",
  "opentargets",
@@ -11969,6 +12006,7 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "wiki",
  "writing-base",
 ]
 
@@ -15952,6 +15990,33 @@ name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
+name = "wiki"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "agentik-types",
+ "apply-patch",
+ "async-trait",
+ "base64 0.23.1",
+ "chrono",
+ "jieba-rs",
+ "pulldown-cmark",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "turso",
+ "uuid",
+ "vfs",
+]
 
 [[package]]
 name = "winapi"

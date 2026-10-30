@@ -66,7 +66,9 @@ pub fn isolate_runtime_paths(config: &mut RuntimeConfig, data_dir: PathBuf, stat
     config.data_dir = data_dir;
     config.state_dir = state_dir.clone();
     config.agent_db = state_dir.join("agents.db");
+    config.kms_db_path = state_dir.join("kms.db");
     config.knowledge_db_path = state_dir.join("knowledge.db");
+    config.wiki_db_path = state_dir.join("wiki.db");
     config.dag_history_db = state_dir.join("dag_history.db");
     config.bib_db_path = state_dir.join("bib.db");
     config.writing_db_path = state_dir.join("writing.db");
@@ -244,10 +246,9 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     config.embedding.enabled = false;
 
     let mut host = RuntimeHost::open(&config).await.unwrap();
-    // One slot shared by KMS, the host, and the gateway state — exactly like
+    // One slot shared by the host and the gateway state — exactly like
     // the real daemon wires it.
-    let model_slot = host.infra().kms.model_slot();
-    model_slot.store(Some(Arc::new(model)));
+    let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
     host.set_model(model_slot.clone());
 
     let hub = EventHub::new();
@@ -257,13 +258,8 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let storage =
         Arc::new(runtime::model_bootstrap::SqliteModelStorage::open(&config.app_db_path).unwrap());
     let (model_events, model_event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let models =
-        runtime::model_actor::start_with_model_slot(storage, model_events, model_slot.clone());
+    let models = runtime::model_actor::start(storage, model_events);
     crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
-    crate::hub::spawn_kms_worker_event_bridge(
-        host.infra().kms.subscribe_worker_events(),
-        hub.clone(),
-    );
     // Report the injected mock through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.
@@ -287,7 +283,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
 
     let bib_shared = state.infra.bib.as_ref().clone();
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let router = router_with_bib(state, token.clone(), bib_shared, None);
+    let router = router_with_bib(state, token.clone(), bib_shared, None, None);
     let server = api_server::server::start(router, "127.0.0.1:0")
         .await
         .unwrap();

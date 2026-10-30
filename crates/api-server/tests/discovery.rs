@@ -156,7 +156,7 @@ async fn client_id_header_makes_creation_idempotent_and_early_close_authoritativ
         gate: Arc::new(Notify::new()),
     });
     shared.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
-    let app = api_server::api_router_with_auth(shared, Some("fixture-token".into()));
+    let app = api_server::api_router_with_auth(shared, None, Some("fixture-token".into()));
     let id = uuid::Uuid::new_v4().to_string();
     let base = format!("/api/v1/bib/search/sessions/{id}");
     let body = json!({"query":"gene","sources":["fast"],"page_size":1});
@@ -257,7 +257,7 @@ async fn imports_check_candidate_revision_preserve_curated_metadata_and_outlive_
             .with_source(fast)
             .with_source(slow.clone()),
     );
-    let app = api_server::api_router_with_auth(shared, Some("fixture-token".into()));
+    let app = api_server::api_router_with_auth(shared, None, Some("fixture-token".into()));
     let created = call(
         &app,
         "POST",
@@ -397,7 +397,7 @@ async fn fulltext_jobs_reuse_durable_attachments_and_survive_session_deletion() 
         calls: AtomicUsize::new(0),
         gate: Arc::new(Notify::new()),
     })));
-    let app = api_server::api_router_with_auth(shared, Some("fixture-token".into()));
+    let app = api_server::api_router_with_auth(shared, None, Some("fixture-token".into()));
     let created = call(
         &app,
         "POST",
@@ -474,7 +474,7 @@ async fn fulltext_preflight_rejects_missing_storage_and_full_queue_before_metada
     })));
     let bib = shared.bib.clone();
     let acquisitions = shared.discovery_acquisitions.clone();
-    let app = api_server::api_router_with_auth(shared.clone(), Some("fixture-token".into()));
+    let app = api_server::api_router_with_auth(shared.clone(), None, Some("fixture-token".into()));
     let created = call(
         &app,
         "POST",
@@ -508,6 +508,7 @@ async fn fulltext_preflight_rejects_missing_storage_and_full_queue_before_metada
     assert_eq!(bib.article_count().await.unwrap(), 0);
     let app = api_server::api_router_with_auth(
         shared.with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp())),
+        None,
         Some("fixture-token".into()),
     );
     let reservations: Vec<_> = (0..16).map(|_| acquisitions.reserve().unwrap()).collect();
@@ -566,7 +567,7 @@ async fn authenticated_discovery_routes_deliver_partial_batches_retry_page_and_r
         ..Default::default()
     })
     .unwrap();
-    let app = api_server::api_router_with_auth(shared, Some("fixture-token".into()));
+    let app = api_server::api_router_with_auth(shared, None, Some("fixture-token".into()));
     assert_eq!(
         call(&app, "GET", "/api/v1/bib/search/sources", None, false)
             .await

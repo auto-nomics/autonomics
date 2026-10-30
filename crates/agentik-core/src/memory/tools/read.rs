@@ -5,7 +5,7 @@ use agentik_sdk::types::tools::ToolResult;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::memory::KmsAgentHandle;
+use crate::memory::{MEMORY_SCOPE_ID, MemoryBackend};
 use crate::tools::{ToolError, ToolFunction};
 
 use super::util::store_error;
@@ -15,10 +15,10 @@ const MAX_READ_LINES: usize = 1_000;
 
 #[tool(
     name = "memory_read",
-    description = "Read the current memory summary or one active knowledge node by UUID."
+    description = "Read the current memory summary or one active memory entry by UUID."
 )]
 pub struct MemoryReadInput {
-    #[desc = "'summary' for the compact summary, or a knowledge node UUID returned by memory_search."]
+    #[desc = "'summary' for the compact summary, or an entry UUID returned by memory_search."]
     pub target: String,
     #[desc = "Starting 1-indexed line. Default 1."]
     pub offset: Option<usize>,
@@ -27,11 +27,11 @@ pub struct MemoryReadInput {
 }
 
 pub struct MemoryReadTool {
-    backend: Arc<KmsAgentHandle>,
+    backend: Arc<MemoryBackend>,
 }
 
 impl MemoryReadTool {
-    pub fn new(backend: Arc<KmsAgentHandle>) -> Self {
+    pub fn new(backend: Arc<MemoryBackend>) -> Self {
         Self { backend }
     }
 }
@@ -53,8 +53,8 @@ impl ToolFunction for MemoryReadTool {
         if input.target.eq_ignore_ascii_case("summary") {
             let summary = self
                 .backend
-                .store()
-                .get_summary()
+                .store
+                .get_summary(MEMORY_SCOPE_ID)
                 .await
                 .map_err(store_error)?;
             let Some(summary) = summary else {
@@ -81,24 +81,23 @@ impl ToolFunction for MemoryReadTool {
             Uuid::parse_str(input.target.trim()).map_err(|e| ToolError::ValidationFailed {
                 message: format!("invalid memory entry UUID: {e}"),
             })?;
-        let node = self
+        let entry = self
             .backend
-            .store()
-            .get_knowledge(entry_id)
+            .store
+            .get_entry(MEMORY_SCOPE_ID, entry_id)
             .await
             .map_err(store_error)?
             .ok_or_else(|| ToolError::ValidationFailed {
-                message: format!("knowledge node {entry_id} not found"),
+                message: format!("memory entry {entry_id} not found"),
             })?;
-        let lines: Vec<&str> = node.body_md.lines().skip(offset - 1).take(limit).collect();
+        let lines: Vec<&str> = entry.body_md.lines().skip(offset - 1).take(limit).collect();
         Ok(ToolResult::success_json(serde_json::json!({
-            "kind": "knowledge_node",
-            "id": node.id,
-            "knowledge_path": node.knowledge_path.as_str(),
-            "title": node.title,
-            "status": node.status,
-            "confidence": node.confidence,
-            "structural": node.structural,
+            "kind": "entry",
+            "id": entry.id,
+            "entry_type": entry.entry_type,
+            "title": entry.title,
+            "status": entry.status,
+            "confidence": entry.confidence,
             "offset": offset,
             "lines": lines,
             "returned": lines.len(),
@@ -113,35 +112,36 @@ mod tests {
     use uuid::Uuid;
 
     use crate::memory::{
-        EmptyMemorySource, KmsAgentHandle, Knowledge, KnowledgePath, KnowledgeStore, MemoryConfig,
-        MemoryStore, TursoKmsStorage,
+        MEMORY_SCOPE_ID, MemoryBackend, MemoryConfig, MemoryEntry, MemoryStore, TursoMemoryStorage,
     };
 
     use super::*;
 
     #[tokio::test]
     async fn reads_summary_and_entry() {
-        let store = Arc::new(TursoKmsStorage::open_in_memory().await.unwrap());
-        let backend = Arc::new(
-            KmsAgentHandle::new(
-                MemoryConfig::new(),
-                Arc::clone(&store),
-                Arc::new(EmptyMemorySource),
-            )
-            .await,
-        );
+        let store: Arc<dyn MemoryStore> =
+            Arc::new(TursoMemoryStorage::open_in_memory().await.unwrap());
+        let backend = Arc::new(MemoryBackend::new(
+            MemoryConfig::new(),
+            Arc::clone(&store),
+            None,
+        ));
         let now = crate::memory::now_ms();
         store
             .complete_phase2(
+                MEMORY_SCOPE_ID,
                 "source",
-                vec![Knowledge::leaf(
-                    KnowledgePath::new(["engineering", "testing", "verification"]),
-                    "Verification workflow".into(),
-                    "Always run targeted tests before cargo check.".into(),
-                    0.9,
-                    "source",
-                    now,
-                )],
+                vec![MemoryEntry {
+                    id: Uuid::new_v4(),
+                    scope_id: MEMORY_SCOPE_ID,
+                    entry_type: "workflow".into(),
+                    title: "Verification workflow".into(),
+                    body_md: "Always run targeted tests before cargo check.".into(),
+                    status: "active".into(),
+                    confidence: 0.9,
+                    created_at: now,
+                    updated_at: now,
+                }],
                 "v1\n\nRun tests.",
                 Vec::new(),
                 Vec::new(),
@@ -159,23 +159,15 @@ mod tests {
             .unwrap();
         assert!(result.text_content().contains("Run tests."));
 
-        let node = store
-            .list_knowledge(10)
-            .await
-            .unwrap()
-            .into_iter()
-            .find(|node| !node.structural)
-            .unwrap();
-        let system = backend.system();
+        let entry = store.list_entries(MEMORY_SCOPE_ID, 1).await.unwrap()[0].clone();
         let result = MemoryReadTool::new(backend)
             .run(MemoryReadInput {
-                target: node.id.to_string(),
+                target: entry.id.to_string(),
                 offset: None,
                 limit: None,
             })
             .await
             .unwrap();
         assert!(result.text_content().contains("targeted tests"));
-        system.shutdown();
     }
 }

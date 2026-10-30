@@ -62,7 +62,7 @@ try {
 
   // Floating is now an explicit choice; the default is a docked assistant.
   await page.getByRole('button', { name: 'Bibliography' }).click();
-  await page.getByLabel('Agent 显示方式').selectOption('floating');
+  await page.getByLabel('Agent 浮窗模式').click();
   await composer.waitFor({ state: 'visible' });
   const floating = await composer.evaluate(node => Boolean(node.closest('.fixed')));
   assert.equal(floating, true, 'workspace must float over the bibliography view');
@@ -70,7 +70,7 @@ try {
   await assert.doesNotReject(() => page.getByText('alpha answer').waitFor({ state: 'visible' }));
 
   // The floating tab bar still switches agents and loads their history.
-  await page.getByRole('button', { name: 'beta', exact: true }).click();
+  await page.locator('button[title="/root/beta"]').click();
   await assert.doesNotReject(() => page.getByText('beta answer').waitFor({ state: 'visible' }));
 
   // Collapse shrinks the floating shell into a mini window; the workspace
