@@ -15,6 +15,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 type View = "agent" | "config" | "bib" | "kms";
@@ -38,11 +39,16 @@ export function App() {
   useEffect(() => {
     try { localStorage.setItem("autonomics.workbench.sidebar.collapsed", String(sidebarCollapsed)); } catch { /* storage unavailable */ }
   }, [sidebarCollapsed]);
-  const wideWorkbench = useMediaQuery("(min-width: 1100px)");
-  const [placement, setPlacement] = useState<"docked" | "floating" | "hidden">(() => {
+  // The single breakpoint: ≥ md is desktop (rail sidebar, auxiliary dock,
+  // resizable inspector), below it everything goes mobile (drawer sidebar,
+  // fullscreen workspace drawer).
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const [placement, setPlacement] = useState<"docked" | "hidden">(() => {
     try {
+      // The retired "floating" placement collapses into "docked": with the
+      // draggable shell gone, the drawer overlay is the non-docked hosting.
       const saved = localStorage.getItem("autonomics.workbench.agent.placement");
-      return saved === "floating" || saved === "hidden" ? saved : "docked";
+      return saved === "hidden" ? "hidden" : "docked";
     } catch { return "docked"; }
   });
   const [auxiliarySize] = useState(() => {
@@ -55,19 +61,16 @@ export function App() {
   useEffect(() => {
     try { localStorage.setItem("autonomics.workbench.agent.placement", placement); } catch { /* storage unavailable */ }
   }, [placement]);
-  const showAuxiliary = view !== "agent" && placement === "docked" && wideWorkbench;
+  const showAuxiliary = view !== "agent" && placement === "docked" && isDesktop;
   const [spawnOpen, setSpawnOpen] = useState(false);
   const [dagAgent, setDagAgent] = useState<string | null>(null);
   // Workspace hosting: the center column is a single AgentWorkspace
-  // instance that portals into the main editor, auxiliary pane or floating
-  // shell according to the selected view and placement.
+  // instance that portals into the main editor, auxiliary pane or bottom
+  // drawer according to the selected view and placement.
   const [dockedSlot, setDockedSlot] = useState<HTMLDivElement | null>(null);
   const workspaceMode = view === "agent" ? (dockedSlot ? "docked" : "standby")
     : placement === "hidden" ? "standby"
-    : showAuxiliary ? (auxiliarySlot ? "docked" : "standby") : "floating";
-  // ≥ md: the inspector is a resizable panel; below it it is a drawer. The
-  // flag starts from the persisted panel layout so a reload keeps it.
-  const isDesktop = useMediaQuery("(min-width: 768px)");
+    : showAuxiliary ? (auxiliarySlot ? "docked" : "standby") : "drawer";
   // Mobile renders no persistent rail: the collapsed state hides the sidebar
   // entirely and a blank left-edge strip re-opens it as an overlay drawer.
   // Desktop keeps the 56px icon rail with its toggle button.
@@ -166,6 +169,12 @@ export function App() {
   const onSlotChange = useCallback((slot: HTMLDivElement | null) => {
     setDockedSlot((current) => (current === slot ? current : slot));
   }, []);
+
+  // Effort refresh keyed to the active agent; a fresh closure per render
+  // would re-fire the workspace's effect (and refetch) on every render.
+  const refreshEffort = useCallback(() => {
+    void runtime.refreshAgentEffort(runtime.activeAgent);
+  }, [runtime.refreshAgentEffort, runtime.activeAgent]);
 
   if (runtime.booting) {
     return <div className="grid h-full place-items-center text-sm text-muted-foreground">正在连接 Gateway…</div>;
@@ -279,7 +288,11 @@ export function App() {
               </Button>
             ))}
           </section>
-          {runtime.agents.length > 0 && <section className={cn("flex w-full flex-col gap-1", railCollapsed && "items-center")}>
+          {/* Collapsed rail drops the section headings, so the two groups
+              need a real divider between them. */}
+          {runtime.agents.length > 0 && <>
+            {railCollapsed && <Separator className="w-8 shrink-0" />}
+            <section className={cn("flex w-full flex-col gap-1", railCollapsed && "items-center")}>
             {!railCollapsed && <h2 className="px-3 pb-1 text-xs font-medium text-muted-foreground">Agent 项目</h2>}
             {runtime.agents.slice(0, 8).map(agent => {
               const label = agent.path.split(/[\\/]/).filter(Boolean).at(-1) || agent.path;
@@ -288,7 +301,8 @@ export function App() {
                 <Bot /><span className={cn("min-w-0 truncate text-xs", railCollapsed && "sr-only")}>{label}</span><span className={cn("ml-auto size-1.5 shrink-0 rounded-full", agent.status === "Streaming" ? "bg-primary" : "bg-muted-foreground/50", railCollapsed && "sr-only")} />
               </Button>;
             })}
-          </section>}
+            </section>
+            </>}
         </nav>
         <div className={cn("flex w-full shrink-0 flex-col gap-2 border-t p-2", railCollapsed && "items-center px-1")}>
           <div className={cn("flex min-w-0 items-center gap-2 px-1", railCollapsed && "justify-center")} title={runtime.connected ? "Gateway 已连接" : "Gateway 已断开"}>
@@ -297,15 +311,15 @@ export function App() {
           </div>
           <Button
             size="sm"
-            variant={placement === "floating" ? "secondary" : "ghost"}
+            variant={placement === "docked" ? "secondary" : "ghost"}
             className={cn("w-full justify-start gap-2", railCollapsed && "h-9 w-9 min-w-9 justify-center p-0")}
-            aria-label="Agent 浮窗模式"
-            aria-pressed={placement === "floating"}
-            title={`切换为 Agent ${placement === "floating" ? "停靠" : "浮窗"}`}
-            onClick={() => setPlacement(current => current === "floating" ? "docked" : "floating")}
+            aria-label="Agent 副窗"
+            aria-pressed={placement === "docked"}
+            title={`切换为 Agent ${placement === "docked" ? "隐藏" : "停靠"}`}
+            onClick={() => setPlacement(current => current === "docked" ? "hidden" : "docked")}
           >
             <PanelRight />
-            <span className={cn("truncate", railCollapsed && "sr-only")}>{placement === "floating" ? "Agent 浮窗" : "Agent 停靠"}</span>
+            <span className={cn("truncate", railCollapsed && "sr-only")}>{placement === "docked" ? "Agent 停靠" : "Agent 隐藏"}</span>
           </Button>
           <Button size="sm" variant="ghost" className={cn("w-full justify-start gap-2", railCollapsed && "h-9 w-9 min-w-9 justify-center p-0")} title={railCollapsed ? "退出登录" : undefined} aria-label="退出登录" onClick={() => void runtime.logout()}><LogOut />{!railCollapsed && <span>退出登录</span>}</Button>
         </div>
@@ -407,6 +421,9 @@ export function App() {
         modelCatalog={runtime.modelCatalog}
         onLoadModelCatalog={runtime.loadModelCatalog}
         onChangeModel={(path, spec) => runtime.setAgentModel(path, spec)}
+        agentEffort={runtime.agentEfforts[runtime.activeAgent]}
+        onRefreshEffort={refreshEffort}
+        onChangeEffort={(path, effort) => runtime.setAgentEffort(path, effort)}
         onSelectAgent={runtime.selectAgent}
         onShutdown={(path) => void runtime.shutdownAgent(path)}
         onSpawn={() => setSpawnOpen(true)}

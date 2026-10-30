@@ -618,6 +618,10 @@ impl ModelWorker {
     async fn catalog(&self) -> StorageResult<ModelCatalogData> {
         let providers = self.storage.providers().await?;
         let models = self.storage.models().await?;
+        // Thin clients (GUI) have no SDK registry; fold the built-in preset
+        // catalogues in here so every consumer sees them. DB rows win.
+        let (providers, models) =
+            crate::model_bootstrap::catalog_with_sdk_presets(providers, models);
         let active_model = self.storage.active_model_spec().await?;
         let openai_token = match self.storage.chatgpt_blob_json().await? {
             Some(json) => TokenBlob::from_json(&json)

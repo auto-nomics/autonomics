@@ -927,6 +927,70 @@ pub fn resolve_from_parts(
     Model::new(model_info, &provider_config).ok()
 }
 
+/// Fold the SDK's built-in provider catalogues into a storage catalog view.
+///
+/// Thin clients (the GUI) have no in-process SDK registry, so the catalog
+/// they consume must already carry the built-in models the TUI merges
+/// client-side. Storage rows win over same-named presets (custom metadata
+/// overrides the preset), and every built-in provider type without a
+/// storage row gains a placeholder provider row (negative id, no
+/// credentials) so the config UI can offer credentials for it. Idempotent:
+/// presets already present in `models` are skipped, so folding an already
+/// folded view is a no-op.
+pub fn catalog_with_sdk_presets(
+    mut providers: Vec<ProviderRow>,
+    mut models: Vec<ModelRow>,
+) -> (Vec<ProviderRow>, Vec<ModelRow>) {
+    use agentik_sdk::provider::registry;
+    use std::collections::HashSet;
+
+    for (index, type_str) in registry::known_provider_types().into_iter().enumerate() {
+        let provider_type = ProviderType::from(type_str);
+        let has_row = providers.iter().any(|provider| {
+            provider.provider_type.eq_ignore_ascii_case(type_str)
+                || provider.name.eq_ignore_ascii_case(type_str)
+        });
+        if !has_row {
+            providers.push(ProviderRow {
+                id: -(index as i64) - 1,
+                name: type_str.to_string(),
+                provider_type: type_str.to_string(),
+                base_url: registry::default_base_url(&provider_type).unwrap_or("").to_string(),
+                api_key: String::new(),
+                auth_method: registry::default_auth_method(&provider_type).storage_tag().to_string(),
+            });
+        }
+        let stored: HashSet<String> = models
+            .iter()
+            .filter(|model| model.provider_name.eq_ignore_ascii_case(type_str))
+            .map(|model| model.model_name.clone())
+            .collect();
+        for preset in registry::preset_models(&provider_type).unwrap_or_default() {
+            if stored.contains(&preset.model_name) {
+                continue;
+            }
+            models.push(ModelRow {
+                provider_name: type_str.to_string(),
+                model_name: preset.model_name,
+                context_length: preset.context_length,
+                max_output_tokens: preset.max_output_tokens,
+                vision_ability: preset.vision_ability,
+                supports_function_calling: preset.supports_function_calling,
+                supports_streaming: preset.supports_streaming,
+                supports_thinking: preset.supports_thinking,
+                thinking_enabled: preset.thinking_enabled,
+                input_token_price: preset.input_token_price,
+                output_token_price: preset.output_token_price,
+                custom: false,
+            });
+        }
+    }
+    // Grouped by provider then model name: the GUI renders one flat list in
+    // the composer picker and per-provider sections in the config page.
+    models.sort_by(|a, b| (&a.provider_name, &a.model_name).cmp(&(&b.provider_name, &b.model_name)));
+    (providers, models)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1341,6 +1405,80 @@ mod tests {
             .into_iter()
             .map(|m| m.model_name)
             .collect()
+    }
+
+    // ── catalog_with_sdk_presets ────────────────────────────────────
+
+    /// Every built-in provider type shows up with its presets even with no
+    /// storage rows at all — the GUI has no in-process registry.
+    #[test]
+    fn preset_catalog_covers_all_provider_types_without_storage() {
+        let (providers, models) = catalog_with_sdk_presets(Vec::new(), Vec::new());
+        let types = agentik_sdk::provider::registry::known_provider_types();
+        assert_eq!(providers.len(), types.len());
+        for type_str in types {
+            let provider = providers
+                .iter()
+                .find(|p| p.provider_type == type_str)
+                .unwrap_or_else(|| panic!("{type_str} has a provider row"));
+            assert!(provider.id < 0, "{type_str} placeholder uses a negative id");
+            assert!(provider.api_key.is_empty(), "{type_str} placeholder carries no credentials");
+            let models: Vec<_> = models.iter().filter(|m| m.provider_name == type_str).collect();
+            // Ollama discovers models from the local instance at runtime;
+            // its static preset catalogue is intentionally empty.
+            if type_str != "ollama" {
+                assert!(!models.is_empty(), "{type_str} contributes preset models");
+            }
+            assert!(models.iter().all(|m| !m.custom), "{type_str} presets are not custom");
+        }
+    }
+
+    /// DB rows shadow same-named presets (custom metadata wins), and a
+    /// configured provider keeps its real row instead of a placeholder.
+    #[test]
+    fn preset_catalog_lets_storage_rows_shadow_presets() {
+        let preset_name = registry_preset_names("deepseek")
+            .into_iter()
+            .next()
+            .expect("deepseek preset");
+        let shadow = ModelRow {
+            model_name: preset_name,
+            provider_name: "deepseek".into(),
+            context_length: 12345,
+            custom: true,
+            ..Default::default()
+        };
+        let configured = ProviderRow {
+            id: 7,
+            name: "deepseek".into(),
+            provider_type: "deepseek".into(),
+            base_url: "https://api.deepseek.test".into(),
+            api_key: "k".into(),
+            auth_method: "Bearer".into(),
+        };
+        let (providers, models) = catalog_with_sdk_presets(vec![configured], vec![shadow]);
+        assert_eq!(
+            providers.iter().filter(|p| p.provider_type == "deepseek").count(),
+            1,
+            "configured provider keeps its storage row"
+        );
+        assert_eq!(providers.iter().find(|p| p.provider_type == "deepseek").unwrap().id, 7);
+        let matches: Vec<_> = models
+            .iter()
+            .filter(|m| m.provider_name == "deepseek" && m.custom)
+            .collect();
+        assert_eq!(matches.len(), 1, "shadowed preset is not duplicated");
+        assert_eq!(matches[0].context_length, 12345, "DB metadata wins");
+    }
+
+    /// Folding an already folded catalog is a no-op (the TUI re-merges on
+    /// top of the served catalog).
+    #[test]
+    fn preset_catalog_fold_is_idempotent() {
+        let once = catalog_with_sdk_presets(Vec::new(), Vec::new());
+        let twice = catalog_with_sdk_presets(once.0.clone(), once.1.clone());
+        assert_eq!(once.0.len(), twice.0.len());
+        assert_eq!(once.1.len(), twice.1.len());
     }
 
     // ── SqliteModelStorage round-trips ──────────────────────────────

@@ -28,6 +28,7 @@
     "test:bib-discovery-native": "cargo build -p autonomics-gui --example discovery_native_smoke --locked && node tests/native-discovery.mjs",
     "test:workspace": "node tests/floating-workspace.mjs",
     "test:agent-trace": "node tests/agent-trace.mjs",
+    "test:agent-retry-status": "node tests/agent-retry-status.mjs",
     "test:agent-tab-picker": "node tests/agent-tab-picker.mjs",
     "test:responsive": "node tests/agent-responsive.mjs",
     "test:bib-workflow": "node tests/bibliography-workflow.mjs",
