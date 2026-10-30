@@ -90,11 +90,15 @@ impl App {
             return 0;
         }
 
-        // A left click on a docked agents-panel row acts on that row:
-        // the filter controls refocus the panel, model/effort cells quick-
-        // switch that agent, and the rest of the row switches the leaf in.
-        // Hit regions are recorded by the last render (screen-space rects).
+        // A left click on the tab bar's `>` collapse stub focuses the docked
+        // switch-agent panel (the full list lives there).
         if let MouseEventKind::Down(crossterm::event::MouseButton::Left) = mouse.kind {
+            if self.tab_stub_hit(mouse.column, mouse.row) {
+                self.state
+                    .active_tab_state_mut()
+                    .focus_pane(crate::state::WorkspaceFocus::Agents);
+                return 0;
+            }
             let sidebar = &mut self.state.active_tab_state_mut().sidebar;
             if sidebar.agent_filter.click(mouse.column, mouse.row) {
                 sidebar.reset_agent_scroll();
@@ -151,6 +155,25 @@ impl App {
             }
             _ => 0,
         }
+    }
+
+    /// `true` when `(x, y)` is inside the tab bar's collapse stub. Recomputes
+    /// the same layout the renderer used (via [`fit_tabs`]) against the last
+    /// frame area.
+    fn tab_stub_hit(&self, x: u16, y: u16) -> bool {
+        let area = self.state.last_frame_area;
+        // Tab labels render on the first row of the workspace area, which
+        // starts below the 2-row tab bar strip.
+        if area.width == 0 || y != area.y {
+            return false;
+        }
+        let tabs = self.workspace_tabs();
+        let fit = crate::widgets::agent_workspace::fit_tabs(
+            area.width as usize,
+            &tabs,
+            self.state.active_agent_idx,
+        );
+        fit.collapsed && (x as usize) >= fit.used_width && x < area.width
     }
 
     /// Apply a batched scroll delta to the agent tab.

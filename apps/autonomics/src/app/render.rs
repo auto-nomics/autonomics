@@ -171,9 +171,11 @@ impl App {
             None => (None, None, None),
         };
 
-        // Snapshot the running agents for the docked panel (owned data, so
-        // the mutable tab-state borrow below stays clean).
+        // Collect tab data and the running-agents snapshot before mutably
+        // borrowing tab state (owned data keeps the borrows clean).
+        let workspace_tabs = self.workspace_tabs();
         let running_agents = self.running_agents_snapshot();
+        let active_idx = self.state.active_agent_idx;
         let display = self.state.display_settings.clone();
         let kms_running = self
             .state
@@ -195,6 +197,8 @@ impl App {
         workspace.render(
             frame.area(),
             frame.buffer_mut(),
+            &workspace_tabs,
+            active_idx,
             self.state.active_tab_state_mut(),
         );
 

@@ -23,9 +23,10 @@
 mod empty_state;
 mod logo;
 mod status;
+mod tab_bar;
 
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     prelude::{Buffer, Widget as _},
     widgets::StatefulWidgetRef as _,
 };
@@ -36,6 +37,9 @@ use crate::widgets::sidebar::RunningAgent;
 
 use empty_state::EmptyState;
 pub(crate) use status::{display_name, status_color, status_icon};
+pub use tab_bar::LeafTab;
+use tab_bar::TabBar;
+pub(crate) use tab_bar::{TabBarFit, fit_tabs};
 
 /// Composes the workspace from its empty state or active-leaf parts.
 pub struct AgentWorkspace<'a> {
@@ -55,15 +59,35 @@ pub struct AgentWorkspace<'a> {
 }
 
 impl AgentWorkspace<'_> {
-    /// Render the active agent's leaf into the full workspace area.
+    /// Render the workspace: tab bar (2 rows) + active leaf (remaining
+    /// space).
     ///
-    /// `tab_state` is the active agent's context state. When no agent is
-    /// running, renders a placeholder prompting the user to spawn an agent.
-    pub fn render(&self, area: Rect, buf: &mut Buffer, tab_state: &mut AgentTabState) {
-        if self.agent_name.is_none() {
+    /// `tabs` is the full list of running agents; `active_idx` determines
+    /// which tab is highlighted and which leaf's `tab_state` is rendered.
+    /// When `tabs` is empty, renders a placeholder prompting the user to
+    /// spawn an agent.
+    pub fn render(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        tabs: &[LeafTab],
+        active_idx: usize,
+        tab_state: &mut AgentTabState,
+    ) {
+        if tabs.is_empty() {
             EmptyState.render(area, buf);
             return;
         }
+
+        let areas = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2), // Tab bar (1 row tabs + 1 row border)
+                Constraint::Min(3),    // Active leaf
+            ])
+            .split(area);
+
+        TabBar { tabs, active_idx }.render(areas[0], buf);
 
         let leaf = AgentLeaf {
             agent_name: self.agent_name,
@@ -74,6 +98,6 @@ impl AgentWorkspace<'_> {
             display: self.display,
             agents: self.agents,
         };
-        leaf.render_ref(area, buf, tab_state);
+        leaf.render_ref(areas[1], buf, tab_state);
     }
 }

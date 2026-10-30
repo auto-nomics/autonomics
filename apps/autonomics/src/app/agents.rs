@@ -105,6 +105,24 @@ impl App {
         tracing::info!(kind = kind.name(), agent = %target_path, "spawning agent...");
     }
 
+    /// Build the workspace tab list (one entry per running agent). Shared
+    /// by the renderer and the mouse stub hit-test so both agree on the
+    /// tab layout.
+    pub(super) fn workspace_tabs(&self) -> Vec<crate::widgets::agent_workspace::LeafTab> {
+        self.state
+            .sessions
+            .iter()
+            .map(|s| crate::widgets::agent_workspace::LeafTab {
+                name: s.name.clone(),
+                status: s
+                    .context
+                    .as_ref()
+                    .map(|context| context.tab_state.status)
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
     /// Snapshot all running agents for the sidebar's docked switch-agent
     /// panel, in the panel's display order (shallow paths first).
     pub(super) fn running_agents_snapshot(&self) -> Vec<crate::widgets::sidebar::RunningAgent> {
