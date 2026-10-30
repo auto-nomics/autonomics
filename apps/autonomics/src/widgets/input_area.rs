@@ -21,9 +21,6 @@ use unicode_width::UnicodeWidthStr;
 pub struct InputArea {
     pub textarea: TextArea,
     pub textarea_state: TextAreaState,
-    /// Placeholder text stored locally (xAI textarea has no built-in
-    /// placeholder).
-    placeholder: String,
     /// Maximum grapheme clusters accepted. `None` = no cap. Defaults to
     /// [`InputArea::DEFAULT_MAX_LENGTH`] so an accidental 1 MB paste
     /// cannot produce a 1 MB outbound message.
@@ -46,7 +43,6 @@ impl InputArea {
         Self {
             textarea: TextArea::new(),
             textarea_state: TextAreaState::default(),
-            placeholder: String::new(),
             max_length: Some(Self::DEFAULT_MAX_LENGTH),
             last_cursor_pos: None,
         }
@@ -180,11 +176,6 @@ impl InputArea {
     pub fn last_cursor_pos(&self) -> Option<(u16, u16)> {
         self.last_cursor_pos
     }
-
-    /// Set placeholder text (used for disabled / running state).
-    pub fn set_placeholder(&mut self, text: &str) {
-        self.placeholder = text.to_string();
-    }
 }
 
 impl Default for InputArea {
@@ -198,106 +189,73 @@ pub struct InputWidgetState<'a> {
     pub input: &'a mut InputArea,
 }
 
-/// Width of the boxed prompt gutter ("❯ " = prompt glyph + space).
+/// Width of the prompt gutter ("❯ " = prompt glyph + space).
 pub const PROMPT_GUTTER: u16 = 2;
 
-/// Composite widget: a boxed prompt backed by the xAI `TextArea`, styled to
-/// match the Grok TUI composer.
-///
-/// Renders a rounded border box (`╭─╮│╰─╯`) with a `❯` prefix on the first
-/// content row, followed by the textarea to the right of a 2-column gutter.
-/// The parent layout passes a height of `display_height(width) + 2` so the
-/// border rows are accounted for.
+/// Borderless composer on the status bar's background band: the parent
+/// paints nothing — the widget fills its area with `bg`, draws the `❯`
+/// prefix and the textarea on top of it, and shows the placeholder when
+/// the buffer is empty. Sitting directly under the StatusBar (same bg),
+/// the two read as one merged block.
 pub struct InputWidget<'a> {
-    pub disabled: bool,
-    /// Whether the composer is actively editable (Input mode, agent idle).
-    /// Drives hardware-cursor visibility: the caret only shows when the user
-    /// can type. Browse mode and running both hide it.
+    /// Whether the composer is actively editable (Input mode). Drives
+    /// hardware-cursor visibility: the caret only shows when the user
+    /// can type.
     pub editable: bool,
-    pub title: &'a str,
+    /// The shared status-bar background (must match `StatusBar`'s strip).
+    pub bg: Style,
     pub placeholder: &'a str,
 }
 
-impl<'a> StatefulWidget for InputWidget<'a> {
-    type State = InputWidgetState<'a>;
-
-    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer, state: &mut Self::State) {
-        if area.width < 2 || area.height < 2 {
+impl<'a> InputWidget<'a> {
+    /// Renders the composer. An inherent method rather than a
+    /// `StatefulWidget` impl: the state borrows the caller's `InputArea`,
+    /// and an associated type cannot carry that unconstrained lifetime.
+    pub fn render(
+        self,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+        state: &mut InputWidgetState<'_>,
+    ) {
+        if area.width == 0 || area.height == 0 {
             return;
         }
 
-        // ── Chrome: rounded border box ──
-        // Active (idle) → cyan border; disabled (agent running) → dim gray.
-        let border_color = if self.disabled {
-            Color::DarkGray
-        } else {
-            Color::Cyan
-        };
-        // Title (status label) colour: red on error, yellow while the agent is
-        // active, dim gray when idle.
-        let title_color = if self.title == "error" {
-            Color::Red
-        } else if self.disabled {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        };
-        let block = Block::bordered()
-            .border_set(ratatui::symbols::border::ROUNDED)
-            .border_style(Style::default().fg(border_color))
-            .title_top(
-                Line::from(format!(" {} ", self.title)).style(Style::default().fg(
-                    if self.title.is_empty() {
-                        border_color
-                    } else {
-                        title_color
-                    },
-                )),
-            );
-        let content = block.inner(area);
-        block.render(area, buf);
+        // Paint the shared band first; everything below draws over it.
+        buf.set_style(area, self.bg);
 
-        if content.width == 0 || content.height == 0 {
+        let prompt_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+            .patch(self.bg);
+        buf.set_string(area.x, area.y, "❯", prompt_style);
+        if area.width <= PROMPT_GUTTER {
             return;
         }
-
-        // ── Prefix: ❯ (U+276F) + space, 2 cols, in accent color ──
-        let prompt_style = if self.disabled {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        };
-        buf.set_string(content.x, content.y, "❯", prompt_style);
 
         // Textarea renders into the area right of the prefix gutter.
-        let inner = if content.width > PROMPT_GUTTER {
-            Rect {
-                x: content.x + PROMPT_GUTTER,
-                width: content.width - PROMPT_GUTTER,
-                ..content
-            }
-        } else {
-            content
+        let inner = Rect {
+            x: area.x + PROMPT_GUTTER,
+            width: area.width - PROMPT_GUTTER,
+            ..area
         };
 
-        state.input.set_placeholder(self.placeholder);
-
-        // The hardware caret only shows when the composer is actively editable
-        // (Input mode + agent idle). Browse mode and running both hide it.
+        // The hardware caret only shows when the composer is actively
+        // editable (Input mode).
         if !self.editable {
             state.input.last_cursor_pos = None;
         }
 
-        // Render placeholder directly when textarea is empty (xAI textarea has
-        // no built-in placeholder support). The cursor sits at the start of the
-        // editable row so the hardware caret appears over the first cell.
-        if state.input.is_empty() && !state.input.placeholder.is_empty() {
+        // Render placeholder directly when textarea is empty (xAI textarea
+        // has no built-in placeholder support). The cursor sits at the
+        // start of the editable row so the hardware caret appears over the
+        // first cell.
+        if state.input.is_empty() && !self.placeholder.is_empty() {
             let placeholder_style = Style::default()
                 .fg(Color::DarkGray)
-                .add_modifier(ratatui::style::Modifier::ITALIC);
-            let truncated = truncate_to_width(&state.input.placeholder, inner.width as usize);
+                .add_modifier(ratatui::style::Modifier::ITALIC)
+                .patch(self.bg);
+            let truncated = truncate_to_width(self.placeholder, inner.width as usize);
             buf.set_string(inner.x, inner.y, &truncated, placeholder_style);
             if self.editable {
                 state.input.last_cursor_pos = Some((inner.x, inner.y));

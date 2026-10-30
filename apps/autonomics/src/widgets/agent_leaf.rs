@@ -92,17 +92,16 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
         let running = ts.status.is_active() || ts.status == AgentStatus::Waiting;
 
-        // Dynamic input height: the boxed composer grows with content
-        // (word-wrapped). The widget draws a rounded border box, so
-        // reserve +2 rows (top/bottom) and subtract the border columns
-        // (+ gutter) from the wrap width.
-        let text_width = area.width.saturating_sub(PROMPT_GUTTER + 2);
+        // Dynamic input height: the borderless composer grows with
+        // content (word-wrapped); only the ❯ gutter is subtracted from
+        // the wrap width.
+        let text_width = area.width.saturating_sub(PROMPT_GUTTER);
         let input_text_rows = if running && ts.input.is_empty() {
             1
         } else {
             ts.input.display_height(text_width)
         };
-        let input_constraint = Constraint::Length(input_text_rows + 2);
+        let input_constraint = Constraint::Length(input_text_rows);
         let pending_texts = ts.pending_queue_preview_texts();
         let pending_constraint = Constraint::Length(pending_queue_height(
             pending_texts.len(),
@@ -116,30 +115,17 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // StatusBar (full width)
                 Constraint::Min(3),    // Chat (full width)
                 pending_constraint,    // Runtime-bound input awaiting commit
                 compact_constraint,    // Live compaction preview
-                input_constraint,      // Boxed composer (full width)
+                Constraint::Length(1), // StatusBar (sits on the shared band)
+                input_constraint,      // Composer (same band; borderless)
                 Constraint::Length(1), // Footer hints
             ])
             .split(area);
 
-        // ── StatusBar ──
-        let status_bar = StatusBar {
-            status: &ts.status,
-            context_used: ts.latest_turn_context_used,
-            context_window: self.context_window,
-            model_name: self.active_model,
-            reasoning_effort: self.reasoning_effort,
-            compact: Some(&ts.compact_state),
-            kms_activity: self.kms_activity,
-            frame: ts.frame,
-        };
-        status_bar.render(layout[0], buf);
-
         // ── Chat area (full width) ──
-        let middle = layout[1];
+        let middle = layout[0];
 
         // Left/right keep a 2-column gutter; the top padding is 0 so the
         // transcript starts right under the status bar, and the bottom
@@ -215,15 +201,32 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // Runtime-bound prompts stay out of the transcript until the Session
         // commits them; show a compact preview immediately above the composer.
         if !pending_texts.is_empty() {
-            render_pending_queue(layout[2], buf, &pending_texts);
+            render_pending_queue(layout[1], buf, &pending_texts);
         }
 
         // ── Live compaction preview (summary tail while compacting) ──
         if ts.compact_state.is_compacting {
-            render_compact_preview(layout[3], buf, &ts.compact_state);
+            render_compact_preview(layout[2], buf, &ts.compact_state);
         }
 
-        // ── Input area (boxed composer, ❯ prompt) ──
+        // ── StatusBar + composer: one merged band ──
+        // The status bar sits directly above the composer and both share
+        // the same dark-navy background, so lifecycle state and the input
+        // read as a single bottom block. The chat's bottom padding is the
+        // only separation from the transcript.
+        let band = Style::default().bg(Color::Rgb(24, 34, 46));
+        let status_bar = StatusBar {
+            status: &ts.status,
+            context_used: ts.latest_turn_context_used,
+            context_window: self.context_window,
+            model_name: self.active_model,
+            reasoning_effort: self.reasoning_effort,
+            compact: Some(&ts.compact_state),
+            kms_activity: self.kms_activity,
+            frame: ts.frame,
+        };
+        status_bar.render(layout[3], buf);
+
         let queued = ts.pending_queue_len();
         let placeholder: &str = if running {
             match ts.input_mode {
@@ -242,56 +245,19 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 InputMode::Input => "Type a message…",
             }
         };
-        let spinner = if running {
-            BRAILLE_SPINNER[(ts.frame / 4) as usize % BRAILLE_SPINNER.len()]
-        } else {
-            ""
-        };
-        let title: String = if running {
-            let base = if ts.cancel_pending {
-                "⏹ cancelling…".to_string()
-            } else {
-                match ts.status {
-                    AgentStatus::Requesting => format!("{spinner} thinking…"),
-                    AgentStatus::Streaming => format!("{spinner} responding…"),
-                    AgentStatus::Retrying => format!("{spinner} retrying…"),
-                    AgentStatus::Compacting => format!("{spinner} compacting…"),
-                    AgentStatus::Waiting => format!("{spinner} waiting…"),
-                    AgentStatus::Error => "error".to_string(),
-                    AgentStatus::Cancelled => "cancelled".to_string(),
-                    _ => format!("{spinner} running…"),
-                }
-            };
-            if queued > 0 {
-                format!("{base} ({queued} pending)")
-            } else {
-                base
-            }
-        } else {
-            match ts.input_mode {
-                InputMode::Browse => "browse".to_string(),
-                InputMode::Input => "compose".to_string(),
-            }
-        };
 
         // The composer is interactive even while the agent is running:
         // the user can type and enqueue messages. Only hide the caret
         // when not in Input mode.
         let input_widget = InputWidget {
-            disabled: running,
             editable: ts.input_mode == InputMode::Input,
-            title: &title,
+            bg: band,
             placeholder,
         };
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
         input_widget.render(layout[4], buf, &mut input_state);
-
-        // ── Animated loading bar on the input box bottom border ──
-        if running {
-            render_loading_bar(layout[4], buf, ts.frame);
-        }
 
         // ── Footer hint line ──
         render_footer_hint(
@@ -457,40 +423,6 @@ fn preview_line(message: &str, width: u16) -> String {
         used += ch_width;
     }
     format!("{prefix}{truncated}…")
-}
-
-/// Braille spinner frames for the loading indicator.
-const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Draw an animated loading bar on the bottom border of the input box.
-fn render_loading_bar(area: Rect, buf: &mut Buffer, frame: u64) {
-    let y = area.y + area.height - 1;
-    let start = area.x + 1;
-    let end = area.x + area.width.saturating_sub(1);
-    let width = end.saturating_sub(start) as usize;
-    if width < 4 {
-        return;
-    }
-
-    let bar_len = (width / 4).clamp(3, 12);
-    let pos = ((frame / 2) as usize) % (width + bar_len);
-
-    let bar_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-
-    for i in 0..width {
-        let in_bar = if pos < bar_len {
-            i < pos || i >= width + pos - bar_len
-        } else if pos > width {
-            i < pos - width
-        } else {
-            i >= pos - bar_len && i < pos
-        };
-        if in_bar {
-            buf.set_string(start + i as u16, y, "━", bar_style);
-        }
-    }
 }
 
 /// Draw the 1-row keybinding hint at the bottom of the agent tab.
