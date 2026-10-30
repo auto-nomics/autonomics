@@ -60,11 +60,13 @@ pub(crate) enum AppEvent {
         provider_name: String,
         result: std::result::Result<usize, String>,
     },
-    /// ChatGPT 订阅登录：授权 URL 已就绪。处理器负责复制到剪贴板、
-    /// 尽力打开浏览器并提示用户。
+    /// ChatGPT subscription login: the authorize URL is ready. The
+    /// handler copies it to the clipboard, best-effort opens the browser,
+    /// and shows a hint.
     ChatgptLoginUrl(String),
-    /// ChatGPT 订阅登录结束（daemon 侧完成并落库）。`Ok` 携带账户信息
-    /// 用于 toast 展示；`Err` 为可直接展示的失败原因。
+    /// ChatGPT subscription login finished (completed and persisted
+    /// daemon-side). `Ok` carries the account info for the toast; `Err`
+    /// is a directly displayable failure reason.
     ChatgptLoginCompleted {
         result: std::result::Result<gateway::proto::ChatgptLoginInfo, String>,
     },
@@ -113,8 +115,9 @@ pub(crate) enum AppEvent {
         agent: String,
         info: Option<crate::state::ModelDisplay>,
     },
-    /// 模型热切换被 daemon 拒绝（spec 不可解析、网络错误等）。乐观点亮
-    /// 的标记没有失败提示无法自证，必须以 toast 告知用户。
+    /// A hot model swap was rejected by the daemon (unresolvable spec,
+    /// network error, …). The optimistically lit marker cannot speak for
+    /// itself without a failure toast, so the user must be told.
     ModelSwapFailed { agent: String, error: String },
     /// A provider row save finished (PUT /model-config/provider).
     ProviderSaved {

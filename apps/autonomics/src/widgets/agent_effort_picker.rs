@@ -1,6 +1,6 @@
 //! Effort quick-picker for the docked agents panel (`E`, bulk path).
 //!
-//! A compact popup listing the reasoning-effort stops: `inherit (模型默认)`
+//! A compact popup listing the reasoning-effort stops: `inherit (model default)`
 //! plus `minimal … ultra`. Choosing one targets **every agent passing the
 //! panel filter**; the shared `y/n` bulk confirmation popup runs before
 //! anything is sent. Non-thinking models cannot take an override — the
@@ -24,10 +24,10 @@ const ACCENT: Color = Color::Yellow;
 /// One cyclable stop; `None` = inherit (model default).
 pub type EffortStop = Option<ReasoningEffort>;
 
-/// Label for a stop: `inherit ·模型默认` or the effort name.
+/// Label for a stop: `inherit (model default)` or the effort name.
 pub fn effort_stop_label(stop: EffortStop) -> String {
     match stop {
-        None => "inherit ·模型默认".into(),
+        None => "inherit (model default)".into(),
         Some(effort) => effort.as_str().into(),
     }
 }

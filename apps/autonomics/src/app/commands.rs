@@ -123,7 +123,8 @@ impl App {
             }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
-                // ● 标记对齐当前 agent 的真实模型（provider 精确）。
+                // Align the ● marker with the active agent's real model
+                // (provider-exact).
                 self.sync_model_config_marker();
             }
             CommandAction::EmbeddingConfig => self.open_embedding_config(),

@@ -87,8 +87,9 @@ pub enum ConfigCommand {
     },
     /// Reload the provider catalogue from the DB and SDK registry.
     ReloadCatalog,
-    /// 打开 ChatGPT 订阅 OAuth 浏览器登录（openai provider 专用面板发
-    /// 出）。App 层起回调服务器、复制授权 URL 并等待完成事件。
+    /// Start the ChatGPT subscription OAuth browser login (issued by the
+    /// openai provider's dedicated panel). The App layer runs the callback
+    /// server, copies the authorize URL, and awaits the completion event.
     StartChatgptLogin { provider_name: String },
     /// Close the model config popup.
     Close,
@@ -117,7 +118,8 @@ pub struct CatalogProvider {
     /// provider this is the raw token-blob JSON — never rendered or echoed
     /// into an editor; the dedicated ChatGPT panel shows [`Self::chatgpt`].
     pub api_key: Option<String>,
-    /// ChatGPT 订阅登录摘要（openai 行 api_key 为合法 token blob 时）。
+    /// ChatGPT subscription login summary (when the openai row's api_key
+    /// is a valid token blob).
     pub chatgpt: Option<agentik_sdk::provider::openai::oauth::TokenBlob>,
     /// Whether the tree node is currently expanded (only meaningful if
     /// `configured` is true).
@@ -158,8 +160,8 @@ pub enum ProviderPanelState {
         /// Which of the two fields is currently being typed into.
         focused_field: ConfigField,
     },
-    /// ChatGPT 订阅登录面板（openai provider 专用，替代凭据编辑器：
-    /// 订阅模式没有 API key 输入）。
+    /// ChatGPT subscription login panel (openai provider only, replacing
+    /// the credential editor: subscription mode has no API key input).
     Chatgpt { provider_name: String },
 }
 
@@ -299,7 +301,8 @@ impl ModelConfigState {
             self.provider_panel_state,
             ProviderPanelState::Chatgpt { .. }
         ) {
-            // 登录面板无可输入字段；粘贴落到搜索框反而干扰，直接忽略。
+            // The login panel has no editable fields; a paste landing in
+            // the search box is noise — ignore it.
         } else {
             if let ModelPanelState::Edit(editor) = &mut self.model_panel_state {
                 editor.insert_paste(text);
@@ -446,7 +449,7 @@ impl ModelConfigState {
             };
         }
 
-        // ── ChatGPT 登录面板 ──
+        // ── ChatGPT login panel ──
         if let ProviderPanelState::Chatgpt { provider_name } = &self.provider_panel_state {
             let provider_name = provider_name.clone();
             return match key.code {
@@ -454,7 +457,8 @@ impl ModelConfigState {
                     self.provider_panel_state = ProviderPanelState::Preview;
                     consumed(ConfigCommand::None)
                 }
-                // L 开始登录 / R 重新登录（已登录时同一动作）。
+                // L starts the login / R logs in again (the same action
+                // while already signed in).
                 KeyCode::Char('l')
                 | KeyCode::Char('L')
                 | KeyCode::Char('r')
@@ -1116,8 +1120,8 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 
 // ── Config panel (provider credential editor) ──────────
 
-/// ChatGPT 订阅登录面板：只读展示登录状态与操作提示（无可输入字段，
-/// blob JSON 永不回显）。
+/// ChatGPT subscription login panel: read-only sign-in status and hints
+/// (no editable fields; the blob JSON is never echoed back).
 fn render_chatgpt_panel(
     area: Rect,
     buf: &mut Buffer,
@@ -1129,11 +1133,13 @@ fn render_chatgpt_panel(
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(Color::Yellow))
         .title(Line::from(vec![
-            Span::styled(" ChatGPT 登录 ", Style::default().fg(Color::Yellow)),
+            Span::styled(" ChatGPT login ", Style::default().fg(Color::Yellow)),
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(Color::White)),
         ]))
-        .title_bottom(Line::from("[L] 登录/重新登录  [Esc] 关闭").alignment(Alignment::Center));
+        .title_bottom(
+            Line::from("[L] log in / log in again  [Esc] close").alignment(Alignment::Center),
+        );
     let inner = block.inner(area);
     block.render(area, buf);
 
@@ -1145,29 +1151,32 @@ fn render_chatgpt_panel(
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            label("模式"),
-            val("ChatGPT 订阅（Plus/Pro）OAuth 登录".to_string()),
+            label("Mode"),
+            val("ChatGPT subscription (Plus/Pro) OAuth login".to_string()),
         ]),
         Line::from(vec![
-            label("说明"),
-            dim("无需 API key：按 L 后在浏览器完成 OpenAI 授权，".to_string()),
+            label("About"),
+            dim("No API key needed: press L and finish OpenAI authorization".to_string()),
         ]),
         Line::from(vec![
             Span::raw("            "),
-            dim("授权链接会自动复制到剪贴板。".to_string()),
+            dim("in the browser; the authorize URL is copied to the clipboard.".to_string()),
         ]),
         Line::raw(""),
     ];
 
     match provider.and_then(|p| p.chatgpt.as_ref()) {
         Some(blob) => {
-            lines.push(Line::from(vec![label("状态"), green("已登录".to_string())]));
             lines.push(Line::from(vec![
-                label("账号"),
+                label("Status"),
+                green("Signed in".to_string()),
+            ]));
+            lines.push(Line::from(vec![
+                label("Account"),
                 val(blob.email.clone().unwrap_or_else(|| "email unknown".into())),
             ]));
             lines.push(Line::from(vec![
-                label("计划"),
+                label("Plan"),
                 val(blob.plan_type.clone().unwrap_or_else(|| "unknown".into())),
             ]));
             let tail: String = blob
@@ -1180,21 +1189,24 @@ fn render_chatgpt_panel(
                 dim(format!("…{tail}")),
             ]));
             lines.push(Line::from(vec![
-                label("上次刷新"),
+                label("Last refresh"),
                 dim(blob.last_refresh.format("%Y-%m-%d %H:%M UTC").to_string()),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(dim(
-                "按 R/L 重新登录（切换账号或修复失效凭据）".to_string()
+                "Press R/L to log in again (switch accounts or refresh stale credentials)"
+                    .to_string(),
             )));
         }
         None => {
             lines.push(Line::from(vec![
-                label("状态"),
-                Span::styled("未登录", Style::default().fg(Color::Red)),
+                label("Status"),
+                Span::styled("Not signed in", Style::default().fg(Color::Red)),
             ]));
             lines.push(Line::raw(""));
-            lines.push(Line::from(dim("按 L 开始 ChatGPT 登录".to_string())));
+            lines.push(Line::from(dim(
+                "Press L to start the ChatGPT login".to_string()
+            )));
         }
     }
 
@@ -1473,8 +1485,9 @@ pub fn build_catalog(
                 Some((_, key, _)) if !requires_api_key && key.is_empty() => (true, None),
                 _ => (false, None),
             };
-            // openai 行的 api_key 是 token blob：解析成功记录登录摘要
-            // （脱敏渲染）；原始 JSON 不进任何编辑器。
+            // The openai row's api_key is a token blob: a successful parse
+            // records the login summary (rendered redacted); the raw JSON
+            // never enters any editor.
             let chatgpt = if provider_type == ProviderType::Openai {
                 api_key.as_deref().and_then(|k| {
                     agentik_sdk::provider::openai::oauth::TokenBlob::from_json(k).ok()
@@ -1645,8 +1658,8 @@ mod tests {
         .unwrap()
     }
 
-    /// 把游标移到指定 provider 头行（未配置 provider 无子节点，扁平索引
-    /// 即 provider 索引）。
+    /// Move the cursor to the given provider's header row (an unconfigured
+    /// provider has no children, so the flat index is the provider index).
     fn cursor_on_provider(state: &mut ModelConfigState, name: &str) {
         let pi = state
             .providers
@@ -1920,7 +1933,7 @@ mod tests {
         cursor_on_provider(&mut state, "openai");
         state.handle_key(key('e', true));
 
-        // L → StartChatgptLogin，面板回 Preview。
+        // L → StartChatgptLogin; the panel returns to Preview.
         let cmd = state.handle_key(key('l', false));
         let ConfigCommand::StartChatgptLogin { provider_name } = cmd else {
             panic!("L in the ChatGPT panel should emit StartChatgptLogin, got {cmd:?}");
@@ -1931,7 +1944,7 @@ mod tests {
             ProviderPanelState::Preview
         ));
 
-        // R 同样触发；Esc 仅关闭。
+        // R triggers the same; Esc only closes.
         state.handle_key(key('e', true));
         assert!(matches!(
             state.handle_key(key('R', false)),
@@ -1961,7 +1974,8 @@ mod tests {
         assert_eq!(blob.email.as_deref(), Some("user@example.com"));
         assert_eq!(blob.plan_type.as_deref(), Some("plus"));
 
-        // 垃圾 api_key（非 blob）：configured 仍可为真，但无登录摘要。
+        // Garbage api_key (not a blob): configured can still be true, but
+        // there is no login summary.
         let state = build_catalog(
             &[(
                 "openai".to_string(),
@@ -1975,14 +1989,15 @@ mod tests {
         assert!(p.chatgpt.is_none());
     }
 
-    /// 两个 provider 都带同名模型：选中其中一个只能点亮那一个副本，
-    /// SelectModel 命令必须携带被选中的 provider（回归：曾按纯模型名
-    /// 匹配导致两行同时显示 ● ）。
+    /// Two providers carry a same-named model: selecting one must light up
+    /// only that copy, and SelectModel must carry the selected provider
+    /// (regression: matching by bare model name used to light both rows).
     #[test]
     fn same_named_model_activates_only_the_selected_provider() {
         let mut state = build_catalog(&[], &[]);
-        // bailian / zai 的预设本身就共享一批 GLM 模型名；再注入一个合成的
-        // "shared-model" 保证测试不依赖具体预设清单。
+        // bailian/zai presets already share a set of GLM model names; an
+        // injected synthetic "shared-model" keeps the test independent of
+        // the concrete preset list.
         for name in ["bailian", "zai"] {
             let p = state
                 .providers
@@ -2000,7 +2015,7 @@ mod tests {
             );
         }
 
-        // 光标移到 zai 的 shared-model 行，回车选中。
+        // Move the cursor to zai's shared-model row and select it.
         let cursor = state
             .flat_items()
             .iter()
@@ -2020,7 +2035,8 @@ mod tests {
         assert_eq!(model_name, "shared-model");
         assert_eq!(state.active_model_spec.as_deref(), Some("zai:shared-model"));
 
-        // 渲染：树里恰好一个 ●（zzz 的副本），aaa 的同名行不点亮。
+        // Render: exactly one ● in the tree (zzz's copy); aaa's same-named
+        // row stays unlit.
         let area = Rect::new(0, 0, 80, 40);
         let mut buf = Buffer::empty(area);
         ModelConfigWidget.render_ref(area, &mut buf, &mut state);

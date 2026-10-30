@@ -155,7 +155,7 @@ impl App {
             self.leader_pending = None;
             return true;
         }
-        // Backspace climbs one level (the panel's 返回 hint); at the root
+        // Backspace climbs one level (the panel's back hint); at the root
         // it closes, like LazyVim's which-key back.
         if key.code == KeyCode::Backspace {
             let mut prefix = self.leader_pending.take().unwrap_or_default();
@@ -184,7 +184,9 @@ impl App {
             super::leader::LeaderResolve::Miss => {
                 self.state.toasts.info(
                     "Leader",
-                    Some(format!("␣{ch} 未绑定;Esc 取消,␣␣ 打开命令面板")),
+                    Some(format!(
+                        "␣{ch} is not bound; Esc cancels, ␣␣ opens the palette"
+                    )),
                 );
             }
         }

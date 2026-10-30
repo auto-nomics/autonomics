@@ -177,9 +177,9 @@ impl App {
             .max()
             .unwrap_or(10);
         let footer_w = if at_root {
-            "Esc 关闭".width()
+            "Esc close".width()
         } else {
-            "Esc 关闭 · ⌫ 返回".width()
+            "Esc close · ⌫ back".width()
         };
         let inner_w = (key_col + arrow_w + label_w).max(footer_w + 2);
         let width = (inner_w as u16 + 2)
@@ -254,12 +254,12 @@ impl App {
 
         // Footer: close always; away from the root, the back key.
         let mut footer = vec![Span::styled(
-            "Esc 关闭",
+            "Esc close",
             Style::default().fg(Color::DarkGray),
         )];
         if !at_root {
             footer.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-            footer.push(Span::styled("⌫ 返回", Style::default().fg(Color::Yellow)));
+            footer.push(Span::styled("⌫ back", Style::default().fg(Color::Yellow)));
         }
         Paragraph::new(Line::from(footer)).render(
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),

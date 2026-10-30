@@ -105,8 +105,8 @@ impl App {
             }
             PickerTarget::AllFiltered { agents } => {
                 self.state.bulk_confirm = Some(crate::state::BulkConfirm {
-                    title: "切换模型".into(),
-                    detail: format!("{spec} → {} 个过滤 agent", agents.len()),
+                    title: "Switch model".into(),
+                    detail: format!("{spec} → {} filtered agents", agents.len()),
                     action: crate::state::BulkAction::SetModels { agents, spec },
                 });
             }
@@ -183,7 +183,7 @@ impl App {
             self.refresh_agent_model_info(agent);
         }
         let detail = if skipped > 0 {
-            format!("{label} → {count} agent(s),{skipped} 个非思考模型跳过")
+            format!("{label} → {count} agent(s), {skipped} non-thinking skipped")
         } else {
             format!("{label} → {count} agent(s)")
         };
@@ -239,8 +239,8 @@ impl App {
                 let label = crate::widgets::agent_effort_picker::effort_stop_label(stop);
                 let count = pairs.len();
                 self.state.bulk_confirm = Some(crate::state::BulkConfirm {
-                    title: "批量设置 Effort".into(),
-                    detail: format!("{label} → {count} 个过滤 agent"),
+                    title: "Set effort (bulk)".into(),
+                    detail: format!("{label} → {count} filtered agents"),
                     action: crate::state::BulkAction::SetEffort {
                         agents: pairs,
                         stop,

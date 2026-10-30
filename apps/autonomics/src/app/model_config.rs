@@ -29,8 +29,9 @@ impl App {
             .collect();
         *state = crate::widgets::model_config_widget::build_catalog(&db_tuples, &catalog.models);
 
-        // 完整 "provider:model" spec：树标记按 (provider, model) 双匹配，
-        // 截掉 provider 会让同名模型在所有 provider 下同时点亮。
+        // Full "provider:model" spec: the tree marker matches on both
+        // (provider, model); dropping the provider would light up
+        // same-named models under every provider at once.
         state.active_model_spec = catalog.active_model.clone();
     }
 
@@ -106,8 +107,10 @@ impl App {
                     self.spawn_client_task("set_agent_model", move || async move {
                         if let Err(e) = client.set_agent_model(&an_for_log, &spec_for_task).await {
                             tracing::error!(agent = %an_for_log, model = %spec_for_task, error = %e, "model hot-swap failed");
-                            // 失败必须可见：乐观标记照常点亮，无提示时用户
-                            // 无法区分成功与失败。
+                            // Failures must be visible: the optimistic
+                            // marker lights up as usual, and without a
+                            // toast the user cannot tell it apart from
+                            // success.
                             tx.send(crate::app_event::AppEvent::ModelSwapFailed {
                                 agent: an_for_log.clone(),
                                 error: e.to_string(),
@@ -295,8 +298,9 @@ impl App {
         });
     }
 
-    /// 发起 ChatGPT 订阅 OAuth 登录：daemon 绑定本机回调端口并返回
-    /// 授权 URL（剪贴板 + 浏览器）；完成结果经 ChatgptLogin notice 回流。
+    /// Start a ChatGPT subscription OAuth login: the daemon binds a local
+    /// callback port and returns the authorize URL (clipboard + browser);
+    /// the completion flows back through the ChatgptLogin notice.
     fn start_chatgpt_login(&mut self, provider_name: &str) {
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
@@ -350,8 +354,9 @@ impl App {
             tracing::warn!(provider = provider_name, "no remote catalogue support");
             return;
         }
-        // openai 的目录端点需要 ChatGPT 登录态 —— daemon 侧校验，缺登录时
-        // 通过 notice 回流错误。
+        // The openai catalog endpoint requires a ChatGPT login —
+        // validated daemon-side; a missing login flows back as an error
+        // notice.
         if matches!(provider_type, agentik_sdk::model::ProviderType::Openai) {
             let present = self
                 .state
@@ -366,8 +371,8 @@ impl App {
                 });
             if !present {
                 self.state.toasts.error(
-                    "请先登录",
-                    Some("openai 模型目录需要 ChatGPT 登录态".into()),
+                    "Sign in required",
+                    Some("The openai model catalog needs a ChatGPT login".into()),
                 );
                 return;
             }

@@ -93,7 +93,7 @@ impl PickerTarget {
     pub fn describe(&self) -> String {
         match self {
             Self::Single { agent } => agent.clone(),
-            Self::AllFiltered { agents } => format!("{} 个过滤 agent", agents.len()),
+            Self::AllFiltered { agents } => format!("{} filtered agents", agents.len()),
         }
     }
 }

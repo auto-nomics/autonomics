@@ -136,7 +136,7 @@ impl App {
 
                 self.state
                     .toasts
-                    .info("Gateway 事件流断档", Some("正在重新同步状态…".into()));
+                    .info("Gateway stream lag", Some("Re-syncing state…".into()));
 
                 self.spawn_reconcile("lag");
             }
@@ -144,13 +144,13 @@ impl App {
             GatewayFrame::Disconnected => {
                 self.state
                     .toasts
-                    .info("Gateway 连接中断", Some("正在自动重连…".into()));
+                    .info("Gateway disconnected", Some("Reconnecting…".into()));
             }
 
             GatewayFrame::Reconnected => {
                 self.state
                     .toasts
-                    .info("Gateway 已重连", Some("正在重新同步状态…".into()));
+                    .info("Gateway reconnected", Some("Re-syncing state…".into()));
 
                 self.spawn_reconcile("reconnect");
             }
@@ -436,7 +436,8 @@ impl App {
             },
 
             crate::app_event::AppEvent::ChatgptLoginUrl(url) => {
-                // 授权 URL：复制到剪贴板（保住 lease）+ 尽力开浏览器。
+                // Authorize URL: copy to the clipboard (keeping the
+                // lease) and best-effort open the browser.
 
                 match crate::clipboard_copy::copy_to_clipboard(&url) {
                     Ok(lease) => {
@@ -445,9 +446,9 @@ impl App {
                         let opened = Self::open_in_browser(&url);
 
                         let hint = if opened {
-                            "授权链接已复制；请在打开的浏览器中完成 OpenAI 授权"
+                            "Authorize URL copied; finish OpenAI authorization in the opened browser"
                         } else {
-                            "授权链接已复制到剪贴板，请粘贴到浏览器打开并完成授权"
+                            "Authorize URL copied to the clipboard; paste it into a browser to authorize"
                         };
 
                         tracing::info!(
@@ -456,15 +457,16 @@ impl App {
 
                         self.state
                             .toasts
-                            .info("ChatGPT 登录", Some(hint.to_string()));
+                            .info("ChatGPT login", Some(hint.to_string()));
                     }
 
                     Err(e) => {
                         tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");
 
-                        self.state
-                            .toasts
-                            .error("复制失败", Some(format!("{e}；授权 URL 见日志")));
+                        self.state.toasts.error(
+                            "Copy failed",
+                            Some(format!("{e}; the authorize URL is in the log")),
+                        );
 
                         tracing::info!(url = %url, "chatgpt login authorize url");
                     }
@@ -481,9 +483,9 @@ impl App {
                     self.spawn_catalog_reload();
 
                     self.state.toasts.success(
-                        "ChatGPT 登录成功",
+                        "ChatGPT login succeeded",
                         Some(format!(
-                            "{}（{}）",
+                            "{} ({})",
                             info.email.as_deref().unwrap_or("email unknown"),
                             info.plan_type.as_deref().unwrap_or("plan unknown"),
                         )),
@@ -493,7 +495,7 @@ impl App {
                 Err(e) => {
                     tracing::warn!(error = %e, "chatgpt login failed");
 
-                    self.state.toasts.error("ChatGPT 登录失败", Some(e));
+                    self.state.toasts.error("ChatGPT login failed", Some(e));
                 }
             },
 
@@ -526,9 +528,9 @@ impl App {
 
                     self.dirty = true;
 
-                    // 缓存值已是 provider 精确的 spec：面板开着时让 ● 标记
-
-                    // 自愈到 agent 的真实模型。
+                    // The cached value is already the provider-exact spec:
+                    // with the panel open, let the ● marker self-heal to
+                    // the agent's real model.
 
                     self.sync_model_config_marker();
                 }
@@ -537,7 +539,7 @@ impl App {
             crate::app_event::AppEvent::ModelSwapFailed { agent, error } => {
                 self.state
                     .toasts
-                    .error("模型切换失败", Some(format!("[{agent}] {error}")));
+                    .error("Model swap failed", Some(format!("[{agent}] {error}")));
             }
 
             crate::app_event::AppEvent::SkillEvolutionLoaded {

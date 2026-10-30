@@ -43,12 +43,12 @@ impl LeaderNode {
 pub(super) const LEADER_ROOT: &[LeaderNode] = &[
     LeaderNode::Leaf {
         key: ' ',
-        label: "命令面板",
+        label: "Command palette",
         action: CommandAction::OpenCommandPalette,
     },
     LeaderNode::Leaf {
         key: 'q',
-        label: "退出",
+        label: "Quit",
         action: CommandAction::Quit,
     },
     LeaderNode::Group {
@@ -57,39 +57,39 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
         children: &[
             LeaderNode::Leaf {
                 key: 'n',
-                label: "新建",
+                label: "New agent",
                 action: CommandAction::NewAgent,
             },
             LeaderNode::Leaf {
                 key: 'r',
-                label: "恢复",
+                label: "Resume",
                 action: CommandAction::ResumeAgent,
             },
             LeaderNode::Leaf {
                 key: 't',
-                label: "切换器",
+                label: "Switcher",
                 action: CommandAction::FocusAgentsPanel,
             },
             LeaderNode::Leaf {
                 key: 'c',
-                label: "关闭",
+                label: "Close",
                 action: CommandAction::CloseAgent,
             },
             LeaderNode::Leaf {
                 key: 'd',
-                label: "删除",
+                label: "Delete",
                 action: CommandAction::DeleteAgent,
             },
             LeaderNode::Leaf {
                 key: 'x',
-                label: "取消",
+                label: "Cancel",
                 action: CommandAction::CancelAgent,
             },
         ],
     },
     LeaderNode::Group {
         key: 'v',
-        label: "视图",
+        label: "view",
         children: &[
             LeaderNode::Leaf {
                 key: 'd',
@@ -98,84 +98,84 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
             },
             LeaderNode::Leaf {
                 key: 'b',
-                label: "文献库",
+                label: "Bibliography",
                 action: CommandAction::BibliographyPanel,
             },
             LeaderNode::Leaf {
                 key: 's',
-                label: "进化面板",
+                label: "Evolution",
                 action: CommandAction::SkillEvolutionPanel,
             },
             LeaderNode::Leaf {
                 key: 'k',
-                label: "知识库",
+                label: "Knowledge wiki",
                 action: CommandAction::KnowledgeWikiPanel,
             },
             LeaderNode::Leaf {
                 key: 't',
-                label: "纯对话视图",
+                label: "Chat-only view",
                 action: CommandAction::ToggleChatOnly,
             },
             LeaderNode::Leaf {
                 key: 'h',
-                label: "折叠思考",
+                label: "Collapse thinking",
                 action: CommandAction::ToggleCollapseThinking,
             },
             LeaderNode::Leaf {
                 key: 'c',
-                label: "折叠工具调用",
+                label: "Collapse tool calls",
                 action: CommandAction::ToggleCollapseToolCalls,
             },
             LeaderNode::Leaf {
                 key: 'r',
-                label: "折叠工具结果",
+                label: "Collapse tool results",
                 action: CommandAction::ToggleCollapseToolResults,
             },
         ],
     },
     LeaderNode::Leaf {
         key: 'm',
-        label: "模型配置",
+        label: "Model config",
         action: CommandAction::ModelConfig,
     },
     LeaderNode::Leaf {
         key: 'e',
-        label: "嵌入配置",
+        label: "Embedding config",
         action: CommandAction::EmbeddingConfig,
     },
     LeaderNode::Leaf {
         key: 'g',
-        label: "agent 配置",
+        label: "Agent config",
         action: CommandAction::AgentConfig,
     },
     LeaderNode::Leaf {
         key: 'h',
-        label: "历史搜索",
+        label: "History search",
         action: CommandAction::HistorySearch,
     },
     LeaderNode::Leaf {
         key: 'y',
-        label: "复制消息",
+        label: "Copy message",
         action: CommandAction::CopyMessage,
     },
     LeaderNode::Leaf {
         key: 'C',
-        label: "压缩上下文",
+        label: "Compact context",
         action: CommandAction::Compact,
     },
     LeaderNode::Leaf {
         key: 'G',
-        label: "跟随输出",
+        label: "Follow output",
         action: CommandAction::ToggleAutoScroll,
     },
     LeaderNode::Leaf {
         key: 'p',
-        label: "计划弹窗",
+        label: "Plan popup",
         action: CommandAction::OpenPlanPopup,
     },
     LeaderNode::Leaf {
         key: 'T',
-        label: "任务弹窗",
+        label: "Tasks popup",
         action: CommandAction::OpenTasksPopup,
     },
 ];
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].label, "agent");
         assert_eq!(groups[0].children, 6);
-        assert_eq!(groups[1].label, "视图");
+        assert_eq!(groups[1].label, "view");
         assert_eq!(groups[1].children, 8);
         // A group prefix lists only leaves.
         let inner = whichkey_rows(&['a']);
