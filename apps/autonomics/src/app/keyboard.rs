@@ -78,6 +78,8 @@ impl App {
             || state.profile_picker.visible
             || state.agent_profile_picker.visible
             || state.agents_popup.is_visible()
+            || state.plan_popup.visible
+            || state.tasks_popup.visible
             || state.agent_model_picker.is_visible()
             || state.agent_effort_picker.visible
             || state.name_input.visible
@@ -128,6 +130,8 @@ impl App {
             || state.profile_picker.visible
             || state.agent_profile_picker.visible
             || state.agents_popup.is_visible()
+            || state.plan_popup.visible
+            || state.tasks_popup.visible
             || state.agent_model_picker.is_visible()
             || state.agent_effort_picker.visible
             || state.name_input.visible
@@ -261,9 +265,17 @@ impl App {
         }
 
         // Agents popup (Ctrl+T) captures keys when visible; its quick
-        // pickers sit just below it.
+        // pickers sit just below it, then the plan/tasks popups.
         if self.state.agents_popup.is_visible() {
             self.handle_agents_popup_key(key);
+            return;
+        }
+        if self.state.plan_popup.visible {
+            self.handle_plan_popup_key(key);
+            return;
+        }
+        if self.state.tasks_popup.visible {
+            self.handle_tasks_popup_key(key);
             return;
         }
 
@@ -334,11 +346,6 @@ impl App {
             return;
         }
 
-        // Workspace pane movement runs after overlays have claimed their keys.
-        if self.handle_workspace_navigation(key) {
-            return;
-        }
-
         // Ctrl+C is deliberately NOT bound: accidental presses repeatedly
         // interrupted running agents mid-task. Cancelling and quitting are
         // reachable only through the command palette (Ctrl+P → "Cancel
@@ -366,15 +373,6 @@ impl App {
     }
 
     fn handle_agent_key(&mut self, key: &KeyEvent) {
-        // A focused sidebar pane owns the keys (plan / tasks).
-        if matches!(
-            self.state.active_tab_state().focused_pane(),
-            crate::state::WorkspaceFocus::Plan | crate::state::WorkspaceFocus::Tasks
-        ) {
-            self.handle_sidebar_key(key);
-            return;
-        }
-
         // Alt+1..9: switch to leaf by index.
         if key.modifiers.contains(KeyModifiers::ALT) {
             if let KeyCode::Char(c) = key.code {

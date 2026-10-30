@@ -170,21 +170,22 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
     },
     LeaderNode::Leaf {
         key: 'p',
-        label: "聚焦计划面板",
-        action: CommandAction::FocusPlanPane,
+        label: "计划弹窗",
+        action: CommandAction::OpenPlanPopup,
     },
     LeaderNode::Leaf {
         key: 'T',
-        label: "聚焦任务面板",
-        action: CommandAction::FocusTasksPane,
+        label: "任务弹窗",
+        action: CommandAction::OpenTasksPopup,
     },
 ];
 
 /// Outcome of feeding one key to a pending leader prefix.
 pub enum LeaderResolve {
     /// The key extends the prefix; the hint strip shows this group's
-    /// children.
-    Deeper(&'static [LeaderNode]),
+    /// children. The slice itself is re-derived from the prefix, so the
+    /// payload is unused.
+    Deeper(#[allow(dead_code)] &'static [LeaderNode]),
     /// The key completes a binding.
     Hit(CommandAction),
     /// No binding at this prefix; the pending prefix is dropped.

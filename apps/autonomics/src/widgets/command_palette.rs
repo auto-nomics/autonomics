@@ -28,10 +28,10 @@ pub enum CommandAction {
     Quit,
     /// Toggle the command palette itself (the `<leader><leader>` slot).
     OpenCommandPalette,
-    /// Move keyboard focus to the sidebar's plan pane.
-    FocusPlanPane,
-    /// Move keyboard focus to the sidebar's tasks pane.
-    FocusTasksPane,
+    /// Open the plan popup (the active agent's task plan).
+    OpenPlanPopup,
+    /// Open the tasks popup (the active agent's background tool tasks).
+    OpenTasksPopup,
     CancelAgent,
     ToggleAutoScroll,
     ScrollToBottom,

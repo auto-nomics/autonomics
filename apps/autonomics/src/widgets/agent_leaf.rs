@@ -8,19 +8,12 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr};
 
-use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode, WorkspaceFocus};
+use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState, visual_row_count},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
-    sidebar::{SideBar, SidebarData},
     status_bar::StatusBar,
 };
-
-/// Width of the sidebar as a percentage of the total leaf area.
-/// At 120 cols → ~30 cols sidebar; at 80 cols → ~20 cols.
-const SIDEBAR_PERCENT: u16 = 25;
-/// Minimum sidebar width in columns. Below this the sidebar is hidden.
-const SIDEBAR_MIN_WIDTH: u16 = 24;
 
 /// Collect only rendered lines intersecting the requested logical-row window.
 ///
@@ -67,7 +60,7 @@ fn collect_visible_lines(
     (visible, relative_offset)
 }
 
-/// Renders a single agent's conversation surface with a right-hand sidebar.
+/// Renders a single agent's conversation surface (full width).
 ///
 /// Layout:
 /// ```text
@@ -141,40 +134,11 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             ])
             .split(area);
 
-        // ── Middle: Chat + Sidebar horizontal split ──
+        // ── Chat area (full width — the plan/tasks panes are popups now) ──
         let middle = layout[0];
 
-        // A focused pane whose content vanished (plan finished, tasks
-        // drained) cannot keep focus: fall back to Chat.
-        if match ts.focused_pane() {
-            WorkspaceFocus::Plan => ts.plan.is_empty(),
-            WorkspaceFocus::Tasks => ts.tool_tasks.is_empty(),
-            _ => false,
-        } {
-            ts.focus_pane(WorkspaceFocus::Chat);
-        }
-        let focus = ts.focused_pane();
-
-        // Decide whether to show the sidebar based on available width.
-        let sidebar_width = (middle.width * SIDEBAR_PERCENT / 100).max(SIDEBAR_MIN_WIDTH);
-        let show_sidebar = middle.width >= SIDEBAR_MIN_WIDTH * 3;
-
-        let (chat_area, sidebar_area) = if show_sidebar {
-            let h_split = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Min(20),               // Chat (flexible)
-                    Constraint::Length(sidebar_width), // Sidebar (fixed)
-                ])
-                .split(middle);
-            (h_split[0], Some(h_split[1]))
-        } else {
-            (middle, None)
-        };
-
-        // ── Chat area ──
         let chat_block = Block::default().padding(Padding::new(2, 2, 2, 2));
-        let chat_inner_area = chat_block.inner(chat_area);
+        let chat_inner_area = chat_block.inner(middle);
 
         let viewport_height = chat_inner_area.height;
         let width = chat_inner_area.width;
@@ -240,18 +204,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             total_rows,
         };
         chat_widget.render(chat_inner_area, buf, &mut chat_state);
-
-        // ── Sidebar ──
-        if let Some(sb_area) = sidebar_area {
-            let sidebar = SideBar {
-                data: SidebarData {
-                    plan: &ts.plan,
-                    tool_tasks: &ts.tool_tasks,
-                },
-                focus,
-            };
-            StatefulWidget::render(sidebar, sb_area, buf, &mut ts.sidebar);
-        }
 
         // Runtime-bound prompts stay out of the transcript until the Session
         // commits them; show a compact preview immediately above the composer.

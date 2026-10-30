@@ -1,51 +1,7 @@
-//! Pane focus, sidebar selection, quick model/effort switching, and
-//! navigation to delegated agents.
+//! Popup-driven agent management: quick model/effort switching, bulk
+//! fan-out, and delegated-agent navigation.
 
 use super::*;
-use crate::state::WorkspaceFocus;
-
-fn adjacent_pane(focus: WorkspaceFocus, direction: char) -> WorkspaceFocus {
-    use WorkspaceFocus::*;
-    match (focus, direction) {
-        (Chat | Input, 'l') => Tasks,
-        (Plan | Tasks, 'h') => Chat,
-        (Tasks, 'k') => Plan,
-        (Input, 'k') => Chat,
-        (Plan, 'j') => Tasks,
-        (Tasks, 'j') => Input,
-        (Chat, 'j') => Input,
-        _ => focus,
-    }
-}
-
-fn populated_adjacent_pane(
-    focus: WorkspaceFocus,
-    direction: char,
-    has_plan: bool,
-    has_tasks: bool,
-) -> WorkspaceFocus {
-    use WorkspaceFocus::*;
-    let populated = |pane| match pane {
-        Plan => has_plan,
-        Tasks => has_tasks,
-        _ => true,
-    };
-    if matches!(focus, Chat | Input) && direction == 'l' {
-        return [Tasks, Plan]
-            .into_iter()
-            .find(|&pane| populated(pane))
-            .unwrap_or(Chat);
-    }
-    let mut next = adjacent_pane(focus, direction);
-    while !populated(next) {
-        let candidate = adjacent_pane(next, direction);
-        if candidate == next {
-            return Chat;
-        }
-        next = candidate;
-    }
-    next
-}
 
 /// Resolve short names relative to the delegating parent, never globally.
 fn delegated_agent_index(sessions: &[AgentSession], parent: &str, target: &str) -> Option<usize> {
@@ -61,115 +17,6 @@ fn delegated_agent_index(sessions: &[AgentSession], parent: &str, target: &str) 
 }
 
 impl App {
-    /// Ctrl+h/j/k/l pane movement (Vim-style) and Ctrl+Backspace (= `h`).
-    /// Returns true when the key was a navigation chord.
-    pub(super) fn handle_workspace_navigation(&mut self, key: &KeyEvent) -> bool {
-        if !key.modifiers.contains(KeyModifiers::CONTROL)
-            || key
-                .modifiers
-                .intersects(KeyModifiers::ALT | KeyModifiers::SUPER)
-            || self.state.sessions.is_empty()
-            || self.state.active_tab_state().in_history_search
-        {
-            return false;
-        }
-        let direction = match key.code {
-            KeyCode::Char(c @ ('h' | 'j' | 'k' | 'l')) => c,
-            KeyCode::Backspace => 'h',
-            _ => return false,
-        };
-        let ts = self.state.active_tab_state_mut();
-        ts.focus_pane(populated_adjacent_pane(
-            ts.focused_pane(),
-            direction,
-            !ts.plan.is_empty(),
-            !ts.tool_tasks.is_empty(),
-        ));
-        true
-    }
-
-    /// Keys while a sidebar pane (plan / tasks) holds focus.
-    pub(super) fn handle_sidebar_key(&mut self, key: &KeyEvent) {
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            return;
-        }
-        let ts = self.state.active_tab_state_mut();
-        ts.sidebar.sync(ts.plan.steps.len(), &ts.tool_tasks);
-        match key.code {
-            KeyCode::Esc => ts.focus_pane(WorkspaceFocus::Chat),
-            // Like Vim's command entry, ':' opens commands from anywhere.
-            KeyCode::Char(':') => self.state.command_palette.open(),
-            KeyCode::Enter if ts.focused_pane() == WorkspaceFocus::Tasks => {
-                let selected = ts.sidebar.tasks.selected();
-                let task = selected.and_then(|index| ts.tool_tasks.get(index));
-                let target = task
-                    .filter(|task| task.name == "delegate_to")
-                    .and_then(|task| task.target_agent.clone());
-                let Some(target) = target else {
-                    if task.is_some_and(|task| task.name == "delegate_to") {
-                        self.state.toasts.info(
-                            "Agent unavailable",
-                            Some("This task has no target agent available".into()),
-                        );
-                    }
-                    return;
-                };
-                let Some(parent) = self.state.sessions.get(self.state.active_agent_idx) else {
-                    return;
-                };
-                if let Some(index) =
-                    delegated_agent_index(&self.state.sessions, &parent.name, &target)
-                {
-                    self.state.active_agent_idx = index;
-                    self.state
-                        .active_tab_state_mut()
-                        .focus_pane(WorkspaceFocus::Chat);
-                } else {
-                    self.state.toasts.info(
-                        "Agent unavailable",
-                        Some(format!("Delegated agent {target} is no longer open")),
-                    );
-                }
-            }
-            KeyCode::Up
-            | KeyCode::Down
-            | KeyCode::Left
-            | KeyCode::Right
-            | KeyCode::Char('j' | 'k' | 'h' | 'l')
-            | KeyCode::Home
-            | KeyCode::End => {
-                let tasks = ts.focused_pane() == WorkspaceFocus::Tasks;
-                let (selected, count) = if tasks {
-                    (ts.sidebar.tasks.selected(), ts.tool_tasks.len())
-                } else {
-                    (ts.sidebar.plan.selected(), ts.plan.steps.len())
-                };
-                if count == 0 {
-                    return;
-                }
-                let next = match key.code {
-                    KeyCode::Up | KeyCode::Char('k') => selected.unwrap_or(0).saturating_sub(1),
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        (selected.unwrap_or(0) + 1).min(count - 1)
-                    }
-                    KeyCode::Home => 0,
-                    KeyCode::End => count - 1,
-                    _ => selected.unwrap_or(0),
-                };
-                if tasks {
-                    let tasks_snapshot = ts.tool_tasks.clone();
-                    ts.sidebar.select_task(Some(next), &tasks_snapshot);
-                } else {
-                    ts.sidebar.plan.select(Some(next));
-                }
-            }
-            _ => {}
-        }
-    }
-
     // ── Agents-panel helpers ──────────────────────────────
 
     /// Open the model quick-picker for one agent.
@@ -451,5 +298,42 @@ impl App {
         let mut agents = self.running_agents_snapshot();
         crate::widgets::agents_popup::sort_running_agents(&mut agents);
         self.state.agents_popup.open_with(agents);
+    }
+}
+
+impl App {
+    /// Keys while the plan popup (<leader>p) is open.
+    pub(super) fn handle_plan_popup_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::plan_popup::PlanPopupKeyOutcome;
+        let steps = self.state.active_tab_state().plan.steps.len();
+        if let PlanPopupKeyOutcome::Close = self.state.plan_popup.handle_key(*key, steps) {
+            self.state.plan_popup.close();
+        }
+    }
+
+    /// Keys while the tasks popup (<leader>T) is open. Enter jumps to the
+    /// selected delegation's child agent leaf.
+    pub(super) fn handle_tasks_popup_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::tasks_popup::TasksPopupKeyOutcome;
+        let tasks = self.state.active_tab_state().tool_tasks.clone();
+        match self.state.tasks_popup.handle_key(*key, &tasks) {
+            TasksPopupKeyOutcome::Consumed => {}
+            TasksPopupKeyOutcome::Close => self.state.tasks_popup.close(),
+            TasksPopupKeyOutcome::Jump(target) => {
+                self.state.tasks_popup.close();
+                let Some(parent) = self.state.sessions.get(self.state.active_agent_idx) else {
+                    return;
+                };
+                match delegated_agent_index(&self.state.sessions, &parent.name, &target) {
+                    Some(index) => self.state.active_agent_idx = index,
+                    None => {
+                        self.state.toasts.info(
+                            "Agent unavailable",
+                            Some(format!("Delegated agent {target} is no longer open")),
+                        );
+                    }
+                }
+            }
+        }
     }
 }

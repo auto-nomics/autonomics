@@ -44,16 +44,6 @@ pub enum BulkAction {
     },
 }
 
-/// Keyboard focus inside an agent's workspace.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WorkspaceFocus {
-    #[default]
-    Chat,
-    Plan,
-    Tasks,
-    Input,
-}
-
 // ── Chat data model ─────────────────────────────────────
 
 /// Token usage for a single LLM turn, attached to the assistant message it
@@ -163,11 +153,6 @@ pub struct PendingUserMessage {
 
 /// Mutable state for the Agent tab.
 pub struct AgentTabState {
-    /// Keyboard focus inside this workspace (chat / sidebar panes).
-    pub workspace_focus: WorkspaceFocus,
-    /// Docked sidebar state: pane list cursors, agents-panel filter and
-    /// click areas (see `widgets::sidebar`).
-    pub sidebar: crate::widgets::sidebar::SidebarState,
     /// Rendered chat viewport height from the last frame; drives the
     /// h/l horizontal scroll step (one viewport per press).
     pub chat_viewport_height: u16,
@@ -294,8 +279,6 @@ pub enum CompactResult {
 impl Default for AgentTabState {
     fn default() -> Self {
         Self {
-            workspace_focus: WorkspaceFocus::Chat,
-            sidebar: crate::widgets::sidebar::SidebarState::default(),
             chat_viewport_height: 0,
             messages: Vec::new(),
             tool_tasks: Vec::new(),
@@ -340,30 +323,6 @@ impl Default for AgentTabState {
 }
 
 impl AgentTabState {
-    /// The pane that currently owns keyboard focus. Input mode always wins
-    /// over the stored pane (the composer takes precedence while typing);
-    /// a stored `Input` with the composer closed reads as Chat.
-    pub fn focused_pane(&self) -> WorkspaceFocus {
-        if self.input_mode == InputMode::Input {
-            WorkspaceFocus::Input
-        } else if self.workspace_focus == WorkspaceFocus::Input {
-            WorkspaceFocus::Chat
-        } else {
-            self.workspace_focus
-        }
-    }
-
-    /// Move keyboard focus to a pane, closing the composer unless the
-    /// target is the composer itself.
-    pub fn focus_pane(&mut self, focus: WorkspaceFocus) {
-        self.workspace_focus = focus;
-        self.input_mode = if focus == WorkspaceFocus::Input {
-            InputMode::Input
-        } else {
-            InputMode::Browse
-        };
-    }
-
     /// Returns true when the user can type and send messages.
     /// Sending is allowed in any non-active state — Idle, Error, Cancelled,
     /// and Waiting all behave like "ready for new work". In Waiting the
@@ -976,6 +935,10 @@ pub struct AppState {
     pub message_picker: crate::widgets::message_picker::MessagePickerState,
     /// Agents popup (Ctrl+T): picker-style switcher over running agents.
     pub agents_popup: crate::widgets::agents_popup::AgentsPopupState,
+    /// Plan popup (<leader>p): the active agent's task plan.
+    pub plan_popup: crate::widgets::plan_popup::PlanPopupState,
+    /// Tasks popup (<leader>T): the active agent's background tool tasks.
+    pub tasks_popup: crate::widgets::tasks_popup::TasksPopupState,
     /// Agents-popup model quick-picker (m / M).
     pub agent_model_picker: crate::widgets::agent_model_picker::AgentModelPickerState,
     /// Agents-panel effort quick-picker (E, bulk).

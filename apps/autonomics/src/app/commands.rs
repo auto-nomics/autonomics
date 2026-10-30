@@ -38,18 +38,14 @@ impl App {
             CommandAction::OpenCommandPalette => {
                 self.state.command_palette.toggle();
             }
-            CommandAction::FocusPlanPane => {
+            CommandAction::OpenPlanPopup => {
                 if !self.state.sessions.is_empty() {
-                    self.state
-                        .active_tab_state_mut()
-                        .focus_pane(crate::state::WorkspaceFocus::Plan);
+                    self.state.plan_popup.open();
                 }
             }
-            CommandAction::FocusTasksPane => {
+            CommandAction::OpenTasksPopup => {
                 if !self.state.sessions.is_empty() {
-                    self.state
-                        .active_tab_state_mut()
-                        .focus_pane(crate::state::WorkspaceFocus::Tasks);
+                    self.state.tasks_popup.open();
                 }
             }
             CommandAction::CancelAgent => {

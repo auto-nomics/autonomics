@@ -303,6 +303,26 @@ impl App {
             }
         }
 
+        // ── Plan / Tasks popups (<leader>p / <leader>T) ──
+        if self.state.plan_popup.visible {
+            let plan = self.state.active_tab_state().plan.clone();
+            crate::widgets::plan_popup::render_plan_popup(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.plan_popup,
+                &plan,
+            );
+        }
+        if self.state.tasks_popup.visible {
+            let tasks = self.state.active_tab_state().tool_tasks.clone();
+            crate::widgets::tasks_popup::render_tasks_popup(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.tasks_popup,
+                &tasks,
+            );
+        }
+
         // ── Agents-popup model / effort quick-pickers ──
         if self.state.agent_model_picker.is_visible() {
             crate::widgets::agent_model_picker::render_agent_model_picker(
