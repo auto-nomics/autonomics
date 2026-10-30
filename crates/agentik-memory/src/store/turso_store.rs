@@ -14,6 +14,130 @@ use crate::store::{
 };
 
 const MIGRATION_MARKER: &str = "legacy_agent_db_memory_migrated_v1";
+/// Marker the KMS-unified era wrote after converting every memory_entries
+/// row into knowledge-tree nodes (and emptying the table).
+const KMS_UNIFICATION_MARKER: &str = "memory_entries_to_knowledge_nodes_v1";
+/// Set once the flat entries have been recovered from the frozen agent.db
+/// copy after a KMS-unified database is reshaped back to this layout.
+const KMS_ENTRIES_RECOVERY_MARKER: &str = "kms_memory_entries_recovered_v1";
+
+/// Table DDL for the current layout. Shared by `init_schema` and the
+/// KMS-era reshape so both always agree on the target shape.
+const MEMORY_TABLE_DDL: &[(&str, &str)] = &[
+    (
+        "memory_stage1",
+        r#"CREATE TABLE IF NOT EXISTS memory_stage1 (
+                    scope_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    raw_memory TEXT NOT NULL,
+                    rollout_summary TEXT NOT NULL,
+                    rollout_slug TEXT,
+                    status TEXT NOT NULL,
+                    generated_at INTEGER NOT NULL,
+                    lease_until INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (scope_id, session_id)
+                )"#,
+    ),
+    (
+        "memory_jobs",
+        r#"CREATE TABLE IF NOT EXISTS memory_jobs (
+                    scope_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    lease_until INTEGER NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    updated_at INTEGER NOT NULL
+                )"#,
+    ),
+    (
+        "memory_entries",
+        r#"CREATE TABLE IF NOT EXISTS memory_entries (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body_md TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )"#,
+    ),
+    (
+        "memory_summaries",
+        r#"CREATE TABLE IF NOT EXISTS memory_summaries (
+                    scope_id TEXT PRIMARY KEY,
+                    schema_version TEXT NOT NULL,
+                    summary_md TEXT NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    generated_at INTEGER NOT NULL
+                )"#,
+    ),
+    (
+        "memory_notes",
+        r#"CREATE TABLE IF NOT EXISTS memory_notes (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    slug TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )"#,
+    ),
+    (
+        "memory_semantic_observations",
+        r#"CREATE TABLE IF NOT EXISTS memory_semantic_observations (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    object TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source_hash TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    last_error TEXT
+                )"#,
+    ),
+    (
+        "memory_storage_metadata",
+        r#"CREATE TABLE IF NOT EXISTS memory_storage_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )"#,
+    ),
+];
+
+/// Index (name, DDL) pairs for the current layout. Creation is guarded by a
+/// sqlite_master lookup: turso's parser rejects `CREATE INDEX IF NOT EXISTS`
+/// when the named index already exists and has a multi-column key (it
+/// re-parses the column list as a single expression, e.g.
+/// "invalid expression in CREATE INDEX: scope_id"), so an existing index
+/// must be skipped instead of re-declared.
+const MEMORY_INDEX_DDL: &[(&str, &str)] = &[
+    (
+        "idx_memory_stage1_generated",
+        "CREATE INDEX idx_memory_stage1_generated ON memory_stage1(generated_at DESC)",
+    ),
+    (
+        "idx_memory_entries_scope_status",
+        "CREATE INDEX idx_memory_entries_scope_status ON memory_entries(scope_id, status, updated_at DESC)",
+    ),
+    (
+        "idx_memory_notes_scope_status",
+        "CREATE INDEX idx_memory_notes_scope_status ON memory_notes(scope_id, status, created_at)",
+    ),
+    (
+        "idx_memory_semantic_scope_status",
+        "CREATE INDEX idx_memory_semantic_scope_status ON memory_semantic_observations(scope_id, status, created_at DESC)",
+    ),
+];
 
 #[derive(Clone)]
 pub struct TursoMemoryStorage {
@@ -52,10 +176,6 @@ impl LockedConn {
         Ok(LockedRows {
             rows: owned.into_iter(),
         })
-    }
-
-    async fn execute_batch(&self, sql: impl AsRef<str>) -> turso::Result<()> {
-        self.0.lock().await.execute_batch(sql).await
     }
 }
 
@@ -194,6 +314,7 @@ impl TursoMemoryStorage {
         let storage = Self {
             conn: LockedConn(Arc::new(Mutex::new(conn))),
         };
+        storage.migrate_kms_era_shape().await?;
         storage.init_schema().await?;
         Ok(storage)
     }
@@ -212,89 +333,205 @@ impl TursoMemoryStorage {
     }
 
     async fn init_schema(&self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                r#"
-                CREATE TABLE IF NOT EXISTS memory_stage1 (
-                    scope_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_hash TEXT NOT NULL,
-                    raw_memory TEXT NOT NULL,
-                    rollout_summary TEXT NOT NULL,
-                    rollout_slug TEXT,
-                    status TEXT NOT NULL,
-                    generated_at INTEGER NOT NULL,
-                    lease_until INTEGER NOT NULL DEFAULT 0,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT,
-                    updated_at INTEGER NOT NULL,
-                    PRIMARY KEY (scope_id, session_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_stage1_generated
-                    ON memory_stage1(generated_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_jobs (
-                    scope_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    source_hash TEXT NOT NULL,
-                    lease_until INTEGER NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT,
-                    updated_at INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_entries (
-                    id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
-                    entry_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    body_md TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_entries_scope_status
-                    ON memory_entries(scope_id, status, updated_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_summaries (
-                    scope_id TEXT PRIMARY KEY,
-                    schema_version TEXT NOT NULL,
-                    summary_md TEXT NOT NULL,
-                    source_hash TEXT NOT NULL,
-                    generated_at INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_notes (
-                    id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
-                    slug TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_notes_scope_status
-                    ON memory_notes(scope_id, status, created_at);
-                CREATE TABLE IF NOT EXISTS memory_semantic_observations (
-                    id TEXT PRIMARY KEY,
-                    scope_id TEXT NOT NULL,
-                    subject TEXT NOT NULL,
-                    predicate TEXT NOT NULL,
-                    object TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    source_hash TEXT NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    last_error TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_memory_semantic_scope_status
-                    ON memory_semantic_observations(scope_id, status, created_at DESC);
-                CREATE TABLE IF NOT EXISTS memory_storage_metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-                "#,
+        for (_, ddl) in MEMORY_TABLE_DDL {
+            self.conn.execute(ddl, ()).await.map_err(db_err)?;
+        }
+        for (name, ddl) in MEMORY_INDEX_DDL {
+            if !self.index_exists(name).await? {
+                self.conn.execute(ddl, ()).await.map_err(db_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reshape the memory tables the 2026-10 KMS unification left behind
+    /// (it dropped `scope_id` and switched stage1/jobs/summaries to
+    /// singleton primary keys) back to this crate's layout, preserving
+    /// rows under the process-wide nil scope. Detection is by the stored
+    /// DDL, so a database already on the current layout is a no-op.
+    pub async fn migrate_kms_era_shape(&self) -> Result<()> {
+        let nil = crate::MEMORY_SCOPE_ID.hyphenated().to_string();
+
+        // 1. Notes/semantic only lost the scope column — add it back.
+        for table in ["memory_notes", "memory_semantic_observations"] {
+            if self.table_needs_scope_column(table).await? {
+                self.conn
+                    .execute(
+                        format!(
+                            "ALTER TABLE {table} ADD COLUMN scope_id TEXT NOT NULL DEFAULT '{nil}'"
+                        ),
+                        (),
+                    )
+                    .await
+                    .map_err(|error| {
+                        Error::Storage(format!("add {table}.scope_id back: {error}"))
+                    })?;
+            }
+        }
+
+        // 2. stage1/jobs/summaries changed primary keys — rebuild through a
+        //    staging table so no RENAME support is required. Each rebuild is
+        //    re-entrant: a staging table left behind by a crashed run is
+        //    dropped before the copy starts.
+        for (table, columns) in [
+            (
+                "memory_stage1",
+                &[
+                    "session_id",
+                    "source_hash",
+                    "raw_memory",
+                    "rollout_summary",
+                    "rollout_slug",
+                    "status",
+                    "generated_at",
+                    "lease_until",
+                    "attempts",
+                    "last_error",
+                    "updated_at",
+                ][..],
+            ),
+            (
+                "memory_jobs",
+                &[
+                    "status",
+                    "source_hash",
+                    "lease_until",
+                    "attempts",
+                    "last_error",
+                    "updated_at",
+                ][..],
+            ),
+            (
+                "memory_summaries",
+                &[
+                    "schema_version",
+                    "summary_md",
+                    "source_hash",
+                    "generated_at",
+                ][..],
+            ),
+        ] {
+            if !self.table_has_kms_primary_key(table).await? {
+                continue;
+            }
+            let staging = format!("{table}__kms_mig");
+            // The target shape comes from MEMORY_TABLE_DDL, never from the
+            // stored DDL (which is the legacy shape being replaced).
+            let (_, new_ddl) = MEMORY_TABLE_DDL
+                .iter()
+                .find(|(name, _)| *name == table)
+                .unwrap_or_else(|| panic!("{table} missing from MEMORY_TABLE_DDL"));
+            let target_ddl = new_ddl.replacen(
+                &format!("CREATE TABLE IF NOT EXISTS {table} ("),
+                &format!("CREATE TABLE {table} ("),
+                1,
+            );
+            let staging_ddl = new_ddl.replacen(
+                &format!("CREATE TABLE IF NOT EXISTS {table} ("),
+                &format!("CREATE TABLE {staging} ("),
+                1,
+            );
+            self.conn
+                .execute(format!("DROP TABLE IF EXISTS {staging}"), ())
+                .await
+                .map_err(db_err)?;
+            self.conn
+                .execute(&staging_ddl, ())
+                .await
+                .map_err(|error| Error::Storage(format!("stage {table}: {error}")))?;
+            let column_list = columns.join(", ");
+            self.conn
+                .execute(
+                    format!(
+                        "INSERT INTO {staging} (scope_id, {column_list})
+                         SELECT '{nil}', {column_list} FROM {table}"
+                    ),
+                    (),
+                )
+                .await
+                .map_err(|error| Error::Storage(format!("copy out of {table}: {error}")))?;
+            self.conn
+                .execute(format!("DROP TABLE {table}"), ())
+                .await
+                .map_err(|error| Error::Storage(format!("drop legacy {table}: {error}")))?;
+            self.conn
+                .execute(&target_ddl, ())
+                .await
+                .map_err(|error| Error::Storage(format!("recreate {table}: {error}")))?;
+            self.conn
+                .execute(
+                    format!(
+                        "INSERT INTO {table} (scope_id, {column_list})
+                         SELECT scope_id, {column_list} FROM {staging}"
+                    ),
+                    (),
+                )
+                .await
+                .map_err(|error| Error::Storage(format!("copy back into {table}: {error}")))?;
+            self.conn
+                .execute(format!("DROP TABLE {staging}"), ())
+                .await
+                .map_err(db_err)?;
+        }
+
+        // 3. Drop unified-era indexes whose tables kept their identity.
+        for index in ["idx_memory_notes_status", "idx_memory_semantic_status"] {
+            self.conn
+                .execute(format!("DROP INDEX IF EXISTS {index}"), ())
+                .await
+                .map_err(db_err)?;
+        }
+        Ok(())
+    }
+
+    async fn table_ddl(&self, table: &str) -> Result<Option<String>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params_from_iter([Value::Text(table.into())]),
             )
             .await
-            .map_err(db_err)
+            .map_err(db_err)?;
+        match rows.next().await.map_err(db_err)? {
+            Some(row) => Ok(Some(text(&row, 0)?.to_owned())),
+            None => Ok(None),
+        }
     }
+
+    async fn index_exists(&self, name: &str) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                params_from_iter([Value::Text(name.into())]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    /// True when `table` exists but predates `scope_id` (the KMS-unified
+    /// layout). Detection is by the stored DDL text.
+    async fn table_needs_scope_column(&self, table: &str) -> Result<bool> {
+        match self.table_ddl(table).await? {
+            Some(ddl) => Ok(!ddl.contains("scope_id")),
+            None => Ok(false),
+        }
+    }
+
+    /// True when `table` still carries a KMS-unified primary key (singleton
+    /// or bare session_id) and must be rebuilt.
+    async fn table_has_kms_primary_key(&self, table: &str) -> Result<bool> {
+        let Some(ddl) = self.table_ddl(table).await? else {
+            return Ok(false);
+        };
+        Ok(match table {
+            "memory_stage1" => !ddl.contains("PRIMARY KEY (scope_id, session_id)"),
+            _ => !ddl.contains("scope_id TEXT PRIMARY KEY"),
+        })
+    }
+
 
     /// Copy legacy in-agent.db memory tables into this knowledge database.
     ///
@@ -307,6 +544,20 @@ impl TursoMemoryStorage {
             .to_str()
             .ok_or_else(|| Error::Storage("agent db path is not valid UTF-8".into()))?
             .to_string();
+
+        // The KMS unification converted this database's memory_entries rows
+        // into knowledge-tree nodes and emptied the table; agent.db kept a
+        // frozen copy of the flat rows. Recover them once so the restored
+        // flat-entry memory shows the same entries as before unification.
+        if self.metadata_has(KMS_UNIFICATION_MARKER).await?
+            && !self.metadata_has(KMS_ENTRIES_RECOVERY_MARKER).await?
+            && Path::new(&path).exists()
+        {
+            self.recover_kms_era_entries(&path).await?;
+            self.set_metadata(KMS_ENTRIES_RECOVERY_MARKER, &path).await?;
+            // The legacy marker is necessarily set in a unified database.
+            return Ok(());
+        }
 
         let marker = self
             .conn
@@ -459,6 +710,63 @@ impl TursoMemoryStorage {
             )
             .await
             .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn metadata_has(&self, key: &str) -> Result<bool> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM memory_storage_metadata WHERE key = ?1",
+                params_from_iter([Value::Text(key.into())]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(rows.next().await.map_err(db_err)?.is_some())
+    }
+
+    async fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO memory_storage_metadata(key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params_from_iter([Value::Text(key.into()), Value::Text(value.into())]),
+            )
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Copy the flat `memory_entries` rows out of the frozen agent.db copy
+    /// the KMS unification left behind. The source tables carry the same
+    /// shape as this layout (the unification never touched agent.db).
+    async fn recover_kms_era_entries(&self, path: &str) -> Result<()> {
+        let source_db = Builder::new_local(path)
+            .experimental_multiprocess_wal(true)
+            .build()
+            .await
+            .map_err(db_err)?;
+        let source = source_db.connect().map_err(db_err)?;
+        source
+            .pragma_update("busy_timeout", 5000)
+            .await
+            .map_err(db_err)?;
+        self.copy_table(
+            &source,
+            "memory_entries",
+            &[
+                "id",
+                "scope_id",
+                "entry_type",
+                "title",
+                "body_md",
+                "status",
+                "confidence",
+                "created_at",
+                "updated_at",
+            ],
+        )
+        .await?;
         Ok(())
     }
 
