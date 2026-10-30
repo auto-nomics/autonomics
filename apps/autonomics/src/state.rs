@@ -51,8 +51,6 @@ pub enum WorkspaceFocus {
     Chat,
     Plan,
     Tasks,
-    /// Docked switch-agent panel at the bottom of the sidebar.
-    Agents,
     Input,
 }
 
@@ -356,15 +354,8 @@ impl AgentTabState {
     }
 
     /// Move keyboard focus to a pane, closing the composer unless the
-    /// target is the composer itself. Entering the docked agents panel
-    /// re-anchors its cursor to the active leaf (dropping the stored id
-    /// makes the resolver fall through to the current agent), so Enter on
-    /// arrival is a no-op confirmation; only the transition resets — while
-    /// the panel keeps focus, the j/k cursor survives repeat chords.
+    /// target is the composer itself.
     pub fn focus_pane(&mut self, focus: WorkspaceFocus) {
-        if focus == WorkspaceFocus::Agents && self.workspace_focus != WorkspaceFocus::Agents {
-            self.sidebar.clear_agent_selection();
-        }
         self.workspace_focus = focus;
         self.input_mode = if focus == WorkspaceFocus::Input {
             InputMode::Input
@@ -983,7 +974,9 @@ pub struct AppState {
     /// messages from the active session and lets the user copy one to the
     /// system clipboard.
     pub message_picker: crate::widgets::message_picker::MessagePickerState,
-    /// Agents-panel model quick-picker (m / M).
+    /// Agents popup (Ctrl+T): picker-style switcher over running agents.
+    pub agents_popup: crate::widgets::agents_popup::AgentsPopupState,
+    /// Agents-popup model quick-picker (m / M).
     pub agent_model_picker: crate::widgets::agent_model_picker::AgentModelPickerState,
     /// Agents-panel effort quick-picker (E, bulk).
     pub agent_effort_picker: crate::widgets::agent_effort_picker::AgentEffortPickerState,

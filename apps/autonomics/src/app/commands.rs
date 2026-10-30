@@ -159,9 +159,7 @@ impl App {
             }
             CommandAction::FocusAgentsPanel => {
                 if !self.state.sessions.is_empty() {
-                    self.state
-                        .active_tab_state_mut()
-                        .focus_pane(crate::state::WorkspaceFocus::Agents);
+                    self.toggle_agents_popup();
                 }
             }
             CommandAction::CopyMessage => {

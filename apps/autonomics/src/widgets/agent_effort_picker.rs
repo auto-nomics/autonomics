@@ -74,16 +74,22 @@ pub enum AgentEffortPickerKeyOutcome {
 // State
 // ═══════════════════════════════════════════════════════════════════════
 
-/// State for the agents-panel effort quick-picker popup.
+/// State for the agents-popup effort quick-picker.
 #[derive(Default)]
 pub struct AgentEffortPickerState {
     pub visible: bool,
     pub selected: usize,
+    /// Bulk set captured when the picker opened (the agents popup's tab +
+    /// query filter): (agent path, model is thinking).
+    pub filter: Vec<(String, bool)>,
 }
 
 impl AgentEffortPickerState {
-    pub fn open(&mut self) {
+    /// Open for a bulk set captured by the caller (the agents popup's
+    /// tab + query filter at the moment `E` was pressed).
+    pub fn open_with_filter(&mut self, agents: Vec<(String, bool)>) {
         self.selected = 0;
+        self.filter = agents;
         self.visible = true;
     }
 

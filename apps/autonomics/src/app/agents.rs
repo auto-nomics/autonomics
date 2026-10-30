@@ -105,39 +105,23 @@ impl App {
         tracing::info!(kind = kind.name(), agent = %target_path, "spawning agent...");
     }
 
-    /// Build the workspace tab list (one entry per running agent). Shared
-    /// by the renderer and the mouse stub hit-test so both agree on the
-    /// tab layout.
-    pub(super) fn workspace_tabs(&self) -> Vec<crate::widgets::agent_workspace::LeafTab> {
-        self.state
-            .sessions
-            .iter()
-            .map(|s| crate::widgets::agent_workspace::LeafTab {
-                name: s.name.clone(),
-                status: s
-                    .context
-                    .as_ref()
-                    .map(|context| context.tab_state.status)
-                    .unwrap_or_default(),
-            })
-            .collect()
-    }
-
     /// Snapshot all running agents for the sidebar's docked switch-agent
     /// panel, in the panel's display order (shallow paths first).
-    pub(super) fn running_agents_snapshot(&self) -> Vec<crate::widgets::sidebar::RunningAgent> {
+    pub(super) fn running_agents_snapshot(
+        &self,
+    ) -> Vec<crate::widgets::agents_popup::RunningAgent> {
         let active_name = self
             .state
             .sessions
             .get(self.state.active_agent_idx)
             .map(|s| s.name.clone());
-        let mut agents: Vec<crate::widgets::sidebar::RunningAgent> = self
+        let mut agents: Vec<crate::widgets::agents_popup::RunningAgent> = self
             .state
             .sessions
             .iter()
             .map(|s| {
                 let model_display = self.agent_model_cache.get(&s.name);
-                crate::widgets::sidebar::RunningAgent {
+                crate::widgets::agents_popup::RunningAgent {
                     name: s.name.clone(),
                     agent_id: s.agent_id,
                     status: s
@@ -151,7 +135,7 @@ impl App {
                 }
             })
             .collect();
-        crate::widgets::sidebar::sort_running_agents(&mut agents);
+        crate::widgets::agents_popup::sort_running_agents(&mut agents);
         agents
     }
 

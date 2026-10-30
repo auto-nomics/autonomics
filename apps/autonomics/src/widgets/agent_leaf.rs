@@ -12,7 +12,7 @@ use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode, Works
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState, visual_row_count},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
-    sidebar::{RunningAgent, SideBar, SidebarData},
+    sidebar::{SideBar, SidebarData},
     status_bar::StatusBar,
 };
 
@@ -100,8 +100,6 @@ pub struct AgentLeaf<'a> {
     pub reasoning_effort: Option<&'a str>,
     pub kms_activity: Option<&'a str>,
     pub display: &'a DisplaySettings,
-    /// All running agents for the sidebar's docked switch-agent panel.
-    pub agents: &'a [RunningAgent],
 }
 
 impl StatefulWidgetRef for AgentLeaf<'_> {
@@ -147,11 +145,10 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let middle = layout[0];
 
         // A focused pane whose content vanished (plan finished, tasks
-        // drained, agents closed) cannot keep focus: fall back to Chat.
+        // drained) cannot keep focus: fall back to Chat.
         if match ts.focused_pane() {
             WorkspaceFocus::Plan => ts.plan.is_empty(),
             WorkspaceFocus::Tasks => ts.tool_tasks.is_empty(),
-            WorkspaceFocus::Agents => self.agents.is_empty(),
             _ => false,
         } {
             ts.focus_pane(WorkspaceFocus::Chat);
@@ -250,7 +247,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 data: SidebarData {
                     plan: &ts.plan,
                     tool_tasks: &ts.tool_tasks,
-                    agents: self.agents,
                 },
                 focus,
             };

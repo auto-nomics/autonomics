@@ -23,23 +23,18 @@
 mod empty_state;
 mod logo;
 mod status;
-mod tab_bar;
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     prelude::{Buffer, Widget as _},
     widgets::StatefulWidgetRef as _,
 };
 
 use crate::state::{AgentTabState, DisplaySettings};
 use crate::widgets::agent_leaf::AgentLeaf;
-use crate::widgets::sidebar::RunningAgent;
 
 use empty_state::EmptyState;
 pub(crate) use status::{display_name, status_color, status_icon};
-pub use tab_bar::LeafTab;
-use tab_bar::TabBar;
-pub(crate) use tab_bar::{TabBarFit, fit_tabs};
 
 /// Composes the workspace from its empty state or active-leaf parts.
 pub struct AgentWorkspace<'a> {
@@ -54,40 +49,18 @@ pub struct AgentWorkspace<'a> {
     pub kms_activity: Option<&'a str>,
     /// Global display settings (collapse toggles).
     pub display: &'a DisplaySettings,
-    /// All running agents for the sidebar's docked switch-agent panel.
-    pub agents: &'a [RunningAgent],
 }
 
 impl AgentWorkspace<'_> {
-    /// Render the workspace: tab bar (2 rows) + active leaf (remaining
-    /// space).
+    /// Render the active agent's leaf into the full workspace area.
     ///
-    /// `tabs` is the full list of running agents; `active_idx` determines
-    /// which tab is highlighted and which leaf's `tab_state` is rendered.
-    /// When `tabs` is empty, renders a placeholder prompting the user to
-    /// spawn an agent.
-    pub fn render(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        tabs: &[LeafTab],
-        active_idx: usize,
-        tab_state: &mut AgentTabState,
-    ) {
-        if tabs.is_empty() {
+    /// `tab_state` is the active agent's context state. When no agent is
+    /// running, renders a placeholder prompting the user to spawn an agent.
+    pub fn render(&self, area: Rect, buf: &mut Buffer, tab_state: &mut AgentTabState) {
+        if self.agent_name.is_none() {
             EmptyState.render(area, buf);
             return;
         }
-
-        let areas = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(2), // Tab bar (1 row tabs + 1 row border)
-                Constraint::Min(3),    // Active leaf
-            ])
-            .split(area);
-
-        TabBar { tabs, active_idx }.render(areas[0], buf);
 
         let leaf = AgentLeaf {
             agent_name: self.agent_name,
@@ -96,8 +69,7 @@ impl AgentWorkspace<'_> {
             reasoning_effort: self.reasoning_effort,
             kms_activity: self.kms_activity,
             display: self.display,
-            agents: self.agents,
         };
-        leaf.render_ref(areas[1], buf, tab_state);
+        leaf.render_ref(area, buf, tab_state);
     }
 }

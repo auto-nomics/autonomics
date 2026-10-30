@@ -171,11 +171,6 @@ impl App {
             None => (None, None, None),
         };
 
-        // Collect tab data and the running-agents snapshot before mutably
-        // borrowing tab state (owned data keeps the borrows clean).
-        let workspace_tabs = self.workspace_tabs();
-        let running_agents = self.running_agents_snapshot();
-        let active_idx = self.state.active_agent_idx;
         let display = self.state.display_settings.clone();
         let kms_running = self
             .state
@@ -192,13 +187,10 @@ impl App {
             reasoning_effort: reasoning_effort.as_deref(),
             kms_activity: kms_activity.as_deref(),
             display: &display,
-            agents: &running_agents,
         };
         workspace.render(
             frame.area(),
             frame.buffer_mut(),
-            &workspace_tabs,
-            active_idx,
             self.state.active_tab_state_mut(),
         );
 
@@ -252,7 +244,19 @@ impl App {
                 );
         }
 
-        // ── Agents-panel model / effort quick-pickers ──
+        // ── Agents popup (Ctrl+T) ──
+        if self.state.agents_popup.is_visible() {
+            crate::widgets::agents_popup::render_agents_popup(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.agents_popup,
+            );
+            if let Some((cx, cy)) = self.state.agents_popup.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+            }
+        }
+
+        // ── Agents-popup model / effort quick-pickers ──
         if self.state.agent_model_picker.is_visible() {
             crate::widgets::agent_model_picker::render_agent_model_picker(
                 frame.area(),

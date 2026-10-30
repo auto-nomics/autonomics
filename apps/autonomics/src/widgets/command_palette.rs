@@ -436,8 +436,8 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::ToggleChatOnly,
         },
         Command {
-            title: "Focus agents panel".into(),
-            keywords: "switch agent sidebar docked panel ctrl t".into(),
+            title: "Agents popup".into(),
+            keywords: "switch agent picker popup search filter ctrl t".into(),
             category: "agent".into(),
             action: CommandAction::FocusAgentsPanel,
         },

@@ -8,13 +8,11 @@ fn adjacent_pane(focus: WorkspaceFocus, direction: char) -> WorkspaceFocus {
     use WorkspaceFocus::*;
     match (focus, direction) {
         (Chat | Input, 'l') => Tasks,
-        (Plan | Tasks | Agents, 'h') => Chat,
+        (Plan | Tasks, 'h') => Chat,
         (Tasks, 'k') => Plan,
-        (Agents, 'k') => Tasks,
         (Input, 'k') => Chat,
         (Plan, 'j') => Tasks,
-        (Tasks, 'j') => Agents,
-        (Agents, 'j') => Input,
+        (Tasks, 'j') => Input,
         (Chat, 'j') => Input,
         _ => focus,
     }
@@ -33,7 +31,7 @@ fn populated_adjacent_pane(
         _ => true,
     };
     if matches!(focus, Chat | Input) && direction == 'l' {
-        return [Tasks, Plan, Agents]
+        return [Tasks, Plan]
             .into_iter()
             .find(|&pane| populated(pane))
             .unwrap_or(Chat);
@@ -90,14 +88,8 @@ impl App {
         true
     }
 
-    /// Keys while a sidebar pane (plan / tasks / docked agents panel) holds
-    /// focus.
+    /// Keys while a sidebar pane (plan / tasks) holds focus.
     pub(super) fn handle_sidebar_key(&mut self, key: &KeyEvent) {
-        let ts = self.state.active_tab_state_mut();
-        if ts.focused_pane() == WorkspaceFocus::Agents && ts.sidebar.agent_filter.handle_key(key) {
-            ts.sidebar.reset_agent_scroll();
-            return;
-        }
         if key
             .modifiers
             .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
@@ -106,89 +98,10 @@ impl App {
         }
         let ts = self.state.active_tab_state_mut();
         ts.sidebar.sync(ts.plan.steps.len(), &ts.tool_tasks);
-        let pane = ts.focused_pane();
         match key.code {
             KeyCode::Esc => ts.focus_pane(WorkspaceFocus::Chat),
             // Like Vim's command entry, ':' opens commands from anywhere.
             KeyCode::Char(':') => self.state.command_palette.open(),
-            // Enter on a docked agents-panel row switches that leaf in
-            // (resolved by agent identity, never a stored index) — unless
-            // the column cursor sits on the model or effort cell: Enter
-            // there quick-switches that aspect of the selected agent
-            // instead of moving the leaf.
-            KeyCode::Enter if pane == WorkspaceFocus::Agents => {
-                let agents = self.running_agents_snapshot();
-                let selected = self
-                    .state
-                    .active_tab_state()
-                    .sidebar
-                    .selected_agent_id(&agents);
-                if let Some(agent_id) = selected {
-                    let column = self.state.active_tab_state().sidebar.agent_column;
-                    let agent_name = agents
-                        .iter()
-                        .find(|agent| agent.agent_id == agent_id)
-                        .map(|agent| agent.name.clone());
-                    match column {
-                        crate::widgets::sidebar::AgentColumn::Model => {
-                            if let Some(agent) = agent_name {
-                                self.open_agent_model_picker_single(&agent);
-                            }
-                        }
-                        crate::widgets::sidebar::AgentColumn::Effort => {
-                            if let Some(agent) = agent_name {
-                                self.spawn_agent_effort_cycle(&agent);
-                            }
-                        }
-                        crate::widgets::sidebar::AgentColumn::Name => {
-                            if self.switch_active_agent(agent_id) {
-                                self.state
-                                    .active_tab_state_mut()
-                                    .focus_pane(WorkspaceFocus::Chat);
-                            }
-                        }
-                    }
-                }
-            }
-            // h/l move the agents-panel column cursor (name → model →
-            // effort), skipping columns hidden at the current sidebar
-            // width. Plain h/l reach here only while the inline search is
-            // closed (it owns plain characters while active), like 'm'.
-            KeyCode::Char('h' | 'l')
-                if pane == WorkspaceFocus::Agents && !ts.sidebar.agent_filter.searching =>
-            {
-                ts.sidebar
-                    .advance_agent_column(key.code == KeyCode::Char('l'));
-            }
-            // Quick model / effort switching (agents panel, search closed).
-            // m: model picker for the cursor row · M: model picker for the
-            // whole filtered set · e: cycle the cursor row's effort one
-            // stop · E: effort picker for the filtered set. The bulk paths
-            // ask for confirmation (y/n) after Enter in the picker.
-            KeyCode::Char('m')
-                if pane == WorkspaceFocus::Agents && !ts.sidebar.agent_filter.searching =>
-            {
-                if let Some(agent) = self.selected_agent_name() {
-                    self.open_agent_model_picker_single(&agent);
-                }
-            }
-            KeyCode::Char('M')
-                if pane == WorkspaceFocus::Agents && !ts.sidebar.agent_filter.searching =>
-            {
-                self.open_agent_model_picker_bulk();
-            }
-            KeyCode::Char('e')
-                if pane == WorkspaceFocus::Agents && !ts.sidebar.agent_filter.searching =>
-            {
-                if let Some(agent) = self.selected_agent_name() {
-                    self.spawn_agent_effort_cycle(&agent);
-                }
-            }
-            KeyCode::Char('E')
-                if pane == WorkspaceFocus::Agents && !ts.sidebar.agent_filter.searching =>
-            {
-                self.state.agent_effort_picker.open();
-            }
             KeyCode::Enter if ts.focused_pane() == WorkspaceFocus::Tasks => {
                 let selected = ts.sidebar.tasks.selected();
                 let task = selected.and_then(|index| ts.tool_tasks.get(index));
@@ -228,30 +141,6 @@ impl App {
             | KeyCode::Char('j' | 'k' | 'h' | 'l')
             | KeyCode::Home
             | KeyCode::End => {
-                // Agents-panel cursor moves over the workspace-wide list,
-                // anchored by agent identity so it survives refreshes.
-                if pane == WorkspaceFocus::Agents {
-                    let agents = self.running_agents_snapshot();
-                    let agents = self
-                        .state
-                        .active_tab_state()
-                        .sidebar
-                        .filtered_agents(&agents);
-                    if agents.is_empty() {
-                        return;
-                    }
-                    let ts = self.state.active_tab_state_mut();
-                    let index = ts.sidebar.selected_agent_index(&agents).unwrap_or(0);
-                    let next = match key.code {
-                        KeyCode::Up | KeyCode::Char('k') => index.saturating_sub(1),
-                        KeyCode::Down | KeyCode::Char('j') => (index + 1).min(agents.len() - 1),
-                        KeyCode::Home => 0,
-                        KeyCode::End => agents.len() - 1,
-                        _ => index,
-                    };
-                    ts.sidebar.select_agent(&agents, next);
-                    return;
-                }
                 let tasks = ts.focused_pane() == WorkspaceFocus::Tasks;
                 let (selected, count) = if tasks {
                     (ts.sidebar.tasks.selected(), ts.tool_tasks.len())
@@ -283,17 +172,6 @@ impl App {
 
     // ── Agents-panel helpers ──────────────────────────────
 
-    /// The docked panel's cursor row, as an agent path.
-    pub(super) fn selected_agent_name(&self) -> Option<String> {
-        let agents = self.running_agents_snapshot();
-        self.state
-            .active_tab_state()
-            .sidebar
-            .selected_agent_id(&agents)
-            .and_then(|id| agents.iter().find(|agent| agent.agent_id == id))
-            .map(|agent| agent.name.clone())
-    }
-
     /// Open the model quick-picker for one agent.
     pub(super) fn open_agent_model_picker_single(&mut self, agent: &str) {
         let items = crate::widgets::agent_model_picker::collect_catalog_models(
@@ -316,9 +194,9 @@ impl App {
         );
     }
 
-    /// Open the model quick-picker for every agent passing the panel
-    /// filter.
-    pub(super) fn open_agent_model_picker_bulk(&mut self) {
+    /// Open the model quick-picker for every agent passing the popup's
+    /// tab + query filter.
+    pub(super) fn open_agent_model_picker_bulk(&mut self, filtered: Vec<String>) {
         let items = crate::widgets::agent_model_picker::collect_catalog_models(
             &self.state.model_config_state,
         );
@@ -329,15 +207,6 @@ impl App {
             );
             return;
         }
-        let agents = self.running_agents_snapshot();
-        let filtered: Vec<String> = self
-            .state
-            .active_tab_state()
-            .sidebar
-            .filtered_agents(&agents)
-            .into_iter()
-            .map(|agent| agent.name)
-            .collect();
         if filtered.is_empty() {
             return;
         }
@@ -507,7 +376,7 @@ impl App {
         }
     }
 
-    /// Keys while the agents-panel effort quick-picker is open. Enter arms
+    /// Keys while the agents-popup effort quick-picker is open. Enter arms
     /// the bulk set and routes through the shared y/n confirmation.
     pub(super) fn handle_agent_effort_picker_key(&mut self, key: &KeyEvent) {
         use crate::widgets::agent_effort_picker::AgentEffortPickerKeyOutcome;
@@ -516,19 +385,10 @@ impl App {
             AgentEffortPickerKeyOutcome::Close => self.state.agent_effort_picker.close(),
             AgentEffortPickerKeyOutcome::Confirm { stop } => {
                 self.state.agent_effort_picker.close();
-                let agents = self.running_agents_snapshot();
-                let filtered = self
-                    .state
-                    .active_tab_state()
-                    .sidebar
-                    .filtered_agents(&agents);
-                if filtered.is_empty() {
+                let pairs = std::mem::take(&mut self.state.agent_effort_picker.filter);
+                if pairs.is_empty() {
                     return;
                 }
-                let pairs: Vec<(String, bool)> = filtered
-                    .into_iter()
-                    .map(|agent| (agent.name, agent.effort.is_some()))
-                    .collect();
                 let label = crate::widgets::agent_effort_picker::effort_stop_label(stop);
                 let count = pairs.len();
                 self.state.bulk_confirm = Some(crate::state::BulkConfirm {
@@ -541,5 +401,55 @@ impl App {
                 });
             }
         }
+    }
+}
+
+impl App {
+    /// Keys while the agents popup (Ctrl+T) is open. The popup resolves
+    /// every quick-switch action; this maps its outcomes onto App calls.
+    pub(super) fn handle_agents_popup_key(&mut self, key: &KeyEvent) {
+        use crate::widgets::agents_popup::AgentsPopupKeyOutcome;
+        // Ctrl+W inside the popup closes the selected leaf, mirroring the
+        // former picker's close behavior.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
+            if let Some(agent) = self.state.agents_popup.selected_agent() {
+                let id = agent.agent_id;
+                self.state.agents_popup.close();
+                self.close_agent_leaf_by_id(id);
+            }
+            return;
+        }
+        match self.state.agents_popup.handle_key(*key) {
+            AgentsPopupKeyOutcome::Consumed => {}
+            AgentsPopupKeyOutcome::Close => self.state.agents_popup.close(),
+            AgentsPopupKeyOutcome::Switch(agent_id) => {
+                self.state.agents_popup.close();
+                self.switch_active_agent(agent_id);
+            }
+            AgentsPopupKeyOutcome::OpenModelPicker { agent } => {
+                self.open_agent_model_picker_single(&agent);
+            }
+            AgentsPopupKeyOutcome::OpenModelPickerBulk { agents } => {
+                self.open_agent_model_picker_bulk(agents);
+            }
+            AgentsPopupKeyOutcome::CycleEffort { agent } => {
+                self.spawn_agent_effort_cycle(&agent);
+            }
+            AgentsPopupKeyOutcome::OpenEffortPicker { agents } => {
+                self.state.agent_effort_picker.open_with_filter(agents);
+            }
+        }
+    }
+
+    /// Toggle the agents popup (Ctrl+T): opening snapshots the running
+    /// agents into the picker.
+    pub(super) fn toggle_agents_popup(&mut self) {
+        if self.state.agents_popup.is_visible() {
+            self.state.agents_popup.close();
+            return;
+        }
+        let mut agents = self.running_agents_snapshot();
+        crate::widgets::agents_popup::sort_running_agents(&mut agents);
+        self.state.agents_popup.open_with(agents);
     }
 }

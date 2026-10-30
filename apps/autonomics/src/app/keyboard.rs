@@ -77,6 +77,7 @@ impl App {
             || state.command_palette.is_visible()
             || state.profile_picker.visible
             || state.agent_profile_picker.visible
+            || state.agents_popup.is_visible()
             || state.agent_model_picker.is_visible()
             || state.agent_effort_picker.visible
             || state.name_input.visible
@@ -87,56 +88,6 @@ impl App {
             || state.embedding_config_visible
             || state.agent_config.visible
         {
-            return 0;
-        }
-
-        // A left click on the tab bar's `>` collapse stub focuses the docked
-        // switch-agent panel (the full list lives there).
-        if let MouseEventKind::Down(crossterm::event::MouseButton::Left) = mouse.kind {
-            if self.tab_stub_hit(mouse.column, mouse.row) {
-                self.state
-                    .active_tab_state_mut()
-                    .focus_pane(crate::state::WorkspaceFocus::Agents);
-                return 0;
-            }
-            let sidebar = &mut self.state.active_tab_state_mut().sidebar;
-            if sidebar.agent_filter.click(mouse.column, mouse.row) {
-                sidebar.reset_agent_scroll();
-                self.state
-                    .active_tab_state_mut()
-                    .focus_pane(crate::state::WorkspaceFocus::Agents);
-                return 0;
-            }
-            let clicked = sidebar.click_agent_cell(mouse.column, mouse.row);
-            if let Some((agent_id, cell)) = clicked {
-                match cell {
-                    crate::widgets::sidebar::AgentCell::Model => {
-                        let agent = self
-                            .state
-                            .sessions
-                            .iter()
-                            .find(|s| s.agent_id == agent_id)
-                            .map(|s| s.name.clone());
-                        if let Some(agent) = agent {
-                            self.open_agent_model_picker_single(&agent);
-                        }
-                    }
-                    crate::widgets::sidebar::AgentCell::Effort => {
-                        let agent = self
-                            .state
-                            .sessions
-                            .iter()
-                            .find(|s| s.agent_id == agent_id)
-                            .map(|s| s.name.clone());
-                        if let Some(agent) = agent {
-                            self.spawn_agent_effort_cycle(&agent);
-                        }
-                    }
-                    crate::widgets::sidebar::AgentCell::Row => {
-                        self.switch_active_agent(agent_id);
-                    }
-                }
-            }
             return 0;
         }
 
@@ -155,25 +106,6 @@ impl App {
             }
             _ => 0,
         }
-    }
-
-    /// `true` when `(x, y)` is inside the tab bar's collapse stub. Recomputes
-    /// the same layout the renderer used (via [`fit_tabs`]) against the last
-    /// frame area.
-    fn tab_stub_hit(&self, x: u16, y: u16) -> bool {
-        let area = self.state.last_frame_area;
-        // Tab labels render on the first row of the workspace area, which
-        // starts below the 2-row tab bar strip.
-        if area.width == 0 || y != area.y {
-            return false;
-        }
-        let tabs = self.workspace_tabs();
-        let fit = crate::widgets::agent_workspace::fit_tabs(
-            area.width as usize,
-            &tabs,
-            self.state.active_agent_idx,
-        );
-        fit.collapsed && (x as usize) >= fit.used_width && x < area.width
     }
 
     /// Apply a batched scroll delta to the agent tab.
@@ -208,15 +140,12 @@ impl App {
             return;
         }
 
-        // Ctrl+T: focus the docked switch-agent panel in the sidebar (all
-        // running agents — the status line only names the active one). The
-        // pane entry re-anchors the cursor to the active leaf (see
-        // `focus_pane`) so Enter on arrival is a no-op confirmation.
+        // Ctrl+T: toggle the agents popup — the picker-style switcher over
+        // every running agent (search, status tabs, model/effort quick
+        // switching).
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('t') {
             if !self.state.sessions.is_empty() {
-                self.state
-                    .active_tab_state_mut()
-                    .focus_pane(crate::state::WorkspaceFocus::Agents);
+                self.toggle_agents_popup();
             }
             return;
         }
@@ -238,30 +167,10 @@ impl App {
         }
 
         // Ctrl+W: close the active agent leaf (and terminate its background
-        // process). While the docked agents panel holds focus, it instead
-        // closes the panel's selected leaf — which may be a non-active one.
+        // process). Inside the agents popup it closes the selected leaf.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
             if self.state.sessions.is_empty() {
                 return;
-            }
-            if self.state.active_tab_state().focused_pane() == crate::state::WorkspaceFocus::Agents
-                && !self.state.active_tab_state().sidebar.agent_filter.searching
-            {
-                let agents = self.running_agents_snapshot();
-                let selected = self
-                    .state
-                    .active_tab_state()
-                    .sidebar
-                    .selected_agent_id(&agents);
-                let active_id = self
-                    .state
-                    .sessions
-                    .get(self.state.active_agent_idx)
-                    .map(|session| session.agent_id);
-                if let Some(agent_id) = selected.filter(|id| Some(*id) != active_id) {
-                    self.close_agent_leaf_by_id(agent_id);
-                    return;
-                }
             }
             self.close_active_agent();
             return;
@@ -285,7 +194,14 @@ impl App {
             return;
         }
 
-        // Agents-panel model quick-picker (m / M) captures keys when
+        // Agents popup (Ctrl+T) captures keys when visible; its quick
+        // pickers sit just below it.
+        if self.state.agents_popup.is_visible() {
+            self.handle_agents_popup_key(key);
+            return;
+        }
+
+        // Agents-popup model quick-picker (m / M) captures keys when
         // visible; the effort picker (E) sits just below it.
         if self.state.agent_model_picker.is_visible() {
             self.handle_agent_model_picker_key(key);
@@ -371,12 +287,10 @@ impl App {
     }
 
     fn handle_agent_key(&mut self, key: &KeyEvent) {
-        // A focused sidebar pane owns the keys (plan / tasks / agents).
+        // A focused sidebar pane owns the keys (plan / tasks).
         if matches!(
             self.state.active_tab_state().focused_pane(),
-            crate::state::WorkspaceFocus::Plan
-                | crate::state::WorkspaceFocus::Tasks
-                | crate::state::WorkspaceFocus::Agents
+            crate::state::WorkspaceFocus::Plan | crate::state::WorkspaceFocus::Tasks
         ) {
             self.handle_sidebar_key(key);
             return;
