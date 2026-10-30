@@ -35,6 +35,23 @@ impl App {
             CommandAction::Quit => {
                 self.should_quit = true;
             }
+            CommandAction::OpenCommandPalette => {
+                self.state.command_palette.toggle();
+            }
+            CommandAction::FocusPlanPane => {
+                if !self.state.sessions.is_empty() {
+                    self.state
+                        .active_tab_state_mut()
+                        .focus_pane(crate::state::WorkspaceFocus::Plan);
+                }
+            }
+            CommandAction::FocusTasksPane => {
+                if !self.state.sessions.is_empty() {
+                    self.state
+                        .active_tab_state_mut()
+                        .focus_pane(crate::state::WorkspaceFocus::Tasks);
+                }
+            }
             CommandAction::CancelAgent => {
                 if self.state.active_status().is_active() {
                     let agent_name = self

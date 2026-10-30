@@ -141,6 +141,53 @@ impl App {
             .render(inner, buf);
     }
 
+    /// The which-key hint strip: the pending leader prefix plus every
+    /// binding it offers, floating one row above the composer. Transient
+    /// by design — it disappears the moment the prefix resolves.
+    fn render_leader_hint(
+        &self,
+        area: ratatui::layout::Rect,
+        buf: &mut ratatui::prelude::Buffer,
+        prefix: &[char],
+    ) {
+        use ratatui::{
+            layout::Rect,
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Clear, Paragraph, Widget},
+        };
+
+        let width = area.width.saturating_sub(4).min(72);
+        if width < 10 {
+            return;
+        }
+        let x = area.x + (area.width - width) / 2;
+        let y = area.bottom().saturating_sub(3);
+        let strip = Rect::new(x, y, width, 1);
+
+        Clear.render(strip, buf);
+        let text = super::leader::whichkey_line(prefix, width as usize - 2);
+        let line = Line::from(vec![
+            Span::styled(
+                " leader ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" {text}"), Style::default().fg(Color::Gray)),
+            Span::styled("  Esc 取消", Style::default().fg(Color::DarkGray)),
+        ]);
+        Paragraph::new(line).render(strip, buf);
+        // Frame the strip so it reads as floating over the transcript.
+        for sx in strip.x..strip.right() {
+            buf.set_style(
+                ratatui::layout::Rect::new(sx, strip.y, 1, 1),
+                Style::default().bg(Color::Rgb(20, 30, 40)),
+            );
+        }
+    }
+
     pub(super) fn render(&mut self, frame: &mut Frame) {
         // Remember the frame area for mouse hit-testing (tab-bar stub).
         self.state.last_frame_area = frame.area();
@@ -379,6 +426,11 @@ impl App {
                     frame.buffer_mut(),
                     &mut self.state.skill_evolution,
                 );
+        }
+
+        // ── Which-key hint (leader prefix active) ──
+        if let Some(prefix) = &self.leader_pending {
+            self.render_leader_hint(frame.area(), frame.buffer_mut(), prefix);
         }
 
         // ── Toast notifications (top-most overlay, bottom-right corner) ──

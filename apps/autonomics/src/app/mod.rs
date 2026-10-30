@@ -35,6 +35,7 @@ mod embedding_config;
 mod event_loop;
 mod history;
 mod keyboard;
+mod leader;
 mod model_config;
 mod naming;
 mod render;
@@ -72,6 +73,10 @@ pub struct App {
     model_info_pending: HashSet<String>,
     should_quit: bool,
     cancel_requested_at: Option<Instant>,
+    /// Active leader-key prefix (`<Space>` sequences): `None` when idle,
+    /// `Some(group keys)` while waiting, with an empty slice at the root.
+    /// See [`leader`](self::leader).
+    leader_pending: Option<Vec<char>>,
     dirty: bool,
 }
 
@@ -188,6 +193,7 @@ impl App {
             model_info_pending: HashSet::new(),
             should_quit: false,
             cancel_requested_at: None,
+            leader_pending: None,
             dirty: true,
         };
 

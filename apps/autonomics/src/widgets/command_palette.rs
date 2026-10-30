@@ -26,6 +26,12 @@ use crate::xai_textarea::{TextArea, TextAreaState};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
     Quit,
+    /// Toggle the command palette itself (the `<leader><leader>` slot).
+    OpenCommandPalette,
+    /// Move keyboard focus to the sidebar's plan pane.
+    FocusPlanPane,
+    /// Move keyboard focus to the sidebar's tasks pane.
+    FocusTasksPane,
     CancelAgent,
     ToggleAutoScroll,
     ScrollToBottom,

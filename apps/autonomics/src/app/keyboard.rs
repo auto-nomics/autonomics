@@ -118,6 +118,65 @@ impl App {
         }
     }
 
+    /// True while any modal surface owns the screen (leader keys are a
+    /// browse-mode affordance and must not fight an open popup).
+    fn any_overlay_open(&self) -> bool {
+        let state = &self.state;
+        state.delete_agent_confirm
+            || state.bulk_confirm.is_some()
+            || state.command_palette.is_visible()
+            || state.profile_picker.visible
+            || state.agent_profile_picker.visible
+            || state.agents_popup.is_visible()
+            || state.agent_model_picker.is_visible()
+            || state.agent_effort_picker.visible
+            || state.name_input.visible
+            || state.message_picker.is_visible()
+            || state.dag_view_visible
+            || state.bibliography_visible
+            || state.model_config_visible
+            || state.embedding_config_visible
+            || state.agent_config.visible
+            || state.skill_evolution.visible
+    }
+
+    /// Feed one key to the pending leader prefix. Returns `true` when the
+    /// key was consumed (the caller must not forward it). `Esc` cancels;
+    /// any unmapped key cancels and is swallowed, LazyVim-style.
+    fn handle_leader_key(&mut self, key: &KeyEvent) -> bool {
+        if key.kind != crossterm::event::KeyEventKind::Press {
+            return true;
+        }
+        if key.code == KeyCode::Esc {
+            self.leader_pending = None;
+            return true;
+        }
+        let Some(ch) = key.code.as_char() else {
+            // Chords (Ctrl+…, arrows, Enter) cancel the prefix and are
+            // swallowed; re-press the chord if it was meant to act.
+            self.leader_pending = None;
+            return true;
+        };
+        let prefix = self.leader_pending.take().unwrap_or_default();
+        match super::leader::resolve(&prefix, ch) {
+            super::leader::LeaderResolve::Deeper(_) => {
+                let mut deeper = prefix;
+                deeper.push(ch);
+                self.leader_pending = Some(deeper);
+            }
+            super::leader::LeaderResolve::Hit(action) => {
+                self.run_command_action(action);
+            }
+            super::leader::LeaderResolve::Miss => {
+                self.state.toasts.info(
+                    "Leader",
+                    Some(format!("␣{ch} 未绑定;Esc 取消,␣␣ 打开命令面板")),
+                );
+            }
+        }
+        true
+    }
+
     pub(super) fn handle_key(&mut self, key: &KeyEvent) {
         // Delete-agent confirmation popup captures keys when visible.
         if self.state.delete_agent_confirm {
@@ -129,6 +188,13 @@ impl App {
         // (same y/n pattern as the delete confirmation above it).
         if self.state.bulk_confirm.is_some() {
             self.handle_bulk_confirm_key(key);
+            return;
+        }
+
+        // An active leader prefix consumes the next key (which-key hint is
+        // rendered above the composer).
+        if self.leader_pending.is_some() {
+            self.handle_leader_key(key);
             return;
         }
 
@@ -252,6 +318,19 @@ impl App {
 
         if self.state.agent_config.visible {
             self.handle_agent_config_key(key);
+            return;
+        }
+
+        // <Space> enters the leader prefix (LazyVim-style), available in
+        // browse mode whenever no popup owns the screen. The composer is
+        // never active in browse mode, so the space is free.
+        if key.code == KeyCode::Char(' ')
+            && key.modifiers.is_empty()
+            && !self.any_overlay_open()
+            && self.state.active_tab_state().input_mode == InputMode::Browse
+        {
+            // Empty prefix = the root menu.
+            self.leader_pending = Some(Vec::new());
             return;
         }
 
