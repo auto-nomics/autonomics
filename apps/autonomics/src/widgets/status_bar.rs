@@ -89,7 +89,10 @@ impl Widget for StatusBar<'_> {
         ];
 
         if let Some(kms_activity) = self.kms_activity {
-            spans.push(Span::styled("  │  ", bg));
+            // No separator between the status label and the kms readout —
+            // they read as one left-hand group. The ctx segment keeps its
+            // own separator below.
+            spans.push(Span::styled("  ", bg));
             spans.push(Span::styled(
                 "kms:",
                 base(Style::default().fg(Color::DarkGray)),
