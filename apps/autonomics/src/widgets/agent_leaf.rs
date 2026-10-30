@@ -11,7 +11,6 @@ use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState, visual_row_count},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
-    session_list::SessionSummary,
     sidebar::{SideBar, SidebarData},
     status_bar::StatusBar,
 };
@@ -89,7 +88,6 @@ pub struct AgentLeaf<'a> {
     /// The reasoning effort the active agent's next request would send.
     pub reasoning_effort: Option<&'a str>,
     pub kms_activity: Option<&'a str>,
-    pub sessions: &'a [SessionSummary],
     pub display: &'a DisplaySettings,
 }
 
@@ -243,7 +241,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 data: SidebarData {
                     plan: &ts.plan,
                     tool_tasks: &ts.tool_tasks,
-                    sessions: self.sessions,
                 },
             };
             sidebar.render(sb_area, buf);

@@ -82,8 +82,6 @@ pub enum RunError {
     Spawn { message: String },
     #[error("prompt delivery failed: {message}")]
     Send { message: String },
-    #[error("session switch failed for {session}: {message}")]
-    SessionSwitch { session: Uuid, message: String },
     #[error("run cancelled")]
     Cancelled,
 }

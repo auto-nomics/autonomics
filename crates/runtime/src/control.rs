@@ -244,43 +244,6 @@ impl HostControl {
         self.fire(HostCommand::ListSessions { name: name.into() });
     }
 
-    pub fn create_session(
-        &self,
-        name: &str,
-        title: Option<String>,
-        fork_from: Option<uuid::Uuid>,
-        fork_message_id: Option<String>,
-    ) {
-        self.fire(HostCommand::CreateSession {
-            name: name.into(),
-            title,
-            fork_from,
-            fork_message_id,
-        });
-    }
-
-    pub fn switch_session(&self, name: &str, session_id: uuid::Uuid) {
-        self.fire(HostCommand::SwitchSession {
-            name: name.into(),
-            session_id,
-        });
-    }
-
-    pub fn close_session(&self, name: &str, session_id: uuid::Uuid) {
-        self.fire(HostCommand::CloseSession {
-            name: name.into(),
-            session_id,
-        });
-    }
-
-    pub fn rename_session(&self, name: &str, session_id: uuid::Uuid, title: String) {
-        self.fire(HostCommand::RenameSession {
-            name: name.into(),
-            session_id,
-            title,
-        });
-    }
-
     // ── Model management ──
 
     pub fn set_agent_model(&self, name: &str, model: Model) {
@@ -554,35 +517,9 @@ pub enum HostCommand {
     /// Trigger manual compaction on a named agent's active session.
     CompactAgent { name: String },
 
-    /// Request session list from a named agent.
+    /// Request session list from a named agent. With one context per
+    /// agent the reply carries at most one entry.
     ListSessions { name: String },
-
-    /// Create a new session in a named agent.
-    CreateSession {
-        name: String,
-        title: Option<String>,
-        fork_from: Option<uuid::Uuid>,
-        fork_message_id: Option<String>,
-    },
-
-    /// Switch the active session of a named agent.
-    SwitchSession {
-        name: String,
-        session_id: uuid::Uuid,
-    },
-
-    /// Close a session in a named agent.
-    CloseSession {
-        name: String,
-        session_id: uuid::Uuid,
-    },
-
-    /// Rename a session in a named agent.
-    RenameSession {
-        name: String,
-        session_id: uuid::Uuid,
-        title: String,
-    },
 
     // ── Model management ──
     /// Hot-swap the model of a named agent.

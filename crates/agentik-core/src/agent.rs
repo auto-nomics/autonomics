@@ -1,18 +1,26 @@
-//! # Agent — session manager and shared resource owner.
+//! # Agent — one persistent working context and its shared resources.
 //!
 //! An `Agent` owns stable resources (model, tool registry, storage, prompt
-//! configuration) and manages one or more [`Session`](crate::Session)s — each
-//! representing an independent conversation. Only one session is *active*
-//! at a time (single-active model). Switching sessions pauses the current
-//! one and activates the target.
+//! configuration) and exactly one working context: a
+//! [`Session`](crate::Session) that lives as long as the agent does.
+//! Independent work uses another agent; continuation restores that agent's
+//! context automatically. Conversation creation, switching, forking and
+//! closing within an agent are refused — `Session` and `session_id` remain
+//! internal persistence and wire-format names for compatibility.
+//!
+//! On boot the agent restores its bound context from the `agent_contexts`
+//! table. Legacy multi-session histories select their most recently active
+//! record once (ties break by creation time then UUID) and bind it
+//! permanently; the other histories stay readable through storage/history
+//! APIs. A missing or ambiguous binding never falls back to another record
+//! or an empty context — the agent refuses conversation until recovered.
 //!
 //! The outer [`Agent::run`] loop is an event dispatcher: it reads
 //! [`InternalEvent`]s from its channel, applies session management events
-//! (create / switch / close), and delegates conversation events
-//! (`MessageInject`, `BgTaskComplete`) to the active session's
+//! (legacy commands are recognized and refused), and delegates conversation
+//! events (`MessageInject`, `BgTaskComplete`) to the context's
 //! [`Session::run_session`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use agentik_sdk::model::Model;
@@ -24,9 +32,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AgentError, Result};
-use crate::session::SessionState;
 use crate::session::{AgentShared, Session};
-use crate::storage::{AgentRecord, AgentStorage, PersistOp};
+use crate::storage::{AgentRecord, AgentStorage, PersistOp, StorageError};
 use crate::tools::ToolRegistration;
 use agentik_types::SessionInfo;
 
@@ -73,25 +80,29 @@ pub enum InternalEvent {
     Shutdown,
     /// Replace the active session's cancellation token with a fresh one.
     ResetCancelToken(CancellationToken),
-    /// Create a new session. If `fork_from` is `Some`, deep-clone memory
-    /// from the named parent session.
+    /// Legacy initialization command. Only an empty agent can initialize
+    /// its sole context; replacement and fork arguments are explicitly
+    /// refused.
     CreateSession {
         id: Uuid,
         fork_from: Option<Uuid>,
         fork_message_id: Option<String>,
         title: Option<String>,
     },
-    /// Switch the active session to `id`.
+    /// Legacy selection command: foreign context IDs are refused.
     SwitchSession {
         id: Uuid,
     },
-    /// Close and remove a session.
+    /// Legacy close command: refused; the context lives as long as its
+    /// agent.
     CloseSession {
         id: Uuid,
     },
-    /// Request a list of all sessions (reply via event channel).
+    /// Request a list of all sessions (reply via event channel). With one
+    /// context per agent the reply carries at most one entry.
     ListSessions,
-    /// Rename a session (update title in memory + storage).
+    /// Rename the sole context (same-id renames only; foreign IDs are
+    /// refused).
     RenameSession {
         id: Uuid,
         title: String,
@@ -102,19 +113,23 @@ pub enum InternalEvent {
 
 pub struct Agent {
     pub(crate) shared: Arc<AgentShared>,
-    pub(crate) sessions: HashMap<Uuid, Session>,
-    pub(crate) active_session_id: Option<Uuid>,
+    /// The agent's sole working context. `None` only before the first
+    /// message (auto-created then) or while persistence recovery is pending.
+    pub(crate) context: Option<Session>,
+    /// Set when durable history exists but cannot be safely resumed (bound
+    /// context missing). Metadata only — conversation is refused with the
+    /// stored notice until the operator recovers the agent.
+    pub(crate) recovery_notice: Option<String>,
     pub(crate) internal_event_tx: UnboundedSender<InternalEvent>,
     /// Receiver consumed once by [`run()`]; `None` after that.
     pub(crate) internal_event_rx: Option<UnboundedReceiver<InternalEvent>>,
     /// Initial messages from the builder. Used as a fallback when no
     /// session records exist in storage. Consumed during `run()`.
     pub(crate) initial_messages: Option<Vec<agentik_sdk::types::messages::Message>>,
-    /// Cancel token from the builder, used when auto-creating sessions.
+    /// Cancel token from the builder, used when auto-creating the context.
     pub(crate) cancel_token: CancellationToken,
 }
 
-const AUTO_SESSION_TITLE: &str = "New conversation";
 const RESTORED_SESSION_TITLE: &str = "Restored";
 
 impl Agent {
@@ -205,15 +220,15 @@ impl Agent {
         Ok(())
     }
 
-    // ── Session accessors ─────────────────────────────────
+    // ── Context accessors ─────────────────────────────────
 
+    /// The agent's sole working context (see the module docs).
     pub fn active_session(&self) -> Option<&Session> {
-        self.active_session_id.and_then(|id| self.sessions.get(&id))
+        self.context.as_ref()
     }
 
     pub fn active_session_mut(&mut self) -> Option<&mut Session> {
-        self.active_session_id
-            .and_then(|id| self.sessions.get_mut(&id))
+        self.context.as_mut()
     }
 
     pub fn lifecycle_status(&self) -> agentik_types::AgentLifecycleStatus {
@@ -245,8 +260,14 @@ impl Agent {
         }
     }
 
+    /// Session metadata for `ListSessions` replies: the sole context, or an
+    /// empty list while recovery is pending.
     pub fn session_infos(&self) -> Vec<SessionInfo> {
-        self.sessions.values().map(SessionInfo::from).collect()
+        self.context
+            .as_ref()
+            .map(SessionInfo::from)
+            .into_iter()
+            .collect()
     }
 
     // ── Snapshot ──────────────────────────────────────────
@@ -279,10 +300,10 @@ impl Agent {
 
             let (persist_tx, persist_rx) = tokio::sync::mpsc::unbounded_channel::<PersistOp>();
 
-            // Store in shared so sessions created later can also access it.
+            // Store in shared so contexts created later can also access it.
             let _ = self.shared.persist_tx.set(persist_tx);
-            // Wire into existing sessions.
-            for session in self.sessions.values_mut() {
+            // Wire into an existing context.
+            if let Some(session) = self.context.as_mut() {
                 if let Some(tx) = self.shared.persist_tx.get() {
                     session.persist_tx = Some(tx.clone());
                 }
@@ -312,81 +333,82 @@ impl Agent {
             }
         }
 
-        // ── Restore sessions from storage ──
-        // Query all session records and rebuild sessions that no longer
-        // exist in the HashMap (they were created in a prior run but lost
-        // on restart).
+        // ── Restore the sole context from storage ──
+        // Select BEFORE recovery: a damaged or missing bound context must
+        // never silently fall back to another record or an empty one.
+        // Legacy multi-session histories select their most recently active
+        // record once and bind it permanently; older histories stay
+        // read-only in storage.
         if let Some(storage) = self.shared.storage.clone() {
-            match storage.as_ref().list_session_records(self.shared.id).await {
-                Ok(records) => {
-                    for rec in records {
-                        // Skip if this session is already in the HashMap.
-                        if self.sessions.contains_key(&rec.session_id) {
-                            if let Some(t) = &rec.title {
-                                if let Some(s) = self.sessions.get_mut(&rec.session_id) {
-                                    if s.title.is_none() {
-                                        s.title = Some(t.clone());
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        // Rebuild a session from storage using the unified
-                        // restore_session_state helper (snapshot + WAL).
-                        let mut s = Session::new(rec.session_id, self.shared.clone());
-                        s.cancel_token = self.cancel_token.clone();
-                        s.title = rec.title;
-                        s.created_at = rec.started_at;
-                        s.last_active = rec.last_active;
-                        s.telemetry = rec.telemetry;
-                        s.parent_session_id = rec.parent_session_id;
-                        s.fork_point_message_id = rec.fork_point_message_id;
+            match Self::restore_context_record(storage.as_ref(), self.shared.id).await {
+                Ok(Some(rec)) => {
+                    // Rebuild the context from storage using the unified
+                    // restore_session_state helper (snapshot + WAL).
+                    let mut s = Session::new(rec.session_id, self.shared.clone());
+                    s.cancel_token = self.cancel_token.clone();
+                    s.title = rec.title;
+                    s.created_at = rec.started_at;
+                    s.last_active = rec.last_active;
+                    s.telemetry = rec.telemetry;
+                    s.parent_session_id = rec.parent_session_id;
+                    s.fork_point_message_id = rec.fork_point_message_id;
 
-                        match crate::storage::restore_session_state(
-                            storage.as_ref(),
-                            self.shared.id,
-                            rec.session_id,
-                        )
-                        .await
-                        {
-                            Ok(state) => {
-                                s.messages = state.messages;
-                                s.summary = state.summary;
-                                s.ancestor_summaries = state.ancestor_summaries;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "failed to restore session state for {}", rec.session_id
-                                );
-                            }
+                    match crate::storage::restore_session_state(
+                        storage.as_ref(),
+                        self.shared.id,
+                        rec.session_id,
+                    )
+                    .await
+                    {
+                        Ok(state) => {
+                            s.messages = state.messages;
+                            s.summary = state.summary;
+                            s.ancestor_summaries = state.ancestor_summaries;
                         }
-
-                        // Restore this session's persisted plan. `set_plan`
-                        // stores in place, so the Toolset's captured handle
-                        // sees the restored plan immediately.
-                        match storage
-                            .as_ref()
-                            .load_plan(self.shared.id, rec.session_id)
-                            .await
-                        {
-                            Ok(Some(plan)) if !plan.is_empty() => s.set_plan(plan),
-                            Ok(_) => {}
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "failed to restore plan for session {}", rec.session_id
-                                );
-                            }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to restore context state for {}", rec.session_id
+                            );
                         }
-
-                        tracing::info!(
-                            session_id = %rec.session_id,
-                            title = ?s.title,
-                            "restored session from storage"
-                        );
-                        self.sessions.insert(rec.session_id, s);
                     }
+
+                    // Restore the context's persisted plan. `set_plan`
+                    // stores in place, so the Toolset's captured handle
+                    // sees the restored plan immediately.
+                    match storage
+                        .as_ref()
+                        .load_plan(self.shared.id, rec.session_id)
+                        .await
+                    {
+                        Ok(Some(plan)) if !plan.is_empty() => s.set_plan(plan),
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "failed to restore plan for session {}", rec.session_id
+                            );
+                        }
+                    }
+
+                    tracing::info!(
+                        session_id = %rec.session_id,
+                        title = ?s.title,
+                        "restored sole context from storage"
+                    );
+                    s.resume().await;
+                    self.context = Some(s);
+                }
+                Ok(None) => {}
+                Err(StorageError::RecoveryRequired(reason)) => {
+                    let notice = format!(
+                        "PERSISTENCE_RECOVERY_REQUIRED: {reason}. History preserved. \
+                         Create another agent for independent work; this context was not resumed."
+                    );
+                    tracing::warn!(agent_id = %self.shared.id, %reason,
+                        "context recovery required; refusing an empty replacement");
+                    self.shared.send_event(AgentEvent::Error(notice.clone()));
+                    self.recovery_notice = Some(notice);
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to list session records");
@@ -395,9 +417,9 @@ impl Agent {
         }
 
         // ── Fallback: no session records in storage ──
-        // If the builder provided initial messages and no sessions were
-        // loaded from storage, create one session with those messages.
-        if self.sessions.is_empty() {
+        // If the builder provided initial messages and no context was
+        // restored, create one with those messages and bind it.
+        if self.context.is_none() && self.recovery_notice.is_none() {
             if let Some(messages) = self.initial_messages.take() {
                 let id = Uuid::new_v4();
                 let state = crate::session::SessionState {
@@ -415,17 +437,9 @@ impl Agent {
                 s.title = Some(RESTORED_SESSION_TITLE.into());
                 s.resume().await;
                 self.persist_session_title(id, RESTORED_SESSION_TITLE).await;
-                self.sessions.insert(id, s);
-                self.active_session_id = Some(id);
+                self.bind_context(id).await;
+                self.context = Some(s);
                 tracing::info!("created fallback session from builder initial messages");
-            }
-        } else if self.active_session_id.is_none() {
-            // Sessions exist but none is active — activate the first one.
-            if let Some(&id) = self.sessions.keys().next() {
-                self.active_session_id = Some(id);
-                if let Some(s) = self.sessions.get_mut(&id) {
-                    s.resume().await;
-                }
             }
         }
 
@@ -435,23 +449,26 @@ impl Agent {
                 None => break,
             };
 
-            // ── Auto-create a session on first message ──
-            // If no session exists yet, create one before processing the
-            // event so the message isn't lost.
+            // ── Auto-create the context on first message ──
+            // If no context exists yet, create one before processing the
+            // event so the message isn't lost. Titled with the agent name:
+            // the context IS the agent's conversation now.
             if matches!(event, InternalEvent::MessageInject { .. })
-                && self.active_session_id.is_none()
+                && self.context.is_none()
+                && self.recovery_notice.is_none()
             {
                 let id = Uuid::new_v4();
+                let title = self.shared.name().to_string();
                 let mut s = Session::new(id, self.shared.clone());
-                s.title = Some(AUTO_SESSION_TITLE.into());
+                s.title = Some(title.clone());
                 s.cancel_token = self.cancel_token.clone();
                 s.resume().await;
-                self.persist_session_title(id, AUTO_SESSION_TITLE).await;
-                self.sessions.insert(id, s);
-                self.active_session_id = Some(id);
+                self.persist_session_title(id, &title).await;
+                self.bind_context(id).await;
+                self.context = Some(s);
                 self.shared.send_event(AgentEvent::SessionActivated {
                     id,
-                    title: Some(AUTO_SESSION_TITLE.into()),
+                    title: Some(title),
                 });
                 tracing::info!("auto-created session on first message");
             }
@@ -516,32 +533,96 @@ impl Agent {
             }
 
             if should_run {
-                if let Some(id) = self.active_session_id {
-                    let tx = self.internal_event_tx.clone();
-                    if let Some(session) = self.sessions.get_mut(&id) {
-                        session.run_session(&tx, &mut rx, delegation_id).await;
-                        // A cancel can replace the token while run_session owns
-                        // the receiver. Keep Agent-owned session creation in
-                        // sync with that fresh token.
-                        self.cancel_token = session.cancel_token.clone();
-                    }
+                let tx = self.internal_event_tx.clone();
+                if let Some(session) = self.context.as_mut() {
+                    session.run_session(&tx, &mut rx, delegation_id).await;
+                    // A cancel can replace the token while run_session owns
+                    // the receiver. Keep Agent-owned context creation in
+                    // sync with that fresh token.
+                    self.cancel_token = session.cancel_token.clone();
                 }
             }
         }
 
-        // Shutdown: cancel background tool tasks, then pause all sessions.
+        // Shutdown: cancel background tool tasks, then pause the context.
         // Background tasks (e.g. run_dag, run_bash) are tokio::spawn'd and
         // would outlive the agent task; cancelling their tokens lets them
         // exit cleanly before the runtime is dropped.
-        for session in self.sessions.values_mut() {
+        if let Some(session) = self.context.as_mut() {
             session.finish_turn(agentik_types::TurnExecutionStatus::Interrupted);
             session.toolset.cancel_all_tasks().await;
             session.pause().await;
         }
     }
 
+    /// Select the agent's sole context record and pin the binding.
+    ///
+    /// The `agent_contexts` binding is authoritative once written. Without
+    /// one (legacy agents predating the binding), the most recently active
+    /// record wins — ties break by creation time, then UUID, so the choice
+    /// is deterministic even across clock rollbacks. The winner is bound
+    /// BEFORE any recovery attempt: a damaged latest context must never
+    /// silently fall back to an older or empty one.
+    async fn restore_context_record(
+        storage: &dyn AgentStorage,
+        agent_id: Uuid,
+    ) -> std::result::Result<Option<crate::storage::SessionRecord>, StorageError> {
+        let records = storage.list_session_records(agent_id).await?;
+        let count = records.len();
+        let selected = match storage.agent_context_id(agent_id).await? {
+            Some(id) => Some(
+                records
+                    .into_iter()
+                    .find(|record| record.session_id == id)
+                    .ok_or_else(|| {
+                        StorageError::RecoveryRequired(format!(
+                            "bound context {id} is missing; refusing a replacement"
+                        ))
+                    })?,
+            ),
+            None => records
+                .into_iter()
+                .max_by_key(|record| (record.last_active, record.started_at, record.session_id)),
+        };
+        if let Some(record) = &selected {
+            storage
+                .bind_agent_context(agent_id, record.session_id)
+                .await?;
+            if count > 1 {
+                tracing::warn!(archived_contexts = count - 1, context_id = %record.session_id,
+                    "restoring sole context; legacy histories retained read-only");
+            }
+        }
+        Ok(selected)
+    }
+
+    /// Best-effort context binding after creating a fresh context. Binding
+    /// failures are surfaced but never block the conversation: the record
+    /// itself already exists, and the next restore re-attempts selection.
+    async fn bind_context(&self, id: Uuid) {
+        if let Some(storage) = &self.shared.storage {
+            if let Err(error) = storage
+                .as_ref()
+                .bind_agent_context(self.shared.id, id)
+                .await
+            {
+                tracing::warn!(session_id = %id, error = %error, "failed to bind agent context");
+            }
+        }
+    }
+
     // ── Session management handlers ───────────────────────
 
+    /// Uniform refusal for obsolete context-management commands.
+    fn refuse_context_change(&self) {
+        self.shared.send_event(AgentEvent::Error(
+            "SINGLE_CONTEXT_AGENT: each agent has one persistent context; create another agent for independent work".into(),
+        ));
+    }
+
+    /// Recognize the obsolete creation command so older senders get an
+    /// explicit refusal. Only an empty agent may initialize its sole
+    /// context this way; replacement and fork arguments are refused.
     async fn handle_create_session(
         &mut self,
         id: Uuid,
@@ -549,172 +630,64 @@ impl Agent {
         fork_message_id: Option<&str>,
         title: Option<String>,
     ) {
-        let mut session = match fork_from {
-            Some(parent_id) => {
-                if let Some(parent) = self.sessions.get(&parent_id) {
-                    // A selected message may pre-date compaction and no longer
-                    // live in the active model context. Fall back to the
-                    // immutable user-facing transcript so every visible point
-                    // remains forkable.
-                    let transcript = match fork_message_id {
-                        Some(message_id)
-                            if !parent
-                                .messages
-                                .iter()
-                                .any(|message| message.id == message_id) =>
-                        {
-                            self.shared
-                                .storage
-                                .as_ref()
-                                .map(|storage| storage.get_transcript_messages(parent_id))
-                        }
-                        _ => None,
-                    };
-                    let transcript = match transcript {
-                        Some(future) => future.await.unwrap_or_default(),
-                        None => Vec::new(),
-                    };
-                    let source_messages = transcript
-                        .iter()
-                        .any(|message| Some(message.id.as_str()) == fork_message_id)
-                        .then_some(transcript.as_slice());
-
-                    let fork_point = fork_message_id.filter(|message_id| {
-                        source_messages
-                            .is_some_and(|messages| messages.iter().any(|m| m.id == *message_id))
-                            || parent.messages.iter().any(|m| m.id == *message_id)
-                    });
-
-                    let mut s = match source_messages {
-                        Some(source) => Session::fork_from_source(
-                            parent,
-                            id,
-                            fork_point,
-                            source,
-                            self.shared.clone(),
-                        ),
-                        None => Session::fork_from(parent, id, fork_point, self.shared.clone()),
-                    };
-                    s.title = title.clone();
-                    s
-                } else {
-                    tracing::warn!(parent_id = %parent_id, "fork parent not found");
-                    let mut s = Session::new(id, self.shared.clone());
-                    s.title = title.clone();
-                    s
-                }
-            }
-            None => {
-                let mut s = Session::new(id, self.shared.clone());
-                s.title = title.clone();
-                s
-            }
-        };
-        // Ensure the new session shares the agent's cancel token so that
-        // AgentHandle::cancel() can interrupt an in-flight run_session.
-        session.cancel_token = self.cancel_token.clone();
-        self.sessions.insert(id, session);
-
-        // resume() (called by handle_switch_session) creates the sessions
-        // table row via start_session(). We must persist the title *after*
-        // that row exists, otherwise the UPDATE matches zero rows.
-        self.handle_switch_session(id).await;
-        if let Some(ref t) = title {
-            self.persist_session_title(id, t).await;
-        }
-        if let Some(storage) = &self.shared.storage {
-            if let Some(session) = self.sessions.get(&id) {
-                if session.parent_session_id.is_some() {
-                    let _ = storage
-                        .update_session_lineage(
-                            id,
-                            session.parent_session_id,
-                            session.fork_point_message_id.as_deref(),
-                        )
-                        .await;
-                    let state = SessionState {
-                        messages: session.messages.clone(),
-                        summary: session.summary.clone(),
-                        ancestor_summaries: session.ancestor_summaries.clone(),
-                        telemetry: session.telemetry,
-                    };
-                    let _ = storage
-                        .replace_session_state(self.shared.id, id, &state)
-                        .await;
-                }
-            }
-        }
-
-        let title = self.sessions.get(&id).and_then(|s| s.title.clone());
-        self.shared
-            .send_event(AgentEvent::SessionActivated { id, title });
-        let infos = self.session_infos();
-        self.shared
-            .send_event(AgentEvent::SessionList { sessions: infos });
-    }
-
-    async fn handle_switch_session(&mut self, id: Uuid) {
-        if !self.sessions.contains_key(&id) {
-            tracing::warn!(session_id = %id, "switch target not found");
+        if self.context.is_some()
+            || self.recovery_notice.is_some()
+            || fork_from.is_some()
+            || fork_message_id.is_some()
+        {
+            self.refuse_context_change();
             return;
         }
-        if let Some(old) = self.active_session_id {
-            if old != id {
-                if let Some(s) = self.sessions.get_mut(&old) {
-                    s.pause().await;
-                }
-                self.shared
-                    .send_event(AgentEvent::SessionPaused { id: old });
-            }
+        // Compatibility for internal initialization of an empty agent only.
+        let mut context = Session::new(id, self.shared.clone());
+        context.title = title;
+        context.cancel_token = self.cancel_token.clone();
+        context.resume().await;
+        self.bind_context(id).await;
+        if let Some(ref t) = context.title {
+            self.persist_session_title(id, t).await;
         }
-        self.active_session_id = Some(id);
-        if let Some(s) = self.sessions.get_mut(&id) {
-            s.resume().await;
-        }
-        let title = self.sessions.get(&id).and_then(|s| s.title.clone());
-        self.shared
-            .send_event(AgentEvent::SessionActivated { id, title });
+        self.shared.send_event(AgentEvent::SessionActivated {
+            id,
+            title: context.title.clone(),
+        });
+        self.context = Some(context);
+        self.shared.send_event(AgentEvent::SessionList {
+            sessions: self.session_infos(),
+        });
     }
 
-    async fn handle_rename_session(&mut self, id: Uuid, title: String) {
-        if let Some(s) = self.sessions.get_mut(&id) {
-            s.title = Some(title.clone());
-            tracing::info!(session_id = %id, title = %title, "session renamed");
+    /// Legacy selection command: only the already-bound context id is
+    /// accepted (as a no-op); foreign ids are refused.
+    async fn handle_switch_session(&mut self, id: Uuid) {
+        if self.context.as_ref().is_none_or(|context| context.id != id) {
+            self.refuse_context_change();
         }
-        // Persist to storage.
+    }
+
+    /// Rename the sole context (same-id renames only).
+    async fn handle_rename_session(&mut self, id: Uuid, title: String) {
+        if self.context.as_ref().is_none_or(|context| context.id != id) {
+            self.refuse_context_change();
+            return;
+        }
+        if let Some(s) = self.context.as_mut() {
+            s.title = Some(title.clone());
+            tracing::info!(session_id = %id, title = %title, "context renamed");
+        }
         if let Some(storage) = &self.shared.storage {
             let _ = storage.update_session_title(id, &title).await;
         }
-        // Notify TUI.
         self.shared.send_event(AgentEvent::SessionActivated {
             id,
             title: Some(title),
         });
     }
 
-    async fn handle_close_session(&mut self, id: Uuid) {
-        if let Some(s) = self.sessions.get_mut(&id) {
-            s.finish_turn(agentik_types::TurnExecutionStatus::Interrupted);
-            s.pause().await;
-        }
-        self.sessions.remove(&id);
-        // Permanently delete the session from storage so it doesn't
-        // reappear as an empty session on restart.
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.delete_session(id).await;
-        }
-        self.shared.send_event(AgentEvent::SessionClosed { id });
-        if self.active_session_id == Some(id) {
-            self.active_session_id = self.sessions.keys().next().copied();
-            if let Some(new_id) = self.active_session_id {
-                if let Some(s) = self.sessions.get_mut(&new_id) {
-                    s.resume().await;
-                }
-                let title = self.sessions.get(&new_id).and_then(|s| s.title.clone());
-                self.shared
-                    .send_event(AgentEvent::SessionActivated { id: new_id, title });
-            }
-        }
+    /// Legacy close command: refused; the context lives as long as its
+    /// agent and its history stays readable through storage APIs.
+    async fn handle_close_session(&mut self, _id: Uuid) {
+        self.refuse_context_change();
     }
 
     /// Dispatch a conversation event to the active session.
@@ -740,6 +713,13 @@ impl Agent {
                 }
             }
             _ => {
+                // While recovery is pending, conversation events are refused
+                // with the stored notice instead of running against no (or a
+                // wrong) context.
+                if let Some(notice) = &self.recovery_notice {
+                    self.shared.send_event(AgentEvent::Error(notice.clone()));
+                    return true;
+                }
                 if let Some(session) = self.active_session_mut() {
                     session.apply_internal_event(event).await
                 } else {
@@ -974,6 +954,8 @@ mod tests {
             .await
             .unwrap();
         let agent_id = agent.id();
+        // The auto-created context is titled with the agent's own name.
+        let agent_name = agent.name().to_string();
         let internal_tx = agent.internal_event_tx();
         let task = tokio::spawn(async move {
             agent.run().await;
@@ -1000,7 +982,7 @@ mod tests {
         })
         .await
         .expect("auto-created session activation timed out");
-        assert_eq!(activated_title.as_deref(), Some(AUTO_SESSION_TITLE));
+        assert_eq!(activated_title.as_deref(), Some(agent_name.as_str()));
 
         internal_tx.send(InternalEvent::Shutdown).unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(2), task)
@@ -1013,7 +995,163 @@ mod tests {
             .iter()
             .find(|record| record.title.is_some())
             .and_then(|record| record.title.clone());
-        assert_eq!(title.as_deref(), Some(AUTO_SESSION_TITLE));
+        assert_eq!(title.as_deref(), Some(agent_name.as_str()));
+    }
+
+    /// The auto-created context is permanently bound as the agent's sole
+    /// context: a restart restores exactly that context, never a new one.
+    #[tokio::test]
+    async fn auto_created_context_is_bound_and_restored() {
+        let storage = std::sync::Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+
+        let mut agent = Agent::builder()
+            .with_storage(storage.clone())
+            .with_agent_event_tx(event_tx)
+            .with_cancel_token(cancel_token)
+            .build()
+            .await
+            .unwrap();
+        let agent_id = agent.id();
+        let internal_tx = agent.internal_event_tx();
+        let task = tokio::spawn(async move {
+            agent.run().await;
+        });
+
+        internal_tx
+            .send(InternalEvent::MessageInject {
+                content: vec![ContentBlock::Text {
+                    text: "hello".into(),
+                }],
+                from_user: true,
+                delegation_id: None,
+            })
+            .unwrap();
+
+        let activated_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match event_rx.recv().await {
+                    Some(AgentEvent::SessionActivated { id, .. }) => break id,
+                    Some(_) => continue,
+                    None => panic!("agent event channel closed"),
+                }
+            }
+        })
+        .await
+        .expect("auto-created session activation timed out");
+
+        internal_tx.send(InternalEvent::Shutdown).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("agent shutdown timed out")
+            .unwrap();
+
+        // The binding is durable.
+        assert_eq!(
+            storage.agent_context_id(agent_id).await.unwrap(),
+            Some(activated_id)
+        );
+
+        // A second run of the same agent restores the bound context and
+        // reports it via ListSessions.
+        let (event_tx2, mut event_rx2) = tokio::sync::mpsc::unbounded_channel();
+        let mut agent2 = Agent::builder()
+            .with_id(agent_id)
+            .with_storage(storage.clone())
+            .with_agent_event_tx(event_tx2)
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(agent2.id(), agent_id);
+        let internal_tx2 = agent2.internal_event_tx();
+        let task2 = tokio::spawn(async move {
+            agent2.run().await;
+        });
+        internal_tx2.send(InternalEvent::ListSessions).unwrap();
+        let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match event_rx2.recv().await {
+                    Some(AgentEvent::SessionList { sessions }) => break sessions,
+                    Some(_) => continue,
+                    None => panic!("agent event channel closed"),
+                }
+            }
+        })
+        .await
+        .expect("session list timed out");
+        internal_tx2.send(InternalEvent::Shutdown).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), task2)
+            .await
+            .expect("agent shutdown timed out")
+            .unwrap();
+
+        assert_eq!(listed.len(), 1, "exactly one context is restored");
+        assert_eq!(listed[0].id, activated_id);
+    }
+
+    /// Legacy multi-session agents bind their most recently active record
+    /// once; older histories stay readable but are never restored.
+    #[tokio::test]
+    async fn legacy_sessions_bind_most_recent_record() {
+        let storage = std::sync::Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        cancel_token.cancel();
+
+        let mut agent = Agent::builder()
+            .with_storage(storage.clone())
+            .with_agent_event_tx(event_tx)
+            .with_cancel_token(cancel_token)
+            .build()
+            .await
+            .unwrap();
+        let agent_id = agent.id();
+
+        // Two legacy session rows with strictly ordered activity: the newer
+        // row starts (and is therefore last active) strictly later.
+        let older = uuid::Uuid::new_v4();
+        let newer = uuid::Uuid::new_v4();
+        storage.start_session(agent_id, older).await.unwrap();
+        storage.update_session_title(older, "older").await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        storage.start_session(agent_id, newer).await.unwrap();
+        storage.update_session_title(newer, "newer").await.unwrap();
+
+        let internal_tx = agent.internal_event_tx();
+        let task = tokio::spawn(async move {
+            agent.run().await;
+        });
+        internal_tx.send(InternalEvent::ListSessions).unwrap();
+        let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match event_rx.recv().await {
+                    Some(AgentEvent::SessionList { sessions }) => break sessions,
+                    Some(_) => continue,
+                    None => panic!("agent event channel closed"),
+                }
+            }
+        })
+        .await
+        .expect("session list timed out");
+        internal_tx.send(InternalEvent::Shutdown).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("agent shutdown timed out")
+            .unwrap();
+
+        // The most recently active legacy record became the sole context.
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, newer);
+        assert_eq!(listed[0].title.as_deref(), Some("newer"));
+        assert_eq!(
+            storage.agent_context_id(agent_id).await.unwrap(),
+            Some(newer)
+        );
+        // The older history is retained read-only.
+        let records = storage.list_session_records(agent_id).await.unwrap();
+        assert_eq!(records.len(), 2, "legacy histories are retained");
     }
 
     #[allow(dead_code)]

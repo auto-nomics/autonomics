@@ -85,8 +85,8 @@ path segment 携带完整路径。
 
 `POST /agents`(spawn,同步返回 path)、`POST /agents/{name}/messages`、
 `POST .../cancel|compact|shutdown`、`PUT /agents/{name}/model`(热切换+持久化)、
-`POST .../sessions`、`.../sessions/{id}/activate|close`、`PATCH .../title`、
-`GET /agents/{name}/sessions`(请求 SessionList)、
+`GET /agents/{name}/sessions`(请求 SessionList——每 agent 至多一条上下文;会话内
+create/switch/fork/close 已随单上下文模型移除,独立工作走新建 agent)、
 `PUT /model-config/provider|active-model`、`POST /model-config/chatgpt/login|refresh`、
 `POST /model-config/providers/{name}/catalog`、`PUT /settings`、
 `POST /gateway/shutdown`(优雅停机)。

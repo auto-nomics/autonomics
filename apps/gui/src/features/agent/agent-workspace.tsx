@@ -914,7 +914,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   rows={1}
                   onChange={(event) => props.onDraftChange(event.target.value)}
                   onKeyDown={(event) => {
-                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send" && busy !== "session") {
+                    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send") {
                       event.preventDefault();
                       sendMessage();
                     }
@@ -926,7 +926,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   type="submit"
                   size="icon"
                   className="mb-0.5 shrink-0 rounded-full"
-                  disabled={!draft.trim() || busy === "send" || busy === "session"}
+                  disabled={!draft.trim() || busy === "send"}
                   aria-label="发送"
                   title="发送（Ctrl+Enter）"
                 >

@@ -17,7 +17,6 @@ use std::io::{IsTerminal, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use headless::gateway_runner::list_sessions_via_gateway;
 use headless::gateway_runner::{GatewayRunConfig, run_via_gateway};
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
 use headless::{RunError, RunSummary};
@@ -34,9 +33,6 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
     if let Err(message) = validate_run_args(&args) {
         eprintln!("error: {message}");
         std::process::exit(EXIT_STARTUP);
-    }
-    if args.list_sessions {
-        return print_headless_sessions(&args);
     }
     let prompt = match resolve_prompt(args.prompt.clone()) {
         Ok(prompt) => prompt,
@@ -120,7 +116,6 @@ async fn run_on_gateway(
         profile: args.profile.clone(),
         agent_runtime: agent_runtime.clone(),
         model: args.model.clone(),
-        session: args.session,
         timeout: args.timeout.map(Duration::from_secs),
         cancel,
     };
@@ -174,17 +169,6 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
     if let Err(error) = agentik_types::validate_segment(&args.name) {
         return Err(format!("invalid --name `{}`: {error}", args.name));
     }
-    if args.list_sessions
-        && (args.prompt.is_some()
-            || args.session.is_some()
-            || args.timeout.is_some()
-            || args.output_last_message.is_some()
-            || args.manifest.is_some()
-            || args.agent_config.is_some()
-            || args.no_memory)
-    {
-        return Err("--list-sessions cannot be combined with run-specific options".to_string());
-    }
     Ok(())
 }
 
@@ -202,67 +186,6 @@ fn parse_agent_runtime(args: &RunArgs) -> Result<agentik_core::AgentRuntimeOverr
     Ok(runtime)
 }
 
-fn print_headless_sessions(args: &RunArgs) -> color_eyre::Result<()> {
-    let runtime = tokio::runtime::Runtime::new()
-        .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
-    let result = runtime.block_on(list_sessions_via_gateway(
-        args.profile.clone(),
-        Some(args.name.clone()),
-    ));
-    let mut sessions = match result {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(EXIT_STARTUP);
-        }
-    };
-    sessions.sort_by(|a, b| b.last_active.cmp(&a.last_active).then(a.id.cmp(&b.id)));
-
-    if args.json {
-        let output = serde_json::to_vec(&sessions)
-            .map_err(|e| color_eyre::eyre::eyre!("serialize sessions: {e}"))?;
-        std::io::stdout().write_all(&output)?;
-        std::io::stdout().write_all(b"\n")?;
-        return Ok(());
-    }
-
-    for session in sessions {
-        let active = if session.active { "active" } else { "paused" };
-        let timestamp = chrono::DateTime::from_timestamp_millis(session.last_active)
-            .map(|time| time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| session.last_active.to_string());
-        let title = session.title.as_deref().unwrap_or("<untitled>");
-        println!(
-            "{active}\t{timestamp}\t{}\t{title}\ttokens:{}\ttools:{}\ttime:{}",
-            session.id,
-            session.telemetry.total_tokens,
-            session.telemetry.total_tool_use,
-            format_duration(session.telemetry.time_consume_ms)
-        );
-    }
-    Ok(())
-}
-
-fn format_duration(millis: u64) -> String {
-    if millis < 1_000 {
-        format!("{millis}ms")
-    } else if millis < 60_000 {
-        format!("{:.1}s", millis as f64 / 1_000.0)
-    } else {
-        let minutes = millis / 60_000;
-        let seconds = (millis % 60_000) / 1_000;
-        if minutes < 60 {
-            format!("{minutes}m {seconds}s")
-        } else {
-            format!("{}h {}m", minutes / 60, minutes % 60)
-        }
-    }
-}
-
-/// Assemble the prompt, following codex exec's stdin semantics:
-/// - positional prompt (or `-` sentinel / none) → read stdin;
-/// - piped stdin alongside a positional prompt → appended as a
-///   `<stdin>` block.
 fn resolve_prompt(arg_prompt: Option<String>) -> Result<String, String> {
     let stdin_is_tty = std::io::stdin().is_terminal();
     match arg_prompt {

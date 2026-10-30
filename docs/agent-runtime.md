@@ -4,6 +4,19 @@
 
 Uniform agent loop, memory management, tool dispatch, and multi-agent orchestration.
 
+Each agent owns one persistent working context. Independent work uses another
+agent; continuation restores that agent automatically. Conversation creation,
+switching, forking and closing within an agent are unavailable in the TUI, HTTP
+API and headless CLI. `Session` and `session_id` remain internal persistence
+and wire-format names for compatibility.
+
+Legacy multi-session agents select their most recently active history once
+(ties use creation time and UUID), then persist an immutable `agent_contexts`
+binding. Older histories remain readable through storage/history APIs. The
+binding survives clock rollback; a missing or ambiguous bound history never
+falls back to another or empty context — the agent refuses conversation with
+`PERSISTENCE_RECOVERY_REQUIRED` instead.
+
 ## Features
 
 - **Uniform agent loop** — One behavioral loop for all agents. Agent personality and tooling are configured _only_ through the toolset and system prompt; no agent-specific code paths in the loop itself (see `crates/agentik-core/src/agent.rs`).

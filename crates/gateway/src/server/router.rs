@@ -62,19 +62,7 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/agents/{name}/dag", get(agents::get_agent_dag))
         .route(
             "/agents/{name}/sessions",
-            get(sessions::request_session_list).post(sessions::create_session),
-        )
-        .route(
-            "/agents/{name}/sessions/{id}/activate",
-            post(sessions::activate_session),
-        )
-        .route(
-            "/agents/{name}/sessions/{id}/close",
-            post(sessions::close_session),
-        )
-        .route(
-            "/agents/{name}/sessions/{id}/title",
-            patch(sessions::rename_session),
+            get(sessions::request_session_list),
         )
         // ── storage (persisted agents / history / plans) ──
         .route("/storage/agents", get(storage::list_storage_agents))

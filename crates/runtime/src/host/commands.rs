@@ -345,7 +345,11 @@ impl RuntimeHost {
             HostCommand::GetStatus { reply_tx } => {
                 let g = self.network.graph();
                 let status = HostStatus {
-                    agents: self.agents.values().map(|e| self.snapshot_info(e)).collect(),
+                    agents: self
+                        .agents
+                        .values()
+                        .map(|e| self.snapshot_info(e))
+                        .collect(),
                     profiles: AgentKind::ALL
                         .iter()
                         .map(|k| capability_from_kind(k.name(), k.name(), *k))
@@ -421,40 +425,6 @@ impl RuntimeHost {
             }
             HostCommand::ListSessions { name } => {
                 self.send_agent_command(&name, AgentCommand::ListSessions);
-            }
-            HostCommand::CreateSession {
-                name,
-                title,
-                fork_from,
-                fork_message_id,
-            } => {
-                self.send_agent_command(
-                    &name,
-                    AgentCommand::CreateSession {
-                        title,
-                        fork_from,
-                        fork_message_id,
-                    },
-                );
-            }
-            HostCommand::SwitchSession { name, session_id } => {
-                self.send_agent_command(&name, AgentCommand::SwitchSession(session_id));
-            }
-            HostCommand::CloseSession { name, session_id } => {
-                self.send_agent_command(&name, AgentCommand::CloseSession(session_id));
-            }
-            HostCommand::RenameSession {
-                name,
-                session_id,
-                title,
-            } => {
-                self.send_agent_command(
-                    &name,
-                    AgentCommand::RenameSession {
-                        id: session_id,
-                        title,
-                    },
-                );
             }
 
             // ── Model management ──

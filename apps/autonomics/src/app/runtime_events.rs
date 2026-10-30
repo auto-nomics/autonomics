@@ -226,10 +226,8 @@ impl App {
                 | AgentEvent::SessionClosed { .. }
                 | AgentEvent::SessionList { .. }
         ) {
-            // The backend restore emits no PlanUpdate for the activated
-
-            // session's plan, so fetch it here (guarded by plan_requested).
-
+            // The backend restore emits no PlanUpdate for the context's
+            // plan, so fetch it here (guarded by plan_requested).
             let activated = match &event {
                 AgentEvent::SessionActivated { id, .. } => Some(*id),
                 _ => None,
@@ -241,47 +239,25 @@ impl App {
                 self.spawn_plan_load_for(target_idx, session_id);
             }
         } else {
-            // Plans are per-session: route a PlanUpdate to the sub-session
-
-            // tab it names. Frames without a session_id (legacy builds) and
-
-            // ids for not-yet-known sub-sessions (ordering race with
-
-            // SessionList) fall back to the active tab — never dropped.
-
-            let sub_override = match &event {
-                AgentEvent::PlanUpdate {
-                    session_id: Some(sid),
-                    ..
-                } => self
-                    .state
+            // Plans belong to the agent's sole context; route a PlanUpdate
+            // naming a foreign id (stale frame) to the active context —
+            // never dropped.
+            let tab_state =
+                self.state
                     .sessions
-                    .get(target_idx)
-                    .and_then(|s| s.sub_sessions.iter().position(|sub| sub.id == *sid)),
-                _ => None,
-            };
-
-            // Route to the correct tab's tab_state.
-
-            let tab_state = self.state.sessions.get_mut(target_idx).map(|s| {
-                let idx = sub_override.unwrap_or(s.active_sub_session_idx);
-
-                if idx < s.sub_sessions.len() {
-                    &mut s.sub_sessions[idx].tab_state
-                } else {
-                    &mut s.pending_tab_state
-                }
-            });
+                    .get_mut(target_idx)
+                    .map(|s| match s.context.as_mut() {
+                        Some(context) => &mut context.tab_state,
+                        None => &mut s.pending_tab_state,
+                    });
 
             if let Some(ts) = tab_state {
                 state::apply_event(ts, event);
             }
         }
 
-        // After SessionList arrives, spawn background history loads for
-
-        // sessions that have empty tab_state.messages.
-
+        // After SessionList arrives, spawn background history loads when
+        // the context's tab_state is still empty.
         if is_session_list {
             self.spawn_history_loads_for(target_idx);
         }
@@ -327,27 +303,15 @@ impl App {
                 self.replay_history(agent_id, session_id, &messages);
             }
 
-            crate::app_event::AppEvent::ForkHistoryLoaded {
-                agent_id,
-                session_id,
-                messages,
-            } => {
-                self.handle_fork_history_loaded(agent_id, session_id, &messages);
-            }
-
             crate::app_event::AppEvent::PlanLoaded {
                 agent_id,
                 session_id,
                 plan,
             } => {
-                // Route to the named sub-session's tab_state. Guard against
-
-                // stale overlay: the loaded revision is only applied if it's
-
-                // newer than what the TUI already has (e.g. the model already
-
-                // called update_plan since resume).
-
+                // Route to the agent's sole context. Guard against stale
+                // overlays: the loaded revision is only applied if it's
+                // newer than what the TUI already has (e.g. the model
+                // already called update_plan since resume).
                 let session_idx = self
                     .state
                     .sessions
@@ -356,37 +320,17 @@ impl App {
 
                 let Some(session_idx) = session_idx else {
                     tracing::warn!(%agent_id, "plan loaded for unknown agent");
-
                     return;
                 };
 
-                let is_active_agent = session_idx == self.state.active_agent_idx;
-
                 let agent_session = &mut self.state.sessions[session_idx];
 
-                let ts = match agent_session
-                    .sub_sessions
-                    .iter_mut()
-                    .find(|sub| sub.id == session_id)
-                {
-                    Some(sub) => &mut sub.tab_state,
-                    None => {
-                        // Sub-session not known yet (ordering race with
-
-                        // SessionList) — fall back to the active tab of an
-
-                        // active agent, else the pending state.
-
-                        if is_active_agent
-                            && agent_session.active_sub_session_idx
-                                < agent_session.sub_sessions.len()
-                        {
-                            &mut agent_session.sub_sessions[agent_session.active_sub_session_idx]
-                                .tab_state
-                        } else {
-                            &mut agent_session.pending_tab_state
-                        }
-                    }
+                let ts = match agent_session.context.as_mut() {
+                    // Normal case: the announced context.
+                    Some(context) if context.id == session_id => &mut context.tab_state,
+                    // Ordering race (plan landed before the context was
+                    // announced) — buffer into the pending state.
+                    _ => &mut agent_session.pending_tab_state,
                 };
 
                 if plan.revision > ts.plan.revision {
@@ -397,7 +341,12 @@ impl App {
 
                     self.dirty = true;
 
-                    tracing::info!(                        %agent_id,                        %session_id,                        revision = plan.revision,                        "restored session plan to TUI from storage"                    );
+                    tracing::info!(
+                        %agent_id,
+                        %session_id,
+                        revision = plan.revision,
+                        "restored context plan to TUI from storage"
+                    );
                 }
             }
 
@@ -858,8 +807,7 @@ impl App {
                     self.state.sessions.push(state::AgentSession {
                         name: info.path.clone(),
                         agent_id: info.agent_id.unwrap_or_default(),
-                        sub_sessions: Vec::new(),
-                        active_sub_session_idx: 0,
+                        context: None,
                         pending_tab_state: Default::default(),
                     });
 
@@ -926,8 +874,7 @@ impl App {
                 self.state.sessions.push(state::AgentSession {
                     name: name.clone(),
                     agent_id,
-                    sub_sessions: Vec::new(),
-                    active_sub_session_idx: 0,
+                    context: None,
                     pending_tab_state: Default::default(),
                 });
 
@@ -1022,7 +969,6 @@ impl App {
 
         let Some(session_idx) = session_idx else {
             tracing::warn!(%agent_id, "history loaded for unknown agent");
-
             return;
         };
 
@@ -1034,29 +980,22 @@ impl App {
 
         let session = &mut self.state.sessions[session_idx];
 
-        // Find the sub-session by session_id.
-
-        let sub = session.sub_sessions.iter_mut().find(|s| s.id == session_id);
-
-        let Some(sub) = sub else {
-            tracing::warn!(%session_id, "history loaded for unknown sub-session");
-
+        let Some(context) = session.context.iter_mut().find(|c| c.id == session_id) else {
+            tracing::warn!(%session_id, "history loaded for unknown context");
             return;
         };
 
-        if !sub.tab_state.messages.is_empty() {
+        if !context.tab_state.messages.is_empty() {
             tracing::debug!(%session_id, "tab_state already populated, skipping");
-
             return;
         }
 
-        sub.tab_state.set_messages(lines);
-
-        sub.tab_state.scroll_to_bottom();
+        context.tab_state.set_messages(lines);
+        context.tab_state.scroll_to_bottom();
 
         self.dirty = true;
 
-        tracing::info!(%session_id, count = sub.tab_state.messages.len(), "history replayed");
+        tracing::info!(%session_id, count = context.tab_state.messages.len(), "history replayed");
     }
 
     /// Fold a session list (from hydration or a `SessionList` event that
@@ -1073,23 +1012,16 @@ impl App {
             return;
         };
 
-        for info in sessions {
-            if agent.sub_sessions.iter().any(|s| s.id == info.id) {
-                continue;
-            }
-
-            let mut sub = state::SubSession::new(info.id, info.title.clone());
-
-            sub.last_active = info.last_active;
-
-            sub.created_at = info.created_at;
-
-            sub.parent_session_id = info.parent_session_id;
-
-            sub.fork_point_message_id = info.fork_point_message_id.clone();
-
-            agent.sub_sessions.push(sub);
-        }
+        // At most one context per agent; keep a loaded transcript when the
+        // id matches.
+        let old = agent.context.take();
+        agent.context = match sessions.into_iter().next() {
+            Some(info) => match old {
+                Some(old) if old.id == info.id => Some(state::AgentContext::from_info(info, old)),
+                _ => Some(state::AgentContext::new(info)),
+            },
+            None => old,
+        };
     }
 
     /// Spawn background history loads for all sessions of the agent at
@@ -1103,59 +1035,43 @@ impl App {
 
         let agent_id = agent_session.agent_id;
 
-        let to_load: Vec<uuid::Uuid> = agent_session
-            .sub_sessions
-            .iter()
-            .filter(|s| s.tab_state.messages.is_empty())
-            .map(|s| s.id)
-            .collect();
+        let to_load: Option<uuid::Uuid> = agent_session
+            .context
+            .as_ref()
+            .filter(|c| c.tab_state.messages.is_empty())
+            .map(|c| c.id);
 
-        // ── Restore each session's persistent plan ──
+        let plan_to_load: Option<uuid::Uuid> = agent_session
+            .context
+            .as_ref()
+            .filter(|c| !c.plan_requested)
+            .map(|c| c.id);
 
-        let plans_to_load: Vec<uuid::Uuid> = agent_session
-            .sub_sessions
-            .iter()
-            .filter(|s| !s.plan_requested)
-            .map(|s| s.id)
-            .collect();
-
-        for session_id in to_load {
+        if let Some(session_id) = to_load {
             let client = self.client.clone();
-
             let tx = self.app_event_tx.clone();
-
-            self.spawn_client_task(                &format!("load_session_history::{session_id}"),                move || async move {
-
+            self.spawn_client_task(
+                &format!("load_session_history::{session_id}"),
+                move || async move {
                     match client.session_history(agent_id, session_id).await {
-
                         Ok(messages) => {
-
                             if !messages.is_empty() {
-
                                 tx.send(crate::app_event::AppEvent::HistoryLoaded {
-
-                                    agent_id,                                    session_id,                                    messages,                                }
-
-);
-
+                                    agent_id,
+                                    session_id,
+                                    messages,
+                                });
                             }
-
                         }
-
                         Err(e) => {
-
                             tracing::warn!(%session_id, error = %e, "failed to load session history");
-
                         }
-
                     }
-
-                }
-
-,            );
+                },
+            );
         }
 
-        for session_id in plans_to_load {
+        if let Some(session_id) = plan_to_load {
             self.spawn_plan_load_for(agent_idx, session_id);
         }
     }
@@ -1182,29 +1098,27 @@ impl App {
         let agent_id = agent_session.agent_id;
 
         let already_requested = agent_session
-            .sub_sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .is_none_or(|s| s.plan_requested);
+            .context
+            .as_ref()
+            .filter(|c| c.id == session_id)
+            .is_none_or(|c| c.plan_requested);
 
         if already_requested {
             return;
         }
 
         if let Some(agent_session) = self.state.sessions.get_mut(agent_idx) {
-            if let Some(sub) = agent_session
-                .sub_sessions
-                .iter_mut()
-                .find(|s| s.id == session_id)
+            if let Some(context) = agent_session
+                .context
+                .as_mut()
+                .filter(|c| c.id == session_id)
             {
-                sub.plan_requested = true;
+                context.plan_requested = true;
             }
         }
 
         let client = self.client.clone();
-
         let tx = self.app_event_tx.clone();
-
         self.spawn_client_task(&format!("restore_plan::{session_id}"), move || async move {
             if let Ok(Some(plan)) = client.load_plan(agent_id, session_id).await {
                 if !plan.is_empty() {

@@ -226,15 +226,15 @@ impl AgentBuilder {
             persist_tx: std::sync::OnceLock::new(),
         });
 
-        // ── No default session at build time ────────────────
-        // Sessions are restored from storage in `Agent::run()` or
+        // ── No default context at build time ────────────────
+        // The sole context is restored from storage in `Agent::run()` or
         // auto-created on the first `MessageInject`.
         let cancel_token = self.cancel_token.unwrap_or_default();
 
         Ok(Agent {
             shared,
-            sessions: std::collections::HashMap::new(),
-            active_session_id: None,
+            context: None,
+            recovery_notice: None,
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),
             initial_messages: if self.initial_messages.is_empty() {

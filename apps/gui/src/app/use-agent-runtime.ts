@@ -123,7 +123,6 @@ export function useAgentRuntime() {
   stateRef.current = { agents, sessions, activeAgent, activeSessions };
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
-  const sessionActivationPending = useRef(false);
 
   const appendMessage = useCallback((agent: string, item: ChatItem) => {
     setMessages((current) => ({ ...current, [agent]: [...(current[agent] ?? []), item] }));
@@ -223,17 +222,6 @@ export function useAgentRuntime() {
         streamingRef.current[agent] = null;
         setStreaming((current) => ({ ...current, [agent]: null }));
         setPlans((current) => ({ ...current, [agent]: event.PlanUpdate ?? current[agent] }));
-      } else if (event.SessionClosed !== undefined) {
-        setSessions((current) => {
-          const next = (current[agent] ?? []).filter((session) => session.id !== event.SessionClosed.id);
-          setActiveSessions((currentActive) => {
-            if (currentActive[agent] !== event.SessionClosed.id) return currentActive;
-            const fallback = latestSession(next);
-            if (fallback) void loadHistoryRef.current(agent);
-            return { ...currentActive, [agent]: fallback };
-          });
-          return { ...current, [agent]: next };
-        });
       } else if (event.UsageUpdate !== undefined) {
         setStreaming((current) => {
           const item = current[agent];
@@ -378,7 +366,7 @@ export function useAgentRuntime() {
 
   const sendMessage = async (context = "") => {
     const text = draft.trim();
-    if (!text || !activeAgent || busy === "send" || sessionActivationPending.current) return;
+    if (!text || !activeAgent || busy === "send") return;
     setBusy("send");
     setDraft("");
     try {
@@ -445,33 +433,6 @@ export function useAgentRuntime() {
     }
   };
 
-  const createSession = async (title: string) => {
-    if (!activeAgent) return;
-    await gatewayRequest("POST", `/agents/${activeAgent}/sessions`, {
-      title: title.trim() || "New session",
-      fork_from: null,
-      fork_message_id: null,
-    });
-  };
-
-  const renameSession = async (sessionId: string, title: string) => {
-    await gatewayRequest("PATCH", `/agents/${activeAgent}/sessions/${sessionId}/title`, {
-      title: title.trim() || "Untitled",
-    });
-    setSessions((current) => ({
-      ...current,
-      [activeAgent]: (current[activeAgent] ?? []).map((session) => session.id === sessionId ? { ...session, title } : session),
-    }));
-  };
-
-  const closeSession = async (sessionId: string) => {
-    await gatewayRequest("POST", `/agents/${activeAgent}/sessions/${sessionId}/close`);
-    setSessions((current) => ({
-      ...current,
-      [activeAgent]: (current[activeAgent] ?? []).filter((session) => session.id !== sessionId),
-    }));
-  };
-
   const resumeAgent = async (stored: StoredAgent) => {
     const running = agents.find((agent) => agent.agent_id === stored.id);
     if (running) {
@@ -493,17 +454,6 @@ export function useAgentRuntime() {
       { path: result.path, agent_id: stored.id, status: "Idle" },
     ]);
     selectAgent(result.path);
-  };
-
-  const forkMessage = async (message: { id: string; text: string }) => {
-    const sessionId = activeSessions[activeAgent];
-    if (!sessionId) throw new Error("Fork requires an active session");
-    await gatewayRequest("POST", `/agents/${activeAgent}/sessions`, {
-      title: `Fork at ${message.text.split(/\r?\n/)[0].slice(0, 80)}`,
-      fork_from: sessionId,
-      fork_message_id: message.id,
-    });
-    await gatewayRequest("GET", `/agents/${activeAgent}/sessions`);
   };
 
   /** Model catalog for the composer switcher; fetched once, on first open. */
@@ -545,24 +495,6 @@ export function useAgentRuntime() {
     }
   };
 
-  const activateSession = async (agentPath: string, sessionId: string) => {
-    if (sessionActivationPending.current || busy === "send") return;
-    sessionActivationPending.current = true;
-    setBusy("session");
-    try {
-      await gatewayRequest("POST", `/agents/${agentPath}/sessions/${sessionId}/activate`);
-      stateRef.current = { ...stateRef.current, activeSessions: { ...stateRef.current.activeSessions, [agentPath]: sessionId } };
-      setActiveSessions((current) => ({ ...current, [agentPath]: sessionId }));
-      setMessages((current) => ({ ...current, [agentPath]: [] }));
-      if (agentPath === stateRef.current.activeAgent) void loadHistory(agentPath, sessionId);
-    } catch (cause) {
-      window.alert(String(cause));
-    } finally {
-      sessionActivationPending.current = false;
-      setBusy(null);
-    }
-  };
-
   const activeSessionId = activeSessions[activeAgent] ?? latestSession(sessions[activeAgent] ?? []);
 
   return {
@@ -585,15 +517,10 @@ export function useAgentRuntime() {
     spawnAgent,
     shutdownAgent,
     resumeAgent,
-    // sessions
+    // sessions (the agent's sole working context)
     sessions,
     activeSessions,
     activeSessionId,
-    createSession,
-    renameSession,
-    closeSession,
-    activateSession,
-    forkMessage,
     // transcript
     messages,
     historyLoading,

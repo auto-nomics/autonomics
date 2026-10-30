@@ -222,7 +222,7 @@ export function App() {
   return (
     <ContextBasketProvider
       scope={runtime.activeAgent && runtime.activeSessionId ? JSON.stringify([runtime.activeAgent, runtime.activeSessionId]) : null}
-      sessionLabel={`${runtime.activeAgent.split("/").pop() || "未选择 Agent"} · ${(runtime.sessions[runtime.activeAgent] ?? []).find(session => session.id === runtime.activeSessionId)?.title || runtime.activeSessionId || "未选择会话"}`}
+      sessionLabel={runtime.activeAgent.split("/").pop() || "未选择 Agent"}
       onAdd={() => { if (placement === "hidden") setPlacement("docked"); }}
     >
     <main data-workbench="" data-sidebar-collapsed={sidebarCollapsed || undefined} className={cn("relative grid h-full min-h-0 grid-rows-[minmax(0,1fr)] bg-background", mobile ? "grid-cols-[minmax(0,1fr)]" : railCollapsed ? "grid-cols-[56px_minmax(0,1fr)]" : "grid-cols-[136px_minmax(0,1fr)] sm:grid-cols-[160px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,1fr)]")}>
@@ -323,16 +323,13 @@ export function App() {
       {view === "agent" ? (
         <AgentView
           activeAgent={runtime.activeAgent}
-          activeSessionId={runtime.activeSessionId}
           agents={runtime.agents}
-          sessions={runtime.sessions[runtime.activeAgent] ?? []}
           statuses={runtime.statuses}
           messages={runtime.messages[runtime.activeAgent] ?? []}
           plan={runtime.plans[runtime.activeAgent] ?? null}
           usage={runtime.usage[runtime.activeAgent] ?? null}
           display={runtime.display}
           promptHistory={runtime.promptHistories[runtime.activeAgent] ?? []}
-          rawMessages={runtime.rawMessages[`${runtime.activeAgent}:${runtime.activeSessionId}`] ?? []}
           rightOpen={rightOpen}
           isDesktop={isDesktop}
           onSetRight={setRightOpen}
@@ -344,11 +341,6 @@ export function App() {
           onShutdown={(path) => void runtime.shutdownAgent(path)}
           onSpawnAgent={runtime.spawnAgent}
           onResumeAgent={runtime.resumeAgent}
-          onCreateSession={runtime.createSession}
-          onRenameSession={runtime.renameSession}
-          onCloseSession={runtime.closeSession}
-          onActivateSession={(sessionId) => runtime.activateSession(runtime.activeAgent, sessionId)}
-          onForkMessage={runtime.forkMessage}
           onToggleDisplay={(key) => void runtime.toggleDisplay(key)}
           onView={setView}
           onOpenDag={() => { if (runtime.activeAgent) setDagAgent(runtime.activeAgent); }}

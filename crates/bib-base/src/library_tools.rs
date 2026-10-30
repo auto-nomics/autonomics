@@ -211,7 +211,11 @@ impl ToolFunction for BibEmptyTrashTool {
         // touching an already-erased descendant afterwards would fail NotFound.
         let roots: Vec<&bib_types::Collection> = trashed
             .into_iter()
-            .filter(|c| c.parent_id.as_ref().is_none_or(|p| !trashed_ids.contains(p)))
+            .filter(|c| {
+                c.parent_id
+                    .as_ref()
+                    .is_none_or(|p| !trashed_ids.contains(p))
+            })
             .collect();
 
         let mut erased_ids: Vec<String> = Vec::new();
@@ -525,7 +529,9 @@ impl ToolFunction for BibRemoveFromCollectionTool {
         for id in &input.article_ids {
             let was_member = members.contains(id);
             let outcome = if was_member {
-                self.bib.remove_from_collection(&input.collection_id, id).await
+                self.bib
+                    .remove_from_collection(&input.collection_id, id)
+                    .await
             } else {
                 Ok(())
             };
@@ -547,10 +553,7 @@ impl ToolFunction for BibRemoveFromCollectionTool {
             .iter()
             .filter(|r| r["was_member"] == serde_json::Value::Bool(false))
             .count();
-        let failed = results
-            .iter()
-            .filter(|r| r["error"].is_string())
-            .count();
+        let failed = results.iter().filter(|r| r["error"].is_string()).count();
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "collection_id": input.collection_id,
@@ -1271,14 +1274,15 @@ impl ToolFunction for BibAddNoteTool {
         // A `rects` payload that fails to parse must not be silently
         // dropped — the annotation would lose its anchor without the
         // caller knowing.
-        let rects = match input.rects {
-            Some(value) => Some(serde_json::from_str(&value).map_err(|error| {
-                ToolError::ValidationFailed {
-                    message: format!("invalid `rects` JSON: {error}"),
-                }
-            })?),
-            None => None,
-        };
+        let rects =
+            match input.rects {
+                Some(value) => Some(serde_json::from_str(&value).map_err(|error| {
+                    ToolError::ValidationFailed {
+                        message: format!("invalid `rects` JSON: {error}"),
+                    }
+                })?),
+                None => None,
+            };
 
         let ann = self
             .bib
@@ -2308,7 +2312,10 @@ mod tests {
         let tool = BibEmptyTrashTool { bib: bib.clone() };
 
         // Dry run previews the root subtree without touching the database.
-        let dry = tool.run(BibEmptyTrashInput { confirm: None }).await.unwrap();
+        let dry = tool
+            .run(BibEmptyTrashInput { confirm: None })
+            .await
+            .unwrap();
         let json = match dry.content {
             ToolResultContent::Json(v) => v,
             _ => panic!("expected JSON"),

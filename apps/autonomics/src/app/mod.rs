@@ -36,9 +36,9 @@ mod event_loop;
 mod history;
 mod keyboard;
 mod model_config;
+mod naming;
 mod render;
 mod runtime_events;
-mod sessions;
 mod skill_evolution;
 mod terminal;
 
@@ -161,8 +161,7 @@ impl App {
             state.sessions.push(state::AgentSession {
                 name: info.path.clone(),
                 agent_id: info.agent_id.unwrap_or_default(),
-                sub_sessions: Vec::new(),
-                active_sub_session_idx: 0,
+                context: None,
                 pending_tab_state: Default::default(),
             });
         }

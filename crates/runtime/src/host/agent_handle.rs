@@ -144,50 +144,12 @@ impl AgentHandle {
         self.memory.runtime_config()
     }
 
-    // ── Session management ────────────────────────────────
-
-    /// Create a new session within this agent. Returns the new session ID.
-    ///
-    /// If `fork_from` is `Some(parent_id)`, the new session deep-clones the
-    /// parent's memory (conversation branching). Otherwise the session
-    /// starts with an empty conversation.
-    pub fn create_session(
-        &self,
-        title: Option<String>,
-        fork_from: Option<uuid::Uuid>,
-        fork_message_id: Option<String>,
-    ) -> uuid::Uuid {
-        let id = uuid::Uuid::new_v4();
-        let _ = self.internal_tx.send(InternalEvent::CreateSession {
-            id,
-            fork_from,
-            fork_message_id,
-            title,
-        });
-        id
-    }
-
-    /// Switch the active session to `id`. Pauses the current session and
-    /// activates the target.
-    pub fn switch_session(&self, id: uuid::Uuid) {
-        let _ = self.internal_tx.send(InternalEvent::SwitchSession { id });
-    }
-
-    /// Close and remove a session.
-    pub fn close_session(&self, id: uuid::Uuid) {
-        let _ = self.internal_tx.send(InternalEvent::CloseSession { id });
-    }
+    // ── Context metadata ──────────────────────────────────
 
     /// Request a list of all sessions. The reply arrives as
-    /// `AgentEvent::SessionList` on the event channel.
+    /// `AgentEvent::SessionList` on the event channel — with one context
+    /// per agent it carries at most one entry (the agent's sole context).
     pub fn list_sessions(&self) {
         let _ = self.internal_tx.send(InternalEvent::ListSessions);
-    }
-
-    /// Rename a session.
-    pub fn rename_session(&self, id: uuid::Uuid, title: String) {
-        let _ = self
-            .internal_tx
-            .send(InternalEvent::RenameSession { id, title });
     }
 }

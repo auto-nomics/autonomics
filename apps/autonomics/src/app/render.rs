@@ -110,28 +110,6 @@ impl App {
         let workspace_tabs = self.workspace_tabs();
         let active_idx = self.state.active_agent_idx;
 
-        // Build session summaries for the sidebar. Collect as owned data to
-        // avoid holding an immutable borrow across the mutable
-        // `active_tab_state_mut()` call below.
-        let session_summaries: Vec<crate::widgets::session_list::SessionSummary> = self
-            .state
-            .sessions
-            .get(active_idx)
-            .map(|s| {
-                s.sub_sessions
-                    .iter()
-                    .enumerate()
-                    .map(|(i, sub)| crate::widgets::session_list::SessionSummary {
-                        title: sub.title.clone(),
-                        message_count: sub.tab_state.messages.len(),
-                        is_active: i == s.active_sub_session_idx,
-                        created_at: sub.created_at,
-                        parent_session_id: sub.parent_session_id,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
         let display = self.state.display_settings.clone();
         let kms_running = self
             .state
@@ -146,7 +124,6 @@ impl App {
             context_window,
             reasoning_effort: reasoning_effort.as_deref(),
             kms_activity: kms_activity.as_deref(),
-            sessions: &session_summaries,
             display: &display,
         };
         workspace.render(
@@ -216,19 +193,6 @@ impl App {
                     frame.area(),
                     frame.buffer_mut(),
                     &mut self.state.agent_picker,
-                );
-        }
-
-        // ── Session picker popup ──
-        if self.state.session_picker.visible {
-            use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::session_picker::SessionPicker::new()
-                .popup_width((frame.area().width * 85 / 100).max(80))
-                .popup_height((frame.area().height * 80 / 100).max(24))
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.session_picker,
                 );
         }
 

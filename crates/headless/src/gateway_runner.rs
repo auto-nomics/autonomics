@@ -54,8 +54,6 @@ pub struct GatewayRunConfig {
     /// Model override as `provider:model`; `None` uses the daemon's
     /// active model.
     pub model: Option<String>,
-    /// Resume this session instead of the agent's active one.
-    pub session: Option<Uuid>,
     /// Wall-clock budget; on expiry the run is cancelled (exit code 2).
     pub timeout: Option<Duration>,
     /// Cooperative cancellation requested by the embedding frontend.
@@ -99,31 +97,6 @@ async fn connect_or_hint() -> Result<gateway::GatewayClient, RunError> {
     let token = gateway::manager::read_token();
     let addr = gateway::daemon::env_addr();
     gateway::GatewayClient::new(&addr, token.as_deref())
-        .map_err(|e| RunError::Gateway(e.to_string()))
-}
-
-/// List persisted sessions for a named headless agent identity.
-///
-/// This reads storage through the daemon rather than spawning an agent, so it
-/// works before the first run and does not require a model to be configured.
-pub async fn list_sessions_via_gateway(
-    profile: Option<String>,
-    agent_name: Option<String>,
-) -> Result<Vec<StoredSession>, RunError> {
-    let agent_path = named_agent_path(agent_name.as_deref())?;
-    let client = connect_or_hint().await?;
-
-    let _kind = resolve_kind(profile.as_deref())?;
-    let agents = client
-        .list_storage_agents()
-        .await
-        .map_err(|e| RunError::Gateway(e.to_string()))?;
-    let Some(record) = agents.iter().find(|record| record.name == agent_path) else {
-        return Ok(Vec::new());
-    };
-    client
-        .list_stored_sessions(record.id)
-        .await
         .map_err(|e| RunError::Gateway(e.to_string()))
 }
 
@@ -185,14 +158,6 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     {
         Ok(path) => path,
         Err(error) if error.to_string().contains("already exists") => {
-            if config.session.is_some() {
-                return Err(RunError::SessionSwitch {
-                    session: config.session.expect("session checked above"),
-                    message: "the named identity is already live, so this run \
-                              received a new agent path and cannot resume that session"
-                        .into(),
-                });
-            }
             // A concurrent run holds the requested path. A unique
             // identity can't share persisted sessions, but a contended
             // run can't resume them anyway.
@@ -261,54 +226,6 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
         Ok(id) => id,
         Err(_) => Uuid::nil(),
     };
-
-    // ── Optional session resume ───────────────────────────────────────
-    // Fire the switch, then wait for the agent's `SessionActivated`
-    // confirmation before delivering the prompt — otherwise a fast
-    // prompt can beat the switch and land in the wrong session.
-    if let Some(session) = config.session {
-        if let Err(e) = client.switch_session(&agent_path, session).await {
-            let _ = client.shutdown_agent(&agent_path).await;
-            return Err(RunError::Send {
-                message: e.to_string(),
-            });
-        }
-        let activated = match tokio::time::timeout(REGISTRATION_TIMEOUT, async {
-            loop {
-                match stream.next().await {
-                    Some(Ok(event)) => {
-                        let Some((seq, ParsedFrame::Agent { agent, event })) =
-                            gateway::client::parse_frame(&event)
-                        else {
-                            continue;
-                        };
-                        let _ = seq;
-                        if agent != agent_path {
-                            continue;
-                        }
-                        if let AgentEvent::SessionActivated { id, .. } = event
-                            && id == session
-                        {
-                            return true;
-                        }
-                    }
-                    _ => return false,
-                }
-            }
-        })
-        .await
-        {
-            Ok(true) => true,
-            Ok(false) | Err(_) => false,
-        };
-        if !activated {
-            let _ = client.shutdown_agent(&agent_path).await;
-            return Err(RunError::SessionSwitch {
-                session,
-                message: "SessionActivated was not observed before delivery deadline".into(),
-            });
-        }
-    }
 
     // ── Prompt delivery ───────────────────────────────────────────────
     if let Err(e) = client
@@ -500,10 +417,6 @@ fn validated_agent_name(name: Option<&str>) -> Result<String, RunError> {
             message: format!("invalid agent name `{name}`: {error}"),
         })
         .map(|()| name.to_string())
-}
-
-fn named_agent_path(name: Option<&str>) -> Result<String, RunError> {
-    Ok(format!("/root/{}", validated_agent_name(name)?))
 }
 
 fn unique_agent_name(name: &str) -> String {

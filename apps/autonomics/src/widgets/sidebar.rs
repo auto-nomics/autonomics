@@ -1,9 +1,9 @@
-//! Right-hand sidebar for the agent leaf — consolidates the task plan,
-//! session info, and background tool tasks into one persistent column.
+//! Right-hand sidebar for the agent leaf — consolidates the task plan and
+//! background tool tasks into one persistent column. (Agents own exactly
+//! one working context now, so there is no session list to show.)
 //!
-//! The sidebar is always divided into **three equal-height sections**:
-//! Task Plan, Sessions, and Tasks. Each section gets exactly ⅓ of the inner
-//! height, regardless of content. Empty sections show a muted placeholder.
+//! The sidebar is divided into **two sections** with a divider: Task Plan
+//! and Tasks. Empty sections show a muted placeholder.
 //!
 //! ```text
 //! ┌ Sidebar ────────────┐
@@ -12,11 +12,6 @@
 //! │ ▶ Regression        │
 //! │ ○ Report            │
 //! │ ○ Review            │
-//! ├─────────────────────┤
-//! │ SESSIONS      [2/3] │
-//! │ 💬 GWAS analysis    │
-//! │                     │
-//! │                     │
 //! ├─────────────────────┤
 //! │ TASKS               │
 //! │ ⏳ run_dag          │
@@ -33,22 +28,17 @@ use ratatui::{
 };
 
 use crate::state::{PlanState, ToolTaskInfo, ToolTaskStatus};
-// Re-export SessionSummary so callers (agent_leaf, agent_workspace, app) can
-// construct SidebarData without a separate import from session_list.
-use crate::widgets::session_list::SessionList;
-pub use crate::widgets::session_list::SessionSummary;
 
 /// Data bundle the sidebar needs from the agent tab state.
 pub struct SidebarData<'a> {
     pub plan: &'a PlanState,
     pub tool_tasks: &'a [ToolTaskInfo],
-    pub sessions: &'a [SessionSummary],
 }
 
-/// Right-hand sidebar widget showing plan, sessions, and tasks.
+/// Right-hand sidebar widget showing plan and tasks.
 ///
-/// Always renders three sections of equal height (⅓ each), separated by
-/// divider lines. Empty sections show a muted "(none)" placeholder.
+/// Two sections separated by a divider line. Empty sections show a muted
+/// "(none)" placeholder.
 pub struct SideBar<'a> {
     pub data: SidebarData<'a>,
 }
@@ -72,19 +62,16 @@ impl Widget for SideBar<'_> {
             return;
         }
 
-        // ── Three equal-height sections with dividers between them ──
+        // ── Two sections with one divider between them ──
         //
-        // Layout: [ section_0 | divider(1) | section_1 | divider(1) | section_2 ]
-        // Each section gets (inner.height - 2) / 3 rows.
-        let dividers = 2u16;
-        let section_h = inner.height.saturating_sub(dividers) / 3;
+        // Layout: [ section_0 | divider(1) | section_1 ]
+        let dividers = 1u16;
+        let section_h = inner.height.saturating_sub(dividers) / 2;
 
         let rects = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(section_h), // Plan
-                Constraint::Length(1),         // Divider
-                Constraint::Length(section_h), // Sessions
                 Constraint::Length(1),         // Divider
                 Constraint::Min(0),            // Tasks (gets remainder)
             ])
@@ -92,9 +79,7 @@ impl Widget for SideBar<'_> {
 
         let plan_area = rects[0];
         let div0 = rects[1];
-        let session_area = rects[2];
-        let div1 = rects[3];
-        let task_area = rects[4];
+        let task_area = rects[2];
 
         // ── Section 1: Task Plan ──
         render_section_header(plan_area, buf, "TASK PLAN", self.data.plan.progress());
@@ -108,22 +93,7 @@ impl Widget for SideBar<'_> {
         // ── Divider ──
         render_divider(div0, buf);
 
-        // ── Section 2: Sessions ──
-        render_section_header(session_area, buf, "SESSIONS", None);
-        let session_body = Rect {
-            y: session_area.y + 1,
-            height: session_area.height.saturating_sub(1),
-            ..session_area
-        };
-        SessionList {
-            sessions: self.data.sessions,
-        }
-        .render(session_body, buf);
-
-        // ── Divider ──
-        render_divider(div1, buf);
-
-        // ── Section 3: Tasks ──
+        // ── Section 2: Tasks ──
         render_section_header(task_area, buf, "TASKS", None);
         let task_body = Rect {
             y: task_area.y + 1,

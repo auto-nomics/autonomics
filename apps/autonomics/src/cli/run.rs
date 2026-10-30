@@ -11,11 +11,6 @@ pub struct RunArgs {
     #[arg(value_name = "PROMPT")]
     pub prompt: Option<String>,
 
-    /// List persisted sessions for the --name agent instead of running a
-    /// prompt. Combine with --json for machine-readable output.
-    #[arg(long)]
-    pub list_sessions: bool,
-
     /// Print events to stdout as JSONL, one per line. Progress and
     /// warnings still go to stderr.
     #[arg(long)]
@@ -53,11 +48,6 @@ pub struct RunArgs {
     /// is cancelled (exit code 2).
     #[arg(long, value_name = "SECS")]
     pub timeout: Option<u64>,
-
-    /// Resume this session (id comes from a previous run's
-    /// `turn.started` event) instead of the agent's active one.
-    #[arg(long, value_name = "UUID")]
-    pub session: Option<uuid::Uuid>,
 
     /// Write a JSON run manifest (prompt hash, model, usage, status) to
     /// this file after the run, whatever the outcome.

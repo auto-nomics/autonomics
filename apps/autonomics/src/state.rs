@@ -699,127 +699,65 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
     }
 }
 
-/// Apply session lifecycle events to the full AppState (mutates the
-/// `sub_sessions` list of the agent identified by `agent_idx`).
+/// Apply session lifecycle events to the full AppState (mutates the sole
+/// context of the agent identified by `agent_idx`).
 ///
-/// `agent_idx` is the session-tab index that the event was routed to by
-/// agent name.  When it differs from `active_agent_idx` (e.g. a delegation
-/// triggers `SessionActivated` on a background agent), only the target
-/// agent's sub-sessions are touched — the foreground agent's view is
-/// untouched.
+/// `agent_idx` is the leaf index that the event was routed to by agent
+/// name. When it differs from `active_agent_idx` (e.g. a delegation
+/// announces its context on a background agent), only the target agent's
+/// context is touched — the foreground agent's view is untouched.
 pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: usize) {
-    let active_agent_id = state.sessions.get(agent_idx).map(|s| s.agent_id);
-    let active_session_id = state
-        .sessions
-        .get(agent_idx)
-        .and_then(|s| s.sub_sessions.get(s.active_sub_session_idx))
-        .map(|s| s.id);
     let session = match state.sessions.get_mut(agent_idx) {
         Some(s) => s,
         None => return,
     };
     match event {
         AgentEvent::SessionList { sessions } => {
-            // Build new SubSession entries, preserving tab_state for sessions
-            // we already know about (so we don't wipe message history).
-            let old_subs = std::mem::take(&mut session.sub_sessions);
-            let mut previous: std::collections::HashMap<uuid::Uuid, SubSession> =
-                old_subs.into_iter().map(|s| (s.id, s)).collect();
-            let subs: Vec<SubSession> = sessions
-                .into_iter()
-                .map(|info| {
-                    if let Some(mut old) = previous.remove(&info.id) {
-                        // Keep the existing tab_state, update metadata.
-                        old.title = info.title;
-                        old.last_active = info.last_active;
-                        old.created_at = info.created_at;
-                        old.telemetry = info.telemetry;
-                        old.parent_session_id = info.parent_session_id;
-                        old.fork_point_message_id = info.fork_point_message_id.clone();
-                        old
-                    } else {
-                        let mut sub = SubSession::new(info.id, info.title);
-                        sub.last_active = info.last_active;
-                        sub.created_at = info.created_at;
-                        sub.telemetry = info.telemetry;
-                        sub.parent_session_id = info.parent_session_id;
-                        sub.fork_point_message_id = info.fork_point_message_id.clone();
-                        sub
-                    }
-                })
-                .collect();
-            // Feed the picker if it's open for the same agent.
-            if state.session_picker.visible && state.session_picker.agent_id == active_agent_id {
-                let picker_items: Vec<crate::widgets::session_picker::PickerSession> = subs
-                    .iter()
-                    .map(|s| {
-                        let stats = crate::widgets::session_picker::compute_session_stats(
-                            &s.tab_state.messages,
-                        );
-                        crate::widgets::session_picker::PickerSession {
-                            id: s.id,
-                            title: s.title.clone(),
-                            last_active: s.last_active,
-                            created_at: 0, // not tracked on SubSession
-                            user_message_count: stats.user_message_count,
-                            assistant_message_count: stats.assistant_message_count,
-                            tool_call_count: s.telemetry.total_tool_use as usize,
-                            input_tokens: s.telemetry.input_tokens,
-                            output_tokens: s.telemetry.output_tokens,
-                            total_tokens: s.telemetry.total_tokens,
-                            total_tool_use: s.telemetry.total_tool_use,
-                            time_consume_ms: s.telemetry.time_consume_ms,
-                            first_user_message: stats.first_user_message,
-                            last_assistant_message: stats.last_assistant_message,
-                        }
-                    })
-                    .collect();
-                state
-                    .session_picker
-                    .set_sessions(picker_items, active_session_id);
-            }
-            session.sub_sessions = subs;
-            if session.active_sub_session_idx >= session.sub_sessions.len()
-                && !session.sub_sessions.is_empty()
-            {
-                session.active_sub_session_idx = session.sub_sessions.len() - 1;
-            }
+            // At most one entry: the agent's sole context. Preserve the
+            // existing tab_state when the id matches so hydration never
+            // wipes a loaded transcript.
+            let old = session.context.take();
+            session.context = match sessions.into_iter().next() {
+                Some(info) => match old {
+                    Some(old) if old.id == info.id => Some(AgentContext::from_info(info, old)),
+                    _ => Some(AgentContext::new(info)),
+                },
+                None => old,
+            };
         }
         AgentEvent::SessionActivated { id, title } => {
-            if let Some(idx) = session.sub_sessions.iter().position(|s| s.id == id) {
-                session.active_sub_session_idx = idx;
-                if let Some(t) = title.clone() {
-                    session.sub_sessions[idx].title = Some(t);
-                }
-            } else {
-                let mut sub = SubSession::new(id, title);
-                // Migrate any pending messages (sent before the backend
-                // announced a session) into the new sub-session.
+            // The backend activated (usually: just auto-created) the sole
+            // context. Adopt it, migrating any pending messages sent before
+            // the announcement.
+            if session.context.as_ref().is_none_or(|c| c.id != id) {
+                let mut context = AgentContext::new(agentik_types::SessionInfo {
+                    id,
+                    title: title.clone(),
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                    last_active: chrono::Utc::now().timestamp_millis(),
+                    telemetry: Default::default(),
+                    parent_session_id: None,
+                    fork_point_message_id: None,
+                });
                 if !session.pending_tab_state.messages.is_empty() {
-                    sub.tab_state = std::mem::take(&mut session.pending_tab_state);
+                    context.tab_state = std::mem::take(&mut session.pending_tab_state);
                     tracing::debug!(
-                        migrated = sub.tab_state.messages.len(),
-                        "migrated pending messages into new sub-session"
+                        migrated = context.tab_state.messages.len(),
+                        "migrated pending messages into new context"
                     );
                 }
-                session.sub_sessions.push(sub);
-                session.active_sub_session_idx = session.sub_sessions.len() - 1;
+                session.context = Some(context);
+            } else if title.is_some() {
+                session.context.as_mut().expect("checked above").title = title;
             }
         }
         AgentEvent::SessionPaused { id } => {
-            if let Some(s) = session.sub_sessions.iter().find(|s| s.id == id) {
-                tracing::debug!(session_id = %s.id, "session paused");
-            }
+            tracing::debug!(session_id = %id, "session paused");
         }
         AgentEvent::SessionClosed { id } => {
-            if let Some(pos) = session.sub_sessions.iter().position(|s| s.id == id) {
-                session.sub_sessions.remove(pos);
-                if session.sub_sessions.is_empty() {
-                    session.active_sub_session_idx = 0;
-                } else if session.active_sub_session_idx >= session.sub_sessions.len() {
-                    session.active_sub_session_idx = session.sub_sessions.len() - 1;
-                }
-            }
+            // Contexts are never closed by the backend (the command is
+            // refused); a stale frame from an older build just logs.
+            tracing::debug!(session_id = %id, "ignoring session-closed event");
         }
         _ => {}
     }
@@ -831,58 +769,62 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
 pub struct AgentSession {
     pub name: String,
     pub agent_id: uuid::Uuid,
-    /// All sub-sessions within this agent. Each session carries its own
-    /// `tab_state` so switching sessions restores the previous conversation
-    /// (messages, token counts, scroll position, …).
-    pub sub_sessions: Vec<SubSession>,
-    /// Index into `sub_sessions` of the currently active sub-session.
-    pub active_sub_session_idx: usize,
+    /// The agent's sole working context (see the backend's
+    /// one-context-per-agent contract). `None` until the backend announces
+    /// it via `SessionList` / `SessionActivated`.
+    pub context: Option<AgentContext>,
     /// Per-agent buffer holding messages sent before the backend announces
-    /// the first sub-session (via `SessionActivated`). When a sub-session is
-    /// created, the pending state is migrated into it and this is cleared.
+    /// the context. When the context appears, the pending state migrates
+    /// into it and this is cleared.
     ///
     /// This replaces the old shared `agent_tab_state` fallback, preventing
     /// messages from one agent leaking into another's UI.
     pub pending_tab_state: AgentTabState,
 }
 
-/// One conversation within an agent.
-pub struct SubSession {
+/// The agent's persistent working context — one conversation per agent.
+/// Session-level naming survives for wire/persistence compatibility.
+#[allow(dead_code)] // last_active/created_at/telemetry: context metadata for display
+pub struct AgentContext {
     pub id: uuid::Uuid,
     pub title: Option<String>,
-    /// Epoch-millis of the last activity in this session, as reported by
-    /// the agent's session list. Drives the picker's "Last active" field.
+    /// Epoch-millis of the last activity in this context, as reported by
+    /// the agent's session list.
     pub last_active: i64,
-    /// Epoch-millis when this session was created. Used for ordering in the
-    /// sidebar session list (newest first).
+    /// Epoch-millis when this context was created.
     pub created_at: i64,
     pub telemetry: agentik_types::SessionTelemetry,
-    /// Source conversation for a forked session.
-    pub parent_session_id: Option<uuid::Uuid>,
-    /// Final parent message included when this session was forked.
-    pub fork_point_message_id: Option<String>,
     /// Conversation-level state — chat history, token counts, scroll, etc.
-    /// Owned per-session so each session has its own memory of what
-    /// happened in it.
     pub tab_state: AgentTabState,
-    /// Set once a per-session plan fetch has been spawned for this
-    /// sub-session, so repeated `SessionList` hydrations don't re-fetch.
-    /// The plan itself lives in `tab_state.plan`.
+    /// Set once a plan fetch has been spawned for this context, so
+    /// repeated `SessionList` hydrations don't re-fetch.
     pub plan_requested: bool,
 }
 
-impl SubSession {
-    pub fn new(id: uuid::Uuid, title: Option<String>) -> Self {
+impl AgentContext {
+    pub fn new(info: agentik_types::SessionInfo) -> Self {
         Self {
-            id,
-            title,
-            last_active: 0,
-            created_at: chrono::Utc::now().timestamp_millis(),
-            telemetry: Default::default(),
-            parent_session_id: None,
-            fork_point_message_id: None,
+            id: info.id,
+            title: info.title,
+            last_active: info.last_active,
+            created_at: info.created_at,
+            telemetry: info.telemetry,
             tab_state: AgentTabState::default(),
             plan_requested: false,
+        }
+    }
+
+    /// Refresh metadata from a `SessionInfo`, keeping the loaded
+    /// `tab_state` (transcript, scroll, caches) intact.
+    pub fn from_info(info: agentik_types::SessionInfo, old: Self) -> Self {
+        Self {
+            id: info.id,
+            title: info.title,
+            last_active: info.last_active,
+            created_at: info.created_at,
+            telemetry: info.telemetry,
+            tab_state: old.tab_state,
+            plan_requested: old.plan_requested,
         }
     }
 }
@@ -949,7 +891,6 @@ pub struct AppState {
     /// hit-testing (e.g. the tab-bar collapse stub). Refreshed every render.
     pub last_frame_area: ratatui::layout::Rect,
     pub name_input: crate::widgets::name_input::NameInputState,
-    pub session_picker: crate::widgets::session_picker::SessionPickerState,
     /// Message picker popup (Ctrl+P → "Copy message"). Lists text-bearing
     /// messages from the active session and lets the user copy one to the
     /// system clipboard.
@@ -957,12 +898,6 @@ pub struct AppState {
     /// Transient toast notifications (success / error / info / warning).
     /// Auto-dismiss after a variant-specific timeout.
     pub toasts: crate::widgets::toast::ToastManager,
-    /// When `true`, the name input popup is collecting a **session name**
-    /// (not an agent name). The Enter handler checks this flag.
-    pub pending_session_name: bool,
-    /// When `Some(id)`, the name input popup is collecting a **new title**
-    /// for renaming an existing session.
-    pub pending_session_rename_id: Option<uuid::Uuid>,
     /// Agent kind selected from the picker, waiting for the user to enter a
     /// name. When `Some`, the name input popup is shown.
     pub pending_profile: Option<agentik_core::AgentKind>,
@@ -1014,27 +949,29 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Returns a mutable reference to the active sub-session's tab state.
-    /// If the active agent exists but has no sub-sessions yet (before the
-    /// first `SessionActivated`), returns that agent's `pending_tab_state`
-    /// so messages are buffered per-agent without cross-contamination.
-    /// If no agent exists at all, returns the legacy `agent_tab_state`
-    /// (which is never displayed since the workspace renders an empty state).
+    /// Returns a mutable reference to the active agent's context tab state.
+    /// If the active agent exists but its context is not announced yet
+    /// (before the first `SessionActivated` / `SessionList`), returns that
+    /// agent's `pending_tab_state` so messages are buffered per-agent
+    /// without cross-contamination. If no agent exists at all, returns the
+    /// legacy `agent_tab_state` (never displayed — the workspace renders an
+    /// empty state).
     pub fn active_tab_state_mut(&mut self) -> &mut AgentTabState {
         if let Some(session) = self.sessions.get_mut(self.active_agent_idx) {
-            if let Some(sub) = session.sub_sessions.get_mut(session.active_sub_session_idx) {
-                return &mut sub.tab_state;
+            if let Some(context) = session.context.as_mut() {
+                return &mut context.tab_state;
             }
             return &mut session.pending_tab_state;
         }
         &mut self.agent_tab_state
     }
 
-    /// Returns an immutable reference to the active sub-session's tab state.
+    /// Returns an immutable reference to the active agent's context tab
+    /// state.
     pub fn active_tab_state(&self) -> &AgentTabState {
         if let Some(session) = self.sessions.get(self.active_agent_idx) {
-            if let Some(sub) = session.sub_sessions.get(session.active_sub_session_idx) {
-                return &sub.tab_state;
+            if let Some(context) = session.context.as_ref() {
+                return &context.tab_state;
             }
             return &session.pending_tab_state;
         }

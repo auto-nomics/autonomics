@@ -127,7 +127,7 @@ fn renders_all_child_panes_without_overlap() {
         "a1".into(),
         vec![Annotation {
             id: "n1".into(),
-            kind: AnnotationKind::Note,
+            kind: AnnotationKind::Comment,
             content: "Check methods".into(),
             comment: String::new(),
             tags: Vec::new(),

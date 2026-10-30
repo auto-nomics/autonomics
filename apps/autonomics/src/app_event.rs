@@ -27,8 +27,8 @@ pub(crate) enum AppEvent {
         session_id: uuid::Uuid,
         messages: Vec<agentik_sdk::types::messages::Message>,
     },
-    /// The persistent task plan for a resumed session, loaded from storage.
-    /// Restores that sub-session tab's sidebar checklist so the user sees
+    /// The persistent task plan for a resumed context, loaded from storage.
+    /// Restores the sidebar checklist so the user sees
     /// the same plan the model already knows about (it's injected as a
     /// tail notice). The backend restore does *not* emit an
     /// `AgentEvent::PlanUpdate`, so without this the TUI's `PlanState`
@@ -37,12 +37,6 @@ pub(crate) enum AppEvent {
         agent_id: uuid::Uuid,
         session_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
-    },
-    /// Raw transcript fetched so the user can choose an exact fork point.
-    ForkHistoryLoaded {
-        agent_id: uuid::Uuid,
-        session_id: uuid::Uuid,
-        messages: Vec<agentik_sdk::types::messages::Message>,
     },
     /// A fresh model catalogue snapshot arrived from the daemon (hydration,
     /// `ReloadCatalog`, or after a provider/catalog change). The handler

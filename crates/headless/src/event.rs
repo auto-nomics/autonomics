@@ -74,8 +74,7 @@ pub struct RunStartedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TurnStartedEvent {
     pub turn_id: Uuid,
-    /// The session the turn runs in — the handle scripts use to resume
-    /// later via `--session`.
+    /// The context the turn runs in — the agent's sole working context.
     pub session_id: Uuid,
 }
 

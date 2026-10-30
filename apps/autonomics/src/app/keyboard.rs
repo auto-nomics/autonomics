@@ -78,7 +78,6 @@ impl App {
             || state.agent_profile_picker.visible
             || state.agent_picker.visible
             || state.name_input.visible
-            || state.session_picker.visible
             || state.message_picker.is_visible()
             || state.dag_view_visible
             || state.bibliography_visible
@@ -215,12 +214,6 @@ impl App {
         // Name input popup captures keys when visible.
         if self.state.name_input.visible {
             self.handle_name_input_key(key);
-            return;
-        }
-
-        // Session picker popup captures keys when visible.
-        if self.state.session_picker.visible {
-            self.handle_session_picker_key(key);
             return;
         }
 

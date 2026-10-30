@@ -23,17 +23,6 @@ pub(super) enum AgentCommand {
     Shutdown,
     Cancel,
     ListSessions,
-    CreateSession {
-        title: Option<String>,
-        fork_from: Option<uuid::Uuid>,
-        fork_message_id: Option<String>,
-    },
-    SwitchSession(uuid::Uuid),
-    CloseSession(uuid::Uuid),
-    RenameSession {
-        id: uuid::Uuid,
-        title: String,
-    },
     SetModel(Model),
     Compact,
 }
@@ -88,7 +77,11 @@ impl RuntimeHost {
     /// Returns the enriched info (with `agent_id` and the model fields
     /// filled from the live slot) for callers to broadcast in
     /// [`HostEvent::AgentRegistered`].
-    pub fn register_agent(&mut self, handle: AgentHandle, info: crate::control::AgentInfo) -> crate::control::AgentInfo {
+    pub fn register_agent(
+        &mut self,
+        handle: AgentHandle,
+        info: crate::control::AgentInfo,
+    ) -> crate::control::AgentInfo {
         let path = handle.path.clone();
         let kind = handle.kind;
         let agent_id = handle.agent_id;
@@ -346,18 +339,6 @@ async fn relay_loop(
                 Some(AgentCommand::ListSessions) => {
                     handle.list_sessions();
                 }
-                Some(AgentCommand::CreateSession { title, fork_from, fork_message_id }) => {
-                    let _ = handle.create_session(title, fork_from, fork_message_id);
-                }
-                Some(AgentCommand::SwitchSession(id)) => {
-                    handle.switch_session(id);
-                }
-                Some(AgentCommand::CloseSession(id)) => {
-                    handle.close_session(id);
-                }
-                Some(AgentCommand::RenameSession { id, title }) => {
-                    handle.rename_session(id, title);
-                }
                 Some(AgentCommand::SetModel(model)) => {
                     handle.set_model(model);
                 }
@@ -411,10 +392,7 @@ impl Drop for RuntimeHost {
 /// Reads through the shared `ArcSwapOption`, so agents that inherited the
 /// daemon-wide default slot report the current default, not the one at
 /// registration time. Clears both fields when the slot is empty.
-fn fill_model_fields(
-    info: &mut crate::control::AgentInfo,
-    model: &Arc<ArcSwapOption<Model>>,
-) {
+fn fill_model_fields(info: &mut crate::control::AgentInfo, model: &Arc<ArcSwapOption<Model>>) {
     match model.load_full().as_deref() {
         Some(model) => {
             info.model = Some(model.model_spec());

@@ -475,21 +475,6 @@ pub struct StoredSession {
     pub fork_point_message_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct CreateSessionRequest {
-    pub title: Option<String>,
-    pub fork_from: Option<Uuid>,
-    /// Final parent message to include in the new session. Requires
-    /// `fork_from`; ignored for new root sessions.
-    #[serde(default)]
-    pub fork_message_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct RenameSessionRequest {
-    pub title: String,
-}
-
 /// `PATCH /api/v1/storage/agents/{uuid}` — rename (new full path).
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RenameAgentRequest {

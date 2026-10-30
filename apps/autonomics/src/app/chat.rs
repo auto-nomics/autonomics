@@ -267,81 +267,6 @@ impl App {
         self.state.message_picker.open_with(items);
     }
 
-    /// Fetch raw backend messages and open the fork-point picker.
-    ///
-    /// The rendered transcript does not preserve backend message IDs, so the
-    /// picker must be built from raw history at the moment the user invokes
-    /// the action.
-    pub(super) fn open_fork_message_picker(&mut self) {
-        let Some(agent) = self.state.sessions.get(self.state.active_agent_idx) else {
-            tracing::warn!("no active agent — cannot fork from message");
-            return;
-        };
-        let Some(parent) = agent.sub_sessions.get(agent.active_sub_session_idx) else {
-            tracing::warn!("no active session — cannot fork from message");
-            return;
-        };
-        let agent_id = agent.agent_id;
-        let session_id = parent.id;
-        let client = self.client.clone();
-        let tx = self.app_event_tx.clone();
-        self.spawn_client_task(
-            &format!("load_fork_history::{session_id}"),
-            move || async move {
-                match client.session_history(agent_id, session_id).await {
-                    Ok(messages) => {
-                        tx.send(crate::app_event::AppEvent::ForkHistoryLoaded {
-                            agent_id,
-                            session_id,
-                            messages,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(%session_id, error = %e, "failed to load fork history");
-                    }
-                }
-            },
-        );
-    }
-
-    /// Open the fork-point picker after its raw history fetch completes.
-    pub(super) fn handle_fork_history_loaded(
-        &mut self,
-        agent_id: uuid::Uuid,
-        session_id: uuid::Uuid,
-        messages: &[agentik_sdk::types::messages::Message],
-    ) {
-        let Some(agent_idx) = self
-            .state
-            .sessions
-            .iter()
-            .position(|s| s.agent_id == agent_id)
-        else {
-            return;
-        };
-        if agent_idx != self.state.active_agent_idx {
-            return;
-        }
-        let Some(current_id) = self
-            .state
-            .sessions
-            .get(agent_idx)
-            .and_then(|s| s.sub_sessions.get(s.active_sub_session_idx))
-            .map(|s| s.id)
-        else {
-            return;
-        };
-        if current_id != session_id {
-            return;
-        }
-        let items = crate::widgets::message_picker::collect_message_items(messages);
-        if items.is_empty() {
-            tracing::info!("fork picker: no selectable messages in active session");
-            return;
-        }
-        self.state.message_picker.open_fork_with(items);
-    }
-
     /// Key handling while the message-copy picker is open.
     ///
     /// All keys are delegated to `MessagePickerState::handle_key`, which
@@ -386,38 +311,6 @@ impl App {
                             self.state.toasts.error("Clipboard failed", Some(e));
                         }
                     }
-                }
-            }
-            MessagePickerKeyOutcome::ForkSelected => {
-                let agent_name = self
-                    .state
-                    .sessions
-                    .get(self.state.active_agent_idx)
-                    .map(|s| s.name.clone());
-                let parent_id = self
-                    .state
-                    .sessions
-                    .get(self.state.active_agent_idx)
-                    .and_then(|s| s.sub_sessions.get(s.active_sub_session_idx))
-                    .map(|s| s.id);
-                if let (Some(agent), Some(parent_id)) = (agent_name, parent_id) {
-                    if let Some(item) = self.state.message_picker.selected_item() {
-                        let message_id = item.message_id.clone();
-                        let preview = item.preview.clone();
-                        let title = format!("Fork at {preview}");
-                        self.state.message_picker.close();
-                        self.fire_session_command("create_session", move |client| async move {
-                            let _ = client
-                                .create_session(&agent, Some(title), Some(parent_id), message_id)
-                                .await;
-                        });
-                        self.state.toasts.success(
-                            "Creating branch",
-                            Some("The new conversation will activate when ready".into()),
-                        );
-                    }
-                } else {
-                    self.state.message_picker.close();
                 }
             }
             MessagePickerKeyOutcome::Consumed => {}

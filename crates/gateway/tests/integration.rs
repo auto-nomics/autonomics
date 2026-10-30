@@ -143,7 +143,10 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
         .host_control
         .as_ref()
         .expect("host control installed")
-        .set_agent_model(&path, gateway::testing::renamed_mock_model("mock-model-b", 4096));
+        .set_agent_model(
+            &path,
+            gateway::testing::renamed_mock_model("mock-model-b", 4096),
+        );
     let changed = wait_for_frame(&mut rx, |f| {
         matches!(
             f,
@@ -375,7 +378,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 46);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 43);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -389,9 +392,6 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/agents/{name}/config",
         "/api/v1/agents/{name}/dag",
         "/api/v1/agents/{name}/sessions",
-        "/api/v1/agents/{name}/sessions/{id}/activate",
-        "/api/v1/agents/{name}/sessions/{id}/close",
-        "/api/v1/agents/{name}/sessions/{id}/title",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/plan",
         "/api/v1/storage/agents",

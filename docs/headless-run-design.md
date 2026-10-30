@@ -1,6 +1,6 @@
 # Headless 运行模式设计(初步)
 
-状态:**gateway 单一路径**(2026-09 起)——`autonomics run` 经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变)。**进程内 `run_task` 与 `--ephemeral`/per-run VFS mounts 已整体移除**(双路径维护成本高于其价值;benchmark 隔离待未来一次性 isolated gateway backend,见 §3.1)。CLI:`autonomics run`(--name / --json / -o / --profile / --model / --timeout / --session / --manifest / --list-sessions);退出码 0/1/2/3。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
+状态:**gateway 单一路径**(2026-09 起)——`autonomics run` 经 gateway daemon 执行(`crates/headless::gateway_runner::run_via_gateway`,RunEvent 契约与退出码不变)。**进程内 `run_task` 与 `--ephemeral`/per-run VFS mounts 已整体移除**(双路径维护成本高于其价值;benchmark 隔离待未来一次性 isolated gateway backend,见 §3.1)。CLI:`autonomics run`(--name / --json / -o / --profile / --model / --timeout / --manifest);退出码 0/1/2/3。每个 agent 只有一条持久上下文,按 `--name` 恢复;agent 内的 --session/--list-sessions 已随多会话模型移除,历史经存储 API 只读访问。RunEvent 与 manifest 通过 `run_id` 关联;Ctrl+C 与输出管道断连会协作取消远端 turn。剩余:P2 的 --output-schema、多 turn stdin 脚本,P3 的多 agent 网络运行,以及一次性 isolated gateway backend。参考实现:codex-rs `exec` 子命令(`/mnt/disk3/codex/codex-rs/exec`)。
 
 ## 0. 背景与目标
 
@@ -113,12 +113,11 @@ autonomics run [OPTIONS] [PROMPT]
   --json                             stdout 输出 JSONL 事件流(§4)
   -o, --output-last-message <FILE>   最终消息写入文件(turn 失败也写出)
   --profile <PATH>                   agent profile;缺省用默认 profile
-  --name <NAME>                      Agent name segment;路径为 /root/<NAME>
-  --session <UUID>                   在既有会话上继续(§7)
+  --name <NAME>                      Agent name segment;路径为 /root/<NAME>;
+                                     按 agent 身份自动恢复其唯一持久上下文
   --model <NAME>                     覆盖模型(仅本次运行;默认仍读 settings 表)
   --timeout <SECS>                   整体超时;超时取消,退出码 2
   --manifest <FILE>                  输出 run manifest(§8)
-  --list-sessions                    列出 --name 对应 agent 的持久 session
   -C, --cwd <DIR>                    工作目录(语义对齐 codex)
 ```
 
@@ -196,10 +195,11 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 (`spawn_agent` 内 `get_agent_by_name` → `with_id`;session 快照 + WAL 在
 `Agent::run()` 引导时回放),所以恢复语义几乎免费:
 
-- `--session <UUID>`:spawn 后 `switch_session(id)` → `send_message`;
-- `sessions list` 子命令(枚举历史会话供脚本选取)放 P1。
-- `--list-sessions` 已实现:gateway 直接读取 `--name` 对应 agent 的持久
-  session records,不要求模型配置,也不需要先 spawn agent;`--json` 输出数组。
+- 每个 agent 只有一条持久上下文:spawn 后 `Agent::run()` 按 `agent_contexts`
+  绑定恢复唯一上下文(绑定缺失时拒绝对话,绝不落到空上下文),然后
+  `send_message`。
+- (历史上的 `--session` 恢复与 `--list-sessions` 已随多会话模型移除;
+  旧历史经 `/storage/agents/{id}/sessions` 与 history API 只读访问。)
 
 ## 8. Run manifest
 
@@ -226,8 +226,8 @@ agentik-core storage 已按 agent name 自动恢复并做 WAL replay
 
 - **P0(骨架)**:`build_model` / profile 引导下沉 runtime;`crates/headless`
   库 + `run` 子命令;单 agent 单 turn;人读 + `--json`;退出码;`--timeout`。
-- **P1(可用性)**:`--output-last-message`、`--session` 恢复、
-  `--manifest`、`sessions list`。(原 P1 还交付了 `--ephemeral` 临时 state_dir +
+- **P1(可用性)**:`--output-last-message`、`--manifest`。(原 P1 的 `--session`
+  恢复与 `sessions list` 已随单上下文模型移除。(原 P1 还交付了 `--ephemeral` 临时 state_dir +
   per-run VFS mounts,已在 2026-09 随进程内路径移除,见 §3.1。)
 - **P2(评测)**:`--output-schema`(依赖 agentik-sdk 结构化输出能力,见 §10.3);多 turn stdin 脚本(每行一条 user 消息的 JSONL)。
 - **P3(编排)**:多 agent 网络运行——`NetworkSpec`(nodes/edges/termination)

@@ -132,20 +132,6 @@ impl App {
             CommandAction::SkillEvolve => {
                 self.open_skill_evolution();
             }
-            CommandAction::OpenSessions => {
-                self.open_session_picker();
-            }
-            CommandAction::NewSession => {
-                // Prompt for a session name, then create a real backend
-                // session via host.control().create_session(...). This flows
-                // through handle_name_input_key → pending_session_name.
-                if self.state.sessions.is_empty() {
-                    tracing::warn!("no active agent — cannot create session");
-                    return;
-                }
-                self.state.pending_session_name = true;
-                self.state.name_input.open(" New Session ", "New session");
-            }
             CommandAction::ToggleCollapseThinking => {
                 self.state.display_settings.toggle_thinking();
                 self.persist_display_setting(
@@ -169,9 +155,6 @@ impl App {
             }
             CommandAction::CopyMessage => {
                 self.open_message_picker();
-            }
-            CommandAction::ForkMessage => {
-                self.open_fork_message_picker();
             }
             CommandAction::Compact => {
                 let agent_name = self

@@ -223,6 +223,11 @@ pub enum StorageError {
     NotFound(String),
     #[error("agent not found: {0}")]
     AgentNotFound(Uuid),
+    /// Durable history exists but cannot be safely resumed (e.g. an agent's
+    /// bound context is missing). Callers must refuse an empty replacement
+    /// and surface the reason instead of falling back to another record.
+    #[error("recovery required: {0}")]
+    RecoveryRequired(String),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
     #[error("database error: {0}")]
@@ -391,6 +396,21 @@ pub trait AgentStorage: Send + Sync {
         &self,
         agent_id: Uuid,
     ) -> Result<Vec<SessionRecord>, StorageError>;
+
+    /// The agent's immutable context binding: which session record is the
+    /// agent's sole working context. `None` until the first restore binds
+    /// one (legacy multi-session agents get their most recently active
+    /// history bound on first boot).
+    async fn agent_context_id(&self, agent_id: Uuid) -> Result<Option<Uuid>, StorageError>;
+
+    /// Bind an agent to its sole context. First writer wins atomically —
+    /// this never updates an existing binding; a mismatching binding is a
+    /// [`StorageError::RecoveryRequired`].
+    async fn bind_agent_context(
+        &self,
+        agent_id: Uuid,
+        context_id: Uuid,
+    ) -> Result<(), StorageError>;
 
     /// Replace cumulative telemetry counters for a session.
     async fn update_session_telemetry(

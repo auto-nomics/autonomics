@@ -295,6 +295,11 @@ impl TursoAgentStorage {
                 CREATE INDEX IF NOT EXISTS idx_sessions_agent
                     ON sessions(agent_id);
 
+                CREATE TABLE IF NOT EXISTS agent_contexts (
+                    agent_id   TEXT PRIMARY KEY,
+                    context_id TEXT NOT NULL UNIQUE
+                );
+
                 CREATE TABLE IF NOT EXISTS messages (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id   TEXT NOT NULL,
@@ -1031,6 +1036,12 @@ impl AgentStorage for TursoAgentStorage {
             .await?;
         self.conn
             .execute(
+                "DELETE FROM agent_contexts WHERE agent_id=?1",
+                params_from_iter([Value::Text(id_str.clone())]),
+            )
+            .await?;
+        self.conn
+            .execute(
                 "DELETE FROM agents WHERE id = ?1",
                 params_from_iter([Value::Text(id_str)]),
             )
@@ -1355,6 +1366,69 @@ impl AgentStorage for TursoAgentStorage {
             )
             .await?;
         Ok(())
+    }
+
+    async fn agent_context_id(&self, agent_id: Uuid) -> Result<Option<Uuid>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT context_id FROM agent_contexts WHERE agent_id=?1",
+                params_from_iter([Value::Text(agent_id.to_string())]),
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => {
+                let value = text_col(&row, 0)?;
+                Uuid::parse_str(&value)
+                    .map(Some)
+                    .map_err(|e| StorageError::Other(format!("invalid context UUID: {e}").into()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn bind_agent_context(
+        &self,
+        agent_id: Uuid,
+        context_id: Uuid,
+    ) -> Result<(), StorageError> {
+        let mut owned = self
+            .conn
+            .query(
+                "SELECT id FROM sessions WHERE agent_id=?1 AND id=?2",
+                params_from_iter([
+                    Value::Text(agent_id.to_string()),
+                    Value::Text(context_id.to_string()),
+                ]),
+            )
+            .await?;
+        if owned.next().await?.is_none() {
+            return Err(StorageError::NotFound(
+                "context does not belong to agent".into(),
+            ));
+        }
+        drop(owned);
+        // First writer wins atomically. This never updates a previous binding.
+        self.conn
+            .execute(
+                "INSERT INTO agent_contexts (agent_id, context_id)
+             SELECT agent_id, id FROM sessions WHERE agent_id=?1 AND id=?2
+             ON CONFLICT(agent_id) DO NOTHING",
+                params_from_iter([
+                    Value::Text(agent_id.to_string()),
+                    Value::Text(context_id.to_string()),
+                ]),
+            )
+            .await?;
+        match self.agent_context_id(agent_id).await? {
+            Some(id) if id == context_id => Ok(()),
+            Some(_) => Err(StorageError::RecoveryRequired(
+                "agent already owns another context".into(),
+            )),
+            None => Err(StorageError::NotFound(
+                "context does not belong to agent".into(),
+            )),
+        }
     }
 
     async fn list_session_records(
@@ -1968,6 +2042,135 @@ mod tests {
     use crate::session::SessionState;
     use crate::storage::AgentRuntimeOverrides;
     use agentik_sdk::AgentMessageExt;
+
+    /// Real-data migration rehearsal. Point AUTONOMICS_MIGRATION_SMOKE_DB at
+    /// a *copy* of a production agent.db and run with --ignored. Applies the
+    /// one-context-per-agent migration (legacy selection + agent_contexts
+    /// binding) to every stored agent and prints what would happen on first
+    /// boot after the upgrade.
+    #[tokio::test]
+    #[ignore = "set AUTONOMICS_MIGRATION_SMOKE_DB to a copied agent.db"]
+    async fn migration_smoke_on_real_db_copy() {
+        let Some(path) = std::env::var("AUTONOMICS_MIGRATION_SMOKE_DB").ok() else {
+            panic!("AUTONOMICS_MIGRATION_SMOKE_DB not set");
+        };
+        let storage = TursoAgentStorage::open(&path).await.unwrap();
+        let agents = storage.list_agents().await.unwrap();
+        println!("agents stored: {}", agents.len());
+        let mut bound = 0usize;
+        let mut selected_now = 0usize;
+        let mut empty = 0usize;
+        for agent in &agents {
+            let records = storage.list_session_records(agent.id).await.unwrap();
+            let already = storage.agent_context_id(agent.id).await.unwrap();
+            match already {
+                Some(id) => {
+                    let present = records.iter().any(|r| r.session_id == id);
+                    println!(
+                        "[{}] {} sessions={} bound={} record_present={}",
+                        agent.name,
+                        if present { "OK" } else { "MISSING-BOUND" },
+                        records.len(),
+                        id,
+                        present
+                    );
+                    bound += 1;
+                }
+                None => {
+                    match records
+                        .iter()
+                        .max_by_key(|r| (r.last_active, r.started_at, r.session_id))
+                    {
+                        Some(winner) => {
+                            storage
+                                .bind_agent_context(agent.id, winner.session_id)
+                                .await
+                                .unwrap();
+                            println!(
+                                "[MIGRATED] {} sessions={} -> context={} title={:?}",
+                                agent.name,
+                                records.len(),
+                                winner.session_id,
+                                winner.title
+                            );
+                            selected_now += 1;
+                        }
+                        None => {
+                            println!("[EMPTY] {} (no histories)", agent.name);
+                            empty += 1;
+                        }
+                    }
+                }
+            }
+        }
+        println!("summary: {bound} already bound, {selected_now} migrated now, {empty} empty");
+        assert!(bound + selected_now + empty == agents.len());
+    }
+
+    // ── agent_contexts binding ──────────────────────────────
+
+    #[tokio::test]
+    async fn context_binding_is_first_writer_wins() {
+        let storage = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent = sample_record("binder");
+        storage.upsert_agent(agent.clone()).await.unwrap();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        storage.start_session(agent.id, first).await.unwrap();
+        storage.start_session(agent.id, second).await.unwrap();
+
+        // First bind wins; a second bind of another context is refused
+        // without overwriting.
+        storage.bind_agent_context(agent.id, first).await.unwrap();
+        assert_eq!(
+            storage.agent_context_id(agent.id).await.unwrap(),
+            Some(first)
+        );
+        let err = storage
+            .bind_agent_context(agent.id, second)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, StorageError::RecoveryRequired(_)),
+            "second bind must refuse, got: {err}"
+        );
+        assert_eq!(
+            storage.agent_context_id(agent.id).await.unwrap(),
+            Some(first),
+            "refused bind must not overwrite the existing binding"
+        );
+
+        // Re-binding the SAME context is idempotent.
+        storage.bind_agent_context(agent.id, first).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn context_binding_requires_owned_session() {
+        let storage = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent = sample_record("owner");
+        storage.upsert_agent(agent.clone()).await.unwrap();
+        let foreign_session = Uuid::new_v4();
+
+        let err = storage
+            .bind_agent_context(agent.id, foreign_session)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StorageError::NotFound(_)));
+        assert_eq!(storage.agent_context_id(agent.id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn deleting_agent_removes_context_binding() {
+        let storage = TursoAgentStorage::open_in_memory().await.unwrap();
+        let agent = sample_record("gone");
+        storage.upsert_agent(agent.clone()).await.unwrap();
+        let session = Uuid::new_v4();
+        storage.start_session(agent.id, session).await.unwrap();
+        storage.bind_agent_context(agent.id, session).await.unwrap();
+
+        storage.delete_agent(agent.id).await.unwrap();
+        assert_eq!(storage.agent_context_id(agent.id).await.unwrap(), None);
+    }
 
     fn now_ms() -> i64 {
         chrono::Utc::now().timestamp_millis()

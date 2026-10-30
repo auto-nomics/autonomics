@@ -115,9 +115,9 @@ impl App {
             .map(|s| crate::widgets::agent_workspace::LeafTab {
                 name: s.name.clone(),
                 status: s
-                    .sub_sessions
-                    .get(s.active_sub_session_idx)
-                    .map(|sub| sub.tab_state.status)
+                    .context
+                    .as_ref()
+                    .map(|context| context.tab_state.status)
                     .unwrap_or_default(),
             })
             .collect()
@@ -146,9 +146,9 @@ impl App {
                 name: s.name.clone(),
                 agent_id: s.agent_id,
                 status: s
-                    .sub_sessions
-                    .get(s.active_sub_session_idx)
-                    .map(|sub| sub.tab_state.status)
+                    .context
+                    .as_ref()
+                    .map(|context| context.tab_state.status)
                     .unwrap_or_default(),
                 is_active: active_name.as_deref() == Some(s.name.as_str()),
             })

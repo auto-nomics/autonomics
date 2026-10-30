@@ -407,61 +407,6 @@ impl GatewayClient {
 
     // ── sessions ──
 
-    pub async fn create_session(
-        &self,
-        agent: &str,
-        title: Option<String>,
-        fork_from: Option<Uuid>,
-        fork_message_id: Option<String>,
-    ) -> Result<()> {
-        self.fire(
-            reqwest::Method::POST,
-            &format!("/agents/{}/sessions", encode_segment(agent)),
-            Some(&CreateSessionRequest {
-                title,
-                fork_from,
-                fork_message_id,
-            }),
-        )
-        .await
-    }
-
-    pub async fn switch_session(&self, agent: &str, session_id: Uuid) -> Result<()> {
-        self.fire(
-            reqwest::Method::POST,
-            &format!(
-                "/agents/{}/sessions/{session_id}/activate",
-                encode_segment(agent)
-            ),
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
-    pub async fn close_session(&self, agent: &str, session_id: Uuid) -> Result<()> {
-        self.fire(
-            reqwest::Method::POST,
-            &format!(
-                "/agents/{}/sessions/{session_id}/close",
-                encode_segment(agent)
-            ),
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
-    pub async fn rename_session(&self, agent: &str, session_id: Uuid, title: String) -> Result<()> {
-        self.fire(
-            reqwest::Method::PATCH,
-            &format!(
-                "/agents/{}/sessions/{session_id}/title",
-                encode_segment(agent)
-            ),
-            Some(&RenameSessionRequest { title }),
-        )
-        .await
-    }
-
     /// Request a fresh session list (arrives as `SessionList` agent frames
     /// on the event stream — same async contract as the runtime today).
     pub async fn list_sessions(&self, agent: &str) -> Result<()> {

@@ -164,22 +164,6 @@ async fn unknown_profile_is_a_startup_error() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unknown_session_is_a_startup_error() {
-    let daemon = start_mock_gateway("unused").await;
-    let result = run_jsonl(
-        daemon.client(),
-        GatewayRunConfig {
-            prompt: "What is 1+1?".into(),
-            session: Some(Uuid::new_v4()),
-            ..Default::default()
-        },
-    )
-    .await;
-    daemon.stop().await;
-    assert!(matches!(result, Err(RunError::SessionSwitch { .. })));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn timeout_cancels_mid_turn() {
     let daemon = start_mock_gateway_with_model(always_retrying_model()).await;
     let (summary, jsonl) = run_jsonl(
@@ -344,13 +328,14 @@ async fn session_resume_continues_the_same_session() {
     .await
     .expect("session snapshot flushed to storage");
 
-    // Run 2: same daemon (agent restored by path), resumed session.
+    // Run 2: same daemon, same --name. There is no --session flag anymore —
+    // the agent's sole working context (bound via agent_contexts on restore)
+    // continues automatically.
     let (second, second_jsonl) = run_jsonl(
         client.clone(),
         GatewayRunConfig {
             prompt: "second prompt".into(),
             agent_name: Some("named_resume".into()),
-            session: Some(session_id),
             ..Default::default()
         },
     )
@@ -369,7 +354,7 @@ async fn session_resume_continues_the_same_session() {
         .expect("turn.started carries a session id");
     assert_eq!(
         resumed_id, session_id,
-        "run 2 resumed run 1's session; events:\n{second_jsonl}"
+        "run 2 continued run 1's sole context by agent identity; events:\n{second_jsonl}"
     );
 }
 

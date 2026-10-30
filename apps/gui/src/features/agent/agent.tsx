@@ -3,32 +3,24 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { Layout, LayoutChangedMeta, PanelImperativeHandle } from "react-resizable-panels";
 import {
   Archive,
-  Check,
   CheckCircle2,
   CircleDashed,
   CircleSlash,
   Copy,
-  GitFork,
   History,
   Hourglass,
   LoaderCircle,
-  MessagesSquare,
-  Pencil,
   PenLine,
-  Plus,
   RefreshCw,
   Shrink,
   Square,
   Wrench,
-  X,
   XCircle,
 } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import type {
   AgentInfo,
-  BackendMessage,
   ChatItem,
-  SessionInfo,
   StoredAgent,
 } from "@/types";
 import { Badge } from "@/components/ui/badge";
@@ -41,21 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from "@/components/ui/input-group";
-import { Item, ItemActions, ItemGroup, ItemSeparator } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   ResizableHandle,
@@ -82,7 +60,6 @@ export type DisplaySettings = {
 
 type View = "agent" | "config" | "bib" | "kms";
 
-type PickerMode = "copy" | "fork";
 type PickerItem = { id: string; role: "user" | "assistant"; text: string };
 
 type Command = {
@@ -120,26 +97,15 @@ export function leafName(path: string) {
   return path.split("/").filter(Boolean).pop() ?? "";
 }
 
-/** Compact timestamp for a sidebar session row ("10/29 01:17"); the full
- *  datetime stays on the row tooltip. */
-function formatSessionTime(time: number) {
-  const date = new Date(time);
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 export type AgentViewProps = {
   activeAgent: string;
-  activeSessionId: string | null;
   agents: AgentInfo[];
-  sessions: SessionInfo[];
   statuses: Record<string, string>;
   messages: ChatItem[];
   plan: { revision: number; update: any } | null;
   usage: { input: number; output: number; cache: number } | null;
   display: DisplaySettings;
   promptHistory: string[];
-  rawMessages: BackendMessage[];
   rightOpen: boolean;
   /** Desktop (≥ md): the inspector is a resizable panel. Below it it
    *  becomes a drawer, so the same flag opens a sheet instead. */
@@ -157,11 +123,6 @@ export type AgentViewProps = {
   onShutdown: (path: string) => void;
   onSpawnAgent: (input: { name: string; parentPath: string; profile: string }) => Promise<void>;
   onResumeAgent: (agent: StoredAgent) => Promise<void>;
-  onCreateSession: (title: string) => Promise<void>;
-  onRenameSession: (sessionId: string, title: string) => Promise<void>;
-  onCloseSession: (sessionId: string) => Promise<void>;
-  onActivateSession: (sessionId: string) => Promise<void>;
-  onForkMessage: (message: PickerItem) => Promise<void>;
   onToggleDisplay: (key: keyof DisplaySettings) => void;
   onView: (view: View) => void;
   onOpenDag: () => void;
@@ -206,32 +167,25 @@ function planStepIcon(status: unknown) {
 export function AgentView(props: AgentViewProps) {
   const {
     activeAgent,
-    activeSessionId,
     agents,
-    sessions,
     statuses,
     messages,
     plan,
     usage,
     display,
     promptHistory,
-    rawMessages,
     rightOpen,
     isDesktop,
   } = props;
 
-  const [sessionCreating, setSessionCreating] = useState(false);
-  const [sessionTitle, setSessionTitle] = useState("");
-  const [sessionEditor, setSessionEditor] = useState<{ id: string; title: string } | null>(null);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeQuery, setResumeQuery] = useState("");
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
   const [resumeBusy, setResumeBusy] = useState<string | null>(null);
   const [renameAgent, setRenameAgent] = useState<{ id: string; name: string } | null>(null);
   const [deleteAgent, setDeleteAgent] = useState<{ id: string; confirm: string } | null>(null);
-  const [picker, setPicker] = useState<{ open: boolean; mode: PickerMode; query: string }>({
+  const [picker, setPicker] = useState<{ open: boolean; query: string }>({
     open: false,
-    mode: "copy",
     query: "",
   });
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -283,47 +237,20 @@ export function AgentView(props: AgentViewProps) {
       showToast("No text messages available");
       return;
     }
-    setPicker({ open: true, mode: "copy", query: "" });
-  };
-
-  const openFork = () => {
-    if (!activeSessionId) {
-      showToast("Fork requires an active session");
-      return;
-    }
-    setPicker({ open: true, mode: "fork", query: "" });
+    setPicker({ open: true, query: "" });
   };
 
   const selectPickerItem = async (item: PickerItem) => {
-    if (picker.mode === "copy") {
-      setPicker((current) => ({ ...current, open: false }));
-      showToast(await copyText(item.text));
-    } else {
-      await props.onForkMessage(item);
-      setPicker((current) => ({ ...current, open: false }));
-      showToast("Creating branch; it activates when ready");
-    }
+    setPicker((current) => ({ ...current, open: false }));
+    showToast(await copyText(item.text));
   };
 
   const pickerItems = useMemo(() => {
-    if (picker.mode === "fork") {
-      return [...rawMessages]
-        .reverse()
-        .map((message) => ({
-          id: message.id,
-          role: message.role as "user" | "assistant",
-          text: (message.content ?? [])
-            .filter((block) => block.type === "text" && block.text)
-            .map((block) => block.text ?? "")
-            .join("\n")
-            .trim() || `${message.role} message`,
-        }));
-    }
     return [...messages]
       .filter((message) => (message.role === "user" || message.role === "assistant") && message.text.trim())
       .reverse()
       .map((message) => ({ id: String(message.id), role: message.role as "user" | "assistant", text: message.text }));
-  }, [messages, picker.mode, rawMessages]);
+  }, [messages]);
 
   const filteredPickerItems = useMemo(() => {
     const needle = picker.query.trim().toLowerCase();
@@ -333,12 +260,10 @@ export function AgentView(props: AgentViewProps) {
   const commands = useMemo<Command[]>(() => [
     { id: "new-agent", title: "New agent", category: "agent", keywords: "spawn create start profile", run: props.onSpawn },
     { id: "resume-agent", title: "Resume agent", category: "agent", keywords: "restore reconnect continue previous", run: openResume },
-    { id: "new-session", title: "New session", category: "agent", keywords: "new conversation branch", run: () => setSessionCreating(true) },
     { id: "history", title: "Search prompt history", category: "agent", keywords: "ctrl r recall previous prompt", run: () => setHistoryOpen(true) },
     { id: "cancel", title: "Cancel agent", category: "agent", keywords: "stop abort interrupt", run: props.onCancel },
     { id: "compact", title: "Compact conversation", category: "agent", keywords: "compress summarize context", run: props.onCompact },
     { id: "copy", title: "Copy message", category: "clipboard", keywords: "clipboard transcript text", run: openCopy },
-    { id: "fork", title: "Fork from message", category: "session", keywords: "branch conversation history", run: openFork },
     { id: "model", title: "Select model", category: "config", keywords: "model provider api key activate", run: () => props.onView("config" as View) },
     { id: "bibliography", title: "Bibliography library", category: "research", keywords: "papers articles fulltext collections", run: () => props.onView("bib" as View) },
     { id: "kms", title: "Evolution dashboard", category: "kms", keywords: "skills wiki evidence governance proposals", run: () => props.onView("kms" as View) },
@@ -346,7 +271,7 @@ export function AgentView(props: AgentViewProps) {
     { id: "thinking", title: "Toggle thinking blocks", category: "view", keywords: "collapse fold reasoning", run: () => props.onToggleDisplay("collapse_thinking") },
     { id: "tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => props.onToggleDisplay("collapse_tool_calls") },
     { id: "tool-results", title: "Toggle tool results", category: "view", keywords: "collapse fold output", run: () => props.onToggleDisplay("collapse_tool_results") },
-  ], [props, activeAgent, messages, activeSessionId]);
+  ], [props, activeAgent, messages]);
 
   const filteredCommands = useMemo(() => {
     const needle = paletteQuery.trim().toLowerCase();
@@ -399,137 +324,8 @@ export function AgentView(props: AgentViewProps) {
     }
   }, [isDesktop, rightOpen]);
 
-  const renderInspectorSidebar = (onActivate: (sessionId: string) => void) => (
+  const renderInspectorSidebar = () => (
     <ScrollArea className="min-h-0 flex-1" contentClassName="space-y-4 p-3">
-      <section>
-        <div className="mb-1.5 flex items-center justify-between">
-          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Sessions</h2>
-          <Button size="icon-xs" variant="ghost" aria-label="New session" onClick={() => setSessionCreating(true)} disabled={!activeAgent}>
-            <Plus />
-          </Button>
-        </div>
-        <Card size="sm" className="gap-0 py-0">
-          <CardContent className="p-0">
-            {sessionCreating && (
-              <form
-                className="border-b p-2"
-                onSubmit={async (event) => {
-                  event.preventDefault();
-                  await props.onCreateSession(sessionTitle);
-                  setSessionTitle("");
-                  setSessionCreating(false);
-                }}
-              >
-                <InputGroup>
-                  <InputGroupInput
-                    autoFocus
-                    value={sessionTitle}
-                    placeholder="New session title"
-                    onChange={(event) => setSessionTitle(event.target.value)}
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton type="submit" size="icon-xs" aria-label="Create session" disabled={!sessionTitle.trim()}>
-                      <Plus />
-                    </InputGroupButton>
-                    <InputGroupButton size="icon-xs" aria-label="Cancel" onClick={() => setSessionCreating(false)}>
-                      <X />
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-              </form>
-            )}
-            {sessions.length ? (
-              <ScrollArea className="max-h-60">
-                <ItemGroup className="gap-0">
-                  {sessions.map((session, index) => {
-                    const active = activeSessionId === session.id;
-                    return (
-                      <Fragment key={session.id}>
-                        {index > 0 && <ItemSeparator className="my-0" />}
-                        {sessionEditor?.id === session.id ? (
-                          <form
-                            className="px-2 py-1.5"
-                            onSubmit={async (event) => {
-                              event.preventDefault();
-                              await props.onRenameSession(session.id, sessionEditor.title);
-                              setSessionEditor(null);
-                            }}
-                          >
-                            <InputGroup>
-                              <InputGroupInput
-                                autoFocus
-                                value={sessionEditor.title}
-                                onChange={(event) => setSessionEditor({ id: session.id, title: event.target.value })}
-                              />
-                              <InputGroupAddon align="inline-end">
-                                <InputGroupButton type="submit" size="icon-xs" aria-label="Save title">
-                                  <Check />
-                                </InputGroupButton>
-                                <InputGroupButton size="icon-xs" aria-label="Cancel" onClick={() => setSessionEditor(null)}>
-                                  <X />
-                                </InputGroupButton>
-                              </InputGroupAddon>
-                            </InputGroup>
-                          </form>
-                        ) : (
-                          <Item
-                            data-active={active ? "true" : undefined}
-                            className="group/session relative rounded-none border-0 p-0 hover:bg-accent data-[active=true]:bg-accent"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => void onActivate(session.id)}
-                              title={session.title || session.id}
-                              className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-sm px-2 py-1.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50"
-                            >
-                              <span className="line-clamp-2 text-sm leading-snug">{session.title || session.id}</span>
-                              <span className="text-xs text-muted-foreground tabular-nums">{formatSessionTime(session.last_active)}</span>
-                            </button>
-                            {/* Floating actions: no layout width; the opaque
-                                backdrop tracks the row's tint so the underlying
-                                text never bleeds through. Touch users get them
-                                permanently visible below md. */}
-                            <ItemActions
-                              className={cn(
-                                "absolute inset-y-0 right-0 flex items-center gap-0.5 bg-card pr-1.5 pl-6 opacity-100 transition md:opacity-0",
-                                "md:group-hover/session:opacity-100 md:group-focus-within/session:opacity-100",
-                                "group-hover/session:bg-accent group-data-[active=true]/session:bg-accent",
-                              )}
-                            >
-                              <Button
-                                size="icon-xs"
-                                variant="ghost"
-                                aria-label="Rename session"
-                                onClick={() => setSessionEditor({ id: session.id, title: session.title || "" })}
-                              >
-                                <Pencil />
-                              </Button>
-                              <Button size="icon-xs" variant="ghost" aria-label="Close session" onClick={() => void props.onCloseSession(session.id)}>
-                                <X />
-                              </Button>
-                            </ItemActions>
-                          </Item>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </ItemGroup>
-              </ScrollArea>
-            ) : (
-              <Empty className="gap-2 p-4">
-                <EmptyMedia variant="icon">
-                  <MessagesSquare />
-                </EmptyMedia>
-                <EmptyHeader className="gap-1">
-                  <EmptyTitle className="text-xs">No sessions</EmptyTitle>
-                  <EmptyDescription className="text-xs">点击右上角 + 新建会话</EmptyDescription>
-                </EmptyHeader>
-              </Empty>
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
       <section>
         <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Overview</h2>
         <Card className="p-2.5 text-xs">
@@ -614,7 +410,6 @@ export function AgentView(props: AgentViewProps) {
               <Button size="xs" variant="secondary" onClick={props.onCancel}><Square />Cancel</Button>
               <Button size="xs" variant="secondary" onClick={props.onCompact}><Archive />Compact</Button>
               <Button size="xs" variant="secondary" onClick={openCopy}><Copy />Copy</Button>
-              <Button size="xs" variant="secondary" onClick={openFork}><GitFork />Fork</Button>
               <Button size="xs" variant="secondary" onClick={() => setHistoryOpen(true)}><History />History</Button>
               <Button size="xs" variant="secondary" onClick={props.onRefreshHistory}><RefreshCw />Refresh</Button>
             </div>
@@ -658,7 +453,7 @@ export function AgentView(props: AgentViewProps) {
             className="bg-muted/50"
           >
             <aside className="flex h-full min-h-0 overflow-hidden border-l">
-              {renderInspectorSidebar(props.onActivateSession)}
+              {renderInspectorSidebar()}
             </aside>
           </ResizablePanel>
         </ResizablePanelGroup>
@@ -668,13 +463,11 @@ export function AgentView(props: AgentViewProps) {
           <Sheet open={rightOpen} onOpenChange={props.onSetRight}>
             <SheetContent side="right" className="w-80 max-w-[85vw] gap-0">
               <SheetHeader className="sr-only">
-                <SheetTitle>Sessions</SheetTitle>
-                <SheetDescription>会话与运行详情</SheetDescription>
+                <SheetTitle>Inspector</SheetTitle>
+                <SheetDescription>运行详情</SheetDescription>
               </SheetHeader>
-              {renderInspectorSidebar((sessionId) => {
-                void props.onActivateSession(sessionId);
-                props.onSetRight(false);
-              })}
+              {renderInspectorSidebar()}
+              <div className="sr-only">关闭</div>
             </SheetContent>
           </Sheet>
         </>
@@ -765,10 +558,8 @@ export function AgentView(props: AgentViewProps) {
       <Dialog open={picker.open} onOpenChange={(open) => setPicker((current) => ({ ...current, open }))}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{picker.mode === "fork" ? "Fork from message" : "Copy message"}</DialogTitle>
-            <DialogDescription>
-              {picker.mode === "fork" ? "Click a backend message to create a branch." : "Click a transcript message to copy it."}
-            </DialogDescription>
+            <DialogTitle>Copy message</DialogTitle>
+            <DialogDescription>Click a transcript message to copy it.</DialogDescription>
           </DialogHeader>
           <Input value={picker.query} placeholder="Filter messages" onChange={(event) => setPicker((current) => ({ ...current, query: event.target.value }))} />
           <ScrollArea className="max-h-[60vh] min-h-0" contentClassName="space-y-1">
