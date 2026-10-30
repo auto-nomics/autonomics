@@ -21,6 +21,9 @@ use unicode_width::UnicodeWidthStr;
 pub struct InputArea {
     pub textarea: TextArea,
     pub textarea_state: TextAreaState,
+    /// Placeholder text stored locally (xAI textarea has no built-in
+    /// placeholder).
+    placeholder: String,
     /// Maximum grapheme clusters accepted. `None` = no cap. Defaults to
     /// [`InputArea::DEFAULT_MAX_LENGTH`] so an accidental 1 MB paste
     /// cannot produce a 1 MB outbound message.
@@ -43,6 +46,7 @@ impl InputArea {
         Self {
             textarea: TextArea::new(),
             textarea_state: TextAreaState::default(),
+            placeholder: String::new(),
             max_length: Some(Self::DEFAULT_MAX_LENGTH),
             last_cursor_pos: None,
         }
@@ -176,6 +180,11 @@ impl InputArea {
     pub fn last_cursor_pos(&self) -> Option<(u16, u16)> {
         self.last_cursor_pos
     }
+
+    /// Set placeholder text (used for disabled / running state).
+    pub fn set_placeholder(&mut self, text: &str) {
+        self.placeholder = text.to_string();
+    }
 }
 
 impl Default for InputArea {
@@ -189,72 +198,139 @@ pub struct InputWidgetState<'a> {
     pub input: &'a mut InputArea,
 }
 
-/// Width of the borderless prompt gutter ("› " = prompt glyph + space).
+/// Width of the boxed prompt gutter ("❯ " = prompt glyph + space).
 pub const PROMPT_GUTTER: u16 = 2;
 
-/// Borderless composer with a `❯` prefix and a 2-column prompt gutter.
-/// The prompt blinks while the agent runs; the textarea stays editable.
-/// While the buffer is empty, `AgentLeaf` paints the status line over the
-/// composer row (right of the gutter), so the composer doubles as the
-/// status bar and costs no dedicated row.
-pub struct InputWidget {
-    pub running: bool,
-    /// Render tick (~16 ms), used to blink the prompt every ~500 ms.
-    pub frame: u64,
-    /// Whether the composer is actively editable (Input mode).
-    /// Browse mode hides the hardware caret.
+/// Composite widget: a boxed prompt backed by the xAI `TextArea`, styled to
+/// match the Grok TUI composer.
+///
+/// Renders a rounded border box (`╭─╮│╰─╯`) with a `❯` prefix on the first
+/// content row, followed by the textarea to the right of a 2-column gutter.
+/// The parent layout passes a height of `display_height(width) + 2` so the
+/// border rows are accounted for.
+pub struct InputWidget<'a> {
+    pub disabled: bool,
+    /// Whether the composer is actively editable (Input mode, agent idle).
+    /// Drives hardware-cursor visibility: the caret only shows when the user
+    /// can type. Browse mode and running both hide it.
     pub editable: bool,
+    pub title: &'a str,
+    pub placeholder: &'a str,
 }
 
-impl InputWidget {
-    /// Renders the composer. An inherent method rather than a
-    /// `StatefulWidget` impl: the state borrows the caller's `InputArea`,
-    /// and an associated type cannot carry that unconstrained lifetime.
-    pub fn render(
-        self,
-        area: Rect,
-        buf: &mut ratatui::prelude::Buffer,
-        state: &mut InputWidgetState<'_>,
-    ) {
-        state.input.last_cursor_pos = None;
-        if area.width == 0 || area.height == 0 {
+impl<'a> StatefulWidget for InputWidget<'a> {
+    type State = InputWidgetState<'a>;
+
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer, state: &mut Self::State) {
+        if area.width < 2 || area.height < 2 {
             return;
         }
 
-        let prompt_style = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
-        let prompt = if self.running && (self.frame / 32) % 2 != 0 {
-            " "
+        // ── Chrome: rounded border box ──
+        // Active (idle) → cyan border; disabled (agent running) → dim gray.
+        let border_color = if self.disabled {
+            Color::DarkGray
         } else {
-            "❯"
+            Color::Cyan
         };
-        buf.set_string(area.x, area.y, prompt, prompt_style);
-        if area.width <= PROMPT_GUTTER {
+        // Title (status label) colour: red on error, yellow while the agent is
+        // active, dim gray when idle.
+        let title_color = if self.title == "error" {
+            Color::Red
+        } else if self.disabled {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
+        let block = Block::bordered()
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .border_style(Style::default().fg(border_color))
+            .title_top(
+                Line::from(format!(" {} ", self.title)).style(Style::default().fg(
+                    if self.title.is_empty() {
+                        border_color
+                    } else {
+                        title_color
+                    },
+                )),
+            );
+        let content = block.inner(area);
+        block.render(area, buf);
+
+        if content.width == 0 || content.height == 0 {
             return;
         }
+
+        // ── Prefix: ❯ (U+276F) + space, 2 cols, in accent color ──
+        let prompt_style = if self.disabled {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        };
+        buf.set_string(content.x, content.y, "❯", prompt_style);
 
         // Textarea renders into the area right of the prefix gutter.
-        let inner = Rect {
-            x: area.x + PROMPT_GUTTER,
-            width: area.width - PROMPT_GUTTER,
-            ..area
+        let inner = if content.width > PROMPT_GUTTER {
+            Rect {
+                x: content.x + PROMPT_GUTTER,
+                width: content.width - PROMPT_GUTTER,
+                ..content
+            }
+        } else {
+            content
         };
 
-        // An empty buffer draws nothing here; `AgentLeaf` paints the status
-        // line over `inner` in that case, and the hardware caret sits at the
-        // row start so the first keystroke overwrites it.
-        // StatefulWidgetRef is implemented for &TextArea, not TextArea.
-        // Split-borrow the two pub fields and call render_ref on the reference.
-        let textarea: &TextArea = &state.input.textarea;
-        let ta_state: &mut TextAreaState = &mut state.input.textarea_state;
-        textarea.render_ref(inner, buf, ta_state);
-        if self.editable {
-            // TextAreaState is Copy — query the cursor against the post-render state.
-            state.input.last_cursor_pos =
-                textarea.cursor_pos_with_state(inner, state.input.textarea_state);
+        state.input.set_placeholder(self.placeholder);
+
+        // The hardware caret only shows when the composer is actively editable
+        // (Input mode + agent idle). Browse mode and running both hide it.
+        if !self.editable {
+            state.input.last_cursor_pos = None;
+        }
+
+        // Render placeholder directly when textarea is empty (xAI textarea has
+        // no built-in placeholder support). The cursor sits at the start of the
+        // editable row so the hardware caret appears over the first cell.
+        if state.input.is_empty() && !state.input.placeholder.is_empty() {
+            let placeholder_style = Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(ratatui::style::Modifier::ITALIC);
+            let truncated = truncate_to_width(&state.input.placeholder, inner.width as usize);
+            buf.set_string(inner.x, inner.y, &truncated, placeholder_style);
+            if self.editable {
+                state.input.last_cursor_pos = Some((inner.x, inner.y));
+            }
+        } else {
+            // StatefulWidgetRef is implemented for &TextArea, not TextArea.
+            // Split-borrow the two pub fields and call render_ref on the reference.
+            let textarea: &TextArea = &state.input.textarea;
+            let ta_state: &mut TextAreaState = &mut state.input.textarea_state;
+            textarea.render_ref(inner, buf, ta_state);
+            if self.editable {
+                // TextAreaState is Copy — query the cursor against the post-render state.
+                state.input.last_cursor_pos =
+                    textarea.cursor_pos_with_state(inner, state.input.textarea_state);
+            }
         }
     }
+}
+
+/// Truncate `s` so that its rendered display width does not exceed
+/// `max_width` columns. Avoids splitting mid-grapheme.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    let mut out = String::new();
+    let mut width = 0;
+    for grapheme in s.graphemes(true) {
+        let w = unicode_width::UnicodeWidthStr::width(grapheme);
+        if width + w > max_width {
+            break;
+        }
+        out.push_str(grapheme);
+        width += w;
+    }
+    out
 }
 
 // ── Input-history helpers (chat input Up/Down recall) ───────────

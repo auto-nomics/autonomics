@@ -30,12 +30,6 @@ impl LeaderNode {
             Self::Group { key, .. } | Self::Leaf { key, .. } => *key,
         }
     }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Group { label, .. } | Self::Leaf { label, .. } => label,
-        }
-    }
 }
 
 /// The root menu. `<Space><Space>` opens the palette, mirroring LazyVim's

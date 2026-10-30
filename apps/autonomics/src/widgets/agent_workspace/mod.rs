@@ -63,7 +63,6 @@ impl AgentWorkspace<'_> {
         }
 
         let leaf = AgentLeaf {
-            agent_name: self.agent_name,
             active_model: self.active_model,
             context_window: self.context_window,
             reasoning_effort: self.reasoning_effort,
