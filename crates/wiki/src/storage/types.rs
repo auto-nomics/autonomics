@@ -162,13 +162,62 @@ pub trait WikiSearchStorage: Send + Sync {
     ) -> Result<Vec<SearchHit>>;
 }
 
-/// 存储后端的组合 trait:同时提供词条存储、索引与检索能力。
+/// 附件元数据(blob 本体在 [`crate::storage::blob::BlobStore`] 后端)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub id: String,
+    pub entry_id: String,
+    /// 原始文件名(展示用;存储 key 与其无关)。
+    pub filename: String,
+    pub mime: String,
+    pub size: i64,
+    /// 内容 sha256(hex),上传完整性校验用。
+    pub sha256: String,
+    pub created_at: i64,
+}
+
+/// 图像附件能力:元数据落 sqlite,blob 走 [`crate::storage::blob::BlobStore`]。
+///
+/// 软删除不动附件(恢复即回来);`purge_entry` 连元数据与 blob 一起清。
+#[async_trait]
+pub trait WikiAttachmentStorage: Send + Sync {
+    /// 为词条附加一张图像(`filename` 的扩展名决定 MIME,仅图像白名单;
+    /// 词条须存在且未删除)。返回写入后的元数据。
+    async fn attach_image(
+        &self,
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta>;
+    /// 词条的全部附件(按创建时间升序)。
+    async fn list_attachments(&self, entry_id: uuid::Uuid) -> Result<Vec<AttachmentMeta>>;
+    /// 取附件元数据与内容;附件不存在返回 [`Error::NotFound`]。
+    async fn get_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<(AttachmentMeta, Vec<u8>)>;
+    /// 摘除附件(删元数据行 + 尽力删 blob);不存在是幂等 no-op。
+    async fn detach_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<()>;
+}
+
+/// 存储后端的组合 trait:同时提供词条存储、索引、检索与附件能力。
 ///
 /// Rust 的 trait object 只允许「一个普通 trait + 任意多个 auto trait」,
 /// 因此 `dyn WikiEntryStorage + WikiIndexStorage` 会被 E0225 拒绝。
 /// 这里用 supertrait 把各能力合成单一 trait,`dyn WikiStorage` 就合法了。
-pub trait WikiStorage: WikiEntryStorage + WikiIndexStorage + WikiSearchStorage {}
+pub trait WikiStorage:
+    WikiEntryStorage + WikiIndexStorage + WikiSearchStorage + WikiAttachmentStorage
+{
+}
 
 /// blanket impl:任何同时实现了全部基础 trait 的类型自动满足
 /// `WikiStorage`,实现方无需再手写一遍 `impl WikiStorage for ...`。
-impl<T: WikiEntryStorage + WikiIndexStorage + WikiSearchStorage> WikiStorage for T {}
+impl<T: WikiEntryStorage + WikiIndexStorage + WikiSearchStorage + WikiAttachmentStorage> WikiStorage
+    for T
+{
+}

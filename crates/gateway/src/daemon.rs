@@ -183,7 +183,14 @@ pub async fn run_daemon(
     let bib_shared = state.infra.bib.as_ref().clone();
     // Clone for the extraction sweep before the move into the router.
     let sweep_shared = bib_shared.clone();
-    let router = router_with_bib(state, gateway_token.clone(), bib_shared, env_token.clone());
+    let wiki_shared = state.infra.wiki.clone();
+    let router = router_with_bib(
+        state,
+        gateway_token.clone(),
+        bib_shared,
+        wiki_shared,
+        env_token.clone(),
+    );
 
     let server = api_server::server::start(router, &addr)
         .await

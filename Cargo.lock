@@ -382,6 +382,7 @@ dependencies = [
  "tracing",
  "uuid",
  "vfs",
+ "wiki",
 ]
 
 [[package]]
@@ -5192,6 +5193,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "wiki",
 ]
 
 [[package]]
@@ -11992,6 +11994,7 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "wiki",
  "writing-base",
 ]
 
@@ -15985,18 +15988,21 @@ dependencies = [
  "agentik-types",
  "apply-patch",
  "async-trait",
+ "base64 0.23.1",
  "chrono",
  "jieba-rs",
  "pulldown-cmark",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
  "turso",
  "uuid",
+ "vfs",
 ]
 
 [[package]]

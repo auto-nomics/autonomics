@@ -16,6 +16,7 @@ plugin-rsi = { path = "../plugin-rsi" }
 evolution-core = { path = "../evolution-core" }
 skills = { path = "../skills" }
 api-server = { path = "../api-server" }
+wiki = { path = "../wiki", features = ["vfs"] }
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 dag-core = { path = "../dag-core" }

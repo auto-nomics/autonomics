@@ -52,6 +52,7 @@ serde_json = { workspace = true }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 futures = { workspace = true }
 turso.workspace = true
+wiki = { path = "../wiki", features = ["vfs"] }
 
 schemars.workspace = true
 

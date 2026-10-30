@@ -141,10 +141,7 @@ pub async fn login(
 }
 
 /// `GET /api/session` — report whether the caller's cookie is live.
-pub async fn session_status(
-    State(auth): State<Arc<AuthContext>>,
-    headers: HeaderMap,
-) -> Response {
+pub async fn session_status(State(auth): State<Arc<AuthContext>>, headers: HeaderMap) -> Response {
     let Some(id) = read_session_cookie(&headers) else {
         let body = Json(json!({ "authenticated": false })).into_response();
         return (StatusCode::UNAUTHORIZED, body).into_response();
@@ -171,12 +168,7 @@ pub async fn logout(State(auth): State<Arc<AuthContext>>, headers: HeaderMap) ->
     }
     let cookie = session_cookie("", Duration::ZERO, secure_request(&headers));
     let body = Json(json!({ "authenticated": false }));
-    (
-        StatusCode::OK,
-        [(header::SET_COOKIE, cookie)],
-        body,
-    )
-        .into_response()
+    (StatusCode::OK, [(header::SET_COOKIE, cookie)], body).into_response()
 }
 
 /// Guard the protected routes: a valid bearer token or a live session
@@ -222,8 +214,7 @@ fn read_session_cookie(headers: &HeaderMap) -> Option<String> {
     raw.split(';').find_map(|part| {
         let part = part.trim();
         let (name, value) = part.split_once('=')?;
-        (name.trim() == SESSION_COOKIE && !value.trim().is_empty())
-            .then(|| value.trim().to_owned())
+        (name.trim() == SESSION_COOKIE && !value.trim().is_empty()).then(|| value.trim().to_owned())
     })
 }
 

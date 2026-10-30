@@ -11,7 +11,8 @@ use wiki::service::WikiHandle;
 use wiki::service::start;
 use wiki::storage::turso_wiki_storage::TursoWikiStorage;
 use wiki::tools::{
-    WikiCreateTool, WikiDeleteTool, WikiEditTool, WikiGetTool, WikiLinksTool, WikiListTool,
+    WikiAttachImageTool, WikiAttachmentsTool, WikiCreateTool, WikiDeleteTool, WikiDetachTool,
+    WikiEditTool, WikiGetAttachmentTool, WikiGetTool, WikiLinksTool, WikiListTool,
     WikiMentionsTool, WikiPatchTool, WikiPurgeTool, WikiRestoreTool, WikiRestoreVersionTool,
     WikiSearchTool, WikiUpdateTool, WikiVersionsTool, wiki_read_registrations,
     wiki_write_registrations,
@@ -467,8 +468,8 @@ async fn registrations_cover_all_tools() {
     let handle = Arc::new(start(storage));
     let read = wiki_read_registrations(handle.clone());
     let write = wiki_write_registrations(handle);
-    assert_eq!(read.len(), 6);
-    assert_eq!(write.len(), 8);
+    assert_eq!(read.len(), 8);
+    assert_eq!(write.len(), 10);
     // 定义齐全:名字与参数 schema 均非空。
     for reg in read.iter().chain(write.iter()) {
         assert!(reg.definition.name.starts_with("wiki_"));
@@ -492,14 +493,16 @@ async fn list_browses_without_query_and_pages() {
         .await
         .unwrap();
 
-    // 无过滤:全部词条,最新在前。
+    // 无过滤:全部词条(同秒创建时 mtime 并列,顺序由 id 决定,
+    // 断言取集合而非顺序)。
     let out = json_of(list.execute(json!({})).await.unwrap());
-    let titles: Vec<&str> = out["entries"]
+    let mut titles: Vec<&str> = out["entries"]
         .as_array()
         .unwrap()
         .iter()
         .map(|e| e["title"].as_str().unwrap())
         .collect();
+    titles.sort_unstable();
     assert_eq!(titles, vec!["tagged", "新笔记"]);
     assert_eq!(out["count"], 2);
 
@@ -513,19 +516,122 @@ async fn list_browses_without_query_and_pages() {
         .collect();
     assert_eq!(titles, vec!["tagged"]);
 
-    // 分页。
+    // 分页:两页拼回全集(offset 语义不依赖同刻条目的先后)。
     let out = json_of(list.execute(json!({ "limit": 1 })).await.unwrap());
     assert_eq!(out["count"], 1);
-    assert_eq!(out["entries"][0]["title"], "tagged");
+    let first = out["entries"][0]["title"].as_str().unwrap().to_string();
     let out = json_of(
         list.execute(json!({ "limit": 1, "offset": 1 }))
             .await
             .unwrap(),
     );
-    assert_eq!(out["entries"][0]["title"], "新笔记");
+    assert_eq!(out["count"], 1);
+    let second = out["entries"][0]["title"].as_str().unwrap().to_string();
+    assert_ne!(first, second);
+    assert!(["新笔记", "tagged"].contains(&first.as_str()));
+    assert!(["新笔记", "tagged"].contains(&second.as_str()));
 
     // 元数据里没有正文,但有 ctime/mtime。
     let first = &out["entries"][0];
     assert!(first.get("content").is_none());
     assert!(first["mtime"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn attach_image_tool_roundtrip() {
+    use base64::Engine as _;
+    use wiki::storage::blob::MemoryBlobStore;
+
+    // 附件工具需要 blob 后端:内存实现 + worker 单循环。
+    let storage = Arc::new(
+        TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(MemoryBlobStore::new()),
+    );
+    let handle = Arc::new(start(storage));
+    let create = WikiCreateTool {
+        handle: handle.clone(),
+    };
+    let attach = WikiAttachImageTool {
+        handle: handle.clone(),
+    };
+    let list = WikiAttachmentsTool {
+        handle: handle.clone(),
+    };
+    let get = WikiGetAttachmentTool {
+        handle: handle.clone(),
+    };
+    let detach = WikiDetachTool { handle };
+
+    create
+        .execute(json!({ "title": "图注词条", "content": "见下图。" }))
+        .await
+        .unwrap();
+
+    let png = b"\x89PNG\r\n\x1a\nfake-image-bytes";
+    let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+    let out = json_of(
+        attach
+            .execute(json!({
+                "title": "图注词条",
+                "filename": "figure.png",
+                "data_base64": b64,
+            }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(out["mime"], "image/png");
+    let attachment_id = out["attachment_id"].as_str().unwrap().to_string();
+    let markdown = out["markdown"].as_str().unwrap();
+    assert!(markdown.starts_with("![figure.png](wiki-attach://"));
+
+    // 清单。
+    let out = json_of(list.execute(json!({ "title": "图注词条" })).await.unwrap());
+    assert_eq!(out["count"], 1);
+    assert_eq!(out["attachments"][0]["filename"], "figure.png");
+
+    // 取回:base64 往返一致。
+    let out = json_of(
+        get.execute(json!({
+            "title": "图注词条",
+            "attachment_id": attachment_id,
+        }))
+        .await
+        .unwrap(),
+    );
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(out["data_base64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(decoded, png);
+
+    // 摘除 + 幂等。
+    detach
+        .execute(json!({
+            "title": "图注词条",
+            "attachment_id": attachment_id,
+        }))
+        .await
+        .unwrap();
+    detach
+        .execute(json!({
+            "title": "图注词条",
+            "attachment_id": attachment_id,
+        }))
+        .await
+        .unwrap();
+    let out = json_of(list.execute(json!({ "title": "图注词条" })).await.unwrap());
+    assert_eq!(out["count"], 0);
+
+    // 非法 base64 → 校验错误。
+    let msg = validation_message(
+        attach
+            .execute(json!({
+                "title": "图注词条",
+                "filename": "x.png",
+                "data_base64": "!!!not-base64!!!",
+            }))
+            .await,
+    );
+    assert!(msg.contains("base64"));
 }

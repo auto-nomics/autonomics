@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use wiki::service::start;
 use wiki::storage::error::Result;
 use wiki::storage::types::{
-    EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
-    WikiEntryStorage, WikiIndexStorage, WikiSearchStorage, WikiStorage,
+    AttachmentMeta, EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
+    WikiAttachmentStorage, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage, WikiStorage,
 };
 
 /// 只实现两个基础 trait，不显式写 `impl WikiStorage for _`。
@@ -146,6 +146,48 @@ impl WikiSearchStorage for FakeStorage {
                 score: 1.0,
             })
             .collect())
+    }
+}
+
+#[async_trait]
+impl WikiAttachmentStorage for FakeStorage {
+    async fn attach_image(
+        &self,
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta> {
+        Ok(AttachmentMeta {
+            id: uuid::Uuid::new_v4().to_string(),
+            entry_id: entry_id.to_string(),
+            filename,
+            mime: "image/png".to_string(),
+            size: data.len() as i64,
+            sha256: String::new(),
+            created_at: 0,
+        })
+    }
+
+    async fn list_attachments(&self, _entry_id: uuid::Uuid) -> Result<Vec<AttachmentMeta>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_attachment(
+        &self,
+        _entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<(AttachmentMeta, Vec<u8>)> {
+        Err(wiki::storage::error::Error::NotFound(
+            attachment_id.to_string(),
+        ))
+    }
+
+    async fn detach_attachment(
+        &self,
+        _entry_id: uuid::Uuid,
+        _attachment_id: uuid::Uuid,
+    ) -> Result<()> {
+        Ok(())
     }
 }
 

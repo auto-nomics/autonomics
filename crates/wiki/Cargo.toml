@@ -25,7 +25,16 @@ agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types" }
 # patch 编辑引擎(纯计算,与 vfs 的 edit/patch 工具共用同一实现)。
 apply-patch = { path = "../apply-patch" }
+# 附件:内容指纹(sha2)+ 工具层的 base64 编解码。
+sha2.workspace = true
+base64 = "0.23"
+# 附件 blob 的生产后端(vfs 挂载存储);datafusion 较重,optional。
+vfs = { path = "../vfs", optional = true }
 schemars.workspace = true
+
+[features]
+default = []
+vfs = ["dep:vfs"]
 
 [dev-dependencies]
 tempfile = "3"

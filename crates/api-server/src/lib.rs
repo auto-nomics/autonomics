@@ -7,6 +7,7 @@
 
 pub mod bib;
 pub mod server;
+pub mod wiki;
 
 pub use server::{
     DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, frontend_router,

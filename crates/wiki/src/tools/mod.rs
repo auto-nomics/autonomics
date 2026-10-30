@@ -8,6 +8,7 @@
 //! 引用解析:agent 以标题思考,所有按词条寻址的工具都收 `id` /
 //! `title` 二选一([`resolve_entry`]),标题精确匹配未删除词条。
 
+mod attachments;
 mod create;
 mod delete;
 mod edit;
@@ -23,6 +24,10 @@ mod search;
 mod update;
 mod versions;
 
+pub use attachments::{
+    WikiAttachImageInput, WikiAttachImageTool, WikiAttachmentsInput, WikiAttachmentsTool,
+    WikiDetachInput, WikiDetachTool, WikiGetAttachmentInput, WikiGetAttachmentTool,
+};
 pub use create::{WikiCreateInput, WikiCreateTool};
 pub use delete::{WikiDeleteInput, WikiDeleteTool};
 pub use edit::{WikiEditInput, WikiEditTool};
@@ -105,6 +110,13 @@ fn parse_entry_id(id: &str) -> Result<uuid::Uuid, ToolError> {
     })
 }
 
+/// 已解析词条的 id 字段转 UUID(理论必合法;失败按可纠正错误报)。
+pub(super) fn invalid_entry_id(id: &str) -> ToolError {
+    ToolError::ValidationFailed {
+        message: format!("非法词条 id:{id}"),
+    }
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -170,6 +182,14 @@ pub fn wiki_read_registrations(handle: Arc<WikiHandle>) -> Vec<ToolRegistration>
             handle: handle.clone(),
         }
         .into(),
+        WikiAttachmentsTool {
+            handle: handle.clone(),
+        }
+        .into(),
+        WikiGetAttachmentTool {
+            handle: handle.clone(),
+        }
+        .into(),
         WikiVersionsTool { handle }.into(),
     ]
 }
@@ -203,6 +223,14 @@ pub fn wiki_write_registrations(handle: Arc<WikiHandle>) -> Vec<ToolRegistration
         }
         .into(),
         WikiPatchTool {
+            handle: handle.clone(),
+        }
+        .into(),
+        WikiAttachImageTool {
+            handle: handle.clone(),
+        }
+        .into(),
+        WikiDetachTool {
             handle: handle.clone(),
         }
         .into(),

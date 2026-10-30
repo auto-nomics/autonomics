@@ -23,18 +23,22 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use turso::{Connection, Value};
 
+use super::blob::BlobStore;
 use super::error::{Error, Result};
 use super::types::{
-    EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter, RecycleItem,
-    SearchFilter, SearchHit, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
+    AttachmentMeta, EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter,
+    RecycleItem, SearchFilter, SearchHit, WikiAttachmentStorage, WikiEntryStorage,
+    WikiIndexStorage, WikiSearchStorage,
 };
 use crate::markdown::{LinkKind, Parser};
 use crate::search::{bm25_term, idf, tokenize};
+use sha2::{Digest, Sha256};
 
 /// `IN (...)` 查询单块的参数上限(SQLite 系绑定变量上限 999;80 与
 /// bib-base 的分块粒度一致)。
@@ -74,6 +78,19 @@ CREATE TABLE IF NOT EXISTS search_postings (
 
 CREATE INDEX IF NOT EXISTS idx_search_postings_entry ON search_postings(entry_id);
 
+CREATE TABLE IF NOT EXISTS attachments (
+    id          TEXT PRIMARY KEY NOT NULL,
+    entry_id    TEXT NOT NULL,
+    filename    TEXT NOT NULL,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
+
 CREATE TABLE IF NOT EXISTS aliases (
     alias    TEXT PRIMARY KEY NOT NULL,
     entry_id TEXT NOT NULL
@@ -101,6 +118,8 @@ CREATE TABLE IF NOT EXISTS entry_versions (
 /// Turso 存储后端。
 pub struct TursoWikiStorage {
     conn: Mutex<Connection>,
+    /// 附件 blob 后端;未配置时 attach/get 报错,list(纯元数据)仍可用。
+    blob: Option<Arc<dyn BlobStore>>,
 }
 
 impl TursoWikiStorage {
@@ -162,7 +181,16 @@ impl TursoWikiStorage {
         }
         Ok(Self {
             conn: Mutex::new(conn),
+            blob: None,
         })
+    }
+
+    /// 配置附件 blob 后端(生产用 `vfs_blob::VfsBlobStore`,测试用
+    /// `blob::MemoryBlobStore`)。未配置时 attach/get 报错,list(纯
+    /// 元数据)仍可用。
+    pub fn with_blob_store(mut self, blob: Arc<dyn BlobStore>) -> Self {
+        self.blob = Some(blob);
+        self
     }
 
     /// 覆盖式重写 `from` 的全部出边(目标为词条 id)。
@@ -246,8 +274,21 @@ impl WikiEntryStorage for TursoWikiStorage {
     async fn purge_entry(&self, id: uuid::Uuid) -> Result<()> {
         let id = id.to_string();
         let conn = self.conn.lock().await;
+        // 事务内清行并收集 blob key;COMMIT 成功后再尽力删 blob ——
+        // ROLLBACK 时 blob 仍在,不会出现行回滚而数据丢失。
+        let mut blob_keys: Vec<String> = Vec::new();
         run_in_txn(&conn, |conn| {
+            let keys = &mut blob_keys;
             Box::pin(async move {
+                let mut rows = conn
+                    .query(
+                        "SELECT storage_key FROM attachments WHERE entry_id = ?1",
+                        turso::params![id.clone()],
+                    )
+                    .await?;
+                while let Some(row) = rows.next().await? {
+                    keys.push(text_col(&row, 0)?);
+                }
                 conn.execute(
                     "DELETE FROM entry_links WHERE from_id = ?1 OR to_id = ?1",
                     turso::params![id.clone()],
@@ -278,12 +319,27 @@ impl WikiEntryStorage for TursoWikiStorage {
                     turso::params![id.clone()],
                 )
                 .await?;
+                conn.execute(
+                    "DELETE FROM attachments WHERE entry_id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
                 conn.execute("DELETE FROM entries WHERE id = ?1", turso::params![id])
                     .await?;
                 Ok(())
             })
         })
-        .await
+        .await?;
+        if let Some(blob) = &self.blob {
+            for key in &blob_keys {
+                if let Err(error) = blob.delete(key).await {
+                    // 孤儿 blob(行已删、数据残留)只记日志:无害,可
+                    // 由后端侧 GC 兜底。
+                    tracing::warn!(key = %key, %error, "purge: failed to delete attachment blob");
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn list_deleted(&self) -> Result<Vec<RecycleItem>> {
@@ -763,6 +819,201 @@ async fn init_schema_on(conn: &Connection) -> Result<()> {
             .await?;
     }
     Ok(())
+}
+
+#[async_trait]
+impl WikiAttachmentStorage for TursoWikiStorage {
+    async fn attach_image(
+        &self,
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta> {
+        let Some((mime, ext)) = image_type_from_filename(&filename) else {
+            return Err(Error::Unknown(format!(
+                "不支持的图像格式:{filename}(白名单:png/jpg/jpeg/gif/webp/svg/bmp/avif)"
+            )));
+        };
+        if data.is_empty() {
+            return Err(Error::Unknown("附件内容为空".to_string()));
+        }
+        let blob = self
+            .blob
+            .as_ref()
+            .ok_or_else(|| Error::Unknown("未配置附件存储(with_blob_store)".to_string()))?;
+        let entry_id_str = entry_id.to_string();
+        let now = unix_now();
+        let sha_hex: String = Sha256::digest(&data)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+
+        // 词条须存在且未删除。
+        {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id FROM entries WHERE id = ?1 AND deleted_at IS NULL",
+                    turso::params![entry_id_str.clone()],
+                )
+                .await?;
+            if rows.next().await?.is_none() {
+                return Err(Error::NotFound(entry_id_str));
+            }
+        }
+
+        // key 按附件 id 一对一(不做内容寻址:免引用计数,purge/detach
+        // 直接删 key;跨词条去重交给对象层 GC,取舍见模块文档)。
+        let attachment_id = uuid::Uuid::new_v4();
+        let key = format!("attachments/{entry_id_str}/{attachment_id}.{ext}");
+        blob.put(&key, data.clone()).await?;
+
+        let meta = AttachmentMeta {
+            id: attachment_id.to_string(),
+            entry_id: entry_id_str,
+            filename,
+            mime: mime.to_string(),
+            size: data.len() as i64,
+            sha256: sha_hex,
+            created_at: now,
+        };
+        let insert = async {
+            let conn = self.conn.lock().await;
+            conn.execute(
+                "INSERT INTO attachments (id, entry_id, filename, mime, size, sha256, storage_key, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                turso::params![
+                    meta.id.clone(),
+                    meta.entry_id.clone(),
+                    meta.filename.clone(),
+                    meta.mime.clone(),
+                    meta.size,
+                    meta.sha256.clone(),
+                    key.clone(),
+                    meta.created_at,
+                ],
+            )
+            .await
+        };
+        if let Err(error) = insert.await {
+            // 行失败 → 回滚 blob,不留孤儿。
+            let _ = blob.delete(&key).await;
+            return Err(Error::from(error));
+        }
+        Ok(meta)
+    }
+
+    async fn list_attachments(&self, entry_id: uuid::Uuid) -> Result<Vec<AttachmentMeta>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, entry_id, filename, mime, size, sha256, created_at \
+                 FROM attachments WHERE entry_id = ?1 ORDER BY created_at, id",
+                turso::params![entry_id.to_string()],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(attachment_from_row(&row)?);
+        }
+        Ok(out)
+    }
+
+    async fn get_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<(AttachmentMeta, Vec<u8>)> {
+        let (meta, key) = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, entry_id, filename, mime, size, sha256, created_at, storage_key \
+                     FROM attachments WHERE id = ?1 AND entry_id = ?2",
+                    turso::params![attachment_id.to_string(), entry_id.to_string()],
+                )
+                .await?;
+            match rows.next().await? {
+                Some(row) => {
+                    let key = text_col(&row, 7)?;
+                    (attachment_from_row(&row)?, key)
+                }
+                None => return Err(Error::NotFound(attachment_id.to_string())),
+            }
+        };
+        let blob = self
+            .blob
+            .as_ref()
+            .ok_or_else(|| Error::Unknown("未配置附件存储(with_blob_store)".to_string()))?;
+        let data = blob.get(&key).await?;
+        Ok((meta, data))
+    }
+
+    async fn detach_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<()> {
+        let key: Option<String> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT storage_key FROM attachments WHERE id = ?1 AND entry_id = ?2",
+                    turso::params![attachment_id.to_string(), entry_id.to_string()],
+                )
+                .await?;
+            let key = match rows.next().await? {
+                Some(row) => Some(text_col(&row, 0)?),
+                None => None,
+            };
+            if key.is_some() {
+                conn.execute(
+                    "DELETE FROM attachments WHERE id = ?1 AND entry_id = ?2",
+                    turso::params![attachment_id.to_string(), entry_id.to_string()],
+                )
+                .await?;
+            }
+            key
+        };
+        if let Some(key) = key {
+            if let Some(blob) = &self.blob {
+                if let Err(error) = blob.delete(&key).await {
+                    tracing::warn!(key = %key, %error, "detach: failed to delete attachment blob");
+                }
+            }
+        }
+        // 行不存在 → 幂等 no-op(契约)。
+        Ok(())
+    }
+}
+
+/// 扩展名 → (MIME, 规范化小写扩展名);仅图像白名单。
+fn image_type_from_filename(name: &str) -> Option<(String, String)> {
+    let dot = name.rfind('.')?;
+    let ext = name[dot + 1..].to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        _ => return None,
+    };
+    Some((mime.to_string(), ext))
+}
+
+fn attachment_from_row(row: &turso::Row) -> Result<AttachmentMeta> {
+    Ok(AttachmentMeta {
+        id: text_col(row, 0)?,
+        entry_id: text_col(row, 1)?,
+        filename: text_col(row, 2)?,
+        mime: text_col(row, 3)?,
+        size: int_col(row, 4)?,
+        sha256: text_col(row, 5)?,
+        created_at: int_col(row, 6)?,
+    })
 }
 
 // ─────────────────────── 词条行读写(自由函数,单/批量共用) ───────────────────────

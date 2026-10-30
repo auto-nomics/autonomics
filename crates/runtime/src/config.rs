@@ -72,6 +72,8 @@ const DEFAULT_KNOWLEDGE_DB: &str = "knowledge.db";
 ///
 /// Override via builder `.kms_db_path(…)` or env `AUTONOMICS_KMS_DB`.
 const DEFAULT_KMS_DB: &str = "kms.db";
+/// Default file name of the wiki knowledge db under the state dir.
+const DEFAULT_WIKI_DB: &str = "wiki.db";
 
 /// Default bibliography database path.
 ///
@@ -110,6 +112,9 @@ pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
 
 /// Env var overriding the KMS knowledge DB path.
 pub const ENV_KMS_DB: &str = "AUTONOMICS_KMS_DB";
+
+/// Env var overriding the wiki knowledge DB path.
+pub const ENV_WIKI_DB: &str = "AUTONOMICS_WIKI_DB";
 
 /// Env var overriding the persistent-memory knowledge DB path.
 pub const ENV_KNOWLEDGE_DB: &str = "AUTONOMICS_KNOWLEDGE_DB";
@@ -523,6 +528,10 @@ pub struct RuntimeConfig {
     /// migrated out of `agent.db` into this file once on startup.
     #[serde(default = "default_kms_db_path")]
     pub kms_db_path: PathBuf,
+
+    /// Path to the wiki knowledge database (Turso/SQLite).
+    #[serde(default = "default_wiki_db_path")]
+    pub wiki_db_path: PathBuf,
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
     /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
@@ -608,6 +617,9 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
+    /// Whether to enable wiki knowledge-base tools (wiki_*).
+    #[serde(default)]
+    pub enable_wiki: bool,
     /// Text-embedding provider used by observation clustering.
     #[serde(default)]
     pub embedding: text_embedding::EmbeddingConfig,
@@ -663,6 +675,16 @@ fn default_kms_db_path() -> PathBuf {
                 .join(DEFAULT_KMS_DB)
         })
         .unwrap_or_else(|| PathBuf::from(DEFAULT_KMS_DB))
+}
+
+fn default_wiki_db_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| {
+            PathBuf::from(h)
+                .join(DEFAULT_STATE_DIR)
+                .join(DEFAULT_WIKI_DB)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_WIKI_DB))
 }
 
 fn default_knowledge_db_path() -> PathBuf {
@@ -746,6 +768,10 @@ impl RuntimeConfig {
             .and_then(|b| b.kms_db_path.clone())
             .or_else(|| env_path(ENV_KMS_DB))
             .unwrap_or_else(|| state_dir.join(DEFAULT_KMS_DB));
+        let wiki_db_path = base
+            .and_then(|b| b.wiki_db_path.clone())
+            .or_else(|| env_path(ENV_WIKI_DB))
+            .unwrap_or_else(|| state_dir.join(DEFAULT_WIKI_DB));
         let browser_download_dir = base
             .and_then(|b| b.browser_download_dir.clone())
             .or_else(|| env_path(ENV_BROWSER_DOWNLOAD_DIR));
@@ -794,6 +820,7 @@ impl RuntimeConfig {
             agent_db,
             knowledge_db_path,
             kms_db_path,
+            wiki_db_path,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,
@@ -819,6 +846,7 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
+            enable_wiki: resolve_flag(base, |b| b.enable_wiki, false),
             embedding: base.and_then(|b| b.embedding.clone()).unwrap_or_default(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_interval_secs: base
@@ -1474,6 +1502,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) agent_db: Option<PathBuf>,
     pub(crate) knowledge_db_path: Option<PathBuf>,
     pub(crate) kms_db_path: Option<PathBuf>,
+    pub(crate) wiki_db_path: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -1497,6 +1526,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
+    pub(crate) enable_wiki: Option<bool>,
     pub(crate) embedding: Option<text_embedding::EmbeddingConfig>,
     pub(crate) enable_skill_evolution: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
@@ -1568,6 +1598,12 @@ impl RuntimeConfigBuilder {
     /// Path to the KMS knowledge database (Turso/SQLite).
     pub fn kms_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.kms_db_path = Some(path.into());
+        self
+    }
+
+    /// Override the wiki knowledge DB path.
+    pub fn wiki_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.wiki_db_path = Some(path.into());
         self
     }
 
@@ -1691,6 +1727,12 @@ impl RuntimeConfigBuilder {
     /// Enable KMS knowledge-graph tools.
     pub fn enable_kms(mut self, enabled: bool) -> Self {
         self.enable_kms = Some(enabled);
+        self
+    }
+
+    /// Enable wiki knowledge-base tools.
+    pub fn enable_wiki(mut self, enabled: bool) -> Self {
+        self.enable_wiki = Some(enabled);
         self
     }
 

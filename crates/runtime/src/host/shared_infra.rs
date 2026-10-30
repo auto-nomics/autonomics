@@ -22,6 +22,7 @@ use data_engine::runtime::DataEngineManager;
 use rcsb::RcsbClient;
 use resource_downloader::DownloadManager;
 use vfs::OpendalFileStorage;
+use wiki::service::WikiHandle;
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::error::{Error, Result};
@@ -146,6 +147,10 @@ pub struct SharedInfra {
     pub memory: Arc<MemoryBackend>,
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
+    /// Wiki 知识库的 worker 控制句柄(附件 blob 落在
+    /// `file_storage` 的 `wiki-attachments` 虚拟目录)。`None` 表示
+    /// `enable_wiki` 关闭 —— agent 不挂 wiki 工具,API 层返回 503。
+    pub wiki: Option<Arc<WikiHandle>>,
     /// The process-wide observation hub — the upstream evidence
     /// ledger shared by skills, plugins, and gateway handlers. Neither
     /// downstream owns it; both resolve the same instance.
@@ -269,6 +274,7 @@ impl SharedInfra {
         let memory = open_memory(config, &kms).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
+        let wiki = open_wiki(config, &file_storage).await?;
 
         // One clustering worker over the shared hub. Triggers land on
         // a buffered channel, so callers never block on a slow pass.
@@ -307,6 +313,7 @@ impl SharedInfra {
             writing,
             memory,
             kms,
+            wiki,
             observations,
             evolution_handle,
             skills,
@@ -572,6 +579,12 @@ impl SharedInfra {
 
         if let Some(kms) = self.kms.clone() {
             tools.extend(kms_tools::kms_readonly_registrations(kms));
+        }
+
+        if let Some(wiki) = self.wiki.clone() {
+            // 与 KMS 同款:普通 agent 只拿读组;写组留给维护路径,
+            // 不经 agent 工具暴露。
+            tools.extend(wiki::tools::wiki_read_registrations(wiki));
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
@@ -858,6 +871,34 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
         }
     };
     Ok(Arc::new(store))
+}
+
+/// Open the wiki knowledge db + attachment blob backend, and start the
+/// wiki worker when the runtime feature is enabled. The schema is
+/// initialized unconditionally (idempotent) so the on-disk db always
+/// exists, mirroring `open_kms`.
+async fn open_wiki(
+    config: &RuntimeConfig,
+    file_storage: &Arc<OpendalFileStorage>,
+) -> Result<Option<Arc<WikiHandle>>> {
+    let wiki_db = config.wiki_db_path.clone();
+    tracing::info!(
+        path = %wiki_db.display(),
+        "SharedInfra::open: opening wiki knowledge db"
+    );
+    let blobs = wiki::storage::vfs_blob::VfsBlobStore::new(
+        file_storage.as_ref().clone(),
+        "wiki-attachments",
+    );
+    let storage =
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open(&wiki_db.to_string_lossy())
+            .await
+            .map_err(|error| Error::Other(format!("open wiki storage: {error}")))?
+            .with_blob_store(blobs);
+    if !config.enable_wiki {
+        return Ok(None);
+    }
+    Ok(Some(Arc::new(wiki::service::start(Arc::new(storage)))))
 }
 
 /// Open the KMS knowledge db, migrate legacy rows out of agent.db,

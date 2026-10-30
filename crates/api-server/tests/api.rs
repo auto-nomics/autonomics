@@ -24,7 +24,7 @@ fn request(method: &str, uri: &str, body: Option<String>) -> Request<Body> {
 #[tokio::test]
 async fn server_serves_requests_and_shuts_down_gracefully() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let server = api_server::start(api_server::api_router(shared), "127.0.0.1:0")
+    let server = api_server::start(api_server::api_router(shared, None), "127.0.0.1:0")
         .await
         .unwrap();
 
@@ -45,7 +45,7 @@ async fn server_serves_requests_and_shuts_down_gracefully() {
 #[tokio::test]
 async fn aggregate_router_exposes_bib_module() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
 
     let response = app
         .clone()
@@ -67,7 +67,7 @@ async fn aggregate_router_exposes_bib_module() {
 #[tokio::test]
 async fn server_serves_the_bibliography_frontend() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
 
     for (path, marker) in [
         ("/", "Autonomics Bibliography"),
@@ -89,7 +89,7 @@ async fn server_serves_the_bibliography_frontend() {
 #[tokio::test]
 async fn bib_collections_and_annotations_use_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
 
     let response = app
         .clone()
@@ -151,7 +151,7 @@ async fn bib_collections_and_annotations_use_nested_routes() {
 #[tokio::test]
 async fn bib_article_crud_uses_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     let payload = r#"{
         "title": "Local API test",
         "doi": "10.1000/local-api-test",
@@ -217,7 +217,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
         .await
         .unwrap()
         .with_file_storage(file_storage);
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
 
     let response = app
         .clone()
@@ -606,7 +606,7 @@ async fn bib_reextract_rejects_non_vfs_sources() {
         })
         .await
         .unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
 
     let response = app
         .clone()
@@ -683,7 +683,7 @@ async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
 #[tokio::test]
 async fn api_bearer_auth_protects_api_routes_only() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router_with_auth(shared, Some("test-token".to_owned()));
+    let app = api_server::api_router_with_auth(shared, None, Some("test-token".to_owned()));
 
     let response = app
         .clone()
@@ -1036,7 +1036,7 @@ async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
         .await
         .unwrap()
         .with_file_storage(file_storage);
-    let app = api_server::api_router(shared.clone());
+    let app = api_server::api_router(shared.clone(), None);
     (app, shared, directory)
 }
 
@@ -1281,7 +1281,7 @@ async fn bib_annotation_metadata_updates_preserve_quote_geometry_and_survive_reo
         )
         .await
         .unwrap();
-    let app = api_server::api_router(shared.clone());
+    let app = api_server::api_router(shared.clone(), None);
     let url = format!("/api/v1/bib/annotations/{}", original.id);
     let response = app.clone().oneshot(request("PATCH", &url, Some(serde_json::json!({ "comment": "A persistent interpretation", "tags": ["brain", "methods", "brain"], "color": "#ff6666" }).to_string()))).await.unwrap();
     let status = response.status();
@@ -1363,7 +1363,7 @@ async fn bib_annotation_metadata_updates_preserve_quote_geometry_and_survive_reo
 async fn nested_collections_api_moves_trashes_restores_and_preserves_provenance() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let db = shared.bib.clone();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     async fn send(
         app: &axum::Router,
         method: &str,
@@ -1537,7 +1537,7 @@ async fn nested_collections_api_moves_trashes_restores_and_preserves_provenance(
 #[tokio::test]
 async fn bib_export_ids_exports_only_requested_records_in_order() {
     let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     let records = [
         ("Alpha", "1111111"),
         ("Beta", "2222222"),
@@ -1583,7 +1583,7 @@ async fn collection_changes_wait_for_commit_and_cached_import_preserves_membersh
     use bib_types::{AddedBy, ArticleRole, Collection, Identifier};
     let shared = BibShared::open_in_memory().await.unwrap();
     let db = shared.bib.clone();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     let response = app
         .clone()
         .oneshot(request("GET", "/api/v1/bib/collections/changes", None))
@@ -1689,7 +1689,7 @@ async fn inline_pmc_text_is_repaired_for_raw_download_and_attachment_download() 
         .unwrap()
         .unwrap()
         .key;
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     let response = app
         .clone()
         .oneshot(request(
@@ -1771,7 +1771,7 @@ async fn bib_search_v2_exposes_ranked_pages_syntax_errors_and_index_progress() {
         ])
         .await
         .unwrap();
-    let app = api_server::api_router(shared);
+    let app = api_server::api_router(shared, None);
     let body = serde_json::json!({"query":"title:\"gene editing\"","page_size":1});
     let response = app
         .clone()

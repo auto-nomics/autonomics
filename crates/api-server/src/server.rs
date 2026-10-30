@@ -86,12 +86,19 @@ fn primary_local_ip(destination: &str) -> Option<IpAddr> {
 ///
 /// Feature modules expose private route tables. This is the single place where
 /// future REST modules are mounted under the public `/api` namespace.
-pub fn api_router(shared: bib_base::BibShared) -> Router {
-    api_router_with_auth(shared, None)
+pub fn api_router(
+    shared: bib_base::BibShared,
+    wiki: Option<Arc<wiki::service::WikiHandle>>,
+) -> Router {
+    api_router_with_auth(shared, wiki, None)
 }
 
 /// Build the aggregate router with an optional bearer token for `/api` routes.
-pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<String>) -> Router {
+pub fn api_router_with_auth(
+    shared: bib_base::BibShared,
+    wiki: Option<Arc<wiki::service::WikiHandle>>,
+    bearer_token: Option<String>,
+) -> Router {
     let auth_state = BearerAuthState {
         token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
     };
@@ -102,6 +109,7 @@ pub fn api_router_with_auth(shared: bib_base::BibShared, bearer_token: Option<St
         .route("/api/v1", get(api_index))
         .route("/api/health", get(health))
         .nest("/api/v1/bib", crate::bib::router(shared))
+        .nest("/api/v1/wiki", crate::wiki::router(wiki))
         .layer(axum::middleware::from_fn_with_state(
             auth_state,
             bearer_auth,
@@ -189,7 +197,7 @@ async fn api_index() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "name": "autonomics-tui",
         "version": 1,
-        "modules": ["bib"],
+        "modules": ["bib", "wiki"],
     }))
 }
 

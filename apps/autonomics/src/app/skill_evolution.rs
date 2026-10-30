@@ -11,7 +11,6 @@ impl App {
         self.refresh_skill_evolution();
     }
 
-
     pub(super) fn close_skill_evolution(&mut self) {
         self.state.skill_evolution.close();
     }

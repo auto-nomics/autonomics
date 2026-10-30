@@ -359,3 +359,134 @@ async fn list_entries_browses_without_query() {
     // 标签 trim 容错。
     assert_eq!(by_tag(&["  gwas  "]).await, vec!["中标".to_string()]);
 }
+
+// ─────────────────────── 图像附件(blob 后端) ───────────────────────
+
+mod attachments {
+    use super::*;
+    use wiki::storage::blob::MemoryBlobStore;
+    use wiki::storage::types::WikiAttachmentStorage;
+
+    async fn storage_with_blobs() -> (TursoWikiStorage, std::sync::Arc<MemoryBlobStore>) {
+        let blobs = MemoryBlobStore::new();
+        let storage = TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(blobs.clone());
+        (storage, blobs)
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-bytes";
+
+    #[tokio::test]
+    async fn attach_list_get_roundtrip() {
+        let (storage, _blobs) = storage_with_blobs().await;
+        let id = uuid::Uuid::new_v4();
+        storage.create_entry(entry(id, "有图词条")).await.unwrap();
+
+        let meta = storage
+            .attach_image(id, "plot.png".to_string(), PNG.to_vec())
+            .await
+            .unwrap();
+        assert_eq!(meta.mime, "image/png");
+        assert_eq!(meta.size, PNG.len() as i64);
+        assert_eq!(meta.sha256.len(), 64);
+
+        let list = storage.list_attachments(id).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].filename, "plot.png");
+
+        let (got, bytes) = storage
+            .get_attachment(id, meta.id.parse().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(got.id, meta.id);
+        assert_eq!(bytes, PNG);
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_non_images_and_missing_entries() {
+        let (storage, _blobs) = storage_with_blobs().await;
+        let id = uuid::Uuid::new_v4();
+        storage.create_entry(entry(id, "词条")).await.unwrap();
+
+        // 非图像扩展名。
+        assert!(
+            storage
+                .attach_image(id, "notes.txt".to_string(), b"x".to_vec())
+                .await
+                .is_err()
+        );
+        // 词条不存在 / 已软删。
+        assert!(
+            storage
+                .attach_image(uuid::Uuid::new_v4(), "a.png".to_string(), PNG.to_vec())
+                .await
+                .is_err()
+        );
+        storage.delete_entry(id).await.unwrap();
+        assert!(
+            storage
+                .attach_image(id, "a.png".to_string(), PNG.to_vec())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn detach_is_idempotent_and_drops_blob() {
+        let (storage, blobs) = storage_with_blobs().await;
+        let id = uuid::Uuid::new_v4();
+        storage.create_entry(entry(id, "词条")).await.unwrap();
+        let meta = storage
+            .attach_image(id, "a.png".to_string(), PNG.to_vec())
+            .await
+            .unwrap();
+        let attachment_id = meta.id.parse().unwrap();
+        assert_eq!(blobs.keys().await.len(), 1);
+
+        storage.detach_attachment(id, attachment_id).await.unwrap();
+        // blob 已清;附件不可取。
+        assert!(blobs.keys().await.is_empty());
+        assert!(storage.get_attachment(id, attachment_id).await.is_err());
+        // 幂等。
+        storage.detach_attachment(id, attachment_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn purge_scrubs_attachments_and_blobs() {
+        let (storage, blobs) = storage_with_blobs().await;
+        let id = uuid::Uuid::new_v4();
+        storage.create_entry(entry(id, "将删词条")).await.unwrap();
+        storage
+            .attach_image(id, "one.png".to_string(), PNG.to_vec())
+            .await
+            .unwrap();
+        storage
+            .attach_image(id, "two.png".to_string(), PNG.to_vec())
+            .await
+            .unwrap();
+        assert_eq!(blobs.keys().await.len(), 2);
+
+        storage.delete_entry(id).await.unwrap();
+        // 软删不动附件(恢复即回来)。
+        assert_eq!(storage.list_attachments(id).await.unwrap().len(), 2);
+
+        storage.purge_entry(id).await.unwrap();
+        assert!(storage.list_attachments(id).await.unwrap().is_empty());
+        assert!(blobs.keys().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_without_blob_backend_is_rejected() {
+        let storage = TursoWikiStorage::open_in_memory().await.unwrap();
+        let id = uuid::Uuid::new_v4();
+        storage.create_entry(entry(id, "词条")).await.unwrap();
+        assert!(
+            storage
+                .attach_image(id, "a.png".to_string(), PNG.to_vec())
+                .await
+                .is_err()
+        );
+    }
+}

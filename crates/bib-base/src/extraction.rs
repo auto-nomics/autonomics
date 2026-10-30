@@ -546,7 +546,7 @@ pub async fn sweep_pending(shared: &BibShared) {
             "failed to reset stale attachment running extractions"
         );
     }
-    if let Err(error)=crate::managed_fulltext::repair_legacy_open_access(shared).await {
+    if let Err(error) = crate::managed_fulltext::repair_legacy_open_access(shared).await {
         tracing::warn!(%error,"legacy OA originals repair deferred; raw downloads retry on read");
     }
     backfill_extracted_objects(shared).await;

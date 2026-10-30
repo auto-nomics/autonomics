@@ -13,8 +13,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{Error, Result};
 use crate::storage::types::{
-    EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter, RecycleItem,
-    SearchFilter, SearchHit, WikiStorage,
+    AttachmentMeta, EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter,
+    RecycleItem, SearchFilter, SearchHit, WikiStorage,
 };
 
 /// worker 从控制通道消费的命令。每条命令携带 oneshot 回执;调用方
@@ -96,6 +96,26 @@ pub enum WikiCommand {
         limit: usize,
         filter: SearchFilter,
         reply: oneshot::Sender<Result<Vec<SearchHit>>>,
+    },
+    AttachImage {
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+        reply: oneshot::Sender<Result<AttachmentMeta>>,
+    },
+    ListAttachments {
+        entry_id: uuid::Uuid,
+        reply: oneshot::Sender<Result<Vec<AttachmentMeta>>>,
+    },
+    GetAttachment {
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+        reply: oneshot::Sender<Result<(AttachmentMeta, Vec<u8>)>>,
+    },
+    DetachAttachment {
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+        reply: oneshot::Sender<Result<()>>,
     },
 }
 
@@ -210,6 +230,51 @@ impl<T: WikiStorage + ?Sized> WikiWorker<T> {
                     let _ = reply.send(
                         self.store
                             .search_with_filter(&query, limit, &filter)
+                            .await
+                            .map_err(Error::from),
+                    );
+                }
+                WikiCommand::AttachImage {
+                    entry_id,
+                    filename,
+                    data,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        self.store
+                            .attach_image(entry_id, filename, data)
+                            .await
+                            .map_err(Error::from),
+                    );
+                }
+                WikiCommand::ListAttachments { entry_id, reply } => {
+                    let _ = reply.send(
+                        self.store
+                            .list_attachments(entry_id)
+                            .await
+                            .map_err(Error::from),
+                    );
+                }
+                WikiCommand::GetAttachment {
+                    entry_id,
+                    attachment_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        self.store
+                            .get_attachment(entry_id, attachment_id)
+                            .await
+                            .map_err(Error::from),
+                    );
+                }
+                WikiCommand::DetachAttachment {
+                    entry_id,
+                    attachment_id,
+                    reply,
+                } => {
+                    let _ = reply.send(
+                        self.store
+                            .detach_attachment(entry_id, attachment_id)
                             .await
                             .map_err(Error::from),
                     );
@@ -393,5 +458,55 @@ impl WikiHandle {
             .into_iter()
             .filter_map(|hit| by_id.get(&hit.entry_id).map(|e| (e.clone(), hit.score)))
             .collect())
+    }
+
+    /// 附加一张图像(filename 扩展名决定 MIME,仅图像白名单)。
+    pub async fn attach_image(
+        &self,
+        entry_id: uuid::Uuid,
+        filename: String,
+        data: Vec<u8>,
+    ) -> Result<AttachmentMeta> {
+        self.call(|reply| WikiCommand::AttachImage {
+            entry_id,
+            filename,
+            data,
+            reply,
+        })
+        .await
+    }
+
+    /// 词条的附件清单(创建时间升序)。
+    pub async fn list_attachments(&self, entry_id: uuid::Uuid) -> Result<Vec<AttachmentMeta>> {
+        self.call(|reply| WikiCommand::ListAttachments { entry_id, reply })
+            .await
+    }
+
+    /// 取附件元数据与内容。
+    pub async fn get_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<(AttachmentMeta, Vec<u8>)> {
+        self.call(|reply| WikiCommand::GetAttachment {
+            entry_id,
+            attachment_id,
+            reply,
+        })
+        .await
+    }
+
+    /// 摘除附件(幂等)。
+    pub async fn detach_attachment(
+        &self,
+        entry_id: uuid::Uuid,
+        attachment_id: uuid::Uuid,
+    ) -> Result<()> {
+        self.call(|reply| WikiCommand::DetachAttachment {
+            entry_id,
+            attachment_id,
+            reply,
+        })
+        .await
     }
 }

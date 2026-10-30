@@ -271,7 +271,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
 
     let bib_shared = state.infra.bib.as_ref().clone();
     let token = uuid::Uuid::new_v4().simple().to_string();
-    let router = router_with_bib(state, token.clone(), bib_shared, None);
+    let router = router_with_bib(state, token.clone(), bib_shared, None, None);
     let server = api_server::server::start(router, "127.0.0.1:0")
         .await
         .unwrap();
