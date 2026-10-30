@@ -165,6 +165,7 @@ pub fn router(handle: Option<Arc<WikiHandle>>) -> Router {
             "/entries/{id}",
             get(get_entry).put(update_entry).delete(delete_entry),
         )
+        .route("/entries/{id}/content", put(put_entry_content))
         .route("/entries/{id}/restore", post(restore_entry))
         .route("/entries/{id}/purge", rdelete(purge_entry))
         .route("/entries/{id}/versions", get(list_versions))
@@ -295,6 +296,34 @@ async fn update_entry(
         .unwrap_or(entry.mtime);
     handle.update_entry(entry.clone()).await.map_err(api_err)?;
     Ok(Json(json!(entry)))
+}
+
+#[derive(Deserialize)]
+struct PutContentBody {
+    content: String,
+}
+
+/// 整篇替换正文(存储层同事务重建倒排/链接/版本快照)。元数据更新走
+/// `PUT /entries/{id}`。
+async fn put_entry_content(
+    State(handle): State<Option<Arc<WikiHandle>>>,
+    Path(id): Path<String>,
+    Json(body): Json<PutContentBody>,
+) -> ApiResult {
+    let handle = handle_or_503(&handle)?;
+    let id = parse_uuid(&id, "entry")?;
+    let mut entry = handle.get_entry(id).await.map_err(api_err)?;
+    entry.content = body.content;
+    entry.mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(entry.mtime);
+    handle.update_entry(entry.clone()).await.map_err(api_err)?;
+    Ok(Json(json!({
+        "id": entry.id,
+        "title": entry.title,
+        "size": entry.content.len(),
+    })))
 }
 
 async fn delete_entry(

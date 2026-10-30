@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { WikiPanel } from "@/components/wiki/wiki-panel";
 import { toast } from "sonner";
 
 import { ArticleDetailPanel } from "@/components/bibliography/article-detail";
@@ -16,6 +17,13 @@ import {
 
 
 export function App() {
+  const [topView, setTopView] = useState<"bib" | "wiki">(() => {
+    try {
+      return localStorage.getItem("app.topView") === "wiki" ? "wiki" : "bib";
+    } catch {
+      return "bib";
+    }
+  });
   const [health, setHealth] = useState<BibHealth | null>(null);
   const [recursive,setRecursive]=useState(()=>{try{return localStorage.getItem("bib.collections.recursive")==="true";}catch{return false;}});
   const recursiveRef=useRef(recursive);
@@ -258,7 +266,7 @@ export function App() {
     toast.success("Article deleted");
   }
 
-  return (
+  const bibPane = (
     <div className="flex h-screen min-h-0 flex-col overflow-y-auto bg-background lg:overflow-hidden">
 
       <main className="grid w-full min-h-0 flex-1 gap-4 px-4 py-4 lg:grid-rows-[minmax(0,1fr)] lg:items-stretch lg:grid-cols-[260px_minmax(320px,2fr)_minmax(420px,3fr)] lg:px-6 xl:grid-cols-[280px_minmax(360px,2fr)_minmax(480px,3fr)]">
@@ -311,6 +319,34 @@ export function App() {
           />
         </section>
       </main>
+    </div>
+  );
+
+  return (
+    <div className="flex h-screen min-h-0 flex-col bg-background">
+      <nav className="flex items-center gap-1 border-b px-3 py-1.5 text-sm">
+        {(["bib", "wiki"] as const).map((view) => (
+          <button
+            key={view}
+            type="button"
+            className={`rounded-md px-3 py-1 transition-colors ${
+              topView === view ? "bg-accent font-medium" : "text-muted-foreground hover:bg-accent"
+            }`}
+            onClick={() => {
+              setTopView(view);
+              try {
+                localStorage.setItem("app.topView", view);
+              } catch {
+                // storage unavailable — per-session default only.
+              }
+            }}
+          >
+            {view === "bib" ? "Bibliography" : "Wiki"}
+          </button>
+        ))}
+        <span className="ml-auto text-xs text-muted-foreground">autonomics workspace</span>
+      </nav>
+      <div className="min-h-0 flex-1">{topView === "wiki" ? <WikiPanel /> : bibPane}</div>
     </div>
   );
 }
