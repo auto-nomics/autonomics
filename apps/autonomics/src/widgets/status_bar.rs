@@ -168,22 +168,16 @@ impl Widget for StatusBar<'_> {
 
         // ── Model name + reasoning effort (right-aligned) ──
         if let Some(name) = self.model_name {
-            let label = "model ";
+            // let label = "model ";
             let effort_seg = self.reasoning_effort.map(|effort| format!(" ⋅ {effort}"));
             let effort_str = effort_seg.as_deref().unwrap_or("");
-            let total_w = label.width() + name.width() + effort_str.width();
+            let total_w = name.width() + effort_str.width();
             if total_w < area.width as usize {
                 let x = area.x + area.width - total_w as u16;
                 let y = area.y;
-                buf.set_string(x, y, label, base(Style::default().fg(Color::DarkGray)));
+                buf.set_string(x as u16, y, name, base(Style::default().fg(Color::Gray)));
                 buf.set_string(
-                    x + label.width() as u16,
-                    y,
-                    name,
-                    base(Style::default().fg(Color::Gray)),
-                );
-                buf.set_string(
-                    x + (label.width() + name.width()) as u16,
+                    x + (name.width()) as u16,
                     y,
                     effort_str,
                     base(Style::default().fg(Color::Cyan)),

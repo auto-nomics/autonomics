@@ -1,5 +1,5 @@
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     prelude::{Buffer, StatefulWidget, Widget},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -73,7 +73,6 @@ fn collect_visible_lines(
 /// │ ╭─ running… ─────────────────────────────────╮   │
 /// │ │ ❯ draft…                                   │   │
 /// │ ╰────────────────────────────────────────────╯   │
-/// │ Footer hints (full width, 1 row)                 │
 /// └──────────────────────────────────────────────────┘
 /// ```
 pub struct AgentLeaf<'a> {
@@ -97,9 +96,9 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // the wrap width.
         let text_width = area.width.saturating_sub(PROMPT_GUTTER);
         let input_text_rows = if running && ts.input.is_empty() {
-            1
+            2
         } else {
-            ts.input.display_height(text_width)
+            ts.input.display_height(text_width).max(2)
         };
         let input_constraint = Constraint::Length(input_text_rows);
         let pending_texts = ts.pending_queue_preview_texts();
@@ -119,8 +118,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 pending_constraint,    // Runtime-bound input awaiting commit
                 compact_constraint,    // Live compaction preview
                 Constraint::Length(1), // StatusBar (sits on the shared band)
-                input_constraint,      // Composer (same band; borderless)
-                Constraint::Length(1), // Footer hints
+                Constraint::Length(1),
+                input_constraint, // Composer (same band; borderless)
             ])
             .split(area);
 
@@ -130,7 +129,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // Left/right keep a 2-column gutter; the top padding is 0 so the
         // transcript starts right under the status bar, and the bottom
         // keeps breathing room above the composer.
-        let chat_block = Block::default().padding(Padding::new(2, 2, 0, 2));
+        let chat_block = Block::default().padding(Padding::new(2, 2, 0, 0));
         let chat_inner_area = chat_block.inner(middle);
 
         let viewport_height = chat_inner_area.height;
@@ -246,6 +245,9 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             }
         };
 
+        let padding_band = Block::new().style(band);
+        padding_band.render(layout[4], buf);
+
         // The composer is interactive even while the agent is running:
         // the user can type and enqueue messages. Only hide the caret
         // when not in Input mode.
@@ -257,20 +259,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
-        input_widget.render(layout[4], buf, &mut input_state);
-
-        // ── Footer hint line ──
-        render_footer_hint(
-            layout[5],
-            buf,
-            ts.input_mode,
-            running,
-            queued,
-            ts.in_history_search,
-            &ts.history_search_query,
-            ts.history_search_selected,
-            ts.history_search_matches.len(),
-        );
+        input_widget.render(layout[5], buf, &mut input_state);
     }
 }
 
@@ -423,65 +412,6 @@ fn preview_line(message: &str, width: u16) -> String {
         used += ch_width;
     }
     format!("{prefix}{truncated}…")
-}
-
-/// Draw the 1-row keybinding hint at the bottom of the agent tab.
-#[allow(clippy::too_many_arguments)]
-fn render_footer_hint(
-    area: Rect,
-    buf: &mut Buffer,
-    mode: InputMode,
-    running: bool,
-    queued: usize,
-    searching: bool,
-    query: &str,
-    selected: usize,
-    total: usize,
-) {
-    if area.width == 0 {
-        return;
-    }
-    let hint = if searching {
-        if total == 0 {
-            format!(" search: {query}  (no match)  Esc cancel ")
-        } else {
-            format!(
-                " search: {query}  ({}/{total})  ↑↓ navigate  Enter select  Esc cancel ",
-                selected + 1
-            )
-        }
-    } else if running {
-        match mode {
-            InputMode::Input => {
-                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+P cancel agent ".to_string()
-            }
-            InputMode::Browse => {
-                if queued > 0 {
-                    format!(" {queued} pending  Enter compose  Ctrl+P cancel agent ")
-                } else {
-                    " Enter compose  Ctrl+P cancel agent  Ctrl+R history ".to_string()
-                }
-            }
-        }
-    } else {
-        match mode {
-            InputMode::Browse => {
-                " Enter edit  ↑↓ scroll  j/k scroll  h/l page  PageUp/PageDown  Home/End  Ctrl+G follow  ␣ leader  Ctrl+P quit "
-                    .to_string()
-            }
-            InputMode::Input => {
-                " Insert  Esc exit  Enter send  Shift+Enter newline  Ctrl+R history  Ctrl+G follow "
-                    .to_string()
-            }
-        }
-    };
-    let style = Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM);
-    Paragraph::new(hint)
-        .style(style)
-        .alignment(Alignment::Right)
-        .render(area, buf);
 }
 
 #[cfg(test)]
