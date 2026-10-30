@@ -102,7 +102,7 @@ pub(super) fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<St
         },
 
         // ── Tool-level signals (overwrite the lifecycle-derived status) ──
-        AgentEvent::ToolCall { name, .. } | AgentEvent::ToolCallBackground { name, seq: _ } => (
+        AgentEvent::ToolCall { name, .. } | AgentEvent::ToolCallBackground { name, .. } => (
             AgentStatus::AwaitingTool { tool: name.clone() },
             Some(name.clone()),
         ),
@@ -349,6 +349,7 @@ mod status_derivation_tests {
     #[test]
     fn tool_call_background_flips_to_awaiting_tool() {
         let (s, _) = derive_agent_status(&AgentEvent::ToolCallBackground {
+            target_agent: None,
             seq: 1,
             name: "run_dag".into(),
         });

@@ -103,6 +103,8 @@ pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
     pub collapse_tool_results: bool,
+    /// Chat-only transcript view: non-dialogue lines are dropped entirely.
+    pub chat_only: bool,
 }
 
 /// Settings-table key for the Ollama embedding JSON document.
@@ -650,6 +652,7 @@ impl ModelWorker {
             collapse_thinking: get("collapse_thinking").await,
             collapse_tool_calls: get("collapse_tool_calls").await,
             collapse_tool_results: get("collapse_tool_results").await,
+            chat_only: get("chat_only").await,
         }
     }
 

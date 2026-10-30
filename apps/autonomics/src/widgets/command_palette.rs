@@ -62,6 +62,11 @@ pub enum CommandAction {
     ToggleCollapseToolCalls,
     /// Toggle collapse for tool result blocks.
     ToggleCollapseToolResults,
+    /// Chat-only transcript view: drop non-dialogue lines entirely instead
+    /// of rendering collapsed placeholders.
+    ToggleChatOnly,
+    /// Move keyboard focus to the sidebar's docked agents panel.
+    FocusAgentsPanel,
     /// Open the message picker to copy a chat message to the clipboard.
     CopyMessage,
     /// Manually compact the active agent's conversation history.
@@ -423,6 +428,18 @@ fn default_commands() -> Vec<Command> {
             keywords: "collapse fold hide tool call function".into(),
             category: "view".into(),
             action: CommandAction::ToggleCollapseToolCalls,
+        },
+        Command {
+            title: "Chat-only view".into(),
+            keywords: "clean dialogue hide tools thinking transcript chat only".into(),
+            category: "view".into(),
+            action: CommandAction::ToggleChatOnly,
+        },
+        Command {
+            title: "Focus agents panel".into(),
+            keywords: "switch agent sidebar docked panel ctrl t".into(),
+            category: "agent".into(),
+            action: CommandAction::FocusAgentsPanel,
         },
         Command {
             title: "Toggle tool results".into(),

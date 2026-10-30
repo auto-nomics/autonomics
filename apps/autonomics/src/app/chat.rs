@@ -29,16 +29,31 @@ impl App {
             }
         }
 
+        // Like Vim's command entry, ':' opens commands only in browse mode.
+        // Accept Shift here because terminals may report it for ':'.
+        if key.code == KeyCode::Char(':') {
+            self.state.command_palette.open();
+            return;
+        }
+
+        // `y` yanks a chat message — Vim/tmux copy-mode convention for the
+        // palette's "Copy message" action. Kept as a plain key so the
+        // composer's Emacs Ctrl+Y (yank/paste) chord stays untouched.
+        if key.code == KeyCode::Char('y') {
+            self.open_message_picker();
+            return;
+        }
+
         let ts = self.state.active_tab_state_mut();
 
         match key.code {
-            // Down / PageDown: scroll down (show later content)
-            KeyCode::Down => {
+            // Down / j: scroll down (show later content)
+            KeyCode::Down | KeyCode::Char('j') => {
                 ts.scroll_offset = ts.scroll_offset.saturating_add(1);
                 ts.auto_scroll = false;
             }
-            // Up: scroll up (show earlier content)
-            KeyCode::Up => {
+            // Up / k: scroll up (show earlier content)
+            KeyCode::Up | KeyCode::Char('k') => {
                 ts.scroll_offset = ts.scroll_offset.saturating_sub(1);
                 ts.auto_scroll = false;
             }
@@ -49,6 +64,17 @@ impl App {
             // Home: jump to top
             KeyCode::Home => {
                 ts.scroll_offset = 0;
+                ts.auto_scroll = false;
+            }
+            // Left / h and Right / l: move by the rendered chat viewport.
+            KeyCode::Left | KeyCode::Char('h') => {
+                let page = usize::from(ts.chat_viewport_height).max(1);
+                ts.scroll_offset = ts.scroll_offset.saturating_sub(page);
+                ts.auto_scroll = false;
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                let page = usize::from(ts.chat_viewport_height).max(1);
+                ts.scroll_offset = ts.scroll_offset.saturating_add(page);
                 ts.auto_scroll = false;
             }
             // PageDown: half-page down

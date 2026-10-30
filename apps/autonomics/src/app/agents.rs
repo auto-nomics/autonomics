@@ -105,100 +105,52 @@ impl App {
         tracing::info!(kind = kind.name(), agent = %target_path, "spawning agent...");
     }
 
-    /// Build the workspace tab list (one entry per running agent). Shared
-    /// by the renderer and the mouse stub hit-test so both agree on the
-    /// tab layout.
-    pub(super) fn workspace_tabs(&self) -> Vec<crate::widgets::agent_workspace::LeafTab> {
-        self.state
-            .sessions
-            .iter()
-            .map(|s| crate::widgets::agent_workspace::LeafTab {
-                name: s.name.clone(),
-                status: s
-                    .context
-                    .as_ref()
-                    .map(|context| context.tab_state.status)
-                    .unwrap_or_default(),
-            })
-            .collect()
-    }
-
-    /// Open the switch-agent picker, refreshing its list from the running
-    /// sessions first.
-    pub(super) fn open_agent_picker(&mut self) {
-        self.refresh_agent_picker();
-        self.state.agent_picker.open();
-    }
-
-    /// Sync the switch-agent picker's list from the running sessions.
-    /// Preserves the picker's query; `set_agents` reselects by name.
-    pub(super) fn refresh_agent_picker(&mut self) {
+    /// Snapshot all running agents for the sidebar's docked switch-agent
+    /// panel, in the panel's display order (shallow paths first).
+    pub(super) fn running_agents_snapshot(&self) -> Vec<crate::widgets::sidebar::RunningAgent> {
         let active_name = self
             .state
             .sessions
             .get(self.state.active_agent_idx)
             .map(|s| s.name.clone());
-        let agents: Vec<crate::widgets::agent_picker::RunningAgent> = self
+        let mut agents: Vec<crate::widgets::sidebar::RunningAgent> = self
             .state
             .sessions
             .iter()
-            .map(|s| crate::widgets::agent_picker::RunningAgent {
-                name: s.name.clone(),
-                agent_id: s.agent_id,
-                status: s
-                    .context
-                    .as_ref()
-                    .map(|context| context.tab_state.status)
-                    .unwrap_or_default(),
-                is_active: active_name.as_deref() == Some(s.name.as_str()),
+            .map(|s| {
+                let model_display = self.agent_model_cache.get(&s.name);
+                crate::widgets::sidebar::RunningAgent {
+                    name: s.name.clone(),
+                    agent_id: s.agent_id,
+                    status: s
+                        .context
+                        .as_ref()
+                        .map(|context| context.tab_state.status)
+                        .unwrap_or_else(|| s.pending_tab_state.status),
+                    is_active: active_name.as_deref() == Some(s.name.as_str()),
+                    model: model_display.map(|display| display.spec.clone()),
+                    effort: model_display.and_then(|display| display.reasoning_effort.clone()),
+                }
             })
             .collect();
-        self.state.agent_picker.set_agents(agents);
+        crate::widgets::sidebar::sort_running_agents(&mut agents);
+        agents
     }
 
-    /// Key handling while the switch-agent picker popup is open.
-    pub(super) fn handle_agent_picker_key(&mut self, key: &KeyEvent) {
-        // Re-sync the list: agents may have been spawned or closed while
-        // the picker was open.
-        self.refresh_agent_picker();
-
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => self.state.agent_picker.close(),
-            KeyCode::Up => self.state.agent_picker.move_up(),
-            KeyCode::Down => self.state.agent_picker.move_down(),
-            KeyCode::Backspace => self.state.agent_picker.pop_char(),
-            KeyCode::Char(c) if !ctrl => self.state.agent_picker.push_char(c),
-            // Close the selected leaf without deleting its persisted history.
-            // This mirrors Ctrl+W outside the picker, but targets the picker's
-            // selection so filtered/non-active agents can be closed directly.
-            KeyCode::Char('w') if ctrl => {
-                let agent_id = self.state.agent_picker.selected_agent_id();
-                if let Some(agent_id) = agent_id {
-                    self.close_agent_leaf_by_id(agent_id);
-                    self.refresh_agent_picker();
-                    if self.state.sessions.is_empty() {
-                        self.state.agent_picker.close();
-                    }
-                }
-            }
-            KeyCode::Enter => {
-                let name = self
-                    .state
-                    .agent_picker
-                    .selected_agent()
-                    .map(|a| a.name.clone());
-                if let Some(name) = name {
-                    self.state.agent_picker.close();
-                    // Look up by name: the stored index may be stale if
-                    // agents were closed while the picker was open.
-                    if let Some(idx) = self.state.sessions.iter().position(|s| s.name == name) {
-                        self.state.active_agent_idx = idx;
-                    }
-                }
-            }
-            _ => {}
-        }
+    /// Switch the active leaf to the agent with this identity. Returns
+    /// `false` when no open leaf matches (the agent was closed).
+    pub(super) fn switch_active_agent(&mut self, agent_id: uuid::Uuid) -> bool {
+        let Some(idx) = self
+            .state
+            .sessions
+            .iter()
+            .position(|s| s.agent_id == agent_id)
+        else {
+            return false;
+        };
+        self.state.active_agent_idx = idx;
+        self.dirty = true;
+        true
     }
 
     /// Query stored agents and open the resume picker.

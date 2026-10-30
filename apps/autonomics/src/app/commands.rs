@@ -153,6 +153,17 @@ impl App {
                     self.state.display_settings.collapse_tool_results,
                 );
             }
+            CommandAction::ToggleChatOnly => {
+                self.state.display_settings.toggle_chat_only();
+                self.persist_display_setting("chat_only", self.state.display_settings.chat_only);
+            }
+            CommandAction::FocusAgentsPanel => {
+                if !self.state.sessions.is_empty() {
+                    self.state
+                        .active_tab_state_mut()
+                        .focus_pane(crate::state::WorkspaceFocus::Agents);
+                }
+            }
             CommandAction::CopyMessage => {
                 self.open_message_picker();
             }

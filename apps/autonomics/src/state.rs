@@ -20,6 +20,40 @@ pub struct ToolTaskInfo {
     pub seq: u64,
     pub name: String,
     pub status: ToolTaskStatus,
+    /// Structured destination for a delegation (`delegate_to` background
+    /// tasks); lets the Tasks pane jump to the delegated child agent.
+    pub target_agent: Option<String>,
+}
+
+/// A pending bulk operation awaiting the shared y/n confirmation popup.
+pub struct BulkConfirm {
+    pub title: String,
+    pub detail: String,
+    pub action: BulkAction,
+}
+
+/// What a confirmed bulk operation does.
+pub enum BulkAction {
+    /// `PUT /model` with `spec` for every listed agent.
+    SetModels { agents: Vec<String>, spec: String },
+    /// Apply the effort override to every listed agent; the pairs carry
+    /// whether the agent's model is thinking (non-thinking agents skip).
+    SetEffort {
+        agents: Vec<(String, bool)>,
+        stop: Option<agentik_types::ReasoningEffort>,
+    },
+}
+
+/// Keyboard focus inside an agent's workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkspaceFocus {
+    #[default]
+    Chat,
+    Plan,
+    Tasks,
+    /// Docked switch-agent panel at the bottom of the sidebar.
+    Agents,
+    Input,
 }
 
 // ── Chat data model ─────────────────────────────────────
@@ -51,6 +85,7 @@ impl PlanState {
     }
 
     /// `(completed, total)` or `None` if the plan is empty.
+    #[allow(dead_code)] // sidebar header no longer renders the N/M badge
     pub fn progress(&self) -> Option<(usize, usize)> {
         let total = self.steps.len();
         if total == 0 {
@@ -130,6 +165,14 @@ pub struct PendingUserMessage {
 
 /// Mutable state for the Agent tab.
 pub struct AgentTabState {
+    /// Keyboard focus inside this workspace (chat / sidebar panes).
+    pub workspace_focus: WorkspaceFocus,
+    /// Docked sidebar state: pane list cursors, agents-panel filter and
+    /// click areas (see `widgets::sidebar`).
+    pub sidebar: crate::widgets::sidebar::SidebarState,
+    /// Rendered chat viewport height from the last frame; drives the
+    /// h/l horizontal scroll step (one viewport per press).
+    pub chat_viewport_height: u16,
     pub messages: Vec<ChatLine>,
     pub tool_tasks: Vec<ToolTaskInfo>,
     pub scroll_offset: usize,
@@ -253,6 +296,9 @@ pub enum CompactResult {
 impl Default for AgentTabState {
     fn default() -> Self {
         Self {
+            workspace_focus: WorkspaceFocus::Chat,
+            sidebar: crate::widgets::sidebar::SidebarState::default(),
+            chat_viewport_height: 0,
             messages: Vec::new(),
             tool_tasks: Vec::new(),
             scroll_offset: 0,
@@ -296,6 +342,37 @@ impl Default for AgentTabState {
 }
 
 impl AgentTabState {
+    /// The pane that currently owns keyboard focus. Input mode always wins
+    /// over the stored pane (the composer takes precedence while typing);
+    /// a stored `Input` with the composer closed reads as Chat.
+    pub fn focused_pane(&self) -> WorkspaceFocus {
+        if self.input_mode == InputMode::Input {
+            WorkspaceFocus::Input
+        } else if self.workspace_focus == WorkspaceFocus::Input {
+            WorkspaceFocus::Chat
+        } else {
+            self.workspace_focus
+        }
+    }
+
+    /// Move keyboard focus to a pane, closing the composer unless the
+    /// target is the composer itself. Entering the docked agents panel
+    /// re-anchors its cursor to the active leaf (dropping the stored id
+    /// makes the resolver fall through to the current agent), so Enter on
+    /// arrival is a no-op confirmation; only the transition resets — while
+    /// the panel keeps focus, the j/k cursor survives repeat chords.
+    pub fn focus_pane(&mut self, focus: WorkspaceFocus) {
+        if focus == WorkspaceFocus::Agents && self.workspace_focus != WorkspaceFocus::Agents {
+            self.sidebar.clear_agent_selection();
+        }
+        self.workspace_focus = focus;
+        self.input_mode = if focus == WorkspaceFocus::Input {
+            InputMode::Input
+        } else {
+            InputMode::Browse
+        };
+    }
+
     /// Returns true when the user can type and send messages.
     /// Sending is allowed in any non-active state — Idle, Error, Cancelled,
     /// and Waiting all behave like "ready for new work". In Waiting the
@@ -314,6 +391,7 @@ impl AgentTabState {
     }
 
     /// Number of messages waiting in the pending queue.
+    #[allow(dead_code)] // used by tests; the live preview reads the texts
     pub fn pending_queue_len(&self) -> usize {
         self.pending_queue.len()
     }
@@ -592,7 +670,11 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.scroll_to_bottom();
             }
         }
-        AgentEvent::ToolCallBackground { seq, name } => {
+        AgentEvent::ToolCallBackground {
+            seq,
+            name,
+            target_agent,
+        } => {
             state.push_line(ChatLine::ToolBackground {
                 seq,
                 name: name.clone(),
@@ -601,6 +683,7 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 seq,
                 name,
                 status: ToolTaskStatus::Running,
+                target_agent,
             });
             if state.auto_scroll {
                 state.scroll_to_bottom();
@@ -836,6 +919,10 @@ pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
     pub collapse_tool_results: bool,
+    /// Chat-only view: drop every non-dialogue transcript line entirely
+    /// (thinking, tool calls/results, retries, compaction notices) instead
+    /// of rendering a collapsed placeholder for it.
+    pub chat_only: bool,
     /// Monotonic counter bumped on every toggle. Used by the render cache
     /// to invalidate all cached lines when display settings change.
     pub version: u64,
@@ -852,6 +939,10 @@ impl DisplaySettings {
     }
     pub fn toggle_tool_results(&mut self) {
         self.collapse_tool_results = !self.collapse_tool_results;
+        self.version = self.version.wrapping_add(1);
+    }
+    pub fn toggle_chat_only(&mut self) {
+        self.chat_only = !self.chat_only;
         self.version = self.version.wrapping_add(1);
     }
 }
@@ -884,17 +975,20 @@ pub struct AppState {
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
     pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
     pub agent_profile_picker: crate::widgets::agent_profile_picker::AgentProfilePickerState,
-    /// Switch-agent picker (Ctrl+T / tab-bar collapse stub): lists all
-    /// running agents and switches the active leaf on Enter.
-    pub agent_picker: crate::widgets::agent_picker::AgentPickerState,
     /// Terminal area of the last rendered frame. Used by mouse handlers for
     /// hit-testing (e.g. the tab-bar collapse stub). Refreshed every render.
     pub last_frame_area: ratatui::layout::Rect,
     pub name_input: crate::widgets::name_input::NameInputState,
-    /// Message picker popup (Ctrl+P → "Copy message"). Lists text-bearing
+    /// Message picker popup ("Copy message"). Lists text-bearing
     /// messages from the active session and lets the user copy one to the
     /// system clipboard.
     pub message_picker: crate::widgets::message_picker::MessagePickerState,
+    /// Agents-panel model quick-picker (m / M).
+    pub agent_model_picker: crate::widgets::agent_model_picker::AgentModelPickerState,
+    /// Agents-panel effort quick-picker (E, bulk).
+    pub agent_effort_picker: crate::widgets::agent_effort_picker::AgentEffortPickerState,
+    /// Pending bulk operation awaiting the shared y/n confirmation popup.
+    pub bulk_confirm: Option<BulkConfirm>,
     /// Transient toast notifications (success / error / info / warning).
     /// Auto-dismiss after a variant-specific timeout.
     pub toasts: crate::widgets::toast::ToastManager,

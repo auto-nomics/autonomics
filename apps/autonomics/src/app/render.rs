@@ -77,6 +77,70 @@ impl App {
             .render(inner, buf);
     }
 
+    /// Render the shared y/n confirmation popup for bulk model/effort
+    /// fan-out (same shape as the delete-agent confirmation).
+    fn render_bulk_confirm_popup(
+        &self,
+        area: ratatui::layout::Rect,
+        buf: &mut ratatui::prelude::Buffer,
+    ) {
+        use ratatui::{
+            layout::{Alignment, Rect},
+            style::{Color, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Clear, Paragraph, Widget},
+        };
+        let Some(confirm) = &self.state.bulk_confirm else {
+            return;
+        };
+
+        let pw = 56u16.min(area.width);
+        let ph = 5u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(pw)) / 2;
+        let y = area.y + (area.height.saturating_sub(ph)) / 3;
+        let popup_area = Rect::new(x, y, pw, ph);
+
+        Clear.render(popup_area, buf);
+
+        let block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .title(Span::styled(
+                format!(" {} ", confirm.title),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ))
+            .border_style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(popup_area);
+        block.render(popup_area, buf);
+
+        let lines = vec![
+            Line::from(Span::styled(
+                format!(" {}", confirm.detail),
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled(" Press ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    "y",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" to apply, ", Style::default().fg(Color::Gray)),
+                Span::styled("n", Style::default().fg(Color::Green)),
+                Span::styled(" or ", Style::default().fg(Color::Gray)),
+                Span::styled("Esc", Style::default().fg(Color::Green)),
+                Span::styled(" to cancel", Style::default().fg(Color::Gray)),
+            ]),
+        ];
+
+        Paragraph::new(lines)
+            .alignment(Alignment::Center)
+            .render(inner, buf);
+    }
+
     pub(super) fn render(&mut self, frame: &mut Frame) {
         // Remember the frame area for mouse hit-testing (tab-bar stub).
         self.state.last_frame_area = frame.area();
@@ -95,7 +159,8 @@ impl App {
             self.refresh_agent_model_info(&name);
         }
         let model_info = active_agent_name
-            .and_then(|name| self.agent_model_cache.get(&name).cloned())
+            .as_deref()
+            .and_then(|name| self.agent_model_cache.get(name).cloned())
             .or_else(|| self.state.active_model_display.clone());
         let (model_name, context_window, reasoning_effort) = match model_info {
             Some(display) => (
@@ -106,10 +171,9 @@ impl App {
             None => (None, None, None),
         };
 
-        // Collect tab data before mutably borrowing tab state.
-        let workspace_tabs = self.workspace_tabs();
-        let active_idx = self.state.active_agent_idx;
-
+        // Snapshot the running agents for the docked panel (owned data, so
+        // the mutable tab-state borrow below stays clean).
+        let running_agents = self.running_agents_snapshot();
         let display = self.state.display_settings.clone();
         let kms_running = self
             .state
@@ -120,17 +184,17 @@ impl App {
         let kms_activity = (!self.state.kms_workers.is_empty())
             .then(|| format!("{kms_running}/{} running", self.state.kms_workers.len()));
         let workspace = AgentWorkspace {
+            agent_name: active_agent_name.as_deref(),
             active_model: model_name.as_deref(),
             context_window,
             reasoning_effort: reasoning_effort.as_deref(),
             kms_activity: kms_activity.as_deref(),
             display: &display,
+            agents: &running_agents,
         };
         workspace.render(
             frame.area(),
             frame.buffer_mut(),
-            &workspace_tabs,
-            active_idx,
             self.state.active_tab_state_mut(),
         );
 
@@ -184,16 +248,28 @@ impl App {
                 );
         }
 
-        // ── Switch-agent picker popup ──
-        if self.state.agent_picker.visible {
-            use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::agent_picker::AgentPicker::new()
-                .popup_width(50)
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.agent_picker,
-                );
+        // ── Agents-panel model / effort quick-pickers ──
+        if self.state.agent_model_picker.is_visible() {
+            crate::widgets::agent_model_picker::render_agent_model_picker(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.agent_model_picker,
+            );
+            if let Some((cx, cy)) = self.state.agent_model_picker.cursor_pos {
+                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+            }
+        }
+        if self.state.agent_effort_picker.visible {
+            crate::widgets::agent_effort_picker::render_agent_effort_picker(
+                frame.area(),
+                frame.buffer_mut(),
+                &mut self.state.agent_effort_picker,
+            );
+        }
+
+        // ── Bulk apply confirmation popup (y / n) ──
+        if self.state.bulk_confirm.is_some() {
+            self.render_bulk_confirm_popup(frame.area(), frame.buffer_mut());
         }
 
         // ── Message picker popup (top-most overlay) ──

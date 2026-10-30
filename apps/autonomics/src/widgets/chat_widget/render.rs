@@ -277,6 +277,23 @@ pub(crate) fn render_line_with_settings(
     area: Rect,
     display: &DisplaySettings,
 ) -> Vec<Line<'static>> {
+    // Chat-only view drops non-dialogue machinery lines entirely — no
+    // collapsed placeholder, no table cells. Turn-level signals the user
+    // still needs (errors, cancellation, separators) stay, as do the
+    // dialogue turns.
+    if display.chat_only
+        && matches!(
+            msg,
+            ChatLine::Thinking(_)
+                | ChatLine::ToolCall { .. }
+                | ChatLine::ToolBackground { .. }
+                | ChatLine::ToolResult { .. }
+                | ChatLine::RetryableError { .. }
+                | ChatLine::Compact(_)
+        )
+    {
+        return Vec::new();
+    }
     match msg {
         ChatLine::Thinking(text) if display.collapse_thinking => {
             let n = text.lines().count();

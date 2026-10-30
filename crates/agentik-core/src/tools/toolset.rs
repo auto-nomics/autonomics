@@ -530,6 +530,12 @@ impl Toolset {
                 let _ = tx.send(AgentEvent::ToolCallBackground {
                     seq: *seq,
                     name: name.clone(),
+                    target_agent: toolcalls
+                        .iter()
+                        .find(|tc| tc.id == *id && tc.name == "delegate_to")
+                        .and_then(|tc| tc.input.get("agent_name"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
                 });
             }
             results.push(ToolResult::from_pending_task(id, *seq));

@@ -374,7 +374,7 @@ impl TranslationState {
                 format!("plan updated (revision {revision})"),
             )],
 
-            AgentEvent::ToolCallBackground { seq, name } => vec![notice(
+            AgentEvent::ToolCallBackground { seq, name, .. } => vec![notice(
                 NoticeKind::BackgroundTool,
                 format!("tool {name} moved to background (#{seq})"),
             )],

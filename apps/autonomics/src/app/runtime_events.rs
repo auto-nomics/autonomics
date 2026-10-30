@@ -379,6 +379,10 @@ impl App {
                 }
             },
 
+            crate::app_event::AppEvent::EffortApplied { agent, label, .. } => {
+                tracing::info!(agent = %agent, effort = %label, "effort override applied");
+            }
+
             crate::app_event::AppEvent::ModelCatalogLoaded(catalog) => {
                 Self::load_model_config(&catalog, &mut self.state.model_config_state);
 

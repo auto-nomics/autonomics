@@ -95,7 +95,13 @@ pub enum AgentEvent {
 
     /// Sync phase expired — tool is now running in the background.
     /// `seq` is the short task number (1-based), `name` is the tool name.
-    ToolCallBackground { seq: u64, name: String },
+    ToolCallBackground {
+        seq: u64,
+        name: String,
+        /// Structured destination for a delegation; older events omit this.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_agent: Option<String>,
+    },
 
     /// A background tool task completed with its real result.
     ToolBackgroundComplete { seq: u64, ok: bool },

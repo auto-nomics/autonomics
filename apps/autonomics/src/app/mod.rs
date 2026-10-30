@@ -41,6 +41,7 @@ mod render;
 mod runtime_events;
 mod skill_evolution;
 mod terminal;
+mod workspace;
 
 pub struct App {
     state: AppState,
@@ -152,6 +153,7 @@ impl App {
         state.display_settings.collapse_tool_calls = snapshot.display_settings.collapse_tool_calls;
         state.display_settings.collapse_tool_results =
             snapshot.display_settings.collapse_tool_results;
+        state.display_settings.chat_only = snapshot.display_settings.chat_only;
 
         // Model catalog for the config widget.
         Self::load_model_config(&snapshot.model_catalog, &mut state.model_config_state);

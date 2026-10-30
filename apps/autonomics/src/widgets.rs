@@ -1,6 +1,8 @@
 pub mod agent_config_widget;
+pub mod agent_effort_picker;
+pub mod agent_filter;
 pub mod agent_leaf;
-pub mod agent_picker;
+pub mod agent_model_picker;
 pub mod agent_profile_picker;
 pub mod agent_workspace;
 pub mod bibliography;

@@ -337,6 +337,8 @@ pub struct DisplaySettings {
     pub collapse_thinking: bool,
     pub collapse_tool_calls: bool,
     pub collapse_tool_results: bool,
+    /// Chat-only transcript view: non-dialogue lines dropped entirely.
+    pub chat_only: bool,
 }
 
 impl From<DisplaySettingsData> for DisplaySettings {
@@ -345,6 +347,7 @@ impl From<DisplaySettingsData> for DisplaySettings {
             collapse_thinking: data.collapse_thinking,
             collapse_tool_calls: data.collapse_tool_calls,
             collapse_tool_results: data.collapse_tool_results,
+            chat_only: data.chat_only,
         }
     }
 }

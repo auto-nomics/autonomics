@@ -3,15 +3,16 @@ use ratatui::{
     prelude::{Buffer, StatefulWidget, Widget},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, StatefulWidgetRef},
+    widgets::StatefulWidgetRef,
+    widgets::{Block, Padding, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr};
 
-use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
+use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode, WorkspaceFocus};
 use crate::widgets::{
     chat_widget::{ChatWidget, ChatWidgetState, visual_row_count},
     input_area::{InputWidget, InputWidgetState, PROMPT_GUTTER},
-    sidebar::{SideBar, SidebarData},
+    sidebar::{RunningAgent, SideBar, SidebarData},
     status_bar::StatusBar,
 };
 
@@ -71,24 +72,36 @@ fn collect_visible_lines(
 /// Layout:
 /// ```text
 /// ┌──────────────────────────────────────────────────┐
-/// │ StatusBar (full width, 1 row)                    │
-/// ├──────────────────────────────┬───────────────────┤
 /// │ Chat area                    │ Sidebar           │
 /// │ (scrollable transcript)      │ - Task Plan       │
-/// │                              │ - Sessions        │
-/// │                              │ - Background Tasks│
+/// │                              │ - Tasks           │
+/// │                              │ - Agents panel    │
 /// ├──────────────────────────────┴───────────────────┤
-/// │ Input (full width, dynamic height)               │
-/// │ Footer hints (full width, 1 row)                 │
+/// │ Pending input / compaction preview (conditional) │
+/// │ ❯ ○ name │ i: … o: …           glm-5.3 ⋅ high   │
+/// │   ↑ composer row; shows the status line while    │
+/// │     the input buffer is empty                    │
+/// │ History-search status (0 rows unless searching)  │
 /// └──────────────────────────────────────────────────┘
 /// ```
+///
+/// No dedicated status row: the StatusBar renders inside the composer row
+/// while the input buffer is empty, so the transcript gets the row a top
+/// bar would otherwise spend. The footer row exists only to surface live
+/// history-search state; keybinding hints are not worth a row of chat
+/// space, so it collapses to zero unless a search is in flight.
 pub struct AgentLeaf<'a> {
+    /// Full path of the active agent (drives the status line's name).
+    pub agent_name: Option<&'a str>,
     pub active_model: Option<&'a str>,
+    /// Context window size of the active model (tokens), when known.
     pub context_window: Option<u64>,
     /// The reasoning effort the active agent's next request would send.
     pub reasoning_effort: Option<&'a str>,
     pub kms_activity: Option<&'a str>,
     pub display: &'a DisplaySettings,
+    /// All running agents for the sidebar's docked switch-agent panel.
+    pub agents: &'a [RunningAgent],
 }
 
 impl StatefulWidgetRef for AgentLeaf<'_> {
@@ -97,18 +110,16 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer, ts: &mut AgentTabState) {
         let running = ts.status.is_active() || ts.status == AgentStatus::Waiting;
 
-        // Dynamic input height: the boxed composer grows with content
-        // (word-wrapped), capped at MAX_INPUT_ROWS text rows. The widget draws
-        // a rounded border box, so reserve +2 rows (top/bottom) and subtract
-        // the border columns (+ gutter) from the wrap width.
-        // area.width − 2 (box borders) − 2 (❯ prefix gutter).
-        let text_width = area.width.saturating_sub(PROMPT_GUTTER + 2);
+        // Grow the borderless composer with wrapped text, up to
+        // MAX_INPUT_ROWS. While the agent runs with an empty buffer the
+        // composer stays one row tall — the status line shares it.
+        let text_width = area.width.saturating_sub(PROMPT_GUTTER);
         let input_text_rows = if running && ts.input.is_empty() {
             1
         } else {
             ts.input.display_height(text_width)
         };
-        let input_constraint = Constraint::Length(input_text_rows + 2);
+        let input_constraint = Constraint::Length(input_text_rows);
         let pending_texts = ts.pending_queue_preview_texts();
         let pending_constraint = Constraint::Length(pending_queue_height(
             pending_texts.len(),
@@ -117,39 +128,35 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         ));
         let compact_constraint =
             Constraint::Length(compact_preview_height(&ts.compact_state, area.height));
+        // The footer row exists only to surface live history-search state.
+        let footer_constraint = Constraint::Length(u16::from(ts.in_history_search));
 
         // ── Top-level vertical split ──
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // StatusBar (full width)
-                Constraint::Min(3),    // Middle: Chat + Sidebar (horizontal split)
-                pending_constraint,    // Runtime-bound input awaiting commit
-                compact_constraint,    // Live compaction preview
-                input_constraint,      // Input (full width)
-                Constraint::Length(1), // Footer hints
+                Constraint::Min(3), // Middle: Chat + Sidebar (horizontal split)
+                pending_constraint, // Runtime-bound input awaiting commit
+                compact_constraint, // Live compaction preview
+                input_constraint,   // Input (full width; doubles as StatusBar)
+                footer_constraint,  // History-search status (0 rows otherwise)
             ])
             .split(area);
 
-        // ── StatusBar ──
-        let status_bar = StatusBar {
-            status: &ts.status,
-            input_tokens: ts.latest_turn_input_tokens,
-            output_tokens: ts.latest_turn_output_tokens,
-            cache_read_tokens: ts.latest_turn_cache_read_tokens,
-            cache_creation_tokens: ts.latest_turn_cache_creation_tokens,
-            context_used: ts.latest_turn_context_used,
-            context_window: self.context_window,
-            model_name: self.active_model,
-            reasoning_effort: self.reasoning_effort,
-            compact: Some(&ts.compact_state),
-            kms_activity: self.kms_activity,
-            frame: ts.frame,
-        };
-        status_bar.render(layout[0], buf);
-
         // ── Middle: Chat + Sidebar horizontal split ──
-        let middle = layout[1];
+        let middle = layout[0];
+
+        // A focused pane whose content vanished (plan finished, tasks
+        // drained, agents closed) cannot keep focus: fall back to Chat.
+        if match ts.focused_pane() {
+            WorkspaceFocus::Plan => ts.plan.is_empty(),
+            WorkspaceFocus::Tasks => ts.tool_tasks.is_empty(),
+            WorkspaceFocus::Agents => self.agents.is_empty(),
+            _ => false,
+        } {
+            ts.focus_pane(WorkspaceFocus::Chat);
+        }
+        let focus = ts.focused_pane();
 
         // Decide whether to show the sidebar based on available width.
         let sidebar_width = (middle.width * SIDEBAR_PERCENT / 100).max(SIDEBAR_MIN_WIDTH);
@@ -174,6 +181,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
 
         let viewport_height = chat_inner_area.height;
         let width = chat_inner_area.width;
+        // Remember the viewport height for the h/l horizontal scroll step.
+        ts.chat_viewport_height = viewport_height;
 
         // ── Incremental per-message render cache ──
         let n = ts.messages.len();
@@ -241,100 +250,71 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 data: SidebarData {
                     plan: &ts.plan,
                     tool_tasks: &ts.tool_tasks,
+                    agents: self.agents,
                 },
+                focus,
             };
-            sidebar.render(sb_area, buf);
+            StatefulWidget::render(sidebar, sb_area, buf, &mut ts.sidebar);
         }
 
         // Runtime-bound prompts stay out of the transcript until the Session
         // commits them; show a compact preview immediately above the composer.
         if !pending_texts.is_empty() {
-            render_pending_queue(layout[2], buf, &pending_texts);
+            render_pending_queue(layout[1], buf, &pending_texts);
         }
 
         // ── Live compaction preview (summary tail while compacting) ──
         if ts.compact_state.is_compacting {
-            render_compact_preview(layout[3], buf, &ts.compact_state);
+            render_compact_preview(layout[2], buf, &ts.compact_state);
         }
 
-        // ── Input area (boxed composer, ❯ prompt) ──
-        let queued = ts.pending_queue_len();
-        let placeholder: &str = if running {
-            match ts.input_mode {
-                InputMode::Input => "Type to queue a message… (Ctrl+P → Cancel agent to cancel)",
-                InputMode::Browse => {
-                    if queued > 0 {
-                        "Agent running — pending input waits for next request…"
-                    } else {
-                        "Agent running… (Ctrl+P → Cancel agent to cancel)"
-                    }
-                }
-            }
-        } else {
-            match ts.input_mode {
-                InputMode::Browse => "Type a message, or press Enter to edit…",
-                InputMode::Input => "Type a message…",
-            }
-        };
-        let spinner = if running {
-            BRAILLE_SPINNER[(ts.frame / 4) as usize % BRAILLE_SPINNER.len()]
-        } else {
-            ""
-        };
-        let title: String = if running {
-            let base = if ts.cancel_pending {
-                "⏹ cancelling…".to_string()
-            } else {
-                match ts.status {
-                    AgentStatus::Requesting => format!("{spinner} thinking…"),
-                    AgentStatus::Streaming => format!("{spinner} responding…"),
-                    AgentStatus::Retrying => format!("{spinner} retrying…"),
-                    AgentStatus::Compacting => format!("{spinner} compacting…"),
-                    AgentStatus::Waiting => format!("{spinner} waiting…"),
-                    AgentStatus::Error => "error".to_string(),
-                    AgentStatus::Cancelled => "cancelled".to_string(),
-                    _ => format!("{spinner} running…"),
-                }
-            };
-            if queued > 0 {
-                format!("{base} ({queued} pending)")
-            } else {
-                base
-            }
-        } else {
-            match ts.input_mode {
-                InputMode::Browse => "browse".to_string(),
-                InputMode::Input => "compose".to_string(),
-            }
-        };
-
+        // ── Input area (borderless composer, blinking ❯ prompt) ──
         // The composer is interactive even while the agent is running:
         // the user can type and enqueue messages. Only hide the caret
         // when not in Input mode.
         let input_widget = InputWidget {
-            disabled: running,
+            running,
+            frame: ts.frame,
             editable: ts.input_mode == InputMode::Input,
-            title: &title,
-            placeholder,
         };
         let mut input_state = InputWidgetState {
             input: &mut ts.input,
         };
-        input_widget.render(layout[4], buf, &mut input_state);
+        input_widget.render(layout[3], buf, &mut input_state);
 
-        // ── Animated loading bar on the input box bottom border ──
-        if running {
-            render_loading_bar(layout[4], buf, ts.frame);
+        // ── StatusBar (inside the composer row while the buffer is empty) ──
+        // Replaces the keybinding-hint placeholder: expert users get live
+        // status on the row they already watch, and the first keystroke
+        // pushes it out for the draft.
+        if ts.input.is_empty() && layout[3].width > PROMPT_GUTTER {
+            let status_area = Rect {
+                x: layout[3].x + PROMPT_GUTTER,
+                width: layout[3].width - PROMPT_GUTTER,
+                y: layout[3].y,
+                height: 1,
+            };
+            StatusBar {
+                kms_activity: self.kms_activity,
+                agent_name: self.agent_name,
+                status: &ts.status,
+                input_tokens: ts.latest_turn_input_tokens,
+                output_tokens: ts.latest_turn_output_tokens,
+                cache_read_tokens: ts.latest_turn_cache_read_tokens,
+                cache_creation_tokens: ts.latest_turn_cache_creation_tokens,
+                context_used: ts.latest_turn_context_used,
+                context_window: self.context_window,
+                model_name: self.active_model,
+                reasoning_effort: self.reasoning_effort,
+                compact: Some(&ts.compact_state),
+                frame: ts.frame,
+            }
+            .render(status_area, buf);
         }
 
-        // ── Footer hint line ──
-        render_footer_hint(
-            layout[5],
+        // ── History-search status line (0 rows unless searching) ──
+        render_search_status(
+            layout[4],
             buf,
-            ts.input_mode,
-            running,
-            queued,
-            ts.in_history_search,
             &ts.history_search_query,
             ts.history_search_selected,
             ts.history_search_matches.len(),
@@ -342,11 +322,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
     }
 }
 
-/// Braille spinner frames for the loading indicator.
-const BRAILLE_SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Rows of the live compaction preview: header + up to 3 summary tail
-/// lines. Zero (collapsed) unless a pass is in flight.
+/// Live view of an in-flight compaction: pass header (trigger + scale) and
+/// the tail of the summary being generated.
 fn compact_preview_height(compact: &crate::state::CompactState, total_height: u16) -> u16 {
     if !compact.is_compacting || total_height < 10 {
         return 0;
@@ -363,8 +340,6 @@ fn compact_preview_height(compact: &crate::state::CompactState, total_height: u1
 /// Rows of summary text shown in the preview block.
 const COMPACT_PREVIEW_LINES: usize = 3;
 
-/// Live view of an in-flight compaction: pass header (trigger + scale) and
-/// the tail of the summary being generated.
 fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::CompactState) {
     use agentik_types::{CompactPhase, CompactTrigger};
 
@@ -498,92 +473,22 @@ fn preview_line(message: &str, width: u16) -> String {
     format!("{prefix}{truncated}…")
 }
 
-/// Draw an animated loading bar on the bottom border of the input box.
-fn render_loading_bar(area: Rect, buf: &mut Buffer, frame: u64) {
-    let y = area.y + area.height - 1;
-    let start = area.x + 1;
-    let end = area.x + area.width.saturating_sub(1);
-    let width = end.saturating_sub(start) as usize;
-    if width < 4 {
+/// History-search status row: query + match position while a search is in
+/// flight; nothing otherwise.
+fn render_search_status(area: Rect, buf: &mut Buffer, query: &str, selected: usize, total: usize) {
+    if area.width == 0 || area.height == 0 {
         return;
     }
-
-    let bar_len = (width / 4).clamp(3, 12);
-    let pos = ((frame / 2) as usize) % (width + bar_len);
-
-    let bar_style = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
-
-    for i in 0..width {
-        let in_bar = if pos < bar_len {
-            i < pos || i >= width + pos - bar_len
-        } else if pos > width {
-            i < pos - width
-        } else {
-            i >= pos - bar_len && i < pos
-        };
-        if in_bar {
-            buf.set_string(start + i as u16, y, "━", bar_style);
-        }
-    }
-}
-
-/// Draw the 1-row keybinding hint at the bottom of the agent tab.
-#[allow(clippy::too_many_arguments)]
-fn render_footer_hint(
-    area: Rect,
-    buf: &mut Buffer,
-    mode: InputMode,
-    running: bool,
-    queued: usize,
-    searching: bool,
-    query: &str,
-    selected: usize,
-    total: usize,
-) {
-    if area.width == 0 {
-        return;
-    }
-    let hint = if searching {
-        if total == 0 {
-            format!(" search: {query}  (no match)  Esc cancel ")
-        } else {
-            format!(
-                " search: {query}  ({}/{total})  ↑↓ navigate  Enter select  Esc cancel ",
-                selected + 1
-            )
-        }
-    } else if running {
-        match mode {
-            InputMode::Input => {
-                " Enter queue  Shift+Enter newline  Esc exit  Ctrl+P cancel agent ".to_string()
-            }
-            InputMode::Browse => {
-                if queued > 0 {
-                    format!(" {queued} pending  Enter compose  Ctrl+P cancel agent ")
-                } else {
-                    " Enter compose  Ctrl+P cancel agent  Ctrl+R history ".to_string()
-                }
-            }
-        }
+    let text = if total == 0 {
+        format!(" search: {query}  (no match)  Esc cancel ")
     } else {
-        match mode {
-            InputMode::Browse => {
-                " Enter edit  ↑↓ scroll  PageUp/PageDown  Home/End  Ctrl+G follow  Ctrl+P quit "
-                    .to_string()
-            }
-            InputMode::Input => {
-                " Insert  Esc exit  Enter send  Shift+Enter newline  Ctrl+R history  Ctrl+G follow "
-                    .to_string()
-            }
-        }
+        format!(
+            " search: {query}  ({}/{total})  ↑↓ navigate  Enter select  Esc cancel ",
+            selected + 1
+        )
     };
-    let style = Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::DIM);
-    Paragraph::new(hint)
-        .style(style)
+    Paragraph::new(text)
+        .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Right)
         .render(area, buf);
 }

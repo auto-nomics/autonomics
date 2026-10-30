@@ -38,6 +38,8 @@ pub(crate) enum AppEvent {
         session_id: uuid::Uuid,
         plan: agentik_types::AgentPlan,
     },
+    /// An effort override finished applying (async cycle path).
+    EffortApplied { agent: String, label: String },
     /// A fresh model catalogue snapshot arrived from the daemon (hydration,
     /// `ReloadCatalog`, or after a provider/catalog change). The handler
     /// rebuilds the config widget's catalog state.
