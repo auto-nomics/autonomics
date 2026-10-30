@@ -5,13 +5,24 @@ use std::sync::Arc;
 
 use wiki::service::start;
 use wiki::storage::turso_wiki_storage::TursoWikiStorage;
-use wiki::storage::types::{KnowledgeEntryData, WikiEntryStorage, WikiSearchStorage};
+use wiki::storage::types::{KnowledgeEntryData, SearchFilter, WikiEntryStorage, WikiSearchStorage};
 
 fn entry(id: uuid::Uuid, title: &str, alias: &[&str], content: &str) -> KnowledgeEntryData {
+    entry_with(id, title, alias, &[], content)
+}
+
+fn entry_with(
+    id: uuid::Uuid,
+    title: &str,
+    alias: &[&str],
+    tags: &[&str],
+    content: &str,
+) -> KnowledgeEntryData {
     KnowledgeEntryData {
         id: id.to_string(),
         title: title.to_string(),
         alias: alias.iter().map(|s| s.to_string()).collect(),
+        tags: tags.iter().map(|s| s.to_string()).collect(),
         content: content.to_string(),
         ctime: 1_000,
         mtime: 1_000,
@@ -186,6 +197,113 @@ async fn alias_is_searchable() {
     let hits = s.search("gwas", 10).await.unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].entry_id, id.to_string());
+}
+
+#[tokio::test]
+async fn tag_filter_and_mtime_window() {
+    let s = storage().await;
+    let genetics = uuid::Uuid::new_v4();
+    let ml = uuid::Uuid::new_v4();
+    let plain = uuid::Uuid::new_v4();
+    s.create_entry(entry_with(
+        genetics,
+        "Genetics",
+        &[],
+        &["genetics", "gwas"],
+        "cohort study data",
+    ))
+    .await
+    .unwrap();
+    let mut e_ml = entry_with(ml, "ML", &[], &["ml"], "cohort study data");
+    e_ml.mtime = 2_000; // 其余词条 mtime = 1_000
+    s.create_entry(e_ml).await.unwrap();
+    s.create_entry(entry(plain, "Plain", &[], "cohort study data"))
+        .await
+        .unwrap();
+
+    let ids = |hits: Vec<wiki::storage::types::SearchHit>| {
+        hits.iter().map(|h| h.entry_id.clone()).collect::<Vec<_>>()
+    };
+
+    // 单标签过滤。
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                tags: vec!["genetics".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(hits), vec![genetics.to_string()]);
+
+    // 标签 AND:两个都有才命中;含不存在标签则空。
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                tags: vec!["genetics".to_string(), "gwas".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(hits), vec![genetics.to_string()]);
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                tags: vec!["genetics".to_string(), "missing".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(hits.is_empty());
+
+    // mtime 时间窗。
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                mtime_since: Some(1_500),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(hits), vec![ml.to_string()]);
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                mtime_until: Some(1_500),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(hits).len(), 2, "genetics 与 plain 均在窗内");
+
+    // 标签 trim:空白容错。
+    let hits = s
+        .search_with_filter(
+            "cohort",
+            10,
+            &SearchFilter {
+                tags: vec!["  ml  ".to_string()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(hits), vec![ml.to_string()]);
 }
 
 #[tokio::test]

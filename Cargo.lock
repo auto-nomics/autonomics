@@ -15979,10 +15979,16 @@ checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
 name = "wiki"
 version = "0.1.0"
 dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "agentik-types",
+ "apply-patch",
  "async-trait",
  "chrono",
  "jieba-rs",
  "pulldown-cmark",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "tempfile",

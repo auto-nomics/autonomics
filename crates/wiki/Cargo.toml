@@ -18,6 +18,14 @@ turso.workspace = true
 # 中文分词,词典版本随 Cargo 锁定(bib-base 同款钉版策略)。
 jieba-rs = "=0.11.0"
 pulldown-cmark.workspace = true
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+# 宏生成物引用 ::agentik_sdk 绝对路径(kms-tools 同款)。
+agentik-sdk = { path = "../agentik-sdk" }
+agentik-types = { path = "../agentik-types" }
+# patch 编辑引擎(纯计算,与 vfs 的 edit/patch 工具共用同一实现)。
+apply-patch = { path = "../apply-patch" }
+schemars.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

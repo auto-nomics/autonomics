@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use wiki::service::start;
 use wiki::storage::error::Result;
 use wiki::storage::types::{
-    KnowledgeEntryData, SearchHit, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
-    WikiStorage,
+    EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
+    WikiEntryStorage, WikiIndexStorage, WikiSearchStorage, WikiStorage,
 };
 
 /// 只实现两个基础 trait，不显式写 `impl WikiStorage for _`。
@@ -40,6 +40,11 @@ impl WikiEntryStorage for FakeStorage {
         entries.first().cloned().ok_or_else(|| "empty".into())
     }
 
+    async fn find_by_title(&self, title: &str) -> Result<Option<KnowledgeEntryData>> {
+        let entries = self.entries.lock().unwrap();
+        Ok(entries.iter().find(|e| e.title == title).cloned())
+    }
+
     async fn get_entry_batch(&self, _ids: Vec<uuid::Uuid>) -> Result<Vec<KnowledgeEntryData>> {
         let entries = self.entries.lock().unwrap();
         Ok(entries.clone())
@@ -52,6 +57,27 @@ impl WikiEntryStorage for FakeStorage {
     async fn update_entry_batch(&self, _entries: &[KnowledgeEntryData]) -> Result<()> {
         Ok(())
     }
+
+    async fn restore_entry(&self, _id: uuid::Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    async fn purge_entry(&self, _id: uuid::Uuid) -> Result<()> {
+        Ok(())
+    }
+
+    async fn list_deleted(&self) -> Result<Vec<RecycleItem>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_versions(&self, _id: uuid::Uuid) -> Result<Vec<EntryVersionSummary>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_version(&self, _id: uuid::Uuid, _version: i64) -> Result<KnowledgeEntryData> {
+        let entries = self.entries.lock().unwrap();
+        entries.first().cloned().ok_or_else(|| "empty".into())
+    }
 }
 
 #[async_trait]
@@ -63,13 +89,22 @@ impl WikiIndexStorage for FakeStorage {
     async fn get_out_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
         Ok(ids.iter().map(|_| vec!["out".to_string()]).collect())
     }
+
+    async fn get_mentions(&self, _id: &str) -> Result<Vec<String>> {
+        Ok(vec!["mention".to_string()])
+    }
 }
 
 #[async_trait]
 impl WikiSearchStorage for FakeStorage {
     /// 朴素标题子串匹配:只验证 trait 组合与 worker 链路,真实 BM25
     /// 打分在 TursoWikiStorage(见 tests/search.rs)。
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    async fn search_with_filter(
+        &self,
+        query: &str,
+        limit: usize,
+        _filter: &SearchFilter,
+    ) -> Result<Vec<SearchHit>> {
         Ok(self
             .entries
             .lock()
@@ -90,6 +125,7 @@ fn sample_entry() -> KnowledgeEntryData {
         id: "e1".to_string(),
         title: "title".to_string(),
         alias: vec![],
+        tags: vec![],
         content: "body".to_string(),
         ctime: 0,
         mtime: 0,

@@ -10,6 +10,7 @@ fn entry(id: uuid::Uuid, title: &str) -> KnowledgeEntryData {
         id: id.to_string(),
         title: title.to_string(),
         alias: vec![format!("alias-of-{title}")],
+        tags: vec![],
         content: format!("# {title}\n\nbody"),
         ctime: 1_000,
         mtime: 1_000,

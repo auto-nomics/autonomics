@@ -6,13 +6,18 @@
 //! 语句写路径用显式 BEGIN/COMMIT 包裹,失败 ROLLBACK。行解析手写 ——
 //! turso 不提供 `FromRow` 派生(与 kms 相同的取舍)。
 //!
-//! 链接索引落在 `entry_links` 有向边表上:出边的写入入口是
-//! [`TursoWikiStorage::replace_out_links`],`wiki::markdown` 的链接提取
-//! 落地后,服务层在写条目后调它重建该条目的出边。
+//! 写路径单事务维护四套衍生数据,与词条行保持原子:
+//! - 全文倒排:`search_postings`/`search_docs`(turso 无 FTS,同
+//!   bib-base 自建);
+//! - 别名/标签索引:`aliases`/`tags`(别名可作 wiki 链接目标与提及
+//!   来源,标签供检索过滤);
+//! - 出边:`entry_links`,由 content 中的 wiki 链接(`[[...]]`)经标题/
+//!   别名解析生成(见 [`crate::markdown`]);悬空目标不入库,自指边跳过;
+//! - 版本快照:`entry_versions`,每次写全量快照(writing-base 同款)。
 //!
-//! 全文检索(turso 无 FTS,同 bib-base 自建倒排):`search_postings` 存
-//! (term, entry, tf),`search_docs` 存文档 token 长度;写路径与条目
-//! 同事务维护,查询侧拉取候选 postings 在 Rust 里按 BM25 打分。
+//! 软删除:回收站词条(`deleted_at` 非空)从读取/检索/邻接中隐去,但
+//! 继续占用标题;索引行原样保留,`restore_entry` 即恢复。`purge_entry`
+//! 才真正删除(含全部衍生行)并释放标题。
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -25,8 +30,10 @@ use turso::{Connection, Value};
 
 use super::error::{Error, Result};
 use super::types::{
-    KnowledgeEntryData, SearchHit, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
+    EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
+    WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
 };
+use crate::markdown::{LinkKind, Parser};
 use crate::search::{bm25_term, idf, tokenize};
 
 /// `IN (...)` 查询单块的参数上限(SQLite 系绑定变量上限 999;80 与
@@ -35,12 +42,13 @@ const IN_CHUNK: usize = 80;
 
 const SCHEMA_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS entries (
-    id      TEXT PRIMARY KEY NOT NULL,
-    title   TEXT NOT NULL,
-    alias   TEXT NOT NULL DEFAULT '[]',
-    content TEXT NOT NULL,
-    ctime   INTEGER NOT NULL,
-    mtime   INTEGER NOT NULL,
+    id         TEXT PRIMARY KEY NOT NULL,
+    title      TEXT NOT NULL,
+    alias      TEXT NOT NULL DEFAULT '[]',
+    content    TEXT NOT NULL,
+    ctime      INTEGER NOT NULL,
+    mtime      INTEGER NOT NULL,
+    deleted_at INTEGER,
     UNIQUE(title)
 );
 
@@ -54,17 +62,40 @@ CREATE INDEX IF NOT EXISTS idx_entry_links_to ON entry_links(to_id);
 
 CREATE TABLE IF NOT EXISTS search_docs (
     entry_id TEXT PRIMARY KEY NOT NULL,
-    length INTEGER NOT NULL
+    length   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS search_postings (
-    term TEXT NOT NULL,
+    term     TEXT NOT NULL,
     entry_id TEXT NOT NULL,
-    tf INTEGER NOT NULL,
+    tf       INTEGER NOT NULL,
     PRIMARY KEY (term, entry_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_search_postings_entry ON search_postings(entry_id);
+
+CREATE TABLE IF NOT EXISTS aliases (
+    alias    TEXT PRIMARY KEY NOT NULL,
+    entry_id TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_aliases_entry ON aliases(entry_id);
+
+CREATE TABLE IF NOT EXISTS tags (
+    tag      TEXT NOT NULL,
+    entry_id TEXT NOT NULL,
+    PRIMARY KEY (tag, entry_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tags_entry ON tags(entry_id);
+
+CREATE TABLE IF NOT EXISTS entry_versions (
+    entry_id   TEXT NOT NULL,
+    version    INTEGER NOT NULL,
+    snapshot   TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (entry_id, version)
+);
 ";
 
 /// Turso 存储后端。
@@ -114,44 +145,36 @@ impl TursoWikiStorage {
             builder = builder.experimental_multiprocess_wal(true);
         }
         let db = builder.build().await?;
+        // schema 初始化在一次性连接上跑:初始化里的 pragma 探测是读语
+        // 句,而 turso 连接自第一条读语句起钉住 MVCC 快照(REPEATABLE
+        // READ)——在长驻连接上探测会把快照钉在打开时刻,让本实例永远
+        // 看不到其他实例的后续提交。临时连接跑完即弃,不影响后续读。
+        {
+            let init_conn = db.connect()?;
+            if path != ":memory:" {
+                init_conn.pragma_update("busy_timeout", 5000).await?;
+            }
+            init_schema_on(&init_conn).await?;
+        }
         let conn = db.connect()?;
         if path != ":memory:" {
             conn.pragma_update("busy_timeout", 5000).await?;
         }
-        let storage = Self {
+        Ok(Self {
             conn: Mutex::new(conn),
-        };
-        storage.init_schema().await?;
-        Ok(storage)
+        })
     }
 
-    async fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute_batch(SCHEMA_SQL).await?;
-        Ok(())
-    }
-
-    /// 覆盖式重写 `from` 的全部出边。
+    /// 覆盖式重写 `from` 的全部出边(目标为词条 id)。
     ///
-    /// `wiki::markdown` 链接提取落地后,这是服务层重建出边索引的写入
-    /// 点;当前也可直接用于测试与工具。单事务:旧边删净、新边
-    /// `INSERT OR IGNORE` 入库,重复目标自动去重。
+    /// 写路径正常情况下由 content 的 wiki 链接自动维护(见
+    /// [`TursoWikiStorage`]),本方法供测试与工具显式覆写。单事务:旧边
+    /// 删净、新边 `INSERT OR IGNORE` 入库,重复目标自动去重。
     pub async fn replace_out_links(&self, from: &str, targets: &[String]) -> Result<()> {
         let conn = self.conn.lock().await;
         run_in_txn(&conn, |conn| {
             Box::pin(async move {
-                conn.execute(
-                    "DELETE FROM entry_links WHERE from_id = ?1",
-                    turso::params![from],
-                )
-                .await?;
-                for to in targets {
-                    conn.execute(
-                        "INSERT OR IGNORE INTO entry_links (from_id, to_id) VALUES (?1, ?2)",
-                        turso::params![from, to.as_str()],
-                    )
-                    .await?;
-                }
+                set_out_links(conn, from, targets).await?;
                 Ok(())
             })
         })
@@ -167,7 +190,7 @@ impl WikiEntryStorage for TursoWikiStorage {
         run_in_txn(&conn, |conn| {
             Box::pin(async move {
                 insert_entry(conn, &entry).await?;
-                index_entry(conn, &entry).await?;
+                write_derived(conn, &entry).await?;
                 Ok(())
             })
         })
@@ -176,13 +199,58 @@ impl WikiEntryStorage for TursoWikiStorage {
 
     async fn delete_entry(&self, id: uuid::Uuid) -> Result<()> {
         let id = id.to_string();
+        let now = unix_now();
         let conn = self.conn.lock().await;
         run_in_txn(&conn, |conn| {
             Box::pin(async move {
-                let id2 = id.clone();
+                // 软删除:只盖 deleted_at;衍生行(倒排/链接/别名/版本)
+                // 原样保留,restore 即恢复。已删则不动(幂等)。
+                conn.execute(
+                    "UPDATE entries SET deleted_at = ?2 \
+                     WHERE id = ?1 AND deleted_at IS NULL",
+                    turso::params![id, now],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn restore_entry(&self, id: uuid::Uuid) -> Result<()> {
+        let id = id.to_string();
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT deleted_at FROM entries WHERE id = ?1",
+                turso::params![id.clone()],
+            )
+            .await?;
+        match rows.next().await? {
+            None => Err(Error::NotFound(id)),
+            Some(row) => {
+                if row.get_value(0)? == Value::Null {
+                    Ok(()) // 未删除,幂等 no-op
+                } else {
+                    conn.execute(
+                        "UPDATE entries SET deleted_at = NULL WHERE id = ?1",
+                        turso::params![id],
+                    )
+                    .await?;
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    async fn purge_entry(&self, id: uuid::Uuid) -> Result<()> {
+        let id = id.to_string();
+        let conn = self.conn.lock().await;
+        run_in_txn(&conn, |conn| {
+            Box::pin(async move {
                 conn.execute(
                     "DELETE FROM entry_links WHERE from_id = ?1 OR to_id = ?1",
-                    turso::params![id2],
+                    turso::params![id.clone()],
                 )
                 .await?;
                 conn.execute(
@@ -195,6 +263,21 @@ impl WikiEntryStorage for TursoWikiStorage {
                     turso::params![id.clone()],
                 )
                 .await?;
+                conn.execute(
+                    "DELETE FROM aliases WHERE entry_id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
+                conn.execute(
+                    "DELETE FROM tags WHERE entry_id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
+                conn.execute(
+                    "DELETE FROM entry_versions WHERE entry_id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
                 conn.execute("DELETE FROM entries WHERE id = ?1", turso::params![id])
                     .await?;
                 Ok(())
@@ -203,17 +286,60 @@ impl WikiEntryStorage for TursoWikiStorage {
         .await
     }
 
+    async fn list_deleted(&self) -> Result<Vec<RecycleItem>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, title, alias, content, ctime, mtime, deleted_at FROM entries \
+                 WHERE deleted_at IS NOT NULL ORDER BY deleted_at, id",
+                (),
+            )
+            .await?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let deleted_at = int_col(&row, 6)?;
+            let mut entry = entry_from_row(&row)?;
+            entry.tags = fetch_tags(&conn, &entry.id).await?;
+            items.push(RecycleItem { entry, deleted_at });
+        }
+        Ok(items)
+    }
+
     async fn get_entry(&self, id: uuid::Uuid) -> Result<KnowledgeEntryData> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, title, alias, content, ctime, mtime FROM entries WHERE id = ?1",
+                "SELECT id, title, alias, content, ctime, mtime FROM entries \
+                 WHERE id = ?1 AND deleted_at IS NULL",
                 turso::params![id.to_string()],
             )
             .await?;
         match rows.next().await? {
-            Some(row) => entry_from_row(&row),
+            Some(row) => {
+                let mut entry = entry_from_row(&row)?;
+                entry.tags = fetch_tags(&conn, &entry.id).await?;
+                Ok(entry)
+            }
             None => Err(Error::NotFound(id.to_string())),
+        }
+    }
+
+    async fn find_by_title(&self, title: &str) -> Result<Option<KnowledgeEntryData>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, title, alias, content, ctime, mtime FROM entries \
+                 WHERE title = ?1 AND deleted_at IS NULL",
+                turso::params![title.to_string()],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => {
+                let mut entry = entry_from_row(&row)?;
+                entry.tags = fetch_tags(&conn, &entry.id).await?;
+                Ok(Some(entry))
+            }
+            None => Ok(None),
         }
     }
 
@@ -230,7 +356,7 @@ impl WikiEntryStorage for TursoWikiStorage {
                 .join(", ");
             let sql = format!(
                 "SELECT id, title, alias, content, ctime, mtime FROM entries \
-                 WHERE id IN ({placeholders})"
+                 WHERE id IN ({placeholders}) AND deleted_at IS NULL"
             );
             let mut rows = conn
                 .query(&sql, turso::params_from_iter(chunk.iter().map(uuid_value)))
@@ -239,6 +365,10 @@ impl WikiEntryStorage for TursoWikiStorage {
                 let entry = entry_from_row(&row)?;
                 by_id.insert(entry.id.clone(), entry);
             }
+        }
+        let tag_map = fetch_tags_batch(&conn, by_id.keys()).await?;
+        for entry in by_id.values_mut() {
+            entry.tags = tag_map.get(&entry.id).cloned().unwrap_or_default();
         }
         // 按入参顺序输出,重复 id 只取一次,未命中的跳过。
         let mut seen = HashSet::new();
@@ -259,7 +389,7 @@ impl WikiEntryStorage for TursoWikiStorage {
         run_in_txn(&conn, |conn| {
             Box::pin(async move {
                 update_entry_row(conn, &entry).await?;
-                index_entry(conn, &entry).await?;
+                write_derived(conn, &entry).await?;
                 Ok(())
             })
         })
@@ -281,12 +411,45 @@ impl WikiEntryStorage for TursoWikiStorage {
             Box::pin(async move {
                 for entry in &entries {
                     update_entry_row(conn, entry).await?;
-                    index_entry(conn, entry).await?;
+                    write_derived(conn, entry).await?;
                 }
                 Ok(())
             })
         })
         .await
+    }
+
+    async fn list_versions(&self, id: uuid::Uuid) -> Result<Vec<EntryVersionSummary>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT version, created_at FROM entry_versions WHERE entry_id = ?1 \
+                 ORDER BY version DESC",
+                turso::params![id.to_string()],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            out.push(EntryVersionSummary {
+                version: int_col(&row, 0)?,
+                created_at: int_col(&row, 1)?,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn get_version(&self, id: uuid::Uuid, version: i64) -> Result<KnowledgeEntryData> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT snapshot FROM entry_versions WHERE entry_id = ?1 AND version = ?2",
+                turso::params![id.to_string(), version],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(serde_json::from_str(&text_col(&row, 0)?)?),
+            None => Err(Error::NotFound(format!("{} v{version}", id))),
+        }
     }
 }
 
@@ -299,11 +462,64 @@ impl WikiIndexStorage for TursoWikiStorage {
     async fn get_out_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
         fetch_adjacency(&self.conn, ids, "from_id", "to_id").await
     }
+
+    async fn get_mentions(&self, id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+        // 目标必须存在且未删除;标题 + 全部别名都是提及探测词。
+        let mut rows = conn
+            .query(
+                "SELECT title, alias FROM entries WHERE id = ?1 AND deleted_at IS NULL",
+                turso::params![id.to_string()],
+            )
+            .await?;
+        let Some(row) = rows.next().await? else {
+            return Err(Error::NotFound(id.to_string()));
+        };
+        let title = text_col(&row, 0)?;
+        let alias: Vec<String> = serde_json::from_str(&text_col(&row, 1)?)?;
+        drop(rows);
+
+        let mut terms: Vec<String> = Vec::new();
+        for term in std::iter::once(title).chain(alias) {
+            let term = term.trim().to_string();
+            if !term.is_empty() && !terms.contains(&term) {
+                terms.push(term);
+            }
+        }
+
+        let mut mentions: Vec<String> = Vec::new();
+        for term in &terms {
+            // 未链接的纯文本提及:正文含该词,且没有 [[链接]] 指向目标。
+            let pattern = format!("%{}%", like_escape(term));
+            let mut rows = conn
+                .query(
+                    "SELECT DISTINCT e.id FROM entries e \
+                     WHERE e.deleted_at IS NULL AND e.id != ?1 \
+                     AND e.id NOT IN (SELECT from_id FROM entry_links WHERE to_id = ?1) \
+                     AND e.content LIKE ?2 ESCAPE '\\' ORDER BY e.id",
+                    turso::params![id.to_string(), pattern],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                let hit = text_col(&row, 0)?;
+                if !mentions.contains(&hit) {
+                    mentions.push(hit);
+                }
+            }
+        }
+        mentions.sort();
+        Ok(mentions)
+    }
 }
 
 #[async_trait]
 impl WikiSearchStorage for TursoWikiStorage {
-    async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+    async fn search_with_filter(
+        &self,
+        query: &str,
+        limit: usize,
+        filter: &SearchFilter,
+    ) -> Result<Vec<SearchHit>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -319,10 +535,12 @@ impl WikiSearchStorage for TursoWikiStorage {
         }
         let conn = self.conn.lock().await;
 
-        // 全库统计:N 与平均文档长度(以 search_docs 为准,空库直接空)。
+        // 全库统计只算未删除词条(N 与平均文档长度)。
         let mut stats_rows = conn
             .query(
-                "SELECT COUNT(*), COALESCE(AVG(length), 0.0) FROM search_docs",
+                "SELECT COUNT(*), COALESCE(AVG(d.length), 0.0) \
+                 FROM search_docs d JOIN entries e ON e.id = d.entry_id \
+                 WHERE e.deleted_at IS NULL",
                 (),
             )
             .await?;
@@ -334,7 +552,7 @@ impl WikiSearchStorage for TursoWikiStorage {
             return Ok(Vec::new());
         }
 
-        // 候选 postings:查询词的全部 (term, entry, tf)。
+        // 候选 postings(查询词的全部命中,只算未删除词条)。
         let mut tf: HashMap<String, HashMap<String, i64>> = HashMap::new(); // entry -> term -> tf
         let mut df: HashMap<String, usize> = HashMap::new(); // term -> 含该词文档数
         for chunk in terms.chunks(IN_CHUNK) {
@@ -343,7 +561,9 @@ impl WikiSearchStorage for TursoWikiStorage {
                 .collect::<Vec<_>>()
                 .join(", ");
             let sql = format!(
-                "SELECT term, entry_id, tf FROM search_postings WHERE term IN ({placeholders})"
+                "SELECT p.term, p.entry_id, p.tf FROM search_postings p \
+                 JOIN entries e ON e.id = p.entry_id \
+                 WHERE p.term IN ({placeholders}) AND e.deleted_at IS NULL"
             );
             let mut rows = conn
                 .query(&sql, turso::params_from_iter(chunk.iter().map(text_value)))
@@ -360,30 +580,79 @@ impl WikiSearchStorage for TursoWikiStorage {
             return Ok(Vec::new());
         }
 
-        // 候选文档长度。
+        // 候选元数据:文档长度 + mtime(时间窗在此过滤)。
         let candidates: Vec<String> = tf.keys().cloned().collect();
-        let mut doc_len: HashMap<String, i64> = HashMap::new();
+        let mut meta: HashMap<String, (i64, i64)> = HashMap::new(); // id -> (mtime, length)
         for chunk in candidates.chunks(IN_CHUNK) {
             let placeholders = (1..=chunk.len())
                 .map(|position| format!("?{position}"))
                 .collect::<Vec<_>>()
                 .join(", ");
             let sql = format!(
-                "SELECT entry_id, length FROM search_docs WHERE entry_id IN ({placeholders})"
+                "SELECT e.id, e.mtime, d.length FROM entries e \
+                 JOIN search_docs d ON d.entry_id = e.id \
+                 WHERE e.id IN ({placeholders}) AND e.deleted_at IS NULL"
             );
             let mut rows = conn
                 .query(&sql, turso::params_from_iter(chunk.iter().map(text_value)))
                 .await?;
             while let Some(row) = rows.next().await? {
-                doc_len.insert(text_col(&row, 0)?, int_col(&row, 1)?);
+                let entry_id = text_col(&row, 0)?;
+                let mtime = int_col(&row, 1)?;
+                let length = int_col(&row, 2)?;
+                let since_ok = filter.mtime_since.is_none_or(|s| mtime >= s);
+                let until_ok = filter.mtime_until.is_none_or(|u| mtime <= u);
+                if since_ok && until_ok {
+                    meta.insert(entry_id, (mtime, length));
+                }
             }
+        }
+
+        // 标签 AND 过滤:每个候选须含全部过滤标签。
+        if !filter.tags.is_empty() {
+            let wanted: Vec<String> = filter
+                .tags
+                .iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            if wanted.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut tag_hits: HashMap<String, usize> = HashMap::new();
+            let live: Vec<String> = meta.keys().cloned().collect();
+            for chunk in live.chunks(IN_CHUNK) {
+                let entry_placeholders = (1..=chunk.len())
+                    .map(|position| format!("?{position}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let tag_placeholders = (chunk.len() + 1..=chunk.len() + wanted.len())
+                    .map(|position| format!("?{position}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!(
+                    "SELECT entry_id, tag FROM tags \
+                     WHERE entry_id IN ({entry_placeholders}) AND tag IN ({tag_placeholders})"
+                );
+                let mut params: Vec<Value> = chunk.iter().map(text_value).collect();
+                params.extend(wanted.iter().map(text_value));
+                let mut rows = conn.query(&sql, turso::params_from_iter(params)).await?;
+                while let Some(row) = rows.next().await? {
+                    let entry_id = text_col(&row, 0)?;
+                    // 同一 (tag, entry) 至多一行,计数即可判「全含」。
+                    *tag_hits.entry(entry_id).or_insert(0) += 1;
+                }
+            }
+            meta.retain(|id, _| tag_hits.get(id).is_some_and(|&n| n >= wanted.len()));
         }
 
         // BM25 打分:score(d) = Σ_t idf(t) · tf 部分。
         let mut hits: Vec<SearchHit> = tf
             .into_iter()
             .filter_map(|(entry_id, term_tf)| {
-                let dl = doc_len.get(&entry_id).copied().unwrap_or(0);
+                let &(_mtime, dl) = meta.get(&entry_id)?;
                 let mut score = 0.0_f64;
                 for term in &terms {
                     let Some(&count) = term_tf.get(term) else {
@@ -406,7 +675,27 @@ impl WikiSearchStorage for TursoWikiStorage {
     }
 }
 
-// ─────────────────────── 条目行读写(自由函数,单/批量共用) ───────────────────────
+/// 幂等 schema 初始化:建表 + 旧库补列(`CREATE TABLE IF NOT EXISTS`
+/// 不会给已存在的表加列,kms 的 pragma 探测同款)。须在一次性连接上
+/// 执行,理由见 [`TursoWikiStorage::open`]。
+async fn init_schema_on(conn: &Connection) -> Result<()> {
+    conn.execute_batch(SCHEMA_SQL).await?;
+    let mut columns = conn
+        .query(
+            "SELECT name FROM pragma_table_info('entries') WHERE name = 'deleted_at'",
+            (),
+        )
+        .await?;
+    let has_deleted_at = columns.next().await?.is_some();
+    drop(columns);
+    if !has_deleted_at {
+        conn.execute_batch("ALTER TABLE entries ADD COLUMN deleted_at INTEGER;")
+            .await?;
+    }
+    Ok(())
+}
+
+// ─────────────────────── 词条行读写(自由函数,单/批量共用) ───────────────────────
 
 /// 写入前规范化与校验:trim 首尾空白;全空白标题拒绝。
 /// 不折叠大小写——`BRCA1` 与 `brca1` 对专业缩写是不同词条,保持区分。
@@ -418,9 +707,9 @@ fn normalize_entry(entry: KnowledgeEntryData) -> Result<KnowledgeEntryData> {
     Ok(KnowledgeEntryData { title, ..entry })
 }
 
-/// 事务内预检标题占用(trim 后精确匹配):命中返回占用者 id;
-/// `exclude_id` 跳过自身(重命名为现名不算占用)。预检只求友好错误,
-/// 并发窗口仍由 `UNIQUE(title)` 约束兜底。
+/// 事务内预检标题占用(trim 后精确匹配,含回收站中未净删的词条):
+/// 命中返回占用者 id;`exclude_id` 跳过自身(重命名为现名不算占用)。
+/// 预检只求友好错误,并发窗口仍由 `UNIQUE(title)` 约束兜底。
 async fn title_owner(
     conn: &Connection,
     title: &str,
@@ -481,7 +770,7 @@ async fn update_entry_row(conn: &Connection, entry: &KnowledgeEntryData) -> Resu
     let affected = conn
         .execute(
             "UPDATE entries SET title = ?2, alias = ?3, content = ?4, ctime = ?5, mtime = ?6 \
-             WHERE id = ?1",
+             WHERE id = ?1 AND deleted_at IS NULL",
             turso::params![
                 entry.id.clone(),
                 entry.title.clone(),
@@ -498,20 +787,25 @@ async fn update_entry_row(conn: &Connection, entry: &KnowledgeEntryData) -> Resu
     Ok(())
 }
 
-/// 重建 `entry` 的检索倒排:文档 = title + alias + content 拼接后分词。
-/// 幂等:先清该条目旧 postings 与长度行再写。须在调用方事务内执行,
-/// 与条目行保持原子。
-async fn index_entry(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()> {
-    conn.execute(
-        "DELETE FROM search_postings WHERE entry_id = ?1",
-        turso::params![entry.id.clone()],
-    )
-    .await?;
-    conn.execute(
-        "DELETE FROM search_docs WHERE entry_id = ?1",
-        turso::params![entry.id.clone()],
-    )
-    .await?;
+/// 词条行写入后的全部衍生数据维护:倒排、别名/标签、出边、版本快照。
+/// 须在调用方事务内执行。
+async fn write_derived(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()> {
+    reindex_entry(conn, entry).await?;
+    rebuild_out_links(conn, entry).await?;
+    snapshot_version(conn, entry).await?;
+    Ok(())
+}
+
+/// 重建 `entry` 的检索倒排与别名/标签索引:文档 = title + alias +
+/// content 拼接后分词。幂等:先清该条目旧行再写。
+async fn reindex_entry(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()> {
+    for table in ["search_postings", "search_docs", "aliases", "tags"] {
+        conn.execute(
+            &format!("DELETE FROM {table} WHERE entry_id = ?1"),
+            turso::params![entry.id.clone()],
+        )
+        .await?;
+    }
 
     let mut doc = String::with_capacity(entry.title.len() + entry.content.len() + 16);
     doc.push_str(&entry.title);
@@ -540,11 +834,178 @@ async fn index_entry(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()
         )
         .await?;
     }
+
+    // 别名:trim、去空、去重;INSERT OR IGNORE —— 撞其他词条的别名时
+    // 先占者赢,解析口径稳定(先标题后别名,见 resolve_target)。
+    let mut aliases: HashSet<&str> = HashSet::new();
+    for alias in &entry.alias {
+        let alias = alias.trim();
+        if !alias.is_empty() {
+            aliases.insert(alias);
+        }
+    }
+    for alias in aliases {
+        conn.execute(
+            "INSERT OR IGNORE INTO aliases (alias, entry_id) VALUES (?1, ?2)",
+            turso::params![alias, entry.id.clone()],
+        )
+        .await?;
+    }
+
+    // 标签:同样 trim、去空、去重;大小写不折叠(与标题口径一致)。
+    let mut tags: HashSet<&str> = HashSet::new();
+    for tag in &entry.tags {
+        let tag = tag.trim();
+        if !tag.is_empty() {
+            tags.insert(tag);
+        }
+    }
+    for tag in tags {
+        conn.execute(
+            "INSERT OR IGNORE INTO tags (tag, entry_id) VALUES (?1, ?2)",
+            turso::params![tag, entry.id.clone()],
+        )
+        .await?;
+    }
     Ok(())
 }
 
-/// 邻接表批量查询:`WHERE {key} IN (...)`,把 `{value}` 按 key 分桶。
-/// 桶内按 value 排序保证确定性;`key`/`value` 是编译期列名,非用户输入。
+/// 从 `entry.content` 提取 wiki 链接并解析目标(先标题后别名,均要求
+/// 未删除;悬空目标跳过,自指边跳过),覆盖式重建出边。
+async fn rebuild_out_links(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()> {
+    let mut targets: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for link in Parser::new().extract_links(&entry.content) {
+        if link.kind != LinkKind::Wiki {
+            continue;
+        }
+        if !seen.insert(link.target.clone()) {
+            continue;
+        }
+        if let Some(id) = resolve_target(conn, &link.target).await? {
+            if id != entry.id && !targets.contains(&id) {
+                targets.push(id);
+            }
+        }
+    }
+    set_out_links(conn, &entry.id, &targets).await
+}
+
+/// 内链目标解析:先按标题(未删除),再按别名(未删除)。
+async fn resolve_target(conn: &Connection, target: &str) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT id FROM entries WHERE title = ?1 AND deleted_at IS NULL",
+            turso::params![target.to_string()],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        return Ok(Some(text_col(&row, 0)?));
+    }
+    drop(rows);
+    let mut rows = conn
+        .query(
+            "SELECT a.entry_id FROM aliases a JOIN entries e ON e.id = a.entry_id \
+             WHERE a.alias = ?1 AND e.deleted_at IS NULL",
+            turso::params![target.to_string()],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => Ok(Some(text_col(&row, 0)?)),
+        None => Ok(None),
+    }
+}
+
+/// 覆盖式写出边:删净旧边再插入;重复目标由调用方去重,这里 IGNORE 兜底。
+async fn set_out_links(conn: &Connection, from: &str, targets: &[String]) -> Result<()> {
+    conn.execute(
+        "DELETE FROM entry_links WHERE from_id = ?1",
+        turso::params![from],
+    )
+    .await?;
+    for to in targets {
+        conn.execute(
+            "INSERT OR IGNORE INTO entry_links (from_id, to_id) VALUES (?1, ?2)",
+            turso::params![from, to.as_str()],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// 追加一条全量版本快照(编号 = 现有最大版本 + 1;created_at 取词条
+/// mtime,写入时刻由调用方语义决定)。writing-base 同款模式。
+async fn snapshot_version(conn: &Connection, entry: &KnowledgeEntryData) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(version), 0) FROM entry_versions WHERE entry_id = ?1",
+            turso::params![entry.id.clone()],
+        )
+        .await?;
+    let next = match rows.next().await? {
+        Some(row) => int_col(&row, 0)? + 1,
+        None => 1,
+    };
+    conn.execute(
+        "INSERT INTO entry_versions (entry_id, version, snapshot, created_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+        turso::params![
+            entry.id.clone(),
+            next,
+            serde_json::to_string(entry)?,
+            entry.mtime,
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// 单词条标签(字典序)。
+async fn fetch_tags(conn: &Connection, id: &str) -> Result<Vec<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT tag FROM tags WHERE entry_id = ?1 ORDER BY tag",
+            turso::params![id.to_string()],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        out.push(text_col(&row, 0)?);
+    }
+    Ok(out)
+}
+
+/// 批量标签:id -> 标签列表(字典序)。
+async fn fetch_tags_batch<'a>(
+    conn: &Connection,
+    ids: impl Iterator<Item = &'a String>,
+) -> Result<HashMap<String, Vec<String>>> {
+    let ids: Vec<String> = ids.cloned().collect();
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
+    for chunk in ids.chunks(IN_CHUNK) {
+        let placeholders = (1..=chunk.len())
+            .map(|position| format!("?{position}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT entry_id, tag FROM tags WHERE entry_id IN ({placeholders})");
+        let mut rows = conn
+            .query(&sql, turso::params_from_iter(chunk.iter().map(text_value)))
+            .await?;
+        while let Some(row) = rows.next().await? {
+            map.entry(text_col(&row, 0)?)
+                .or_default()
+                .push(text_col(&row, 1)?);
+        }
+    }
+    for tags in map.values_mut() {
+        tags.sort();
+    }
+    Ok(map)
+}
+
+/// 邻接表批量查询:`WHERE {key} IN (...)`,把 `{value}` 按 key 分桶;
+/// 邻居须是未删除词条。桶内按 value 排序保证确定性;`key`/`value`
+/// 是编译期列名,非用户输入。
 async fn fetch_adjacency(
     conn: &Mutex<Connection>,
     ids: &[String],
@@ -562,8 +1023,10 @@ async fn fetch_adjacency(
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT {key}, {value} FROM entry_links WHERE {key} IN ({placeholders}) \
-             ORDER BY {value}"
+            "SELECT l.{key}, l.{value} FROM entry_links l \
+             JOIN entries e ON e.id = l.{value} \
+             WHERE l.{key} IN ({placeholders}) AND e.deleted_at IS NULL \
+             ORDER BY l.{value}"
         );
         let mut rows = conn
             .query(&sql, turso::params_from_iter(chunk.iter().map(text_value)))
@@ -579,6 +1042,25 @@ async fn fetch_adjacency(
         .iter()
         .map(|id| buckets.get(id).cloned().unwrap_or_default())
         .collect())
+}
+
+/// LIKE 模式转义:`\`、`%`、`_` 前加反斜杠(SQL 里配 `ESCAPE '\'`)。
+fn like_escape(term: &str) -> String {
+    let mut out = String::with_capacity(term.len());
+    for ch in term.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 // ─────────────────────── 行解析(手写;turso 无 FromRow) ───────────────────────
@@ -615,6 +1097,7 @@ fn entry_from_row(row: &turso::Row) -> Result<KnowledgeEntryData> {
         alias: serde_json::from_str(&text_col(row, 2)?)?,
         id: text_col(row, 0)?,
         title: text_col(row, 1)?,
+        tags: Vec::new(), // 标签在独立表,由调用方 fetch_tags(_batch) 填充
         content: text_col(row, 3)?,
         ctime: int_col(row, 4)?,
         mtime: int_col(row, 5)?,
@@ -780,5 +1263,10 @@ mod tests {
         assert!(db.exists());
         assert_eq!(std::fs::read(&db).unwrap(), b"only-main");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn like_escape_covers_wildcards() {
+        assert_eq!(like_escape("50%_off\\x"), r"50\%\_off\\x");
     }
 }
