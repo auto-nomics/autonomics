@@ -13,7 +13,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{Error, Result};
 use crate::storage::types::{
-    EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit, WikiStorage,
+    EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter, RecycleItem,
+    SearchFilter, SearchHit, WikiStorage,
 };
 
 /// worker 从控制通道消费的命令。每条命令携带 oneshot 回执;调用方
@@ -49,6 +50,10 @@ pub enum WikiCommand {
     GetEntryBatch {
         ids: Vec<uuid::Uuid>,
         reply: oneshot::Sender<Result<Vec<KnowledgeEntryData>>>,
+    },
+    ListEntries {
+        filter: ListFilter,
+        reply: oneshot::Sender<Result<Vec<ListEntrySummary>>>,
     },
     UpdateEntry {
         entry: KnowledgeEntryData,
@@ -144,6 +149,9 @@ impl<T: WikiStorage + ?Sized> WikiWorker<T> {
                 }
                 WikiCommand::GetEntryBatch { ids, reply } => {
                     let _ = reply.send(self.store.get_entry_batch(ids).await.map_err(Error::from));
+                }
+                WikiCommand::ListEntries { filter, reply } => {
+                    let _ = reply.send(self.store.list_entries(&filter).await.map_err(Error::from));
                 }
                 WikiCommand::UpdateEntry { entry, reply } => {
                     let _ = reply.send(self.store.update_entry(entry).await.map_err(Error::from));
@@ -273,6 +281,13 @@ impl WikiHandle {
 
     pub async fn get_entry_batch(&self, ids: Vec<uuid::Uuid>) -> Result<Vec<KnowledgeEntryData>> {
         self.call(|reply| WikiCommand::GetEntryBatch { ids, reply })
+            .await
+    }
+
+    /// 无查询浏览:按过滤器列出词条摘要(mtime 降序,offset/limit 分页)。
+    pub async fn list_entries(&self, filter: &ListFilter) -> Result<Vec<ListEntrySummary>> {
+        let filter = filter.clone();
+        self.call(|reply| WikiCommand::ListEntries { filter, reply })
             .await
     }
 

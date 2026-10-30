@@ -51,6 +51,31 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// 浏览清单里的词条摘要:除正文外的全部字段(标签按字典序)。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListEntrySummary {
+    pub id: String,
+    pub title: String,
+    pub alias: Vec<String>,
+    pub tags: Vec<String>,
+    pub ctime: i64,
+    pub mtime: i64,
+}
+
+/// 无查询浏览的过滤器:全部条件取交集,按 `mtime` 降序 + id 升序输出,
+/// `offset`/`limit` 分页;`limit == 0` 返回空。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListFilter {
+    /// 命中需**全部**含有的标签(AND;trim 后精确匹配,不折叠大小写)。
+    pub tags: Vec<String>,
+    /// `mtime` 下界(unix 秒,含)。
+    pub mtime_since: Option<i64>,
+    /// `mtime` 上界(unix 秒,含)。
+    pub mtime_until: Option<i64>,
+    pub limit: usize,
+    pub offset: usize,
+}
+
 #[async_trait]
 pub trait WikiEntryStorage: Send + Sync {
     /// 新建条目。title 先 trim 再落库;trim 后为空返回
@@ -81,6 +106,9 @@ pub trait WikiEntryStorage: Send + Sync {
     /// 批量取条目:只返回存在且未删除的,按入参顺序输出,重复 id 只
     /// 出现一次。
     async fn get_entry_batch(&self, ids: Vec<uuid::Uuid>) -> Result<Vec<KnowledgeEntryData>>;
+    /// 无查询浏览:按 [`ListFilter`] 列出未删除词条摘要(mtime 降序 +
+    /// id 升序,offset/limit 分页)。
+    async fn list_entries(&self, filter: &ListFilter) -> Result<Vec<ListEntrySummary>>;
     /// 覆盖式更新单条(含 `ctime`,调用方负责保全);title 同样先 trim
     /// 校验。id 不存在(或已软删)时返回 [`Error::NotFound`];重命名为
     /// 其他条目占用的标题返回 [`Error::DuplicateTitle`],重命名为自身

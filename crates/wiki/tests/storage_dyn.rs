@@ -45,6 +45,35 @@ impl WikiEntryStorage for FakeStorage {
         Ok(entries.iter().find(|e| e.title == title).cloned())
     }
 
+    async fn list_entries(
+        &self,
+        filter: &wiki::storage::types::ListFilter,
+    ) -> Result<Vec<wiki::storage::types::ListEntrySummary>> {
+        let entries = self.entries.lock().unwrap();
+        let wanted: std::collections::HashSet<&str> =
+            filter.tags.iter().map(|t| t.trim()).collect();
+        Ok(entries
+            .iter()
+            .filter(|e| {
+                let since_ok = filter.mtime_since.is_none_or(|s| e.mtime >= s);
+                let until_ok = filter.mtime_until.is_none_or(|u| e.mtime <= u);
+                let tags_ok = wanted.is_empty()
+                    || wanted.iter().all(|w| e.tags.iter().any(|t| t.trim() == *w));
+                since_ok && until_ok && tags_ok
+            })
+            .map(|e| wiki::storage::types::ListEntrySummary {
+                id: e.id.clone(),
+                title: e.title.clone(),
+                alias: e.alias.clone(),
+                tags: e.tags.clone(),
+                ctime: e.ctime,
+                mtime: e.mtime,
+            })
+            .skip(filter.offset)
+            .take(filter.limit)
+            .collect())
+    }
+
     async fn get_entry_batch(&self, _ids: Vec<uuid::Uuid>) -> Result<Vec<KnowledgeEntryData>> {
         let entries = self.entries.lock().unwrap();
         Ok(entries.clone())

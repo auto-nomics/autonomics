@@ -30,8 +30,8 @@ use turso::{Connection, Value};
 
 use super::error::{Error, Result};
 use super::types::{
-    EntryVersionSummary, KnowledgeEntryData, RecycleItem, SearchFilter, SearchHit,
-    WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
+    EntryVersionSummary, KnowledgeEntryData, ListEntrySummary, ListFilter, RecycleItem,
+    SearchFilter, SearchHit, WikiEntryStorage, WikiIndexStorage, WikiSearchStorage,
 };
 use crate::markdown::{LinkKind, Parser};
 use crate::search::{bm25_term, idf, tokenize};
@@ -322,6 +322,76 @@ impl WikiEntryStorage for TursoWikiStorage {
             }
             None => Err(Error::NotFound(id.to_string())),
         }
+    }
+
+    async fn list_entries(&self, filter: &ListFilter) -> Result<Vec<ListEntrySummary>> {
+        if filter.limit == 0 {
+            return Ok(Vec::new());
+        }
+        // 规范化标签:trim、去空、去重(与写入口径一致)。
+        let wanted: Vec<String> = filter
+            .tags
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let conn = self.conn.lock().await;
+        let mut sql = String::from(
+            "SELECT e.id, e.title, e.alias, e.ctime, e.mtime FROM entries e \
+             WHERE e.deleted_at IS NULL",
+        );
+        let mut params: Vec<Value> = Vec::new();
+        if let Some(since) = filter.mtime_since {
+            params.push(Value::Integer(since));
+            sql.push_str(&format!(" AND e.mtime >= ?{}", params.len()));
+        }
+        if let Some(until) = filter.mtime_until {
+            params.push(Value::Integer(until));
+            sql.push_str(&format!(" AND e.mtime <= ?{}", params.len()));
+        }
+        if !wanted.is_empty() {
+            // AND 语义:词条须含全部标签 → 子查询按词条数标签去重计数。
+            let placeholders = (1..=wanted.len())
+                .map(|position| format!("?{}", params.len() + position))
+                .collect::<Vec<_>>()
+                .join(", ");
+            params.extend(wanted.iter().map(text_value));
+            params.push(Value::Integer(wanted.len() as i64));
+            sql.push_str(&format!(
+                " AND e.id IN (SELECT entry_id FROM tags WHERE tag IN ({placeholders}) \
+                 GROUP BY entry_id HAVING COUNT(DISTINCT tag) = ?{})",
+                params.len()
+            ));
+        }
+        // mtime 降序 + id 升序:同 mtime 时输出稳定,分页不重不漏。
+        params.push(Value::Integer(filter.limit as i64));
+        sql.push_str(&format!(
+            " ORDER BY e.mtime DESC, e.id LIMIT ?{}",
+            params.len()
+        ));
+        if filter.offset > 0 {
+            params.push(Value::Integer(filter.offset as i64));
+            sql.push_str(&format!(" OFFSET ?{}", params.len()));
+        }
+
+        let mut rows = conn.query(&sql, turso::params_from_iter(params)).await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let id = text_col(&row, 0)?;
+            let alias: Vec<String> = serde_json::from_str(&text_col(&row, 2)?)?;
+            out.push(ListEntrySummary {
+                tags: fetch_tags(&conn, &id).await?,
+                id,
+                title: text_col(&row, 1)?,
+                alias,
+                ctime: int_col(&row, 3)?,
+                mtime: int_col(&row, 4)?,
+            });
+        }
+        Ok(out)
     }
 
     async fn find_by_title(&self, title: &str) -> Result<Option<KnowledgeEntryData>> {

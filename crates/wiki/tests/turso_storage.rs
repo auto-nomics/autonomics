@@ -3,7 +3,7 @@
 
 use wiki::storage::error::Error;
 use wiki::storage::turso_wiki_storage::TursoWikiStorage;
-use wiki::storage::types::{KnowledgeEntryData, WikiEntryStorage, WikiIndexStorage};
+use wiki::storage::types::{KnowledgeEntryData, ListFilter, WikiEntryStorage, WikiIndexStorage};
 
 fn entry(id: uuid::Uuid, title: &str) -> KnowledgeEntryData {
     KnowledgeEntryData {
@@ -262,4 +262,100 @@ async fn file_storage_supports_concurrent_handles() {
     let got = reader.get_entry(id).await.unwrap();
     assert_eq!(got.title, "Shared");
     assert_eq!(got.alias, vec!["alias-of-Shared".to_string()]);
+}
+
+#[tokio::test]
+async fn list_entries_browses_without_query() {
+    let storage = TursoWikiStorage::open_in_memory().await.unwrap();
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    let c = uuid::Uuid::new_v4();
+    let mut ea = entry(a, "旧");
+    ea.mtime = 1_000;
+    let mut eb = entry(b, "新");
+    eb.mtime = 3_000;
+    let mut ec = entry(c, "中标");
+    ec.tags = vec!["gwas".to_string(), "methods".to_string()];
+    ec.mtime = 2_000;
+    for e in [&ea, &eb, &ec] {
+        storage.create_entry(e.clone()).await.unwrap();
+    }
+
+    // 默认:mtime 降序,全部元数据、无正文。
+    let all = storage
+        .list_entries(&ListFilter {
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let titles: Vec<&str> = all.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, vec!["新", "中标", "旧"]);
+    assert!(all.iter().all(|s| !s.id.is_empty()));
+    assert_eq!(all[1].tags, vec!["gwas".to_string(), "methods".to_string()]);
+
+    // 标签 AND:单标签命中;双标签命中;不相关标签为空。
+    let by_tag = async |tags: &[&str]| {
+        storage
+            .list_entries(&ListFilter {
+                tags: tags.iter().map(|t| t.to_string()).collect(),
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.title.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(by_tag(&["gwas"]).await, vec!["中标".to_string()]);
+    assert_eq!(by_tag(&["gwas", "methods"]).await, vec!["中标".to_string()]);
+    assert_eq!(by_tag(&["gwas", "missing"]).await, Vec::<String>::new());
+
+    // mtime 窗口。
+    let window = storage
+        .list_entries(&ListFilter {
+            mtime_since: Some(1_500),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let titles: Vec<&str> = window.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, vec!["新", "中标"]);
+
+    // 分页:offset 跳过、limit 截断;limit=0 空。
+    let page = storage
+        .list_entries(&ListFilter {
+            limit: 1,
+            offset: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page[0].title, "中标");
+    assert!(
+        storage
+            .list_entries(&ListFilter {
+                limit: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // 回收站词条不出现。
+    storage.delete_entry(b).await.unwrap();
+    let all = storage
+        .list_entries(&ListFilter {
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 2);
+
+    // 标签 trim 容错。
+    assert_eq!(by_tag(&["  gwas  "]).await, vec!["中标".to_string()]);
 }

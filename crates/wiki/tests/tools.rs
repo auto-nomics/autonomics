@@ -11,9 +11,10 @@ use wiki::service::WikiHandle;
 use wiki::service::start;
 use wiki::storage::turso_wiki_storage::TursoWikiStorage;
 use wiki::tools::{
-    WikiCreateTool, WikiDeleteTool, WikiEditTool, WikiGetTool, WikiLinksTool, WikiMentionsTool,
-    WikiPatchTool, WikiPurgeTool, WikiRestoreTool, WikiRestoreVersionTool, WikiSearchTool,
-    WikiUpdateTool, WikiVersionsTool, wiki_read_registrations, wiki_write_registrations,
+    WikiCreateTool, WikiDeleteTool, WikiEditTool, WikiGetTool, WikiLinksTool, WikiListTool,
+    WikiMentionsTool, WikiPatchTool, WikiPurgeTool, WikiRestoreTool, WikiRestoreVersionTool,
+    WikiSearchTool, WikiUpdateTool, WikiVersionsTool, wiki_read_registrations,
+    wiki_write_registrations,
 };
 
 /// success_json 的回执正文(Value),断言用。
@@ -466,11 +467,65 @@ async fn registrations_cover_all_tools() {
     let handle = Arc::new(start(storage));
     let read = wiki_read_registrations(handle.clone());
     let write = wiki_write_registrations(handle);
-    assert_eq!(read.len(), 5);
+    assert_eq!(read.len(), 6);
     assert_eq!(write.len(), 8);
     // 定义齐全:名字与参数 schema 均非空。
     for reg in read.iter().chain(write.iter()) {
         assert!(reg.definition.name.starts_with("wiki_"));
         assert!(!reg.definition.description.is_empty());
     }
+}
+
+#[tokio::test]
+async fn list_browses_without_query_and_pages() {
+    let (handle, create, _) = fixture().await;
+    let list = WikiListTool {
+        handle: handle.clone(),
+    };
+
+    create
+        .execute(json!({ "title": "新笔记", "content": "x", "tags": ["recent"] }))
+        .await
+        .unwrap();
+    create
+        .execute(json!({ "title": " tagged", "content": "x", "tags": [" gwas  "] }))
+        .await
+        .unwrap();
+
+    // 无过滤:全部词条,最新在前。
+    let out = json_of(list.execute(json!({})).await.unwrap());
+    let titles: Vec<&str> = out["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, vec!["tagged", "新笔记"]);
+    assert_eq!(out["count"], 2);
+
+    // 标签过滤(trim 后匹配)。
+    let out = json_of(list.execute(json!({ "tags": ["gwas"] })).await.unwrap());
+    let titles: Vec<&str> = out["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, vec!["tagged"]);
+
+    // 分页。
+    let out = json_of(list.execute(json!({ "limit": 1 })).await.unwrap());
+    assert_eq!(out["count"], 1);
+    assert_eq!(out["entries"][0]["title"], "tagged");
+    let out = json_of(
+        list.execute(json!({ "limit": 1, "offset": 1 }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(out["entries"][0]["title"], "新笔记");
+
+    // 元数据里没有正文,但有 ctime/mtime。
+    let first = &out["entries"][0];
+    assert!(first.get("content").is_none());
+    assert!(first["mtime"].as_i64().unwrap() > 0);
 }

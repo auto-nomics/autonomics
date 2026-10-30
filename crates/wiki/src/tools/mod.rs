@@ -13,6 +13,7 @@ mod delete;
 mod edit;
 mod get;
 mod links;
+mod list;
 mod mentions;
 mod patch;
 mod purge;
@@ -27,6 +28,7 @@ pub use delete::{WikiDeleteInput, WikiDeleteTool};
 pub use edit::{WikiEditInput, WikiEditTool};
 pub use get::{WikiGetInput, WikiGetTool};
 pub use links::{WikiLinksInput, WikiLinksTool};
+pub use list::{WikiListInput, WikiListTool};
 pub use mentions::{WikiMentionsInput, WikiMentionsTool};
 pub use patch::{WikiPatchInput, WikiPatchTool};
 pub use purge::{WikiPurgeInput, WikiPurgeTool};
@@ -153,6 +155,10 @@ pub fn wiki_read_registrations(handle: Arc<WikiHandle>) -> Vec<ToolRegistration>
         }
         .into(),
         WikiGetTool {
+            handle: handle.clone(),
+        }
+        .into(),
+        WikiListTool {
             handle: handle.clone(),
         }
         .into(),
