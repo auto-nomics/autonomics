@@ -155,6 +155,16 @@ impl App {
             self.leader_pending = None;
             return true;
         }
+        // Backspace climbs one level (the panel's 返回 hint); at the root
+        // it closes, like LazyVim's which-key back.
+        if key.code == KeyCode::Backspace {
+            let mut prefix = self.leader_pending.take().unwrap_or_default();
+            if !prefix.is_empty() {
+                prefix.pop();
+                self.leader_pending = Some(prefix);
+            }
+            return true;
+        }
         let Some(ch) = key.code.as_char() else {
             // Chords (Ctrl+…, arrows, Enter) cancel the prefix and are
             // swallowed; re-press the chord if it was meant to act.

@@ -141,10 +141,11 @@ impl App {
             .render(inner, buf);
     }
 
-    /// The which-key hint strip: the pending leader prefix plus every
-    /// binding it offers, floating one row above the composer. Transient
-    /// by design — it disappears the moment the prefix resolves.
-    fn render_leader_hint(
+    /// The which-key panel: a bordered floating list anchored at the
+    /// bottom-right of the frame, showing the current prefix's bindings —
+    /// leaves first, then `+count group` rows — with an Esc / back footer
+    /// (LazyVim's which-key layout).
+    fn render_leader_panel(
         &self,
         area: ratatui::layout::Rect,
         buf: &mut ratatui::prelude::Buffer,
@@ -154,38 +155,116 @@ impl App {
             layout::Rect,
             style::{Color, Modifier, Style},
             text::{Line, Span},
-            widgets::{Clear, Paragraph, Widget},
+            widgets::{Block, Borders, Clear, Paragraph, Widget},
         };
+        use unicode_width::UnicodeWidthStr;
 
-        let width = area.width.saturating_sub(4).min(72);
-        if width < 10 {
+        let rows = super::leader::whichkey_rows(prefix);
+        let at_root = prefix.is_empty();
+
+        // Panel width fits the widest row (` key → label`) and the footer.
+        let key_col = 1usize;
+        let arrow_w = " → ".width();
+        let label_w = rows
+            .iter()
+            .map(|row| {
+                if row.is_group {
+                    format!("+{} {}", row.children, row.label).width()
+                } else {
+                    row.label.width()
+                }
+            })
+            .max()
+            .unwrap_or(10);
+        let footer_w = if at_root {
+            "Esc 关闭".width()
+        } else {
+            "Esc 关闭 · ⌫ 返回".width()
+        };
+        let inner_w = (key_col + arrow_w + label_w).max(footer_w + 2);
+        let width = (inner_w as u16 + 2)
+            .clamp(20, 44)
+            .min(area.width.saturating_sub(2));
+        let height = (rows.len() as u16 + 1 + 2) // rows + footer + borders
+            .min(area.height.saturating_sub(2))
+            .max(5);
+        if width == 0 || height == 0 {
             return;
         }
-        let x = area.x + (area.width - width) / 2;
-        let y = area.bottom().saturating_sub(3);
-        let strip = Rect::new(x, y, width, 1);
 
-        Clear.render(strip, buf);
-        let text = super::leader::whichkey_line(prefix, width as usize - 2);
-        let line = Line::from(vec![
-            Span::styled(
+        // Anchor at the bottom-right with a one-cell margin.
+        let x = area.right().saturating_sub(width).saturating_sub(1);
+        let y = area.bottom().saturating_sub(height).saturating_sub(1);
+        let panel = Rect::new(x, y, width, height);
+
+        Clear.render(panel, buf);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(
                 " leader ",
                 Style::default()
                     .fg(Color::Black)
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(format!(" {text}"), Style::default().fg(Color::Gray)),
-            Span::styled("  Esc 取消", Style::default().fg(Color::DarkGray)),
-        ]);
-        Paragraph::new(line).render(strip, buf);
-        // Frame the strip so it reads as floating over the transcript.
-        for sx in strip.x..strip.right() {
-            buf.set_style(
-                ratatui::layout::Rect::new(sx, strip.y, 1, 1),
-                Style::default().bg(Color::Rgb(20, 30, 40)),
-            );
+            ))
+            .border_style(Style::default().fg(Color::Cyan));
+        let inner = block.inner(panel);
+        block.render(panel, buf);
+
+        let key_style = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let arrow_style = Style::default().fg(Color::DarkGray);
+        let group_style = Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD);
+        let leaf_style = Style::default().fg(Color::Gray);
+
+        // Rows stop one row above the footer; overflow is clipped (the
+        // binding trees are small enough to fit at any sane terminal size).
+        let list_bottom = inner.bottom().saturating_sub(1);
+        for (offset, row) in rows.iter().enumerate() {
+            let row_y = inner.y + offset as u16;
+            if row_y >= list_bottom {
+                break;
+            }
+            let key_text = match row.key {
+                ' ' => "\u{2423}".to_string(),
+                k => k.to_string(),
+            };
+            let label = if row.is_group {
+                format!("+{} {}", row.children, row.label)
+            } else {
+                row.label.to_string()
+            };
+            let line = Line::from(vec![
+                Span::styled(format!(" {key_text}"), key_style),
+                Span::styled(" → ", arrow_style),
+                Span::styled(
+                    label,
+                    if row.is_group {
+                        group_style
+                    } else {
+                        leaf_style
+                    },
+                ),
+            ]);
+            Paragraph::new(line).render(Rect::new(inner.x, row_y, inner.width, 1), buf);
         }
+
+        // Footer: close always; away from the root, the back key.
+        let mut footer = vec![Span::styled(
+            "Esc 关闭",
+            Style::default().fg(Color::DarkGray),
+        )];
+        if !at_root {
+            footer.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
+            footer.push(Span::styled("⌫ 返回", Style::default().fg(Color::Yellow)));
+        }
+        Paragraph::new(Line::from(footer)).render(
+            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
+            buf,
+        );
     }
 
     pub(super) fn render(&mut self, frame: &mut Frame) {
@@ -448,9 +527,9 @@ impl App {
                 );
         }
 
-        // ── Which-key hint (leader prefix active) ──
+        // ── Which-key panel (leader prefix active) ──
         if let Some(prefix) = &self.leader_pending {
-            self.render_leader_hint(frame.area(), frame.buffer_mut(), prefix);
+            self.render_leader_panel(frame.area(), frame.buffer_mut(), prefix);
         }
 
         // ── Toast notifications (top-most overlay, bottom-right corner) ──

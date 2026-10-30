@@ -218,39 +218,46 @@ pub(super) fn children_of(prefix: &[char]) -> Option<&'static [LeaderNode]> {
     Some(children)
 }
 
-/// Render the which-key hint line for a prefix: the pending keys followed
-/// by every child as `key label` pairs (truncated to `width` columns).
-pub(super) fn whichkey_line(prefix: &[char], width: usize) -> String {
-    use unicode_width::UnicodeWidthStr;
+/// One display row of the which-key panel.
+pub(super) struct WhichKeyRow {
+    pub key: char,
+    pub label: &'static str,
+    pub is_group: bool,
+    /// Group only: number of direct children.
+    pub children: usize,
+}
 
-    let mut text = String::from("␣");
-    for &key in prefix {
-        text.push(key);
-    }
-    text.push_str("  ");
+/// Rows for the panel at `prefix`: leaves first, then groups — the same
+/// order LazyVim's which-key panel uses.
+pub(super) fn whichkey_rows(prefix: &[char]) -> Vec<WhichKeyRow> {
     let Some(children) = children_of(prefix) else {
-        return text;
+        return Vec::new();
     };
+    let mut rows: Vec<WhichKeyRow> = Vec::new();
     for node in children {
-        let key = match node.key() {
-            ' ' => "␣".to_string(),
-            k => k.to_string(),
-        };
-        text.push_str(&format!("{key} {}  ", node.label()));
-    }
-    // Trim whole trailing segments that don't fit; the hint is glanceable
-    // guidance, not a complete map (the palette lists everything).
-    while text.width() > width && text.contains("  ") {
-        let Some(cut) = text.trim_end().rfind("  ") else {
-            break;
-        };
-        text.truncate(cut);
-        text = text.trim_end().to_string();
-        if !text.ends_with(' ') {
-            text.push(' ');
+        match node {
+            LeaderNode::Leaf { key, label, .. } => rows.push(WhichKeyRow {
+                key: *key,
+                label,
+                is_group: false,
+                children: 0,
+            }),
+            LeaderNode::Group {
+                key,
+                label,
+                children,
+            } => rows.push(WhichKeyRow {
+                key: *key,
+                label,
+                is_group: true,
+                children: children.len(),
+            }),
         }
     }
-    text
+    // Stable sort: leaves (is_group = false) before groups (true),
+    // insertion order preserved within each class.
+    rows.sort_by_key(|row| row.is_group);
+    rows
 }
 
 #[cfg(test)]
@@ -287,14 +294,22 @@ mod tests {
     }
 
     #[test]
-    fn whichkey_line_lists_children_and_truncates() {
-        use unicode_width::UnicodeWidthStr;
-        let line = whichkey_line(&[], 200);
-        assert!(line.starts_with('␣'), "got: {line}");
-        assert!(line.contains("agent"), "got: {line}");
-        // Narrow width keeps whole segments only.
-        let narrow = whichkey_line(&[], 20);
-        assert!(narrow.width() <= 20, "got: {narrow} ({})", narrow.width());
+    fn whichkey_rows_list_leaves_before_groups_with_counts() {
+        let rows = whichkey_rows(&[]);
+        assert!(rows.iter().take_while(|row| !row.is_group).count() >= 10);
+        let groups: Vec<&WhichKeyRow> = rows.iter().filter(|row| row.is_group).collect();
+        // Exactly two groups at the root, with their child counts.
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].label, "agent");
+        assert_eq!(groups[0].children, 6);
+        assert_eq!(groups[1].label, "视图");
+        assert_eq!(groups[1].children, 8);
+        // A group prefix lists only leaves.
+        let inner = whichkey_rows(&['a']);
+        assert!(inner.iter().all(|row| !row.is_group));
+        assert_eq!(inner.len(), 6);
+        // A leaf prefix is a stale prefix — no rows.
+        assert!(whichkey_rows(&['q']).is_empty());
     }
 
     #[test]
