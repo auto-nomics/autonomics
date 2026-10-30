@@ -128,10 +128,6 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // ── StatusBar ──
         let status_bar = StatusBar {
             status: &ts.status,
-            input_tokens: ts.latest_turn_input_tokens,
-            output_tokens: ts.latest_turn_output_tokens,
-            cache_read_tokens: ts.latest_turn_cache_read_tokens,
-            cache_creation_tokens: ts.latest_turn_cache_creation_tokens,
             context_used: ts.latest_turn_context_used,
             context_window: self.context_window,
             model_name: self.active_model,

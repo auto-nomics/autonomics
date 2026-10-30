@@ -9,18 +9,16 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::state::{AgentStatus, CompactState};
 
-/// 1-row status bar showing agent state, token counts, and active model.
+/// 1-row status bar showing agent state and active model, drawn on a
+/// dark-navy background strip spanning the full width.
 ///
-/// Status + tokens are left-aligned; the model name is right-aligned on the
-/// same row so both fit in a single line. While compacting, the status
-/// segment expands with live pass details (phase, scale, generated tokens,
-/// elapsed seconds).
+/// Status is left-aligned; kms activity and the context-window readout
+/// follow as separated segments, and the model name is right-aligned on
+/// the same row so both fit in a single line. While compacting, the
+/// status segment expands with live pass details (phase, scale,
+/// generated tokens, elapsed seconds).
 pub struct StatusBar<'a> {
     pub status: &'a AgentStatus,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
     /// Total prompt tokens billed for the latest turn (input + cache_read +
     /// cache_creation). Counts against the model's context window.
     pub context_used: u64,
@@ -70,55 +68,43 @@ impl Widget for StatusBar<'_> {
             _ => base_text.to_string(),
         };
 
-        let out_tok = format_tokens(self.output_tokens);
         let ctx_used = format_tokens(self.context_used);
-        // `in:` shows the absolute prompt size (input + cache_read + cache_creation).
-        // Anthropic's `input_tokens` is uncached-only; adding the cache portions
-        // here gives the user the full token count billed for the prompt.
-        let absolute_in = self.input_tokens + self.cache_read_tokens + self.cache_creation_tokens;
-        let absolute_in_tok = format_tokens(absolute_in);
-        let cache_hit = self.cache_read_tokens + self.cache_creation_tokens;
+
+        // Dark-navy strip behind the whole row; every span (and the gap
+        // filler) carries it so the bar reads as one solid band.
+        let bg = Style::default().bg(Color::Rgb(24, 34, 46));
+        let base = |style: Style| style.patch(bg);
 
         let mut spans = vec![
-            Span::styled(indicator, Style::default().fg(indicator_color)),
-            Span::raw(" "),
+            Span::styled(indicator, base(Style::default().fg(indicator_color))),
+            Span::styled(" ", bg),
             Span::styled(
                 status_text,
-                Style::default()
-                    .fg(indicator_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  │  "),
-            Span::styled(
-                format!("in: {}", absolute_in_tok),
-                Style::default().fg(Color::Gray),
+                base(
+                    Style::default()
+                        .fg(indicator_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ),
         ];
-        // Cache annotation: shown only when cache > 0.
-        if cache_hit > 0 {
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(
-                format!("(cache: {})", format_tokens(cache_hit)),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("out: {}", out_tok),
-            Style::default().fg(Color::Gray),
-        ));
 
         if let Some(kms_activity) = self.kms_activity {
-            spans.push(Span::raw("  │  "));
-            spans.push(Span::styled("kms:", Style::default().fg(Color::DarkGray)));
-            spans.push(Span::raw(" "));
-            spans.push(Span::styled(kms_activity, Style::default().fg(Color::Cyan)));
+            spans.push(Span::styled("  │  ", bg));
+            spans.push(Span::styled(
+                "kms:",
+                base(Style::default().fg(Color::DarkGray)),
+            ));
+            spans.push(Span::styled(" ", bg));
+            spans.push(Span::styled(
+                kms_activity,
+                base(Style::default().fg(Color::Cyan)),
+            ));
         }
 
         // Context window usage — shows percentage, bar, and absolute tokens.
         if self.context_used > 0 {
-            spans.push(Span::raw("  │  "));
-            spans.push(Span::styled("ctx:", Style::default().fg(Color::Gray)));
+            spans.push(Span::styled("  │  ", bg));
+            spans.push(Span::styled("ctx:", base(Style::default().fg(Color::Gray))));
             if let Some(window) = self.context_window {
                 if window > 0 {
                     let pct = (self.context_used * 100) / window;
@@ -129,24 +115,49 @@ impl Widget for StatusBar<'_> {
                         61..=85 => Color::Yellow,
                         _ => Color::Red,
                     };
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(format!("{pct}%"), Style::default().fg(color)));
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(bar, Style::default().fg(color)));
-                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(" ", bg));
+                    spans.push(Span::styled(
+                        format!("{pct}%"),
+                        base(Style::default().fg(color)),
+                    ));
+                    spans.push(Span::styled(" ", bg));
+                    spans.push(Span::styled(bar, base(Style::default().fg(color))));
+                    spans.push(Span::styled(" ", bg));
                     spans.push(Span::styled(
                         format!("{}/{}k", ctx_used, window / 1_000),
-                        Style::default().fg(Color::DarkGray),
+                        base(Style::default().fg(Color::DarkGray)),
                     ));
                 } else {
-                    spans.push(Span::raw(" "));
-                    spans.push(Span::styled(ctx_used, Style::default().fg(Color::Gray)));
+                    spans.push(Span::styled(" ", bg));
+                    spans.push(Span::styled(
+                        ctx_used,
+                        base(Style::default().fg(Color::Gray)),
+                    ));
                 }
             } else {
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(ctx_used, Style::default().fg(Color::Gray)));
+                spans.push(Span::styled(" ", bg));
+                spans.push(Span::styled(
+                    ctx_used,
+                    base(Style::default().fg(Color::Gray)),
+                ));
             }
         }
+
+        // Pad the row to its full width so the background strip is
+        // continuous; the right-aligned model overlaps the padding.
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let model_reserve = self
+            .model_name
+            .map(|_| {
+                "model ".width()
+                    + self
+                        .reasoning_effort
+                        .map(|e| format!(" ⋅ {e}").width())
+                        .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        let pad = (area.width as usize).saturating_sub(used + model_reserve);
+        spans.push(Span::styled(" ".repeat(pad), bg));
 
         let line = Line::from(spans);
 
@@ -161,18 +172,18 @@ impl Widget for StatusBar<'_> {
             if total_w < area.width as usize {
                 let x = area.x + area.width - total_w as u16;
                 let y = area.y;
-                buf.set_string(x, y, label, Style::default().fg(Color::DarkGray));
+                buf.set_string(x, y, label, base(Style::default().fg(Color::DarkGray)));
                 buf.set_string(
                     x + label.width() as u16,
                     y,
                     name,
-                    Style::default().fg(Color::Gray),
+                    base(Style::default().fg(Color::Gray)),
                 );
                 buf.set_string(
                     x + (label.width() + name.width()) as u16,
                     y,
                     effort_str,
-                    Style::default().fg(Color::Cyan),
+                    base(Style::default().fg(Color::Cyan)),
                 );
             }
         }
