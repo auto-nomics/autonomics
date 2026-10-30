@@ -137,7 +137,11 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // ── Chat area (full width — the plan/tasks panes are popups now) ──
         let middle = layout[0];
 
-        let chat_block = Block::default().padding(Padding::new(2, 2, 2, 2));
+        // Left/right keep a 2-column gutter; the top padding is 0 so the
+        // transcript starts on the first row now that no tab bar sits
+        // above it, and the bottom keeps breathing room above the
+        // composer.
+        let chat_block = Block::default().padding(Padding::new(2, 2, 0, 2));
         let chat_inner_area = chat_block.inner(middle);
 
         let viewport_height = chat_inner_area.height;
