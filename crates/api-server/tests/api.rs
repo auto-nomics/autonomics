@@ -65,28 +65,6 @@ async fn aggregate_router_exposes_bib_module() {
 }
 
 #[tokio::test]
-async fn server_serves_the_bibliography_frontend() {
-    let shared = BibShared::open_in_memory().await.unwrap();
-    let app = api_server::api_router(shared, None);
-
-    for (path, marker) in [
-        ("/", "Autonomics Bibliography"),
-        ("/app.js", "Select a record to inspect"),
-        ("/styles.css", "--primary"),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(request("GET", path, None))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "failed path: {path}");
-        let body = response.into_body().collect().await.unwrap().to_bytes();
-        let body = String::from_utf8_lossy(&body).to_string();
-        assert!(body.contains(marker), "missing marker for {path}");
-    }
-}
-
-#[tokio::test]
 async fn bib_collections_and_annotations_use_nested_routes() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let app = api_server::api_router(shared, None);
@@ -703,9 +681,6 @@ async fn api_bearer_auth_protects_api_routes_only() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let response = app.oneshot(request("GET", "/", None)).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 }
 

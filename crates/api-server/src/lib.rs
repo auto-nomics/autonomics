@@ -13,6 +13,5 @@ mod subscriptions;
 pub mod wiki;
 
 pub use server::{
-    DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, frontend_router,
-    start,
+    DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, start,
 };

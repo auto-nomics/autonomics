@@ -67,8 +67,11 @@ async fn setup(hold: bool) -> (BibShared, Arc<Source>, Router) {
         hold: AtomicBool::new(hold),
     });
     shared.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
-    let app =
-        api_server::api_router_with_auth(shared.clone(), None, Some("subscription-test-token".into()));
+    let app = api_server::api_router_with_auth(
+        shared.clone(),
+        None,
+        Some("subscription-test-token".into()),
+    );
     (shared, source, app)
 }
 fn spec() -> Value {
