@@ -30,7 +30,8 @@ pub use search::{
     SearchRetrieval, SearchScope, SearchSort, SemanticSearchEvidence,
 };
 pub use types::{
-    AddedBy, Annotation, AnnotationKind, AnnotationRect, AnnotationTextRange, AnnotationUpdate,
+    AddedBy, AnchoredAnnotation, Annotation, AnnotationAnchorProof, AnnotationKind,
+    AnnotationRect, AnnotationTextRange, AnnotationUpdate, ResolvedAnchor,
     Article, ArticleRole, ArticleSource, Author, Collection, CollectionArticle, CollectionStatus,
     ExportFormat, ExtractStatus, FetchStatus, FileFormat, FullText, FullTextSource, IdKind,
     Identifier, LibraryEntry, Reference, SearchHit, TextFormat,

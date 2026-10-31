@@ -339,6 +339,9 @@ pub(crate) struct AnnotationSync {
     pub(crate) page: Option<u32>,
     pub(crate) color: Option<String>,
     pub(crate) rects: Option<Vec<AnnotationRect>>,
+    /// Comment override — an agent note attached to a highlight. When
+    /// `None` the kind-based mapping applies (comment kind only).
+    pub(crate) comment: Option<String>,
     pub(crate) created_at: String,
 }
 
@@ -504,7 +507,7 @@ pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
     {
         let mut rows = tx
             .query(
-                "SELECT id, article_id, kind, content, page, color, rects, created_at \
+                "SELECT id, article_id, kind, content, page, color, rects, comment, created_at \
                  FROM annotations",
                 turso::params![],
             )
@@ -519,7 +522,11 @@ pub(crate) async fn migrate(conn: &Connection) -> Result<()> {
                 color: opt_string(row.get_value(5)?),
                 rects: opt_string(row.get_value(6)?)
                     .and_then(|value| serde_json::from_str(&value).ok()),
-                created_at: opt_string(row.get_value(7)?).unwrap_or_default(),
+                comment: {
+                    let comment = opt_string(row.get_value(7)?).unwrap_or_default();
+                    (!comment.is_empty()).then_some(comment)
+                },
+                created_at: opt_string(row.get_value(8)?).unwrap_or_default(),
             });
         }
     }
@@ -956,6 +963,9 @@ pub(crate) async fn sync_annotation_item(
                 (Some(annotation.content.clone()), None)
             }
         };
+        // An explicit comment (agent note on a highlight) wins over the
+        // kind-based default, but `text` keeps the quoted source text.
+        let comment = annotation.comment.clone().or(comment);
         let normalized_text = text.as_deref().map(str::to_lowercase);
         let normalized_comment = comment.as_deref().map(str::to_lowercase);
         let position = annotation
@@ -1958,6 +1968,7 @@ mod tests {
                     height: 0.4,
                     space: None,
                     text_range: None,
+                    anchor: None,
                 }]),
                 None,
             )
