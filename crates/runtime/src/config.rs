@@ -617,9 +617,6 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
-    /// Whether to enable wiki knowledge-base tools (wiki_*).
-    #[serde(default)]
-    pub enable_wiki: bool,
     /// Text-embedding provider used by observation clustering.
     #[serde(default)]
     pub embedding: text_embedding::EmbeddingConfig,
@@ -846,7 +843,6 @@ impl RuntimeConfig {
             )
             .unwrap_or(true),
             enable_kms: resolve_flag(base, |b| b.enable_kms, false),
-            enable_wiki: resolve_flag(base, |b| b.enable_wiki, false),
             embedding: base.and_then(|b| b.embedding.clone()).unwrap_or_default(),
             enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
             skill_evolution_interval_secs: base
@@ -1533,7 +1529,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
     pub(crate) enable_kms: Option<bool>,
-    pub(crate) enable_wiki: Option<bool>,
     pub(crate) embedding: Option<text_embedding::EmbeddingConfig>,
     pub(crate) enable_skill_evolution: Option<bool>,
     pub(crate) skill_evolution_interval_secs: Option<u64>,
@@ -1734,12 +1729,6 @@ impl RuntimeConfigBuilder {
     /// Enable KMS knowledge-graph tools.
     pub fn enable_kms(mut self, enabled: bool) -> Self {
         self.enable_kms = Some(enabled);
-        self
-    }
-
-    /// Enable wiki knowledge-base tools.
-    pub fn enable_wiki(mut self, enabled: bool) -> Self {
-        self.enable_wiki = Some(enabled);
         self
     }
 

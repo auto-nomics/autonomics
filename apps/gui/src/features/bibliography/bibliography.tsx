@@ -343,22 +343,22 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
   );
 }
 
-export function BibliographyView() {
-  const [workspace, setWorkspace] = useState<"library" | "discover" | "snapshots" | "subscriptions">("library");
-  const [discoveryMounted, setDiscoveryMounted] = useState(false);
-  const [snapshotsMounted, setSnapshotsMounted] = useState(false);
-  const [subscriptionsMounted, setSubscriptionsMounted] = useState(false);
+export type BibliographyWorkspace = "library" | "discover" | "snapshots" | "subscriptions";
+
+// The workspace tabs live in the app sidebar; this component is controlled by
+// the selected workspace and only keeps the lazy-mount bookkeeping: a panel
+// is created on first visit, then stays mounted (hidden) so its state
+// survives navigation.
+export function BibliographyView({ workspace = "library" }: { workspace?: BibliographyWorkspace } = {}) {
+  const [mounted, setMounted] = useState<Set<BibliographyWorkspace>>(() => new Set([workspace]));
+  useEffect(() => {
+    setMounted(current => (current.has(workspace) ? current : new Set([...current, workspace])));
+  }, [workspace]);
   return <div className="flex min-h-0 flex-1 flex-col">
-    <nav aria-label="Bibliography workspace" className="flex min-h-9 shrink-0 flex-wrap items-center gap-0.5 border-b px-1.5">
-      <Button size="sm" variant={workspace === "library" ? "secondary" : "ghost"} aria-current={workspace === "library" ? "page" : undefined} onClick={() => setWorkspace("library")}>Library</Button>
-      <Button size="sm" variant={workspace === "discover" ? "secondary" : "ghost"} aria-current={workspace === "discover" ? "page" : undefined} onClick={() => { setDiscoveryMounted(true); setWorkspace("discover"); }}>Discover</Button>
-      <Button size="sm" variant={workspace === "snapshots" ? "secondary" : "ghost"} aria-current={workspace === "snapshots" ? "page" : undefined} onClick={() => { setSnapshotsMounted(true); setWorkspace("snapshots"); }}>Snapshots</Button>
-      <Button size="sm" variant={workspace === "subscriptions" ? "secondary" : "ghost"} aria-current={workspace === "subscriptions" ? "page" : undefined} onClick={() => { setSubscriptionsMounted(true); setWorkspace("subscriptions"); }}>Subscriptions</Button>
-    </nav>
     <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView /></div>
-    {discoveryMounted && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
-    {snapshotsMounted && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={workspace === "snapshots"} /></div>}
-    {subscriptionsMounted && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={workspace === "subscriptions"} /></div>}
+    {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
+    {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={workspace === "snapshots"} /></div>}
+    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={workspace === "subscriptions"} /></div>}
   </div>;
 }
 

@@ -13,6 +13,16 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 use tower::ServiceExt;
 
+/// 每个路由构建配一个独立内存 wiki(路由状态需要真实句柄)。
+async fn wiki_handle() -> std::sync::Arc<wiki::service::WikiHandle> {
+    let storage = std::sync::Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    std::sync::Arc::new(wiki::service::start(storage))
+}
 fn request(body: Value, id: Option<&str>) -> Request<Body> {
     let mut builder =
         Request::post("/api/v1/bib/search/explore").header("content-type", "application/json");
@@ -43,7 +53,7 @@ async fn app(provider: Router) -> (Router, tokio::task::JoinHandle<()>) {
             .with_reco_base_url(&origin)
             .with_max_retries(0),
     );
-    (api_server::api_router(shared, None), task)
+    (api_server::api_router(shared, wiki_handle().await), task)
 }
 
 #[tokio::test]
@@ -223,7 +233,7 @@ async fn graph_selection_uses_fresh_exact_discovery_and_preserves_curated_librar
         .push(bib_types::Identifier::doi("10.1234/curated"));
     curated.keywords = vec!["manual-tag".into()];
     shared.bib.upsert_article(&curated).await.unwrap();
-    let app = api_server::api_router(shared.clone(), None);
+    let app = api_server::api_router(shared.clone(), wiki_handle().await);
     let graph = body(
         app.clone()
             .oneshot(request(input("references"), None))

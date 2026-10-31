@@ -1,12 +1,8 @@
 //! Wiki REST module: entries / recycle bin / versions / search / links /
 //! mentions / image attachments, all funneled through the worker handle.
 //!
-//! Mounted at `/api/v1/wiki`. The state is `Option<Arc<WikiHandle>>` —
-//! `None` (runtime `enable_wiki` off) keeps the routes registered but every
-//! handler answers 503, so clients can probe capability without probing
-//! routes.
-
-use std::sync::Arc;
+//! Mounted at `/api/v1/wiki`. The state is the worker handle
+//! (`Arc<WikiHandle>`); the wiki feature has no runtime gate.
 
 use axum::{
     Json, Router,
@@ -15,6 +11,8 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete as rdelete, get, post, put},
 };
+use std::sync::Arc;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 use wiki::service::WikiHandle;
@@ -118,13 +116,6 @@ fn api_err(e: wiki::error::Error) -> ApiErr {
     }
 }
 
-fn state_503() -> ApiErr {
-    error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "wiki is disabled (enable_wiki)",
-    )
-}
-
 fn parse_uuid(raw: &str, what: &str) -> Result<uuid::Uuid, ApiErr> {
     uuid::Uuid::parse_str(raw).map_err(|_| {
         (
@@ -157,7 +148,7 @@ fn meta_json(m: &wiki::storage::types::AttachmentMeta) -> Value {
     })
 }
 
-pub fn router(handle: Option<Arc<WikiHandle>>) -> Router {
+pub fn router(handle: Arc<WikiHandle>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/entries", get(list_entries).post(create_entry))
@@ -194,23 +185,16 @@ pub fn router(handle: Option<Arc<WikiHandle>>) -> Router {
         .with_state(handle)
 }
 
-async fn health(State(handle): State<Option<Arc<WikiHandle>>>) -> impl IntoResponse {
-    Json(json!({
-        "status": if handle.is_some() { "ok" } else { "disabled" },
-    }))
-}
-
-fn handle_or_503(handle: &Option<Arc<WikiHandle>>) -> Result<Arc<WikiHandle>, ApiErr> {
-    handle.clone().ok_or_else(state_503)
+async fn health() -> impl IntoResponse {
+    Json(json!({ "status": "ok" }))
 }
 
 // ─────────────────────── entries ───────────────────────
 
 async fn list_entries(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Query(query): Query<ListQuery>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     // title 精确查找优先(标题可能含斜杠,不适合做路径段)。
     if let Some(title) = query.title.as_deref() {
         let entry = handle
@@ -240,10 +224,9 @@ async fn list_entries(
 }
 
 async fn create_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Json(body): Json<CreateEntryBody>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -261,22 +244,17 @@ async fn create_entry(
     Ok(Json(json!({ "id": entry.id, "title": entry.title })))
 }
 
-async fn get_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn get_entry(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     let entry = handle.get_entry(id).await.map_err(api_err)?;
     Ok(Json(json!(entry)))
 }
 
 async fn update_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path(id): Path<String>,
     Json(body): Json<UpdateEntryBody>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let id = parse_uuid(&id, "entry")?;
     let mut entry = handle.get_entry(id).await.map_err(api_err)?;
     // 纯元数据合并(与工具面同语义):正文改动走 wiki_patch 端点链路
@@ -306,11 +284,10 @@ struct PutContentBody {
 /// 整篇替换正文(存储层同事务重建倒排/链接/版本快照)。元数据更新走
 /// `PUT /entries/{id}`。
 async fn put_entry_content(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path(id): Path<String>,
     Json(body): Json<PutContentBody>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let id = parse_uuid(&id, "entry")?;
     let mut entry = handle.get_entry(id).await.map_err(api_err)?;
     entry.content = body.content;
@@ -326,38 +303,25 @@ async fn put_entry_content(
     })))
 }
 
-async fn delete_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn delete_entry(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     handle.delete_entry(id).await.map_err(api_err)?;
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
 
-async fn restore_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn restore_entry(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     handle.restore_entry(id).await.map_err(api_err)?;
     Ok(Json(json!({ "restored": true, "id": id })))
 }
 
-async fn purge_entry(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn purge_entry(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     handle.purge_entry(id).await.map_err(api_err)?;
     Ok(Json(json!({ "purged": true, "id": id })))
 }
 
-async fn recycle(State(handle): State<Option<Arc<WikiHandle>>>) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn recycle(State(handle): State<Arc<WikiHandle>>) -> ApiResult {
     let items = handle.list_deleted().await.map_err(api_err)?;
     let count = items.len();
     Ok(Json(json!({ "count": count, "items": items })))
@@ -365,11 +329,7 @@ async fn recycle(State(handle): State<Option<Arc<WikiHandle>>>) -> ApiResult {
 
 // ─────────────────────── versions ───────────────────────
 
-async fn list_versions(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn list_versions(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     let versions = handle.list_versions(id).await.map_err(api_err)?;
     let count = versions.len();
@@ -377,20 +337,18 @@ async fn list_versions(
 }
 
 async fn get_version(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path((id, version)): Path<(String, i64)>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let id = parse_uuid(&id, "entry")?;
     let entry = handle.get_version(id, version).await.map_err(api_err)?;
     Ok(Json(json!({ "version": version, "entry": entry })))
 }
 
 async fn restore_version(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path((id, version)): Path<(String, i64)>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let id = parse_uuid(&id, "entry")?;
     handle.restore_version(id, version).await.map_err(api_err)?;
     Ok(Json(json!({ "rolled_back_to": version, "id": id })))
@@ -399,10 +357,9 @@ async fn restore_version(
 // ─────────────────────── search / graph ───────────────────────
 
 async fn search_get(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Query(query): Query<SearchQuery>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let q = query.q.unwrap_or_default();
     let hits = match parse_tags(&query.tags) {
         tags if tags.is_empty() => handle.search(&q, query.limit.unwrap_or(10)).await,
@@ -423,10 +380,9 @@ async fn search_get(
 }
 
 async fn search_post(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Json(body): Json<SearchBody>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let hits = handle
         .search_filtered(
             &body.query,
@@ -442,8 +398,7 @@ async fn search_post(
     Ok(Json(json!({ "results": hits })))
 }
 
-async fn links(State(handle): State<Option<Arc<WikiHandle>>>, Path(id): Path<String>) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn links(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     let entry = handle.get_entry(id).await.map_err(api_err)?;
     let out = handle
@@ -467,11 +422,7 @@ async fn links(State(handle): State<Option<Arc<WikiHandle>>>, Path(id): Path<Str
     })))
 }
 
-async fn mentions(
-    State(handle): State<Option<Arc<WikiHandle>>>,
-    Path(id): Path<String>,
-) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
+async fn mentions(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_uuid(&id, "entry")?;
     let entry = handle.get_entry(id).await.map_err(api_err)?;
     let ids = handle.get_mentions(&entry.id).await.map_err(api_err)?;
@@ -482,10 +433,9 @@ async fn mentions(
 // ─────────────────────── attachments ───────────────────────
 
 async fn list_attachments(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let id = parse_uuid(&id, "entry")?;
     let items = handle.list_attachments(id).await.map_err(api_err)?;
     let count = items.len();
@@ -496,11 +446,10 @@ async fn list_attachments(
 }
 
 async fn upload_attachment(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path(id): Path<String>,
     mut multipart: Multipart,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let entry_id = parse_uuid(&id, "entry")?;
     let mut filename: Option<String> = None;
     let mut data: Option<Vec<u8>> = None;
@@ -538,13 +487,9 @@ async fn upload_attachment(
 }
 
 async fn download_attachment(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path((id, attachment_id)): Path<(String, String)>,
 ) -> Result<Response, Response> {
-    let handle = match handle_or_503(&handle) {
-        Ok(handle) => handle,
-        Err(response) => return Err(response.into_response()),
-    };
     let entry_id = match parse_uuid(&id, "entry") {
         Ok(id) => id,
         Err(response) => return Err(response.into_response()),
@@ -579,10 +524,9 @@ async fn download_attachment(
 }
 
 async fn detach_attachment(
-    State(handle): State<Option<Arc<WikiHandle>>>,
+    State(handle): State<Arc<WikiHandle>>,
     Path((id, attachment_id)): Path<(String, String)>,
 ) -> ApiResult {
-    let handle = handle_or_503(&handle)?;
     let entry_id = parse_uuid(&id, "entry")?;
     let attachment_id = parse_uuid(&attachment_id, "attachment")?;
     handle

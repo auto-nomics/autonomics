@@ -86,26 +86,20 @@ fn primary_local_ip(destination: &str) -> Option<IpAddr> {
 ///
 /// Feature modules expose private route tables. This is the single place where
 /// future REST modules are mounted under the public `/api` namespace.
-pub fn api_router(
-    shared: bib_base::BibShared,
-    wiki: Option<Arc<wiki::service::WikiHandle>>,
-) -> Router {
+pub fn api_router(shared: bib_base::BibShared, wiki: Arc<wiki::service::WikiHandle>) -> Router {
     api_router_with_auth(shared, wiki, None)
 }
 
 /// Build the aggregate router with an optional bearer token for `/api` routes.
 pub fn api_router_with_auth(
     shared: bib_base::BibShared,
-    wiki: Option<Arc<wiki::service::WikiHandle>>,
+    wiki: Arc<wiki::service::WikiHandle>,
     bearer_token: Option<String>,
 ) -> Router {
     let auth_state = BearerAuthState {
         token: Arc::new(bearer_token.filter(|token| !token.trim().is_empty())),
     };
     Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(app_javascript))
-        .route("/styles.css", get(styles))
         .route("/api/v1", get(api_index))
         .route("/api/health", get(health))
         .nest("/api/v1/bib", crate::bib::router(shared))
@@ -159,34 +153,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .zip(right)
         .fold(0, |difference, (left, right)| difference | (left ^ right))
         == 0
-}
-
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../frontend/dist/index.html"))
-}
-
-/// Static routes for the embedded web frontend, exposed so the gateway
-/// daemon can mount them on its own listener (the TUI process no longer
-/// serves them itself).
-pub fn frontend_router() -> Router {
-    Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(app_javascript))
-        .route("/styles.css", get(styles))
-}
-
-async fn app_javascript() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        include_str!("../frontend/dist/app.js"),
-    )
-}
-
-async fn styles() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("../frontend/dist/styles.css"),
-    )
 }
 
 async fn health() -> Json<serde_json::Value> {

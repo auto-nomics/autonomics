@@ -22,6 +22,17 @@ use std::{
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, Error>;
+/// 每个 router 构建配一个独立内存 wiki(路由状态需要真实句柄)。
+async fn wiki_handle() -> std::sync::Arc<wiki::service::WikiHandle> {
+    let storage = std::sync::Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    std::sync::Arc::new(wiki::service::start(storage))
+}
+
 const TOKEN: &str = "attachment-capacity-fixture";
 fn elapsed(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.
@@ -385,7 +396,7 @@ async fn main() -> Result<()> {
         .await?
         .with_file_storage(storage);
     let server = api_server::start(
-        api_server::api_router_with_auth(shared.clone(), None, Some(TOKEN.into())),
+        api_server::api_router_with_auth(shared.clone(), wiki_handle().await, Some(TOKEN.into())),
         "127.0.0.1:0",
     )
     .await?;
