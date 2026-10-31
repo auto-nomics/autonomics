@@ -1032,6 +1032,7 @@ dependencies = [
  "tokio",
  "tracing",
  "vfs",
+ "wiki",
 ]
 
 [[package]]

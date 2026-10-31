@@ -627,13 +627,11 @@ impl BibCore {
         let mut out = Vec::new();
         while let Some(row) = rows.next().await? {
             let article_id = row.get::<String>(0)?;
-            let (text, format) = match (
-                opt_string(row.get_value(1)?),
-                opt_string(row.get_value(2)?),
-            ) {
-                (Some(text), Some(raw_format)) => (text, TextFormat::from_str(&raw_format)),
-                _ => continue,
-            };
+            let (text, format) =
+                match (opt_string(row.get_value(1)?), opt_string(row.get_value(2)?)) {
+                    (Some(text), Some(raw_format)) => (text, TextFormat::from_str(&raw_format)),
+                    _ => continue,
+                };
             let attachment_key = crate::zotero_model::attachment_for_article(&conn, &article_id)
                 .await?
                 .map(|attachment| attachment.key);
@@ -1487,9 +1485,14 @@ mod tests {
         .await
         .unwrap();
         assert!(base.mark_extraction_running(article_id).await.unwrap());
-        base.record_extraction_success(article_id, "\u{feff}body\r\nlines\r", TextFormat::Plain, "test")
-            .await
-            .unwrap();
+        base.record_extraction_success(
+            article_id,
+            "\u{feff}body\r\nlines\r",
+            TextFormat::Plain,
+            "test",
+        )
+        .await
+        .unwrap();
         let stored = base.get_fulltext(article_id).await.unwrap().unwrap();
         assert_eq!(
             stored.text_content.as_deref(),
@@ -1581,7 +1584,12 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows.next().await.unwrap().unwrap().get::<String>(0).unwrap(),
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
             "repair"
         );
         drop(rows);

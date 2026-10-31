@@ -439,7 +439,9 @@ async fn mentions(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>)
     let ids = handle.get_mentions(&entry.id).await.map_err(api_err)?;
     let count = ids.len();
     let mentions = link_refs(&handle, ids).await;
-    Ok(Json(json!({ "count": count, "unlinked_mentions": mentions })))
+    Ok(Json(
+        json!({ "count": count, "unlinked_mentions": mentions }),
+    ))
 }
 
 // ─────────────────────── attachments ───────────────────────

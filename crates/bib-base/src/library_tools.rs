@@ -29,8 +29,8 @@
 
 use std::sync::Arc;
 
-use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use crate::shared::BibShared;
+use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;

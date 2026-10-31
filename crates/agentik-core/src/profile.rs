@@ -218,9 +218,7 @@ impl FromStr for AgentKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_name(s).ok_or_else(|| {
-            format!(
-                "unknown agent kind `{s}`; expected researcher, developer, browser, or curator"
-            )
+            format!("unknown agent kind `{s}`; expected researcher, developer, browser, or curator")
         })
     }
 }
@@ -535,7 +533,11 @@ mod tests {
     #[test]
     fn wiki_read_is_universal_and_write_is_curator_only() {
         for kind in AgentKind::ALL {
-            assert!(kind.enable_wiki_read(), "{} must read the wiki", kind.name());
+            assert!(
+                kind.enable_wiki_read(),
+                "{} must read the wiki",
+                kind.name()
+            );
             assert_eq!(
                 kind.enable_wiki_write(),
                 kind == AgentKind::Curator,

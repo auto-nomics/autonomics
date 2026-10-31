@@ -404,16 +404,14 @@ impl BibliographyState {
                     false
                 }
                 BibliographyFocus::Collections => {
-                    if let Some(id) = self.selected_collection.clone() {
-                        if self
+                    if let Some(id) = self.selected_collection.clone()
+                        && self
                             .collections
                             .iter()
                             .any(|c| c.parent_id.as_deref() == Some(id.as_str()))
-                        {
-                            if !self.expanded_collections.insert(id) {
-                                self.move_collection(true);
-                            }
-                        }
+                        && !self.expanded_collections.insert(id)
+                    {
+                        self.move_collection(true);
                     }
                     false
                 }

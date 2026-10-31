@@ -532,7 +532,6 @@ impl TursoMemoryStorage {
         })
     }
 
-
     /// Copy legacy in-agent.db memory tables into this knowledge database.
     ///
     /// The migration is row-by-row and marker-based, so repeated startup is a
@@ -554,7 +553,8 @@ impl TursoMemoryStorage {
             && Path::new(&path).exists()
         {
             self.recover_kms_era_entries(&path).await?;
-            self.set_metadata(KMS_ENTRIES_RECOVERY_MARKER, &path).await?;
+            self.set_metadata(KMS_ENTRIES_RECOVERY_MARKER, &path)
+                .await?;
             // The legacy marker is necessarily set in a unified database.
             return Ok(());
         }

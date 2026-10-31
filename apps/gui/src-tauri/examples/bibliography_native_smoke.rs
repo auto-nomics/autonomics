@@ -8,6 +8,17 @@ mod request_cancellation;
 use std::{sync::Arc, time::Duration};
 use tauri::Manager;
 
+/// 路由状态需要真实 wiki 句柄;smoke fixture 用独立内存库。
+async fn wiki_handle() -> Arc<wiki::service::WikiHandle> {
+    let storage = Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    Arc::new(wiki::service::start(storage))
+}
+
 #[tauri::command]
 fn smoke_done(app: tauri::AppHandle, result: serde_json::Value) {
     let output = std::env::var("BIB_NATIVE_SMOKE_OUTPUT")
@@ -36,9 +47,10 @@ fn main() {
         article.keywords = vec!["gene".into()];
         shared.bib.upsert_article(&article).await.unwrap();
         let db = shared.bib.clone();
-        let server = api_server::start(api_server::api_router(shared), "127.0.0.1:0")
-            .await
-            .unwrap();
+        let server =
+            api_server::start(api_server::api_router(shared, wiki_handle().await), "127.0.0.1:0")
+                .await
+                .unwrap();
         let http = reqwest::Client::new();
         for (name, text, preferred) in [
             ("preferred.txt", "Unrelated preferred file.", true),

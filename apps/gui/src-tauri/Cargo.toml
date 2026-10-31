@@ -33,3 +33,4 @@ api-server = { path = "../../../crates/api-server" }
 bib-base = { path = "../../../crates/bib-base" }
 bib-types = { path = "../../../crates/bib-types" }
 vfs = { path = "../../../crates/vfs" }
+wiki = { path = "../../../crates/wiki" }

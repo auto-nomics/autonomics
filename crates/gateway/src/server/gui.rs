@@ -24,6 +24,40 @@ pub fn router() -> Router {
         .route("/assets/gui.css", get(gui_stylesheet))
 }
 
+async fn gui_index() -> Html<&'static str> {
+    Html(GUI_INDEX)
+}
+
+async fn gui_javascript() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        GUI_JAVASCRIPT,
+    )
+}
+
+async fn gui_worker() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        GUI_WORKER,
+    )
+}
+
+async fn gui_stylesheet() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        GUI_STYLESHEET,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,38 +94,4 @@ mod tests {
             assert!(response.status().is_success(), "{uri}");
         }
     }
-}
-
-async fn gui_index() -> Html<&'static str> {
-    Html(GUI_INDEX)
-}
-
-async fn gui_javascript() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        GUI_JAVASCRIPT,
-    )
-}
-
-async fn gui_worker() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        GUI_WORKER,
-    )
-}
-
-async fn gui_stylesheet() -> impl IntoResponse {
-    (
-        [
-            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        GUI_STYLESHEET,
-    )
 }

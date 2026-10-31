@@ -136,8 +136,11 @@ async fn kms_era_database_is_reshaped_and_entries_recovered() {
         NIL
     );
     assert_eq!(
-        scalar_text(&conn, "SELECT scope_id FROM memory_semantic_observations WHERE id = 'o1'")
-            .await,
+        scalar_text(
+            &conn,
+            "SELECT scope_id FROM memory_semantic_observations WHERE id = 'o1'"
+        )
+        .await,
         NIL
     );
 
@@ -166,7 +169,9 @@ async fn kms_era_database_is_reshaped_and_entries_recovered() {
         assert_eq!(
             scalar_count(
                 &conn,
-                &format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = '{index}'")
+                &format!(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = '{index}'"
+                )
             )
             .await,
             1,

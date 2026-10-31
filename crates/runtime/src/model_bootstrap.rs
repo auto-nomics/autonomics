@@ -955,9 +955,13 @@ pub fn catalog_with_sdk_presets(
                 id: -(index as i64) - 1,
                 name: type_str.to_string(),
                 provider_type: type_str.to_string(),
-                base_url: registry::default_base_url(&provider_type).unwrap_or("").to_string(),
+                base_url: registry::default_base_url(&provider_type)
+                    .unwrap_or("")
+                    .to_string(),
                 api_key: String::new(),
-                auth_method: registry::default_auth_method(&provider_type).storage_tag().to_string(),
+                auth_method: registry::default_auth_method(&provider_type)
+                    .storage_tag()
+                    .to_string(),
             });
         }
         let stored: HashSet<String> = models
@@ -987,7 +991,8 @@ pub fn catalog_with_sdk_presets(
     }
     // Grouped by provider then model name: the GUI renders one flat list in
     // the composer picker and per-provider sections in the config page.
-    models.sort_by(|a, b| (&a.provider_name, &a.model_name).cmp(&(&b.provider_name, &b.model_name)));
+    models
+        .sort_by(|a, b| (&a.provider_name, &a.model_name).cmp(&(&b.provider_name, &b.model_name)));
     (providers, models)
 }
 
@@ -1422,14 +1427,23 @@ mod tests {
                 .find(|p| p.provider_type == type_str)
                 .unwrap_or_else(|| panic!("{type_str} has a provider row"));
             assert!(provider.id < 0, "{type_str} placeholder uses a negative id");
-            assert!(provider.api_key.is_empty(), "{type_str} placeholder carries no credentials");
-            let models: Vec<_> = models.iter().filter(|m| m.provider_name == type_str).collect();
+            assert!(
+                provider.api_key.is_empty(),
+                "{type_str} placeholder carries no credentials"
+            );
+            let models: Vec<_> = models
+                .iter()
+                .filter(|m| m.provider_name == type_str)
+                .collect();
             // Ollama discovers models from the local instance at runtime;
             // its static preset catalogue is intentionally empty.
             if type_str != "ollama" {
                 assert!(!models.is_empty(), "{type_str} contributes preset models");
             }
-            assert!(models.iter().all(|m| !m.custom), "{type_str} presets are not custom");
+            assert!(
+                models.iter().all(|m| !m.custom),
+                "{type_str} presets are not custom"
+            );
         }
     }
 
@@ -1458,11 +1472,21 @@ mod tests {
         };
         let (providers, models) = catalog_with_sdk_presets(vec![configured], vec![shadow]);
         assert_eq!(
-            providers.iter().filter(|p| p.provider_type == "deepseek").count(),
+            providers
+                .iter()
+                .filter(|p| p.provider_type == "deepseek")
+                .count(),
             1,
             "configured provider keeps its storage row"
         );
-        assert_eq!(providers.iter().find(|p| p.provider_type == "deepseek").unwrap().id, 7);
+        assert_eq!(
+            providers
+                .iter()
+                .find(|p| p.provider_type == "deepseek")
+                .unwrap()
+                .id,
+            7
+        );
         let matches: Vec<_> = models
             .iter()
             .filter(|m| m.provider_name == "deepseek" && m.custom)

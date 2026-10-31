@@ -116,7 +116,7 @@ mod workflow_tests {
 
         // A burst of manual triggers coalesces into exactly one more
         // report (which is a no-op — the cluster is consumed).
-        for i in 0..5 {
+        for _ in 0..5 {
             handle.trigger(EvolutionTrigger::Observation);
         }
         let coalesced = tokio::time::timeout(Duration::from_secs(2), reports.recv())

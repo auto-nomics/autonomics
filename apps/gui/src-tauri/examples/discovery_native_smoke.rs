@@ -14,6 +14,17 @@ use std::{sync::Arc, time::Duration};
 use tauri::Manager;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// 路由状态需要真实 wiki 句柄;smoke fixture 用独立内存库。
+async fn wiki_handle() -> Arc<wiki::service::WikiHandle> {
+    let storage = Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    Arc::new(wiki::service::start(storage))
+}
+
 async fn arxiv_fixture() -> Arc<arxiv::ArxivClient> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/api/query", listener.local_addr().unwrap());
@@ -257,7 +268,11 @@ fn main() {
                 .with_source(Arc::new(bib_base::S2Source::new(shared.s2.clone()))),
         );
         api_server::start(
-            api_server::api_router_with_auth(shared, Some("native-fixture-token".into())),
+            api_server::api_router_with_auth(
+                shared,
+                wiki_handle().await,
+                Some("native-fixture-token".into()),
+            ),
             "127.0.0.1:0",
         )
         .await

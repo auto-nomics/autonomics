@@ -62,7 +62,7 @@ pub(crate) async fn list_clusters(State(state): State<GatewayState>) -> Json<Vec
         clusters
             .into_iter()
             .filter(|c| c.members.len() >= evolution_core::cluster::MIN_CLUSTER)
-            .filter_map(|cluster| {
+            .map(|cluster| {
                 // partition_key encodes `kind \u{1f} node_kind`; both
                 // halves exist by construction when the key exists.
                 let (kind, node_kind) = cluster
@@ -82,13 +82,13 @@ pub(crate) async fn list_clusters(State(state): State<GatewayState>) -> Json<Vec
                     })
                     .collect();
                 members.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
-                Some(ClusterView {
+                ClusterView {
                     id: cluster.id,
                     kind,
                     node_kind,
                     model_signature: cluster.model_signature,
                     members,
-                })
+                }
             })
             .collect(),
     )

@@ -693,7 +693,10 @@ async fn model_config_catalog_serves_builtin_presets() {
         "one row per known provider type"
     );
     assert!(
-        catalog.providers.iter().all(|p| p.id < 0 && p.api_key.is_empty()),
+        catalog
+            .providers
+            .iter()
+            .all(|p| p.id < 0 && p.api_key.is_empty()),
         "placeholder rows use negative ids and carry no credentials"
     );
 
@@ -703,7 +706,11 @@ async fn model_config_catalog_serves_builtin_presets() {
         .unwrap()
         .len();
     assert_eq!(
-        catalog.models.iter().filter(|m| m.provider_name == "zai").count(),
+        catalog
+            .models
+            .iter()
+            .filter(|m| m.provider_name == "zai")
+            .count(),
         zai,
         "zai presets are served in full"
     );

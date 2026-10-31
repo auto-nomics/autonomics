@@ -55,7 +55,9 @@ impl BibCore {
         &self,
         input: AnchoredNoteInput,
     ) -> Result<crate::types::AnchoredAnnotation> {
-        use crate::anchor::{LineIndex, QuoteLocator, collapse_context, resolve_anchor, utf16_offset};
+        use crate::anchor::{
+            LineIndex, QuoteLocator, collapse_context, resolve_anchor, utf16_offset,
+        };
 
         if input.quote.trim().is_empty() {
             return Err(Error::Anchor(
@@ -107,11 +109,7 @@ impl BibCore {
         let matched = match matches.len() {
             0 => {
                 let hint = locator.longest_prefix_match(input.quote.trim(), MIN_HINT_CHARS);
-                return Err(Error::Anchor(not_found_message(
-                    source,
-                    &text,
-                    hint,
-                )));
+                return Err(Error::Anchor(not_found_message(source, &text, hint)));
             }
             1 => matches[0],
             _ if input.near_line.is_none() => {
@@ -130,7 +128,11 @@ impl BibCore {
         };
         let resolved = resolve_anchor(source, &text, matched);
 
-        let note = input.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+        let note = input
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
         let (content, comment) = match input.kind {
             AnnotationKind::Highlight => {
                 let note = note.ok_or_else(|| {
@@ -775,7 +777,10 @@ mod tests {
         assert_eq!(proof.source_hash, anchored.anchor.source_hash);
 
         // Note bodies are searchable, tags persisted on the row.
-        let hits = core.search_articles("efficacy signal", 10, 0).await.unwrap();
+        let hits = core
+            .search_articles("efficacy signal", 10, 0)
+            .await
+            .unwrap();
         assert_eq!(hits[0].article_id, "test");
         let listed = core.list_annotations("test", None).await.unwrap();
         assert_eq!(listed.len(), 1);
@@ -842,11 +847,17 @@ mod tests {
             ))
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("requires the article's full text"));
+        assert!(
+            error
+                .to_string()
+                .contains("requires the article's full text")
+        );
 
         // Neither text nor abstract → both kinds refuse.
         let bare = BibCore::open(":memory:").await.unwrap();
-        bare.upsert_article(&Article::new("bare", "No text")).await.unwrap();
+        bare.upsert_article(&Article::new("bare", "No text"))
+            .await
+            .unwrap();
         let error = bare
             .add_anchored_annotation(AnchoredNoteInput {
                 article_id: "bare".into(),

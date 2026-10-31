@@ -130,9 +130,7 @@ impl QuoteLocator {
         let first = needle[0];
         let mut at = 0;
         while at + needle.len() <= self.folded.len() {
-            let Some(relative) = self.folded[at..].iter().position(|c| *c == first) else {
-                return None;
-            };
+            let relative = self.folded[at..].iter().position(|c| *c == first)?;
             let candidate = at + relative;
             if candidate + needle.len() > self.folded.len() {
                 return None;
@@ -166,6 +164,8 @@ fn fold_quote(quote: &str) -> Vec<char> {
 pub(crate) struct LineIndex {
     /// Byte offset where each line starts; line 1 starts at 0.
     line_starts: Vec<usize>,
+    /// Total byte length; only [`Self::byte_range_of_line`] reads it.
+    #[cfg_attr(not(test), allow(dead_code))]
     total_bytes: usize,
 }
 
@@ -194,8 +194,11 @@ impl LineIndex {
     }
 
     /// Half-open byte range of a 1-based line.
+    #[cfg_attr(not(test), allow(dead_code))] // exercised by the LineIndex tests
     pub fn byte_range_of_line(&self, line: u32) -> (usize, usize) {
-        let index = (line as usize).saturating_sub(1).min(self.line_starts.len() - 1);
+        let index = (line as usize)
+            .saturating_sub(1)
+            .min(self.line_starts.len() - 1);
         let start = self.line_starts[index];
         let end = self
             .line_starts
@@ -218,11 +221,7 @@ pub(crate) fn hash_text(text: &str) -> String {
 }
 
 /// Assemble the resolved anchor for a single (already disambiguated) match.
-pub(crate) fn resolve_anchor(
-    source: &str,
-    text: &str,
-    matched: Match,
-) -> ResolvedAnchor {
+pub(crate) fn resolve_anchor(source: &str, text: &str, matched: Match) -> ResolvedAnchor {
     let lines = LineIndex::new(text);
     let quote = &text[matched.start_byte..matched.end_byte];
     ResolvedAnchor {
@@ -256,7 +255,7 @@ pub(crate) fn collapse_context(text: &str, start_byte: usize, end_byte: usize) -
     let to = (folded_end + CONTEXT_RADIUS).min(locator.folded.len());
     let mut context: String = locator.folded[from..to].iter().collect();
     if from > 0 {
-        context.insert_str(0, "…");
+        context.insert(0, '…');
     }
     if to < locator.folded.len() {
         context.push('…');
@@ -281,7 +280,10 @@ mod tests {
         // A quote copied across the line break and indentation matches.
         let hits = locator.find_all("alpha\n beta gamma", 10);
         assert_eq!(hits.len(), 1);
-        assert_eq!(&text[hits[0].start_byte..hits[0].end_byte], "alpha\n  beta   gamma");
+        assert_eq!(
+            &text[hits[0].start_byte..hits[0].end_byte],
+            "alpha\n  beta   gamma"
+        );
         // Case is exact: the lowercase quote matches only the lowercase
         // occurrence, never the ALPHA one, and vice versa.
         assert_eq!(locator.find_all("alpha beta gamma", 10).len(), 1);
@@ -296,10 +298,7 @@ mod tests {
         let hits = locator.find_all("方法显著降低了死亡率", 10);
         assert_eq!(hits.len(), 2);
         for hit in &hits {
-            assert_eq!(
-                &text[hit.start_byte..hit.end_byte],
-                "方法显著降低了死亡率"
-            );
+            assert_eq!(&text[hit.start_byte..hit.end_byte], "方法显著降低了死亡率");
         }
         // Second occurrence starts one line later (11 CJK chars + 。 + \n).
         assert!(hits[1].start_byte > hits[0].end_byte);
@@ -319,11 +318,7 @@ mod tests {
             "the treatment reduced mortality "
         );
         // Nothing remotely similar → None.
-        assert!(
-            locator
-                .longest_prefix_match("zzz qqq xxx", 4)
-                .is_none()
-        );
+        assert!(locator.longest_prefix_match("zzz qqq xxx", 4).is_none());
     }
 
     #[test]
@@ -360,13 +355,13 @@ mod tests {
         assert_eq!(resolved.line_end, 2);
         assert_eq!(resolved.source_hash, hash_text(text));
         assert!(resolved.context.contains("the key finding is here"));
-        assert_eq!(
-            resolved.source_hash,
-            {
-                use sha2::Digest;
-                let digest = sha2::Sha256::digest(text.as_bytes());
-                digest.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            }
-        );
+        assert_eq!(resolved.source_hash, {
+            use sha2::Digest;
+            let digest = sha2::Sha256::digest(text.as_bytes());
+            digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        });
     }
 }
