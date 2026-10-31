@@ -9,6 +9,6 @@ document.documentElement.classList.add("dark");
 ReactDOM.createRoot(container).render(
   <>
     <App />
-    <Toaster position="bottom-right" />
+    <Toaster position="bottom-center" />
   </>,
 );
