@@ -555,8 +555,17 @@ impl SharedInfra {
 
         if kind.enable_bibliography() {
             let bib_shared = self.bib.clone();
-            let bib_tools =
-                bib_base::bib_all_registrations(bib_shared.bib.clone(), file_storage.clone());
+            // Highlight anchoring reads/generates the SDT structure through
+            // BibShared, which must therefore carry the mounted VFS.
+            let bib_shared = match bib_shared.file_storage.clone() {
+                Some(_) => bib_shared,
+                None => {
+                    let mut shared = (*bib_shared).clone();
+                    shared.file_storage = Some(file_storage.clone());
+                    Arc::new(shared)
+                }
+            };
+            let bib_tools = bib_base::bib_all_registrations(bib_shared.clone());
             tools.extend(bib_tools);
 
             // Unified retrieval: one query across the local library and
