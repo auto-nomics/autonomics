@@ -1,8 +1,9 @@
 //! Hardcoded agent kinds and the per-agent persisted configuration.
 //!
-//! Agents come in exactly three kinds — [`AgentKind::Researcher`],
-//! [`AgentKind::Developer`], and [`AgentKind::Browser`] — whose
-//! identity, prompts, and tool capabilities are fixed in code.
+//! Agents come in exactly four kinds — [`AgentKind::Researcher`],
+//! [`AgentKind::Developer`], [`AgentKind::Browser`], and
+//! [`AgentKind::Curator`] — whose identity, prompts, and tool
+//! capabilities are fixed in code.
 //! Per-agent state that outlives a spawn (model preference, runtime
 //! overrides) lives in [`AgentProfileConfig`], persisted in the
 //! `agents.config_json` column.
@@ -33,18 +34,31 @@ pub enum AgentKind {
     /// only the `browser_*` tool group — no DAG / bib / writing tools
     /// unless the host explicitly adds them.
     Browser,
+    /// Knowledge-base maintenance specialist. Every kind can read the
+    /// shared wiki; only `Curator` holds the `wiki_*` write group
+    /// (create/edit/patch entries, tags, attachments, recycle bin), so
+    /// task agents stay read-only over the organization's long-term
+    /// memory and all curation flows through one auditable role.
+    Curator,
 }
 
 impl AgentKind {
     /// Every kind, in picker/display order.
-    pub const ALL: [Self; 3] = [Self::Researcher, Self::Developer, Self::Browser];
+    pub const ALL: [Self; 4] = [
+        Self::Researcher,
+        Self::Developer,
+        Self::Browser,
+        Self::Curator,
+    ];
 
-    /// Wire/stable name: `"researcher"`, `"developer"`, or `"browser"`.
+    /// Wire/stable name: `"researcher"`, `"developer"`, `"browser"`, or
+    /// `"curator"`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Researcher => "researcher",
             Self::Developer => "developer",
             Self::Browser => "browser",
+            Self::Curator => "curator",
         }
     }
 
@@ -54,6 +68,7 @@ impl AgentKind {
             "researcher" => Some(Self::Researcher),
             "developer" => Some(Self::Developer),
             "browser" => Some(Self::Browser),
+            "curator" => Some(Self::Curator),
             _ => None,
         }
     }
@@ -62,6 +77,7 @@ impl AgentKind {
     ///
     /// `developer` and its descendants are [`AgentKind::Developer`];
     /// `browser` and its descendants are [`AgentKind::Browser`];
+    /// `curator` and its descendants are [`AgentKind::Curator`];
     /// everything else — `researcher`, `researcher/<specialist>`, the
     /// legacy `default`, and unknown paths — is
     /// [`AgentKind::Researcher`]. This mirrors the role enforcement the
@@ -71,6 +87,8 @@ impl AgentKind {
             Self::Developer
         } else if path == "browser" || path.starts_with("browser/") {
             Self::Browser
+        } else if path == "curator" || path.starts_with("curator/") {
+            Self::Curator
         } else {
             Self::Researcher
         }
@@ -81,6 +99,7 @@ impl AgentKind {
             Self::Researcher => "Full-featured biomedical research assistant.",
             Self::Developer => "Node and plugin developer for the DAG ecosystem.",
             Self::Browser => "Web-browsing specialist with a private browser session.",
+            Self::Curator => "Knowledge-base curator maintaining the shared wiki.",
         }
     }
 
@@ -94,6 +113,9 @@ impl AgentKind {
             }
             Self::Browser => {
                 "You are a headless web-browsing specialist. You operate a private browser session to navigate, extract, and interact with the web on behalf of a caller. Every action is mediated through the `browser_*` tool group; you do not perform direct DOM mutation, networking, or filesystem access outside the browser sandbox."
+            }
+            Self::Curator => {
+                "You are a knowledge-base curator. You create, structure, and maintain the shared wiki through the `wiki_*` tool group: entries, aliases, tags, `[[wiki links]]`, attachments, and version history. You are the only role that writes to the knowledge base; keep entries concise, well-titled, cross-linked, and deduplicated."
             }
         }
     }
@@ -157,6 +179,22 @@ impl AgentKind {
         true
     }
 
+    /// Expose the read-only `wiki_*` knowledge-base tool group (search,
+    /// get, list, links, mentions, attachments, versions). Enabled for
+    /// every kind — the wiki is shared long-term memory, so any agent
+    /// may consult it.
+    pub const fn enable_wiki_read(self) -> bool {
+        true
+    }
+
+    /// Expose the `wiki_*` write tool group (create/update/edit/patch,
+    /// tags, attachments, recycle bin, version restore). Whitelisted to
+    /// the curator kind — task agents must stay read-only over the
+    /// knowledge base so curation flows through one auditable role.
+    pub const fn enable_wiki_write(self) -> bool {
+        matches!(self, Self::Curator)
+    }
+
     /// Enable the `browser_*` tool group backed by a per-agent
     /// [`browser_use::BrowserSession`].
     pub const fn enable_browser(self) -> bool {
@@ -180,7 +218,9 @@ impl FromStr for AgentKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_name(s).ok_or_else(|| {
-            format!("unknown agent kind `{s}`; expected researcher, developer, or browser")
+            format!(
+                "unknown agent kind `{s}`; expected researcher, developer, browser, or curator"
+            )
         })
     }
 }
@@ -356,11 +396,20 @@ mod tests {
                 "{path}"
             );
         }
+        let curator = ["curator", "curator/wiki"];
+        for path in curator {
+            assert_eq!(
+                AgentKind::from_legacy_profile_path(path),
+                AgentKind::Curator,
+                "{path}"
+            );
+        }
         let researcher = [
             "researcher",
             "researcher/genomics",
             "developer-x",
             "browser-x",
+            "curator-x",
             "default",
             "literature",
             "",
@@ -413,13 +462,14 @@ mod tests {
             Some(AgentKind::Developer)
         );
         assert_eq!(AgentKind::from_name("browser"), Some(AgentKind::Browser));
+        assert_eq!(AgentKind::from_name("curator"), Some(AgentKind::Curator));
         for rejected in ["Researcher", "researcher/genomics", "", "default"] {
             assert_eq!(AgentKind::from_name(rejected), None, "{rejected}");
         }
         let err = "wizard".parse::<AgentKind>().unwrap_err();
         assert_eq!(
             err,
-            "unknown agent kind `wizard`; expected researcher, developer, or browser"
+            "unknown agent kind `wizard`; expected researcher, developer, browser, or curator"
         );
     }
 
@@ -466,11 +516,43 @@ mod tests {
         assert!(browser.enable_dag_history());
         assert!(!browser.enable_plugin_rsi());
         assert!(browser.enable_browser());
+
+        let curator = AgentKind::Curator;
+        assert!(!curator.enable_bibliography());
+        assert!(!curator.enable_writing());
+        assert!(!curator.enable_opengwas());
+        assert!(!curator.enable_opentargets());
+        assert!(!curator.enable_gwascatalog());
+        assert!(!curator.enable_chembl());
+        assert!(!curator.enable_rcsb());
+        assert!(!curator.enable_string());
+        assert!(!curator.enable_kegg());
+        assert!(curator.enable_dag_history());
+        assert!(!curator.enable_plugin_rsi());
+        assert!(!curator.enable_browser());
+    }
+
+    #[test]
+    fn wiki_read_is_universal_and_write_is_curator_only() {
+        for kind in AgentKind::ALL {
+            assert!(kind.enable_wiki_read(), "{} must read the wiki", kind.name());
+            assert_eq!(
+                kind.enable_wiki_write(),
+                kind == AgentKind::Curator,
+                "{} must {} wiki write tools",
+                kind.name(),
+                if kind == AgentKind::Curator {
+                    "hold"
+                } else {
+                    "lack"
+                }
+            );
+        }
     }
 
     #[test]
     fn all_lists_every_kind_with_matching_names() {
-        assert_eq!(AgentKind::ALL.len(), 3);
+        assert_eq!(AgentKind::ALL.len(), 4);
         for kind in AgentKind::ALL {
             assert_eq!(AgentKind::from_name(kind.name()), Some(kind));
             assert_eq!(kind.to_string(), kind.name());

@@ -690,7 +690,7 @@ export function SpawnAgentDialog({
         >
           <Input value={spawnName} placeholder="agent name" onChange={(event) => setSpawnName(event.target.value)} required />
           <Input value={spawnParent} placeholder="/root" onChange={(event) => setSpawnParent(event.target.value)} required />
-          <Input value={spawnProfile} placeholder="profile" onChange={(event) => setSpawnProfile(event.target.value)} required />
+          <Input value={spawnProfile} placeholder="researcher | developer | browser | curator" onChange={(event) => setSpawnProfile(event.target.value)} required />
           <Button type="submit" disabled={busy === "spawn"}>Spawn</Button>
         </form>
       </DialogContent>

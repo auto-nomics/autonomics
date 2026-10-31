@@ -39,7 +39,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     // Hydration first.
     let state = client.state().await.unwrap();
     assert!(state.agents.is_empty());
-    // researcher + developer + browser (AgentKind::ALL).
+    // researcher + developer + browser + curator (AgentKind::ALL).
     assert_eq!(state.profiles.len(), agentik_core::AgentKind::ALL.len());
 
     // Start the event pump.

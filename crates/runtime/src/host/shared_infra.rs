@@ -106,6 +106,12 @@ impl PromptCapabilities for agentik_core::AgentKind {
     fn enable_resource_downloads(&self) -> bool {
         (*self).enable_resource_downloads()
     }
+    fn enable_wiki_read(&self) -> bool {
+        (*self).enable_wiki_read()
+    }
+    fn enable_wiki_write(&self) -> bool {
+        (*self).enable_wiki_write()
+    }
 }
 
 /// Process-level shared infrastructure created once and reused by all agents.
@@ -596,9 +602,15 @@ impl SharedInfra {
             tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
-        // wiki 读组无条件挂载(工具面无门控);写组留给维护路径,
-        // 不经 agent 工具暴露。
-        tools.extend(wiki::tools::wiki_read_registrations(self.wiki.clone()));
+        // wiki 读组对每个 kind 挂载(知识库是共享长期记忆,任何
+        // agent 都可查阅);写组只给 curator kind——任务 agent 对
+        // 长期记忆保持只读,知识维护走一条可审计的路径。
+        if kind.enable_wiki_read() {
+            tools.extend(wiki::tools::wiki_read_registrations(self.wiki.clone()));
+        }
+        if kind.enable_wiki_write() {
+            tools.extend(wiki::tools::wiki_write_registrations(self.wiki.clone()));
+        }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
         // Pass the agent's own path so list_agents / route_task can exclude self.
@@ -1285,5 +1297,55 @@ mod plugin_profile_tools_tests {
             crate::config::build_system_prompt(&AgentKind::Developer)
                 .contains("Plugin Development")
         );
+    }
+
+    /// The wiki read group ships with every kind; the write group is
+    /// the curator's alone — task agents must stay read-only over the
+    /// shared long-term memory.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wiki_write_tools_are_restricted_to_the_curator_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.data_dir = dir.path().join("data");
+        config.state_dir = dir.path().join("state");
+        config.agent_db = dir.path().join("agent.db");
+        config.wiki_db_path = dir.path().join("wiki.db");
+        config.embedding.enabled = false;
+        let mut host = RuntimeHost::open(&config).await.unwrap();
+        let agent_path = agentik_types::AgentPath::try_from("/root/agent").unwrap();
+
+        for kind in AgentKind::ALL {
+            let tools = host
+                .infra
+                .tools_from_profile(&agent_path, kind)
+                .await
+                .unwrap();
+            let names: Vec<&str> = tools.iter().map(|t| t.definition.name.as_str()).collect();
+            for read_tool in ["wiki_search", "wiki_get", "wiki_list", "wiki_mentions"] {
+                assert!(
+                    names.contains(&read_tool),
+                    "{kind} must register `{read_tool}`"
+                );
+            }
+            for write_tool in [
+                "wiki_create",
+                "wiki_edit",
+                "wiki_patch",
+                "wiki_delete",
+                "wiki_attach_image",
+            ] {
+                assert_eq!(
+                    names.contains(&write_tool),
+                    kind == AgentKind::Curator,
+                    "{kind} unexpectedly {} `{write_tool}`",
+                    if kind == AgentKind::Curator {
+                        "lacks"
+                    } else {
+                        "holds"
+                    }
+                );
+            }
+        }
+        host.shutdown_all_agents_and_wait().await;
     }
 }

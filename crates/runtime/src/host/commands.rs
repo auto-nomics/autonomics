@@ -905,6 +905,19 @@ pub(super) fn capability_from_kind(
         tags.push("pipeline".into());
         expertise.push("dag-execution".into());
     }
+    if kind.enable_wiki_read() {
+        tags.push("wiki".into());
+        expertise.push("knowledge-lookup".into());
+    }
+    if kind.enable_wiki_write() {
+        tags.push("knowledge".into());
+        tags.push("knowledge-base".into());
+        tags.push("curation".into());
+        tags.push("note-taking".into());
+        expertise.push("knowledge-management".into());
+        expertise.push("wiki-curation".into());
+        expertise.push("documentation".into());
+    }
     if kind.enable_plugin_rsi() {
         tags.push("plugin".into());
         tags.push("node".into());

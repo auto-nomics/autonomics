@@ -260,8 +260,8 @@ impl GatewayClient {
         self.get("/agents").await
     }
 
-    /// Spawn an agent from an agent-kind name (`researcher`/`developer`).
-    /// Returns the registered path.
+    /// Spawn an agent from an agent-kind name (`researcher`/`developer`/
+    /// `browser`/`curator`). Returns the registered path.
     pub async fn spawn_agent(
         &self,
         name: &str,

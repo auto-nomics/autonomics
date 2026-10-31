@@ -979,6 +979,36 @@ const PROMPT_BIOMEDICAL_RESOURCES: &str = "\n\
 - Use `clinicaltrials_study_lookup` for a study's status, sponsor, design, conditions, \
   interventions, and primary outcomes.";
 
+const PROMPT_WIKI_READ: &str = "\n\
+### Knowledge Base (Read)\n\
+- The shared wiki is durable, cross-session knowledge: entries are titled markdown notes \
+  with `[[wiki links]]`, aliases, and #tags, plus version history and image attachments.\n\
+- Use `wiki_search` for full-text retrieval (Chinese and English, BM25-ranked); filter by \
+  tag when scoping. Use `wiki_get` to read one entry by id or exact title, and `wiki_list` \
+  to browse or enumerate entries.\n\
+- Use `wiki_links` / `wiki_mentions` to traverse what an entry links to and what links back \
+  to it; use `wiki_versions`, `wiki_attachments`, and `wiki_get_attachment` for history and \
+  attached images.\n\
+- Before asking the user for background the project may already hold, check the wiki first. \
+  Reference entries by title in answers. Writing is reserved for the curator role; agents \
+  without curation tools should propose entry text for a curator.";
+
+const PROMPT_WIKI_WRITE: &str = "\n\
+### Knowledge Base (Curation)\n\
+- You are the write path for the shared wiki. Create entries with `wiki_create` (title, \
+  optional alias list and #tags, markdown body using `[[wiki links]]`), and keep bodies \
+  focused: one entry, one topic, linked to neighbors instead of duplicating them.\n\
+- Titles are unique and trimmed; aliases redirect lookups, so register common alternate \
+  spellings as aliases rather than duplicate entries. `wiki_update` edits metadata only \
+  (title/alias/tags); `wiki_edit` rewrites the whole body, `wiki_patch` applies minimal \
+  search/replace chunks.\n\
+- `wiki_delete` soft-deletes to the recycle bin (the title stays reserved); `wiki_restore` \
+  recovers it and `wiki_purge` destroys it permanently. Every write snapshots a version — \
+  restore old content with `wiki_restore_version` after checking `wiki_versions`.\n\
+- Attach images with `wiki_attach_image` and detach with `wiki_detach`. After importing or \
+  restructuring material, run `wiki_search` to catch near-duplicates and merge them into \
+  one well-linked entry.";
+
 const PROMPT_RESOURCE_DOWNLOADS: &str = "\n\
 ### Central Resource Downloads\n\
 - Use `resource_download` for allowlisted HTTP(S) files and host-managed S3/OSS \
@@ -1283,6 +1313,16 @@ pub trait PromptCapabilities {
     fn enable_resource_downloads(&self) -> bool {
         false
     }
+    /// Read-only wiki tools ship with every agent kind, so the section
+    /// defaults on (mirrors the unconditional tool mount).
+    fn enable_wiki_read(&self) -> bool {
+        true
+    }
+    // Wiki write tools are keyed on the agent *kind* (curator only),
+    // never on the global runtime config.
+    fn enable_wiki_write(&self) -> bool {
+        false
+    }
 }
 
 /// Build the default system prompt dynamically, including only the sections for
@@ -1329,6 +1369,13 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
 
     if caps.enable_resource_downloads() {
         s.push_str(PROMPT_RESOURCE_DOWNLOADS);
+    }
+
+    if caps.enable_wiki_read() {
+        s.push_str(PROMPT_WIKI_READ);
+    }
+    if caps.enable_wiki_write() {
+        s.push_str(PROMPT_WIKI_WRITE);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -1398,6 +1445,9 @@ pub fn default_system_prompt() -> String {
             true
         }
         fn enable_browser(&self) -> bool {
+            true
+        }
+        fn enable_wiki_write(&self) -> bool {
             true
         }
     }
@@ -2039,6 +2089,45 @@ mod tests {
         for kind in [AgentKind::Developer, AgentKind::Browser] {
             assert!(!build_system_prompt(&kind).contains("Central Resource Downloads"));
         }
+    }
+
+    #[test]
+    fn system_prompt_advertises_wiki_read_for_every_kind_and_write_for_curator_only() {
+        use agentik_core::AgentKind;
+
+        for kind in AgentKind::ALL {
+            let prompt = build_system_prompt(&kind);
+            assert!(
+                prompt.contains("### Knowledge Base (Read)"),
+                "{} must advertise wiki read tools",
+                kind.name()
+            );
+            assert!(
+                prompt.contains("wiki_search"),
+                "{} must name the retrieval tool",
+                kind.name()
+            );
+            if kind == AgentKind::Curator {
+                continue;
+            }
+            assert!(
+                !prompt.contains("### Knowledge Base (Curation)"),
+                "{} must not advertise wiki write tools",
+                kind.name()
+            );
+            assert!(
+                !prompt.contains("wiki_create"),
+                "{} must not name write tools",
+                kind.name()
+            );
+        }
+
+        let curator_prompt = build_system_prompt(&AgentKind::Curator);
+        assert!(curator_prompt.contains("### Knowledge Base (Read)"));
+        assert!(curator_prompt.contains("### Knowledge Base (Curation)"));
+        assert!(curator_prompt.contains("wiki_create"));
+        assert!(curator_prompt.contains("wiki_patch"));
+        assert!(curator_prompt.contains("wiki_restore_version"));
     }
 
     #[test]

@@ -247,6 +247,8 @@ pub fn kind_preview_lines(
         ("kegg", kind.enable_kegg()),
         ("dag-history", kind.enable_dag_history()),
         ("plugin-rsi", kind.enable_plugin_rsi()),
+        ("wiki-read", kind.enable_wiki_read()),
+        ("wiki-write", kind.enable_wiki_write()),
     ] {
         lines.push(flag_line(name, enabled));
     }

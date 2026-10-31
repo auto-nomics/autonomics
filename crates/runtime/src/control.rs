@@ -296,9 +296,12 @@ impl HostControl {
             Some(seg) => match agentik_core::AgentKind::from_name(seg) {
                 Some(kind) => kind,
                 None => {
-                    return Err(format!(
-                        "Unknown role '{seg}'. Use researcher, developer, or browser."
-                    ));
+                    let roles = agentik_core::AgentKind::ALL
+                        .iter()
+                        .map(|k| k.name())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(format!("Unknown role '{seg}'. Use {roles}."));
                 }
             },
         };

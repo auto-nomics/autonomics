@@ -42,12 +42,14 @@ pub(crate) async fn spawn_agent(
         .parse()
         .map_err(|e| format!("invalid parent_path `{}`: {e}", req.parent_path))?;
     let kind = agentik_core::AgentKind::from_name(&req.profile).ok_or_else(|| {
+        let roles = agentik_core::AgentKind::ALL
+            .iter()
+            .map(|k| k.name())
+            .collect::<Vec<_>>()
+            .join(", ");
         GatewayError::Status(
             StatusCode::BAD_REQUEST,
-            format!(
-                "unknown agent kind `{}`; expected researcher or developer",
-                req.profile
-            ),
+            format!("unknown agent kind `{}`; expected {roles}", req.profile),
         )
     })?;
     // Model override: unresolvable specs degrade to the daemon default,
