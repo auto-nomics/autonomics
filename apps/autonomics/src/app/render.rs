@@ -276,17 +276,19 @@ impl App {
         // never issue HTTP): filled on registration / model changes via
         // AppEvent::ModelInfoLoaded, falling back to the daemon's active
         // default model when no agent is active.
-        let active_agent_name = self
+        // `s.name` holds the agent's hierarchical AgentPath, e.g.
+        // `/root/researcher`; it keys the model cache and labels the leaf.
+        let active_agent_path = self
             .state
             .sessions
             .get(self.state.active_agent_idx)
             .map(|s| s.name.clone());
-        if let Some(name) = active_agent_name.clone() {
-            self.refresh_agent_model_info(&name);
+        if let Some(path) = active_agent_path.clone() {
+            self.refresh_agent_model_info(&path);
         }
-        let model_info = active_agent_name
+        let model_info = active_agent_path
             .as_deref()
-            .and_then(|name| self.agent_model_cache.get(name).cloned())
+            .and_then(|path| self.agent_model_cache.get(path).cloned())
             .or_else(|| self.state.active_model_display.clone());
         let (model_name, context_window, reasoning_effort) = match model_info {
             Some(display) => (
@@ -299,7 +301,7 @@ impl App {
 
         let display = self.state.display_settings.clone();
         let workspace = AgentWorkspace {
-            agent_name: active_agent_name.as_deref(),
+            agent_path: active_agent_path.as_deref(),
             active_model: model_name.as_deref(),
             context_window,
             reasoning_effort: reasoning_effort.as_deref(),

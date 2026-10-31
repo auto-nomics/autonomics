@@ -9,15 +9,19 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::state::{AgentStatus, CompactState};
 
-/// 1-row status bar showing agent state and active model, drawn on a
-/// dark-navy background strip spanning the full width.
+/// 1-row status bar showing the active agent's path, its state, and the
+/// active model, drawn on a dark-navy background strip spanning the full
+/// width.
 ///
-/// Status is left-aligned; the context-window readout follows as a
-/// separated segment, and the model name is right-aligned on the same
-/// row so both fit in a single line. While compacting, the status
+/// The agent path is left-aligned; the lifecycle status follows, then the
+/// context-window readout, and the model name is right-aligned on the
+/// same row so both fit in a single line. While compacting, the status
 /// segment expands with live pass details (phase, scale,
 /// generated tokens, elapsed seconds).
 pub struct StatusBar<'a> {
+    /// The active agent's hierarchical path (e.g. `/root/researcher`),
+    /// shown at the front of the bar to identify the leaf.
+    pub agent_path: Option<&'a str>,
     pub status: &'a AgentStatus,
     /// Total prompt tokens billed for the latest turn (input + cache_read +
     /// cache_creation). Counts against the model's context window.
@@ -73,23 +77,31 @@ impl Widget for StatusBar<'_> {
         let bg = Style::default().bg(Color::Rgb(24, 34, 46));
         let base = |style: Style| style.patch(bg);
 
-        let mut spans = vec![
-            Span::styled(indicator, base(Style::default().fg(indicator_color))),
-            Span::styled(" ", bg),
-            Span::styled(
-                status_text,
-                base(
-                    Style::default()
-                        .fg(indicator_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
+        let mut spans = Vec::new();
+
+        // Agent path — the leaf's identity, since there is no tab strip.
+        if let Some(path) = self.agent_path {
+            spans.push(Span::styled(
+                path,
+                base(Style::default().fg(Color::Gray)),
+            ));
+            spans.push(Span::styled("  ", bg));
+        }
+
+        spans.push(Span::styled(indicator, base(Style::default().fg(indicator_color))));
+        spans.push(Span::styled(" ", bg));
+        spans.push(Span::styled(
+            status_text,
+            base(
+                Style::default()
+                    .fg(indicator_color)
+                    .add_modifier(Modifier::BOLD),
             ),
-        ];
+        ));
 
         // Context window usage — shows percentage, bar, and absolute tokens.
         if self.context_used > 0 {
-            spans.push(Span::styled("  │  ", bg));
-            spans.push(Span::styled("ctx:", base(Style::default().fg(Color::Gray))));
+            spans.push(Span::styled("  ", bg));
             if let Some(window) = self.context_window {
                 if window > 0 {
                     let pct = (self.context_used * 100) / window;
@@ -215,5 +227,61 @@ pub(crate) fn format_tokens(n: u64) -> String {
         format!("{:.1}k", n as f64 / 1_000.0)
     } else {
         format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_bar_leads_with_agent_path_and_has_no_pipe_separator() {
+        let area = Rect::new(0, 0, 100, 1);
+        let mut buf = ratatui::prelude::Buffer::empty(area);
+        let compact = CompactState::default();
+        StatusBar {
+            agent_path: Some("/root/gwas/fig4"),
+            status: &AgentStatus::Idle,
+            context_used: 12_345,
+            context_window: Some(200_000),
+            model_name: Some("glm-5.3"),
+            reasoning_effort: Some("high"),
+            compact: Some(&compact),
+            frame: 0,
+        }
+        .render(area, &mut buf);
+
+        let row: String = (0..area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(row.starts_with("/root/gwas/fig4"), "row: {row:?}");
+        assert!(!row.contains('│'), "row: {row:?}");
+        assert!(row.contains("idle"), "row: {row:?}");
+        // Context readout keeps its percentage but carries no `ctx:` label.
+        assert!(row.contains("6%"), "row: {row:?}");
+        assert!(!row.contains("ctx:"), "row: {row:?}");
+    }
+
+    #[test]
+    fn status_bar_omits_path_segment_when_absent() {
+        let area = Rect::new(0, 0, 60, 1);
+        let mut buf = ratatui::prelude::Buffer::empty(area);
+        let compact = CompactState::default();
+        StatusBar {
+            agent_path: None,
+            status: &AgentStatus::Idle,
+            context_used: 0,
+            context_window: None,
+            model_name: None,
+            reasoning_effort: None,
+            compact: Some(&compact),
+            frame: 0,
+        }
+        .render(area, &mut buf);
+
+        let row: String = (0..area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect();
+        assert!(row.trim_start().starts_with("○"), "row: {row:?}");
     }
 }

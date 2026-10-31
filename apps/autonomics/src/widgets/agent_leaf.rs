@@ -76,6 +76,8 @@ fn collect_visible_lines(
 /// └──────────────────────────────────────────────────┘
 /// ```
 pub struct AgentLeaf<'a> {
+    /// The active agent's hierarchical path, shown in the status bar.
+    pub agent_path: Option<&'a str>,
     pub active_model: Option<&'a str>,
     /// Context window size of the active model (tokens), when known.
     pub context_window: Option<u64>,
@@ -214,6 +216,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // only separation from the transcript.
         let band = Style::default().bg(Color::Rgb(24, 34, 46));
         let status_bar = StatusBar {
+            agent_path: self.agent_path,
             status: &ts.status,
             context_used: ts.latest_turn_context_used,
             context_window: self.context_window,
