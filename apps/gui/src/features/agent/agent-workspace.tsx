@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  Bot,
   Brain,
+  Check,
   Cpu,
   GitFork,
   CheckCircle2,
@@ -33,6 +35,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -57,30 +60,28 @@ import {
 import { ToolPayloadPreview, ToolPayloadView, parseMaybeJson } from "./agent-json";
 
 /** Where the workspace renders: docked in the main or auxiliary workbench
- *  pane, floating over another view, or briefly standby until the
- *  docked slot mounts. The component instance survives mode changes —
- *  only the portal target moves — so transcript state never resets. */
-export type AgentWorkspaceMode = "standby" | "docked" | "floating";
+ *  pane, in the bottom drawer overlay, or briefly standby until the docked
+ *  slot mounts. The component instance survives mode changes — only the
+ *  portal target moves — so transcript state never resets. */
+export type AgentWorkspaceMode = "standby" | "docked" | "drawer";
 
-const FLOAT_COLLAPSED_KEY = "autonomics.workspace.float.collapsed";
-const FLOAT_POS_KEY = "autonomics.workspace.float.pos";
+const DRAWER_COLLAPSED_KEY = "autonomics.workspace.drawer.collapsed";
 
-type FloatPos = { x: number; y: number };
+/** Reasoning-effort ladder; mirrors `ReasoningEffort` in
+ *  crates/agentik-types/src/reasoning.rs — every variant must appear. */
+const EFFORT_OPTIONS = [
+  { value: "none", label: "关闭", hint: "none" },
+  { value: "minimal", label: "极简", hint: "minimal" },
+  { value: "low", label: "低", hint: "low" },
+  { value: "medium", label: "中", hint: "medium" },
+  { value: "high", label: "高", hint: "high" },
+  { value: "xhigh", label: "超高", hint: "xhigh" },
+  { value: "max", label: "最大", hint: "max" },
+  { value: "ultra", label: "极致", hint: "ultra" },
+] as const;
 
-function readFloatPos(): FloatPos | null {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(FLOAT_POS_KEY) ?? "null");
-    return typeof parsed?.x === "number" && typeof parsed?.y === "number" ? parsed : null;
-  } catch { return null; }
-}
-
-/** Keep the floating shell on screen; it must never be dragged out of reach. */
-function clampPos(pos: FloatPos, width: number, height: number): FloatPos {
-  const margin = 8;
-  return {
-    x: Math.min(Math.max(pos.x, margin), Math.max(margin, window.innerWidth - width - margin)),
-    y: Math.min(Math.max(pos.y, margin), Math.max(margin, window.innerHeight - height - margin)),
-  };
+function effortLabel(effort: string | null | undefined) {
+  return EFFORT_OPTIONS.find((option) => option.value === effort)?.label ?? "推理";
 }
 
 /** Sliding-window transcript rendering: only the tail of the message list
@@ -334,6 +335,14 @@ export type AgentWorkspaceProps = {
   onLoadModelCatalog: () => Promise<void>;
   /** Hot-swaps the agent's model to a `provider:model` spec. */
   onChangeModel: (path: string, spec: string) => Promise<void>;
+  /** Effective reasoning effort for the active agent (`undefined` = not
+   *  loaded yet, `null` = the model has no thinking support). */
+  agentEffort?: string | null;
+  /** Re-reads the effective effort; called when the active agent changes
+   *  and after a model switch. */
+  onRefreshEffort: () => void;
+  /** Sets the per-agent reasoning-effort override. */
+  onChangeEffort: (path: string, effort: string) => Promise<void>;
   onDraftChange: (value: string) => void;
   onSendMessage: (context?: string) => void;
   showInspectorToggle?: boolean;
@@ -365,33 +374,14 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   } = props;
 
   const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(FLOAT_COLLAPSED_KEY) === "true"; } catch { return false; }
+    try { return localStorage.getItem(DRAWER_COLLAPSED_KEY) === "true"; } catch { return false; }
   });
   useEffect(() => {
     if (basket?.revealVersion) setCollapsed(false);
   }, [basket?.revealVersion]);
-  const [floatBody, setFloatBody] = useState<HTMLDivElement | null>(null);
-  // Floating-shell position; null anchors the default bottom-right corner.
-  const [floatPos, setFloatPos] = useState<FloatPos | null>(readFloatPos);
-  const floatShellRef = useRef<HTMLDivElement | HTMLButtonElement | null>(null);
-  // Callback form: a mutable union ref is not assignable to either element's
-  // ref prop, and a stable identity avoids detach/attach churn per render.
-  const setFloatShell = useCallback((node: HTMLDivElement | HTMLButtonElement | null) => {
-    floatShellRef.current = node;
-  }, []);
-  const floatPosRef = useRef(floatPos);
-  floatPosRef.current = floatPos;
-  const dragRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    baseX: number;
-    baseY: number;
-    latestX: number;
-    latestY: number;
-    moved: boolean;
-  } | null>(null);
-  const suppressClickRef = useRef(false);
+  // Drawer overlay body; null while the drawer is collapsed or not the
+  // active hosting mode.
+  const [drawerBody, setDrawerBody] = useState<HTMLDivElement | null>(null);
   // Off-document container that keeps the workspace subtree mounted while
   // no real portal target exists (first frames, hidden collapsed state).
   const detachedRef = useRef<HTMLDivElement | null>(null);
@@ -400,112 +390,19 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   }
 
   useEffect(() => {
-    try { localStorage.setItem(FLOAT_COLLAPSED_KEY, String(collapsed)); } catch { /* preference storage may be unavailable */ }
+    try { localStorage.setItem(DRAWER_COLLAPSED_KEY, String(collapsed)); } catch { /* preference storage may be unavailable */ }
   }, [collapsed]);
-
-  // Keep the shell empty while it resizes: the workspace portals in only
-  // after the expand transition settles, and leaves at once on collapse.
-  const [bodyMounted, setBodyMounted] = useState(false);
-  useEffect(() => {
-    if (mode !== "floating" || collapsed) {
-      setBodyMounted(false);
-      return;
-    }
-    const timer = window.setTimeout(() => setBodyMounted(true), 220);
-    return () => window.clearTimeout(timer);
-  }, [mode, collapsed]);
-
-  useEffect(() => {
-    try {
-      if (floatPos) localStorage.setItem(FLOAT_POS_KEY, JSON.stringify(floatPos));
-      else localStorage.removeItem(FLOAT_POS_KEY);
-    } catch { /* preference storage may be unavailable */ }
-  }, [floatPos]);
-
-  // Keep a restored position inside the viewport; it may predate a
-  // smaller window or a different screen.
-  useLayoutEffect(() => {
-    if (mode !== "floating" || !floatPos) return;
-    const shell = floatShellRef.current;
-    if (!shell) return;
-    const clamped = clampPos(floatPos, shell.offsetWidth, shell.offsetHeight);
-    if (clamped.x !== floatPos.x || clamped.y !== floatPos.y) setFloatPos(clamped);
-  }, [mode, collapsed, activeAgent, floatPos]);
-
-  useEffect(() => {
-    if (mode !== "floating") return;
-    const onResize = () => {
-      const shell = floatShellRef.current;
-      const pos = floatPosRef.current;
-      if (!shell || !pos) return;
-      setFloatPos(clampPos(pos, shell.offsetWidth, shell.offsetHeight));
-    };
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [mode]);
-
-  const startDrag = (event: ReactPointerEvent<HTMLElement>, excludeButtons: boolean) => {
-    // Any fresh gesture invalidates a stale click suppression.
-    suppressClickRef.current = false;
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    // Header controls (collapse) stay clickable instead of starting a drag.
-    if (excludeButtons && (event.target as HTMLElement).closest("button")) return;
-    const shell = floatShellRef.current;
-    if (!shell) return;
-    const rect = shell.getBoundingClientRect();
-    dragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      baseX: rect.left,
-      baseY: rect.top,
-      latestX: rect.left,
-      latestY: rect.top,
-      moved: false,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  };
-
-  const moveDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    const drag = dragRef.current;
-    const shell = floatShellRef.current;
-    if (!drag || !shell || event.pointerId !== drag.pointerId) return;
-    const dx = event.clientX - drag.startX;
-    const dy = event.clientY - drag.startY;
-    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
-    drag.moved = true;
-    const next = clampPos({ x: drag.baseX + dx, y: drag.baseY + dy }, shell.offsetWidth, shell.offsetHeight);
-    // Track the pointer on the DOM directly: committing to state per move
-    // would re-render the whole transcript every frame.
-    shell.style.left = `${next.x}px`;
-    shell.style.top = `${next.y}px`;
-    drag.latestX = next.x;
-    drag.latestY = next.y;
-  };
-
-  const endDrag = (event: ReactPointerEvent<HTMLElement>) => {
-    const drag = dragRef.current;
-    if (!drag || event.pointerId !== drag.pointerId) return;
-    dragRef.current = null;
-    if (event.currentTarget.hasPointerCapture(drag.pointerId)) {
-      event.currentTarget.releasePointerCapture(drag.pointerId);
-    }
-    if (drag.moved) setFloatPos({ x: drag.latestX, y: drag.latestY });
-    // A real drag swallows the trailing click so releasing the pointer,
-    // e.g. over the pill, does not also trigger the button.
-    suppressClickRef.current = drag.moved;
-  };
 
   const target = mode === "docked" && dockedSlot
     ? dockedSlot
-    : mode === "floating" && floatBody
-      ? floatBody
+    : mode === "drawer" && !collapsed && drawerBody
+      ? drawerBody
       : detachedRef.current!;
 
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [effortPickerOpen, setEffortPickerOpen] = useState(false);
   // Set when the catalog fetch fails; the open list shows the error
   // instead of an empty-state that would read as "no models exist".
   const [modelPickerError, setModelPickerError] = useState<string | null>(null);
@@ -539,6 +436,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       setModelPickerOpen(false);
       return;
     }
+    setEffortPickerOpen(false);
     setModelPickerError(null);
     try {
       await props.onLoadModelCatalog();
@@ -547,6 +445,39 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     }
     setModelPickerOpen(true);
   };
+
+  const toggleEffortPicker = () => {
+    if (effortPickerOpen) {
+      setEffortPickerOpen(false);
+      return;
+    }
+    setModelPickerOpen(false);
+    setEffortPickerOpen(true);
+  };
+
+  // Re-read the effective effort whenever the active agent changes; the
+  // model switch refreshes its own path.
+  useEffect(() => {
+    if (!activeAgent) return;
+    props.onRefreshEffort();
+  }, [activeAgent, props.onRefreshEffort]);
+
+  // Click-outside closes whichever composer popover is open. pointerdown
+  // (capture) so the close lands before any click the same gesture
+  // triggers elsewhere — e.g. the send button submits while the list is
+  // already folding away. Both pills stay excluded: their own clicks go
+  // through the toggles.
+  useEffect(() => {
+    if (!modelPickerOpen && !effortPickerOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) return;
+      if (event.target.closest("[data-composer-popover]")) return;
+      setModelPickerOpen(false);
+      setEffortPickerOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [modelPickerOpen, effortPickerOpen]);
 
   const toggleExpand = useCallback((id: number, open: boolean) => {
     setExpanded((current) => ({ ...current, [id]: open }));
@@ -717,7 +648,18 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         ) : (
           <div className="flex h-10 items-center gap-1 px-1.5">
             {searchToggle}
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {/* Pinned left of the tab strip: stays visible and clickable no
+                matter how far the agent tabs have scrolled. */}
+            <Button size="icon-sm" variant="ghost" aria-label="New agent" className="shrink-0" onClick={props.onSpawn}>
+              <Plus />
+            </Button>
+            {/* Vertical margins (not an explicit height): the base
+                component's self-stretch needs height:auto to work — an
+                explicit h-* would make it fall back to flex-start and pin
+                the line to the top edge. 40px row - 2×6px = 28px, matching
+                the size-7 icon buttons. */}
+            <Separator orientation="vertical" className="my-1.5 shrink-0" />
+            <div data-tab-strip="" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {agents.map((agent) => (
                 <div
                   key={agent.path}
@@ -746,9 +688,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   </button>
                 </div>
               ))}
-              <Button size="icon-sm" variant="ghost" aria-label="New agent" onClick={props.onSpawn}>
-                <Plus />
-              </Button>
             </div>
             <Button size="icon-sm" variant="ghost" aria-label="View agent DAG" title="View agent DAG" disabled={!activeAgent} onClick={props.onOpenDag}><GitFork /></Button>
             {docked && props.showInspectorToggle !== false && (
@@ -851,7 +790,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                 textarea keeps focus-relevant layout; the list reuses the
                 same Command shape as the agent picker. */}
             {modelPickerOpen && (
-              <div className="absolute inset-x-2 bottom-full z-30 mb-2 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:inset-x-3">
+              <div
+                data-composer-popover=""
+                className="absolute inset-x-2 bottom-full z-30 mb-2 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:inset-x-3"
+              >
                 <Command
                   loop
                   onKeyDown={(event) => {
@@ -891,8 +833,8 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                                   if (!active) void props.onChangeModel(activeAgent, spec);
                                 }}
                               >
-                                <span className="truncate">{model.model_name}</span>
-                                <span className="ml-auto shrink-0 pl-2 text-xs text-muted-foreground">
+                                <span className="min-w-0 flex-1 truncate">{model.model_name}</span>
+                                <span className="shrink-0 pl-2 text-xs text-muted-foreground">
                                   {model.provider_name}
                                 </span>
                               </CommandItem>
@@ -903,6 +845,41 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                     )}
                   </CommandList>
                 </Command>
+              </div>
+            )}
+            {/* Reasoning-effort switcher: fixed eight-step ladder, no
+                search; hidden behind a disabled pill when the model lacks
+                thinking support. */}
+            {effortPickerOpen && (
+              <div
+                data-composer-popover=""
+                className="absolute bottom-full left-2 z-30 mb-2 w-48 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:left-3"
+              >
+                {props.agentEffort === null ? (
+                  <div className="p-3 text-xs text-muted-foreground">当前模型不支持思考</div>
+                ) : (
+                  <div className="p-1">
+                    {EFFORT_OPTIONS.map((option) => {
+                      const active = props.agentEffort === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setEffortPickerOpen(false);
+                            if (!active) void props.onChangeEffort(activeAgent, option.value);
+                          }}
+                          data-checked={active ? "true" : undefined}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent focus-visible:bg-accent"
+                        >
+                          <span>{option.label}</span>
+                          <span className="text-xs text-muted-foreground">{option.hint}</span>
+                          {active && <Check className="ml-auto size-3.5 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
             {/* Card-style composer: borderless textarea with a floating
@@ -936,6 +913,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <div className="flex items-center gap-2 px-2.5 pb-2 pt-1 text-[11px] text-muted-foreground">
                 <button
                   type="button"
+                  data-composer-popover=""
                   onClick={() => void toggleModelPicker()}
                   aria-expanded={modelPickerOpen}
                   aria-label="切换模型"
@@ -948,6 +926,23 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   <Cpu className="size-3 shrink-0" />
                   <span className="truncate">{currentModelShort ?? "选择模型"}</span>
                   <ChevronDown className={cn("size-3 shrink-0 transition-transform", modelPickerOpen && "rotate-180")} />
+                </button>
+                <button
+                  type="button"
+                  data-composer-popover=""
+                  onClick={toggleEffortPicker}
+                  aria-expanded={effortPickerOpen}
+                  aria-label="推理力度"
+                  disabled={props.agentEffort === null}
+                  title={props.agentEffort === null ? "当前模型不支持思考" : `推理力度：${effortLabel(props.agentEffort)}，点击切换`}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-0.5 transition hover:border-border hover:bg-background disabled:pointer-events-none disabled:opacity-50",
+                    effortPickerOpen && "border-border bg-background",
+                  )}
+                >
+                  <Brain className="size-3 shrink-0" />
+                  <span className="truncate">{effortLabel(props.agentEffort)}</span>
+                  <ChevronDown className={cn("size-3 shrink-0 transition-transform", effortPickerOpen && "rotate-180")} />
                 </button>
                 <span className="truncate">Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史</span>
                 {streaming && (
@@ -971,72 +966,50 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   return (
     <>
-      {mode === "floating" ? (
-        <div
-          ref={setFloatShell}
-          data-floating-shell=""
-          style={floatPos ? { left: floatPos.x, top: floatPos.y } : { right: 16, bottom: 16 }}
-          className={cn(
-            "fixed z-40 flex origin-bottom-right flex-col overflow-hidden border bg-card shadow-2xl motion-reduce:animate-none",
-            // The size swap doubles as the collapse animation: width and
-            // height only, constant corner radius — left/top is excluded so
-            // dragging never tweens.
-            "transition-[width,height] duration-200",
-            collapsed
-              ? "h-9 w-52 rounded-lg"
-              : "h-[min(80dvh,640px)] w-[min(94vw,560px)] rounded-lg",
-            // Float up from the corner when first appearing.
-            "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-200",
-          )}
+      {mode === "drawer" && (collapsed ? (
+        // Collapsed drawer: a floating action button that reopens the
+        // workspace; the pulsing dot keeps streaming visible at a glance.
+        <button
+          type="button"
+          aria-label="打开 Agent 副窗"
+          title="打开 Agent 副窗"
+          onClick={() => setCollapsed(false)}
+          className="fixed right-4 bottom-4 z-40 grid size-12 place-items-center rounded-full border bg-card text-foreground shadow-2xl transition-colors hover:bg-accent animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none"
         >
-          <div
-            title="拖拽移动 · 双击复位到右下角"
-            onDoubleClick={() => setFloatPos(null)}
-            onClick={(event) => {
-              if (!collapsed) return;
-              if ((event.target as HTMLElement).closest("button")) return;
-              if (suppressClickRef.current) {
-                suppressClickRef.current = false;
-                return;
-              }
-              setCollapsed(false);
-            }}
-            onPointerDown={(event) => startDrag(event, true)}
-            onPointerMove={moveDrag}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
-            className={cn(
-              "flex h-9 shrink-0 cursor-grab touch-none select-none items-center gap-2 border-b bg-muted/50 px-2 active:cursor-grabbing",
-              collapsed && "border-b-transparent hover:bg-accent",
-            )}
-          >
+          <Bot className="size-5" />
+          {streaming && (
+            <span className="absolute right-2.5 top-2.5 size-2.5 animate-pulse rounded-full border-2 border-card bg-sky-400" />
+          )}
+        </button>
+      ) : (
+        // Bottom drawer overlay: a full-screen sheet below md (the app's
+        // single desktop breakpoint), an inset rounded card at md and up.
+        // Non-modal — the view behind stays usable, the header button
+        // folds it back to the FAB.
+        <div
+          data-drawer-shell=""
+          className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-card shadow-2xl motion-reduce:animate-none md:inset-x-3 md:top-auto md:bottom-3 md:h-[min(80dvh,640px)] md:rounded-xl md:border-t animate-in fade-in-0 slide-in-from-bottom-4 duration-200"
+        >
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-muted/50 px-2">
             <AgentStatusIcon status={statuses[activeAgent]} />
-            <span className="min-w-0 truncate text-xs font-medium">
-              {collapsed ? (activeAgent ? leafName(activeAgent) : "Agent") : activeAgent}
-            </span>
-            {!collapsed && <span className="shrink-0 text-[11px] text-muted-foreground">{running}</span>}
-            {collapsed && streaming ? <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" /> : null}
+            <span className="min-w-0 truncate text-xs font-medium">{activeAgent || "Agent"}</span>
+            <span className="shrink-0 text-[11px] text-muted-foreground">{running}</span>
+            {streaming && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
             <Button
               size="icon-xs"
               variant="ghost"
               className="ml-auto"
-              aria-label={collapsed ? "展开 agent 浮窗" : "收起 agent 浮窗"}
-              aria-expanded={!collapsed}
-              title={collapsed ? "展开副窗" : "收起为迷你浮窗"}
-              onClick={() => {
-                if (suppressClickRef.current) {
-                  suppressClickRef.current = false;
-                  return;
-                }
-                setCollapsed((current) => !current);
-              }}
+              aria-label="收起 Agent 抽屉"
+              aria-expanded={true}
+              title="收起为副窗按钮"
+              onClick={() => setCollapsed(true)}
             >
-              <ChevronDown className={cn("transition-transform", collapsed && "rotate-180")} />
+              <ChevronDown />
             </Button>
           </div>
-          {!collapsed && bodyMounted && <div ref={setFloatBody} className="flex min-h-0 flex-1 flex-col bg-background" />}
+          <div ref={setDrawerBody} className="flex min-h-0 flex-1 flex-col bg-background" />
         </div>
-      ) : null}
+      ))}
       {createPortal(content, target)}
     </>
   );

@@ -182,7 +182,10 @@ pub(super) fn derive_agent_status(event: &AgentEvent) -> (AgentStatus, Option<St
         // conversation memory; it does not change the active status.
         AgentEvent::UserMessageAcknowledged(_) => (AgentStatus::Running, None),
 
-        // ── Session lifecycle events — out of scope for runtime status ──
+        // ── Session lifecycle events ──
+        // Skipped by `observe_status` (see `is_session_bookkeeping`); this
+        // arm only feeds the delegation-progress labels, which want the
+        // coarse "idle" tag for these informational handshakes.
         AgentEvent::SessionActivated { .. }
         | AgentEvent::SessionPaused { .. }
         | AgentEvent::SessionClosed { .. }
@@ -222,6 +225,22 @@ pub(super) fn truncate_preview(s: &str, max: usize) -> String {
     }
 }
 
+/// Session lifecycle events are informational handshakes, not status
+/// transitions: the driver fires a `list_sessions` request after *every*
+/// `TurnCompleted` (`Failed` included), so projecting the reply onto
+/// `Idle` would wipe the sticky `Failed`/`Completed` status the turn
+/// just landed on within milliseconds of it appearing. They must never
+/// reach the projection — and therefore never the status bookkeeping.
+fn is_session_bookkeeping(event: &AgentEvent) -> bool {
+    matches!(
+        event,
+        AgentEvent::SessionActivated { .. }
+            | AgentEvent::SessionPaused { .. }
+            | AgentEvent::SessionClosed { .. }
+            | AgentEvent::SessionList { .. }
+    )
+}
+
 impl RuntimeHost {
     /// Update the named agent's runtime [`AgentStatus`] from the event
     /// just observed, mirroring the change into the entry's `AgentInfo`
@@ -233,6 +252,9 @@ impl RuntimeHost {
     /// shutdown is a separate command path that races with event
     /// delivery).
     pub(super) fn observe_status(&mut self, name: &str, event: &AgentEvent) {
+        if is_session_bookkeeping(event) {
+            return;
+        }
         let (new_status, new_last_event) = derive_agent_status(event);
         let entry = match self.agents.get_mut(name) {
             Some(e) => e,
@@ -497,6 +519,31 @@ mod status_derivation_tests {
 #[cfg(test)]
 mod status_tests {
     use super::*;
+
+    // ── Session bookkeeping ──
+
+    /// The post-turn `list_sessions` handshake (and its siblings) must be
+    /// classified as bookkeeping, so `observe_status` skips them instead
+    /// of wiping the sticky `Failed`/`Completed` status to `Idle`.
+    #[test]
+    fn session_events_are_status_bookkeeping() {
+        let id = uuid::Uuid::new_v4();
+        assert!(is_session_bookkeeping(&AgentEvent::SessionList {
+            sessions: vec![],
+        }));
+        assert!(is_session_bookkeeping(&AgentEvent::SessionActivated {
+            id,
+            title: None,
+        }));
+        assert!(is_session_bookkeeping(&AgentEvent::SessionPaused { id }));
+        assert!(is_session_bookkeeping(&AgentEvent::SessionClosed { id }));
+        // Status-bearing events must never be mistaken for bookkeeping.
+        assert!(!is_session_bookkeeping(&AgentEvent::Error("boom".into())));
+        assert!(!is_session_bookkeeping(&AgentEvent::Done));
+        assert!(!is_session_bookkeeping(&AgentEvent::LifecycleChanged(
+            agentik_types::AgentLifecycleStatus::Error
+        )));
+    }
 
     // ── is_final_status ──
 

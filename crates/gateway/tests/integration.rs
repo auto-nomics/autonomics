@@ -671,3 +671,61 @@ async fn spawn_rejects_unknown_agent_kind() {
         "unexpected error: {error}"
     );
 }
+
+/// The served catalog must carry the SDK's built-in provider presets —
+/// thin clients (the GUI) have no in-process registry and would otherwise
+/// show no built-in models at all (only storage rows such as ChatGPT's).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_config_catalog_serves_builtin_presets() {
+    use agentik_sdk::provider::registry;
+
+    let gateway_daemon = start_mock_gateway("unused").await;
+    let client = gateway_daemon.client();
+
+    let catalog = client.model_catalog().await.unwrap();
+
+    // Every built-in provider type is listed, configured or not; the test
+    // database is fresh, so all rows are credential-less placeholders.
+    let types = registry::known_provider_types();
+    assert_eq!(
+        catalog.providers.len(),
+        types.len(),
+        "one row per known provider type"
+    );
+    assert!(
+        catalog.providers.iter().all(|p| p.id < 0 && p.api_key.is_empty()),
+        "placeholder rows use negative ids and carry no credentials"
+    );
+
+    // Presets are served for the registry types (zai's GLM flagship among
+    // them), marked non-custom, and grouped by provider then model name.
+    let zai = registry::preset_models(&agentik_sdk::model::ProviderType::from("zai"))
+        .unwrap()
+        .len();
+    assert_eq!(
+        catalog.models.iter().filter(|m| m.provider_name == "zai").count(),
+        zai,
+        "zai presets are served in full"
+    );
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|m| m.provider_name == "zai" && !m.custom && m.model_name.starts_with("glm")),
+        "zai's GLM presets appear"
+    );
+    assert!(
+        catalog.models.iter().all(|m| !m.custom),
+        "preset rows are not custom"
+    );
+    let keys: Vec<(&str, &str)> = catalog
+        .models
+        .iter()
+        .map(|m| (m.provider_name.as_str(), m.model_name.as_str()))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted, "grouped by provider then model name");
+
+    gateway_daemon.stop().await;
+}

@@ -210,6 +210,12 @@ export function useAgentRuntime() {
         });
       } else if (event.PlanUpdate !== undefined) {
         setPlans((current) => ({ ...current, [agent]: event.PlanUpdate }));
+      } else if (event.RetryableError !== undefined) {
+        // Transient API failure in request_with_retries: the agent backs
+        // off and re-sends the same request, so this renders as progress
+        // info in the transcript — the terminal Error item is separate.
+        const retry = event.RetryableError;
+        appendMessage(agent, makeItem("error", `第 ${retry.attempt}/${retry.max_retries} 次重试: ${retry.message}`));
       } else if (event.Error !== undefined) {
         appendMessage(agent, makeItem("error", event.Error));
       } else if (event.SessionList !== undefined) {
@@ -273,7 +279,15 @@ export function useAgentRuntime() {
         }
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
-        setStatuses((current) => ({ ...current, [event.path]: statusLabel(event.status) }));
+        // The coarse host projection collapses Retrying into Running;
+        // recover the distinction from last_event ("retrying (2/5): …")
+        // so the spinner survives the back-off window.
+        setStatuses((current) => ({
+          ...current,
+          [event.path]: typeof event.last_event === "string" && event.last_event.startsWith("retrying")
+            ? "retrying"
+            : statusLabel(event.status),
+        }));
       }
     }
   }, [appendMessage]);
@@ -479,8 +493,36 @@ export function useAgentRuntime() {
       setAgents((current) => current.map((agent) => agent.path === path
         ? { ...agent, model: spec }
         : agent));
+      // The effective reasoning effort comes from the model, so re-read it.
+      void refreshAgentEffort(path);
     } catch (cause) {
       appendMessage(path, makeItem("error", `切换模型失败: ${String(cause)}`));
+    }
+  };
+
+  /** Effective reasoning effort per agent path (`undefined` = not loaded,
+   *  `null` = the model has no thinking support). Read from the model
+   *  info endpoint, which resolves override + model default. */
+  const [agentEfforts, setAgentEfforts] = useState<Record<string, string | null>>({});
+  const refreshAgentEffort = useCallback(async (path: string) => {
+    if (!path) return;
+    try {
+      const info = await gatewayRequest("GET", `/agents/${path}/model`);
+      setAgentEfforts((current) => ({ ...current, [path]: info?.reasoning_effort ?? null }));
+    } catch { /* the composer pill falls back to the generic label */ }
+  }, []);
+
+  /** Sets the per-agent reasoning-effort override. The config endpoint
+   *  replaces the whole runtime-override object, so read-modify-write;
+   *  effort applies at request time, i.e. hot. */
+  const setAgentEffort = async (path: string, effort: string) => {
+    try {
+      const config = await gatewayRequest("GET", `/agents/${path}/config`);
+      const runtime = { ...(config?.runtime ?? {}), reasoning_effort: effort };
+      await gatewayRequest("PUT", `/agents/${path}/config`, { runtime });
+      setAgentEfforts((current) => ({ ...current, [path]: effort }));
+    } catch (cause) {
+      appendMessage(path, makeItem("error", `切换推理力度失败: ${String(cause)}`));
     }
   };
 
@@ -541,5 +583,9 @@ export function useAgentRuntime() {
     modelCatalog,
     loadModelCatalog,
     setAgentModel,
+    // reasoning effort
+    agentEfforts,
+    refreshAgentEffort,
+    setAgentEffort,
   };
 }
