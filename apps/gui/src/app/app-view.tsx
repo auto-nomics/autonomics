@@ -15,7 +15,6 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 type View = "agent" | "config" | "bib" | "kms";
@@ -288,21 +287,6 @@ export function App() {
               </Button>
             ))}
           </section>
-          {/* Collapsed rail drops the section headings, so the two groups
-              need a real divider between them. */}
-          {runtime.agents.length > 0 && <>
-            {railCollapsed && <Separator className="w-8 shrink-0" />}
-            <section className={cn("flex w-full flex-col gap-1", railCollapsed && "items-center")}>
-            {!railCollapsed && <h2 className="px-3 pb-1 text-xs font-medium text-muted-foreground">Agent 项目</h2>}
-            {runtime.agents.slice(0, 8).map(agent => {
-              const label = agent.path.split(/[\\/]/).filter(Boolean).at(-1) || agent.path;
-              const active = runtime.activeAgent === agent.path;
-              return <Button key={agent.path} size="sm" variant={active && view === "agent" ? "secondary" : "ghost"} className={cn("h-8 w-full justify-start gap-2 px-2.5", railCollapsed && "h-9 w-9 min-w-9 justify-center p-0")} aria-label={label} title={railCollapsed ? agent.path : undefined} onClick={() => { runtime.selectAgent(agent.path); setView("agent"); if (mobile) closeDrawer(); }}>
-                <Bot /><span className={cn("min-w-0 truncate text-xs", railCollapsed && "sr-only")}>{label}</span><span className={cn("ml-auto size-1.5 shrink-0 rounded-full", agent.status === "Streaming" ? "bg-primary" : "bg-muted-foreground/50", railCollapsed && "sr-only")} />
-              </Button>;
-            })}
-            </section>
-            </>}
         </nav>
         <div className={cn("flex w-full shrink-0 flex-col gap-2 border-t p-2", railCollapsed && "items-center px-1")}>
           <div className={cn("flex min-w-0 items-center gap-2 px-1", railCollapsed && "justify-center")} title={runtime.connected ? "Gateway 已连接" : "Gateway 已断开"}>
