@@ -63,7 +63,8 @@ export function ReadingView({
   entry: WikiEntry;
   onModeChange: (mode: WikiMode) => void;
   onDelete: () => void;
-  onOpenEntry: (id: string) => void;
+  /** newTab: Ctrl/Cmd+点击或中键 → 在新标签页打开(浏览器习惯)。 */
+  onOpenEntry: (id: string, newTab: boolean) => void;
   onMissingLink: (target: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,6 +107,22 @@ export function ReadingView({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const open = (hit: HTMLElement | null, event: MouseEvent) => {
+      const link = hit?.closest<HTMLElement>("[data-wikilink]");
+      if (!link) return;
+      const target = link.dataset.wikilink;
+      if (!target) return;
+      const newTab = event.ctrlKey || event.metaKey || event.button === 1;
+      void (async () => {
+        try {
+          const found = await findEntryByTitle(target);
+          if (found) onOpenEntry(found.id, newTab);
+          else onMissingLink(target);
+        } catch (error) {
+          toast.error((error as Error).message);
+        }
+      })();
+    };
     const onClick = (event: MouseEvent) => {
       const hit = event.target instanceof HTMLElement ? event.target : null;
       const copyButton = hit?.closest("[data-copy-code]");
@@ -120,22 +137,21 @@ export function ReadingView({
         }
         return;
       }
-      const link = hit?.closest<HTMLElement>("[data-wikilink]");
-      if (!link) return;
-      const target = link.dataset.wikilink;
-      if (!target) return;
-      void (async () => {
-        try {
-          const found = await findEntryByTitle(target);
-          if (found) onOpenEntry(found.id);
-          else onMissingLink(target);
-        } catch (error) {
-          toast.error((error as Error).message);
-        }
-      })();
+      open(hit, event);
+    };
+    // 中键触发 auxclick(浏览器的"在新标签页打开")。
+    const onAuxClick = (event: MouseEvent) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      const hit = event.target instanceof HTMLElement ? event.target : null;
+      open(hit, event);
     };
     container.addEventListener("click", onClick);
-    return () => container.removeEventListener("click", onClick);
+    container.addEventListener("auxclick", onAuxClick);
+    return () => {
+      container.removeEventListener("click", onClick);
+      container.removeEventListener("auxclick", onAuxClick);
+    };
   }, [onOpenEntry, onMissingLink]);
 
   return (
