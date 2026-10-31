@@ -11,6 +11,7 @@
     "tauri": "tauri",
     "test:pdf": "node tests/pdf-reader.mjs",
     "test:login": "node tests/login-flow.mjs",
+    "test:wiki": "node tests/wiki-siyuan-modes.mjs",
     "test:pdf-selection": "node tests/pdf-selection.mjs",
     "test:pdf-tools": "node tests/pdf-tools.mjs",
     "test:reading-selection": "node tests/reading-selection.mjs",

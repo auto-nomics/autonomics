@@ -1,7 +1,8 @@
 /**
  * SiYuan-style wiki workspace: left entry list (BM25 search + tag
- * filter), center reader/editor, right dock (links / files / history),
- * recycle-bin dialog — all over gatewayRequest (cookie session).
+ * filter), center reader/editor with a per-document 阅读/编辑 mode
+ * switch, bottom dock (links / files / history), recycle-bin dialog —
+ * all over gatewayRequest (cookie session).
  */
 import {
   BookOpen,
@@ -9,7 +10,6 @@ import {
   ChevronRight,
   Link2,
   Loader2,
-  Pencil,
   Plus,
   RotateCcw,
   Search,
@@ -33,8 +33,8 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { renderMarkdown } from "@/lib/markdown";
+import { EditorView } from "./editor-view";
+import { ReadingView, type WikiMode } from "./reading-view";
 import {
   attachmentRawUrl,
   createEntry,
@@ -49,11 +49,9 @@ import {
   listRecycle,
   listVersions,
   purgeEntry,
-  putEntryContent,
   restoreEntry,
   restoreVersion,
   searchEntries,
-  updateEntryMeta,
   uploadAttachment,
   type AttachmentMeta,
   type EntrySummary,
@@ -63,7 +61,7 @@ import {
   type WikiEntry,
 } from "./wiki-api";
 
-type Mode = "read" | "edit";
+type Mode = WikiMode;
 type ListRow = EntrySummary;
 
 function rowId(row: ListRow): string {
@@ -100,6 +98,10 @@ export function WikiPanel() {
     });
   const [recycleOpen, setRecycleOpen] = useState(false);
   const [recycle, setRecycle] = useState<RecycleItem[] | null>(null);
+  // Clicking a missing [[wikilink]] in the reader offers to create it
+  // (SiYuan's link-first flow) instead of dead-ending.
+  const [missingLink, setMissingLink] = useState<string | null>(null);
+  const [creatingLink, setCreatingLink] = useState(false);
 
   const parseTags = (raw: string) =>
     raw.split(",").map((tag) => tag.trim()).filter(Boolean);
@@ -147,13 +149,19 @@ export function WikiPanel() {
 
 
   const openEntry = useCallback(async (id: string) => {
+    if (
+      mode === "edit" &&
+      !window.confirm("正在编辑中,切换词条将丢弃未保存的修改。继续?")
+    ) {
+      return;
+    }
     try {
       setSelected(await getEntry(id));
       setMode("read");
     } catch (error) {
       toast.error((error as Error).message);
     }
-  }, []);
+  }, [mode]);
   // Side-panel link clicks open the entry in the center pane.
   useEffect(() => {
     const handler = (event: Event) => {
@@ -204,6 +212,27 @@ export function WikiPanel() {
       await loadBrowse(tagFilter);
     } catch (error) {
       toast.error((error as Error).message);
+    }
+  }
+
+  async function createMissingLink() {
+    if (!missingLink) return;
+    setCreatingLink(true);
+    try {
+      const created = await createEntry({
+        title: missingLink,
+        content: `# ${missingLink}\n\n`,
+        tags: tagFilter ? parseTags(tagFilter) : [],
+      });
+      toast.success(`已创建「${missingLink}」`);
+      setMissingLink(null);
+      await openEntry(created.id);
+      setMode("read");
+      await loadBrowse(tagFilter);
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setCreatingLink(false);
     }
   }
 
@@ -308,9 +337,10 @@ export function WikiPanel() {
             <div className="flex min-h-0 flex-1 flex-col gap-2">
               {mode === "edit" ? (
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <EntryEditor
+                  <EditorView
+                    key={selected.id}
                     entry={selected}
-                    onCancel={() => setMode("read")}
+                    onModeChange={setMode}
                     onSaved={(entry) => {
                       setSelected(entry);
                       setMode("read");
@@ -321,10 +351,12 @@ export function WikiPanel() {
               ) : (
                 <>
                   <div className="flex min-h-0 flex-1 flex-col">
-                    <EntryReader
+                    <ReadingView
                       entry={selected}
-                      onEdit={() => setMode("edit")}
+                      onModeChange={setMode}
                       onDelete={() => void softDelete()}
+                      onOpenEntry={(id) => void openEntry(id)}
+                      onMissingLink={setMissingLink}
                     />
                   </div>
                   {/* 折叠区块:链接 / 附件 / 历史(原右侧栏内容) */}
@@ -389,144 +421,29 @@ export function WikiPanel() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={missingLink !== null} onOpenChange={(open) => {
+        if (!open) setMissingLink(null);
+      }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>词条不存在</DialogTitle>
+            <DialogDescription>
+              「{missingLink}」尚未创建。创建并打开它,或返回继续阅读?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setMissingLink(null)}>
+              取消
+            </Button>
+            <Button onClick={() => void createMissingLink()} disabled={creatingLink}>
+              {creatingLink ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              创建
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
-  );
-}
-
-function EntryReader({
-  entry,
-  onEdit,
-  onDelete,
-}: {
-  entry: WikiEntry;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <Card className="flex h-full min-h-0 flex-col">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-2">
-          <h1 className="min-w-0 break-words text-lg font-semibold">{entry.title}</h1>
-          <span className="flex shrink-0 gap-1">
-            <Button size="sm" variant="outline" onClick={onEdit}>
-              <Pencil className="h-3.5 w-3.5" /> 编辑
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => void onDelete()}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </Button>
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          {entry.tags.map((tag) => (
-            <Badge key={tag} variant="secondary">{tag}</Badge>
-          ))}
-          {entry.alias.map((name) => (
-            <Badge key={name} variant="outline">alias: {name}</Badge>
-          ))}
-          <span className="ml-auto">
-            创建 {formatTime(entry.ctime)} · 修改 {formatTime(entry.mtime)}
-          </span>
-        </div>
-      </CardHeader>
-      <CardContent className="min-h-0 flex-1">
-        <ScrollArea className="h-full pr-3">
-          {/* Server-sanitised on display via renderMarkdown (marked + DOMPurify). */}
-          <div
-            className="md prose prose-sm dark:prose-invert max-w-none break-words text-sm"
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(entry.content) }}
-          />
-        </ScrollArea>
-      </CardContent>
-    </Card>
-  );
-}
-
-function EntryEditor({
-  entry,
-  onCancel,
-  onSaved,
-}: {
-  entry: WikiEntry;
-  onCancel: () => void;
-  onSaved: (entry: WikiEntry) => void;
-}) {
-  const [title, setTitle] = useState(entry.title);
-  const [alias, setAlias] = useState(entry.alias.join(", "));
-  const [tags, setTags] = useState(entry.tags.join(", "));
-  const [content, setContent] = useState(entry.content);
-  const [saving, setSaving] = useState(false);
-
-  const split = (value: string) =>
-    value.split(",").map((item) => item.trim()).filter(Boolean);
-
-  async function save() {
-    setSaving(true);
-    try {
-      const aliasList = split(alias);
-      const tagList = split(tags);
-      const metaChanged =
-        title !== entry.title ||
-        aliasList.join(",") !== entry.alias.join(",") ||
-        tagList.join(",") !== entry.tags.join(",");
-      if (metaChanged) {
-        const updated = await updateEntryMeta(entry.id, {
-          new_title: title !== entry.title ? title : undefined,
-          alias: aliasList,
-          tags: tagList,
-        });
-        onSaved(updated);
-      }
-      if (content !== entry.content) {
-        await putEntryContent(entry.id, content);
-      }
-      onSaved({ ...entry, title, alias: aliasList, tags: tagList, content });
-      toast.success("已保存(新版本快照已追加)");
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Card className="flex h-full min-h-0 flex-col">
-      <CardHeader className="grid gap-2 pb-2">
-        <div className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            标题(唯一,自动 trim)
-          </span>
-          <Input id="wiki-title" value={title} onChange={(event) => setTitle(event.target.value)} />
-        </div>
-        <div className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            别名(逗号分隔)
-          </span>
-          <Input id="wiki-alias" value={alias} onChange={(event) => setAlias(event.target.value)} />
-        </div>
-        <div className="grid gap-1">
-          <span className="text-xs text-muted-foreground">
-            标签(逗号分隔)
-          </span>
-          <Input id="wiki-tags" value={tags} onChange={(event) => setTags(event.target.value)} />
-        </div>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
-        <Textarea
-          className="min-h-0 flex-1 font-mono text-sm"
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
-          spellCheck={false}
-        />
-        <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={onCancel} disabled={saving}>
-            取消
-          </Button>
-          <Button onClick={() => void save()} disabled={saving}>
-            保存
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 
