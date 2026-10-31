@@ -61,6 +61,18 @@ pub struct ExtractedAttachmentBackfill {
     pub format: TextFormat,
 }
 
+/// A `done` extraction whose materialized VFS object must match
+/// `text_content` byte-for-byte. `attachment_key` mirrors the router in
+/// `bib_get_article` (preferred attachment, else article-level), so the
+/// repair writes exactly the objects agents are directed at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExtractedTextRepair {
+    pub article_id: String,
+    pub attachment_key: Option<String>,
+    pub text: String,
+    pub format: TextFormat,
+}
+
 impl BibCore {
     pub(crate) async fn write_fulltext_row(conn: &turso::Connection, ft: &FullText) -> Result<()> {
         let result: Result<()> = conn
@@ -110,10 +122,18 @@ impl BibCore {
     /// article have their `fetch_status` promoted to `fulltext_available`.
     /// Without this sync, collection-level status stays stale at
     /// `metadata_only` even after a full text is stored.
+    ///
+    /// `text_content` is normalized ([`normalize_extracted_text`]) so the
+    /// DB text, the materialized extracted object, and the GUI readers all
+    /// stay byte-identical for annotation anchoring.
     pub async fn upsert_fulltext(&self, ft: &FullText) -> Result<()> {
+        let mut ft = ft.clone();
+        if let Some(text) = ft.text_content.take() {
+            ft.text_content = Some(normalize_extracted_text(&text));
+        }
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
-        let mut result = Self::write_fulltext_row(&tx, ft).await;
+        let mut result = Self::write_fulltext_row(&tx, &ft).await;
 
         if result.is_ok() {
             // Sync collection_articles.fetch_status so collection listings
@@ -134,7 +154,7 @@ impl BibCore {
             result = crate::bib_base::sync_search_index(&tx, &ft.article_id).await;
         }
         if result.is_ok() {
-            let legacy = crate::zotero_model::LegacyFulltext::from_fulltext(ft);
+            let legacy = crate::zotero_model::LegacyFulltext::from_fulltext(&ft);
             result = crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await;
         }
         if result.is_ok() {
@@ -180,6 +200,9 @@ impl BibCore {
     }
 
     /// Record extraction success for one attachment key.
+    ///
+    /// `text` is normalized ([`normalize_extracted_text`]) before it lands
+    /// in `fulltextItems.textContent`.
     pub async fn record_attachment_extraction_success(
         &self,
         attachment_key: &str,
@@ -188,12 +211,13 @@ impl BibCore {
         extracted_by: &str,
         extracted_path: &str,
     ) -> Result<Option<String>> {
+        let text = normalize_extracted_text(text);
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let result = crate::zotero_model::record_attachment_extraction_success(
             &tx,
             attachment_key,
-            text,
+            &text,
             format,
             extracted_by,
             extracted_path,
@@ -351,6 +375,9 @@ impl BibCore {
     /// Persist a finished extraction: text, format, provenance, and the
     /// `collection_articles.fetch_status` promotion + search-index sync
     /// that [`Self::upsert_fulltext`] performs for inline extraction.
+    ///
+    /// `text` is normalized ([`normalize_extracted_text`]) before it is
+    /// stored.
     pub async fn record_extraction_success(
         &self,
         article_id: &str,
@@ -358,6 +385,7 @@ impl BibCore {
         format: TextFormat,
         extracted_by: &str,
     ) -> Result<()> {
+        let text = normalize_extracted_text(text);
         if let Some(attachment) =
             crate::zotero_model::attachment_for_article(&self.conn(), article_id).await?
         {
@@ -369,7 +397,7 @@ impl BibCore {
             return self
                 .record_attachment_extraction_success(
                     &attachment.key,
-                    text,
+                    &text,
                     format,
                     extracted_by,
                     &path,
@@ -580,6 +608,91 @@ impl BibCore {
             }
         }
         Ok(done)
+    }
+
+    /// List every `done` extraction with text for the one-time
+    /// byte-identity repair of materialized extracted objects. The
+    /// attachment key resolves the same way the `bib_get_article` router
+    /// does (preferred attachment, else article-level), so repairing these
+    /// objects is exactly repairing what agents read.
+    pub async fn list_extracted_for_repair(&self) -> Result<Vec<ExtractedTextRepair>> {
+        let conn = self.conn();
+        let mut rows = conn
+            .query(
+                "SELECT article_id, text_content, text_format FROM fulltexts \
+                 WHERE extract_status = 'done' AND text_content IS NOT NULL",
+                turso::params![],
+            )
+            .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let article_id = row.get::<String>(0)?;
+            let (text, format) = match (
+                opt_string(row.get_value(1)?),
+                opt_string(row.get_value(2)?),
+            ) {
+                (Some(text), Some(raw_format)) => (text, TextFormat::from_str(&raw_format)),
+                _ => continue,
+            };
+            let attachment_key = crate::zotero_model::attachment_for_article(&conn, &article_id)
+                .await?
+                .map(|attachment| attachment.key);
+            out.push(ExtractedTextRepair {
+                article_id,
+                attachment_key,
+                text,
+                format,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Claim the one-time extracted-object repair left pending by the
+    /// text-normalization migration (`repair`/`repairing` → `repairing`).
+    /// `true` obliges the caller to verify the objects and close the claim
+    /// with [`Self::finish_text_normalize_repair`]; a crash before that
+    /// keeps the claim, so the next startup retries.
+    pub async fn claim_text_normalize_repair(&self) -> Result<bool> {
+        let conn = self.write_conn();
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
+        let mut rows = tx
+            .query(
+                "SELECT value FROM bib_meta WHERE key = 'text_normalize_v1'",
+                turso::params![],
+            )
+            .await?;
+        let state = rows
+            .next()
+            .await?
+            .map(|row| row.get::<String>(0))
+            .transpose()?
+            .unwrap_or_default();
+        drop(rows);
+        if state != "repair" && state != "repairing" {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.execute(
+            "INSERT INTO bib_meta(key,value) VALUES ('text_normalize_v1','repairing') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            turso::params![],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Close the one-time extracted-object repair claim.
+    pub async fn finish_text_normalize_repair(&self) -> Result<()> {
+        let conn = self.write_conn();
+        conn.execute(
+            "INSERT INTO bib_meta(key,value) VALUES ('text_normalize_v1','done') \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            turso::params![],
+        )
+        .await
+        .map(|_| ())
+        .map_err(crate::error::Error::from)
     }
 
     /// Retrieve the full-text record for an article, if one exists.
@@ -889,6 +1002,24 @@ impl BibBase {
             .await
     }
 
+    /// List `done` extractions for the one-time object byte-identity repair.
+    pub async fn list_extracted_for_repair(&self) -> Result<Vec<ExtractedTextRepair>> {
+        self.call(|reply| BibCommand::ListExtractedForRepair { reply })
+            .await
+    }
+
+    /// Claim the one-time extracted-object repair (`true` = claimed).
+    pub async fn claim_text_normalize_repair(&self) -> Result<bool> {
+        self.call(|reply| BibCommand::ClaimTextNormalizeRepair { reply })
+            .await
+    }
+
+    /// Close the one-time extracted-object repair claim.
+    pub async fn finish_text_normalize_repair(&self) -> Result<()> {
+        self.call(|reply| BibCommand::FinishTextNormalizeRepair { reply })
+            .await
+    }
+
     /// Retrieve the full-text record for an article, if one exists.
     pub async fn get_fulltext(&self, article_id: &str) -> Result<Option<FullText>> {
         self.call(|reply| BibCommand::GetFulltext {
@@ -936,6 +1067,132 @@ impl BibBase {
             reply,
         })
         .await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extracted-text normalization
+// ---------------------------------------------------------------------------
+
+/// Canonical normalization for extracted full text: strip every leading
+/// `U+FEFF` BOM, then fold `CRLF` and lone `CR` line endings to `LF`.
+///
+/// This replicates the GUI text reader's decoding chain and stays ahead of
+/// it: the reader strips one BOM after decoding, so the stored text must
+/// carry none for the two views to stay byte-identical — stripping *all*
+/// leading BOMs guarantees that for any source. `text_content`, the
+/// materialized extracted VFS object, and the reader's rendered text then
+/// share one coordinate space for character-offset annotation anchors.
+/// The function is idempotent; applying it twice changes nothing.
+pub(crate) fn normalize_extracted_text(text: &str) -> String {
+    let stripped = text.trim_start_matches('\u{feff}');
+    if !stripped.contains('\r') {
+        return stripped.to_owned();
+    }
+    let mut normalized = String::with_capacity(stripped.len());
+    let mut chars = stripped.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            normalized.push('\n');
+        } else {
+            normalized.push(character);
+        }
+    }
+    normalized
+}
+
+/// One-time migration: normalize legacy `fulltexts.text_content` rows that
+/// carry a BOM or CR line endings, mirror each change into the Zotero
+/// item tables, and bump the search index so the outbox reindexes the
+/// article.
+///
+/// The `text_normalize_v1` sentinel in `bib_meta` makes this idempotent and
+/// coordinates with the startup sweep: `done` skips everything; a fresh
+/// run that changed rows records `repair` so the sweep verifies the
+/// materialized extracted objects against the new text; `repair` /
+/// `repairing` states are left for the sweep to claim and finish (the rows
+/// are already normalized by then).
+pub(crate) async fn migrate_normalize_text(conn: &turso::Connection) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT value FROM bib_meta WHERE key = 'text_normalize_v1'",
+            turso::params![],
+        )
+        .await?;
+    let state = rows
+        .next()
+        .await?
+        .map(|row| row.get::<String>(0))
+        .transpose()?
+        .unwrap_or_default();
+    drop(rows);
+    if state == "done" || state == "repair" || state == "repairing" {
+        return Ok(());
+    }
+
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).await?;
+    let outcome: Result<usize> = async {
+        let mut changed = 0usize;
+        let mut pending = tx
+            .query(
+                "SELECT article_id, text_content FROM fulltexts \
+                 WHERE text_content LIKE '%' || char(13) || '%' \
+                    OR substr(text_content, 1, 1) = char(65279)",
+                turso::params![],
+            )
+            .await?;
+        let mut affected = Vec::new();
+        while let Some(row) = pending.next().await? {
+            let article_id = row.get::<String>(0)?;
+            let raw = row.get::<String>(1)?;
+            let normalized = normalize_extracted_text(&raw);
+            if normalized == raw {
+                continue;
+            }
+            tx.execute(
+                "UPDATE fulltexts SET text_content = ?2 WHERE article_id = ?1",
+                turso::params![article_id.clone(), normalized],
+            )
+            .await?;
+            affected.push(article_id);
+        }
+        drop(pending);
+        for article_id in &affected {
+            if let Some(legacy) = crate::zotero_model::LegacyFulltext::load(&tx, article_id).await?
+            {
+                crate::zotero_model::sync_fulltext_attachment(&tx, &legacy).await?;
+            }
+            crate::bib_base::sync_search_index(&tx, article_id).await?;
+            changed += 1;
+        }
+        let sentinel = if changed > 0 { "repair" } else { "done" };
+        tx.execute(
+            "INSERT INTO bib_meta(key,value) VALUES ('text_normalize_v1',?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            turso::params![sentinel],
+        )
+        .await?;
+        Ok(changed)
+    }
+    .await;
+    match outcome {
+        Ok(changed) => {
+            tx.commit().await?;
+            if changed > 0 {
+                tracing::info!(
+                    articles = changed,
+                    "normalized legacy extracted text; object repair scheduled"
+                );
+            }
+            Ok(())
+        }
+        Err(error) => {
+            let _ = tx.rollback().await;
+            Err(error)
+        }
     }
 }
 
@@ -1147,5 +1404,195 @@ mod tests {
         assert_eq!(pending[0].article_id, "doi:10.1/empty");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalization_replicates_the_gui_reader_chain() {
+        let assert_normalizes = |raw: &str, want: &str| {
+            let once = normalize_extracted_text(raw);
+            assert_eq!(once, want);
+            assert_eq!(
+                normalize_extracted_text(&once),
+                once,
+                "normalization must be idempotent for {raw:?}"
+            );
+        };
+        // CRLF and lone CR fold to LF; existing LF passes through. A
+        // trailing CR becomes a trailing LF, matching the reader.
+        assert_normalizes("a\r\nb\rc\nd", "a\nb\nc\nd");
+        // Every leading BOM is stripped — the reader strips one more after
+        // decode, so none may remain for the views to stay byte-identical.
+        assert_normalizes("\u{feff}body", "body");
+        assert_normalizes("\u{feff}\u{feff}keep", "keep");
+        assert_normalizes("\u{feff}a\r\nb", "a\nb");
+        assert_normalizes("clean text\n", "clean text\n");
+        // CJK and emoji are untouched beyond line endings — the anchor
+        // coordinate space must be encoding-stable.
+        assert_normalizes(
+            "方法显著\r\n降低了死亡率 🚀\r\n",
+            "方法显著\n降低了死亡率 🚀\n",
+        );
+    }
+
+    #[tokio::test]
+    async fn fulltext_write_paths_store_normalized_text() {
+        let base = BibBase::open_in_memory().await.unwrap();
+        let article_id = "doi:10.1/norm";
+        base.upsert_article(&Article::new(article_id, "Normalized"))
+            .await
+            .unwrap();
+
+        // Inline-text rows normalize on upsert.
+        base.upsert_fulltext(&FullText {
+            article_id: article_id.into(),
+            attachment_key: None,
+            file_path: "vfs:///literature/x/inline.html".into(),
+            file_format: FileFormat::Html,
+            text_content: Some("\u{feff}inline\r\ntext\r".into()),
+            source: FullTextSource::OpenAccess,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: Some(ExtractStatus::Done),
+            text_format: Some(TextFormat::Plain),
+            extracted_by: Some("test".into()),
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        let stored = base.get_fulltext(article_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.text_content.as_deref(),
+            Some("inline\ntext\n"),
+            "trailing CR folds to LF like the reader"
+        );
+
+        // The extraction-success path normalizes too, whether it lands in
+        // the legacy `fulltexts` UPDATE or the attachment mirror.
+        base.upsert_fulltext(&FullText {
+            article_id: article_id.into(),
+            attachment_key: None,
+            file_path: "vfs:///literature/x/replaced.pdf".into(),
+            file_format: FileFormat::Pdf,
+            text_content: None,
+            source: FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: Some(ExtractStatus::Pending),
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        assert!(base.mark_extraction_running(article_id).await.unwrap());
+        base.record_extraction_success(article_id, "\u{feff}body\r\nlines\r", TextFormat::Plain, "test")
+            .await
+            .unwrap();
+        let stored = base.get_fulltext(article_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.text_content.as_deref(),
+            Some("body\nlines\n"),
+            "record_extraction_success must store normalized text"
+        );
+        // A mid-text U+FEFF is content, not an encoding marker — preserved.
+        base.record_extraction_success(article_id, "bom:\u{feff}kept", TextFormat::Plain, "test")
+            .await
+            .unwrap();
+        let stored = base.get_fulltext(article_id).await.unwrap().unwrap();
+        assert_eq!(stored.text_content.as_deref(), Some("bom:\u{feff}kept"));
+    }
+
+    #[tokio::test]
+    async fn normalization_migration_rewrites_crlf_rows_and_is_idempotent() {
+        let directory = std::env::temp_dir().join(format!(
+            "bib-base-normalize-migration-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("legacy.db");
+        let db_path = db_path.to_str().unwrap();
+
+        // Pre-normalization database: raw CRLF and BOM-prefixed texts.
+        let mut builder = turso::Builder::new_local(db_path);
+        builder = builder.experimental_multiprocess_wal(true);
+        let legacy = builder.build().await.unwrap();
+        let conn = legacy.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE articles (\
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, abstract TEXT, year INTEGER, \
+                month INTEGER, journal TEXT, volume TEXT, issue TEXT, pages TEXT, \
+                issn TEXT, essn TEXT, language TEXT, pub_types TEXT, keywords TEXT, \
+                source TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE fulltexts (\
+                article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE, \
+                file_path TEXT NOT NULL, file_format TEXT NOT NULL, text_content TEXT, \
+                source TEXT NOT NULL, file_hash TEXT, file_size INTEGER, uploaded_at TEXT);
+             INSERT INTO articles (id, title) VALUES ('doi:10.1/crlf', 'Crlf');
+             INSERT INTO articles (id, title) VALUES ('doi:10.1/clean', 'Clean');
+             INSERT INTO fulltexts (article_id, file_path, file_format, text_content, source) \
+                VALUES ('doi:10.1/crlf', 'vfs://literature/x/a.txt', 'txt', \
+                        '方法\r\n显著 🚀', 'user_upload');
+             INSERT INTO fulltexts (article_id, file_path, file_format, text_content, source) \
+                VALUES ('doi:10.1/clean', 'vfs://literature/x/b.txt', 'txt', \
+                        'already clean', 'user_upload');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        drop(legacy);
+
+        // Opening through BibBase runs the normalization migration.
+        let core = BibCore::open(db_path).await.unwrap();
+        let crlf = core.get_fulltext("doi:10.1/crlf").await.unwrap().unwrap();
+        assert_eq!(crlf.text_content.as_deref(), Some("方法\n显著 🚀"));
+        let clean = core.get_fulltext("doi:10.1/clean").await.unwrap().unwrap();
+        assert_eq!(clean.text_content.as_deref(), Some("already clean"));
+
+        // The Zotero mirror received the normalized text too.
+        let conn = core.conn();
+        let mut rows = conn
+            .query(
+                "SELECT textContent FROM fulltextItems WHERE textContent = ?1",
+                turso::params!["方法\n显著 🚀"],
+            )
+            .await
+            .unwrap();
+        assert!(rows.next().await.unwrap().is_some());
+        drop(rows);
+
+        // The search outbox reindexes the rewritten article...
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM searchOutbox WHERE articleID = 'doi:10.1/crlf'",
+                turso::params![],
+            )
+            .await
+            .unwrap();
+        assert!(rows.next().await.unwrap().is_some());
+        drop(rows);
+        // ...and the sentinel schedules the object repair for the sweep.
+        let mut rows = conn
+            .query(
+                "SELECT value FROM bib_meta WHERE key = 'text_normalize_v1'",
+                turso::params![],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<String>(0).unwrap(),
+            "repair"
+        );
+        drop(rows);
+        drop(conn);
+
+        // A second open re-runs nothing: the scan is skipped once the
+        // sentinel is set, and the text is already normalized.
+        let core = BibCore::open(db_path).await.unwrap();
+        let crlf = core.get_fulltext("doi:10.1/crlf").await.unwrap().unwrap();
+        assert_eq!(crlf.text_content.as_deref(), Some("方法\n显著 🚀"));
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

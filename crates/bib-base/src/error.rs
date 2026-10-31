@@ -36,6 +36,8 @@ pub enum Error {
     CollectionConflict(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("quote anchor failed: {0}")]
+    Anchor(String),
     #[error(
         "bib-base storage actor stopped (all handles dropped or the actor task panicked); \
          re-open the database for a fresh handle"

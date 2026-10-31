@@ -197,6 +197,10 @@ pub async fn run_extraction_parts(
 
     match extractor.extract(&content, fulltext.file_format).await {
         Ok(mut extracted) => {
+            // Canonical text normalization: the extracted object written
+            // below and the recorded `text_content` must be byte-identical
+            // to what the GUI readers render, or annotation anchors drift.
+            extracted.text = crate::fulltext::normalize_extracted_text(&extracted.text);
             if let Err(message) = crate::zotero_extract::store_structure(
                 storage,
                 article_id,
@@ -310,6 +314,9 @@ pub async fn run_attachment_extraction_parts(
 
     match extractor.extract(&content, fulltext.file_format).await {
         Ok(mut extracted) => {
+            // Same normalization contract as the article-level worker: the
+            // extracted object and the recorded text stay byte-identical.
+            extracted.text = crate::fulltext::normalize_extracted_text(&extracted.text);
             if let Err(message) = crate::zotero_extract::store_structure(
                 storage,
                 article_id,
@@ -550,6 +557,7 @@ pub async fn sweep_pending(shared: &BibShared) {
         tracing::warn!(%error,"legacy OA originals repair deferred; raw downloads retry on read");
     }
     backfill_extracted_objects(shared).await;
+    repair_extracted_objects(shared).await;
     let pending = match shared.bib.list_attachments_needing_extraction().await {
         Ok(pending) => pending,
         Err(error) => {
@@ -608,6 +616,77 @@ pub async fn backfill_extracted_objects(shared: &BibShared) {
                 "failed to backfill extracted text object"
             );
         }
+    }
+}
+
+/// One-time-per-upgrade byte-identity repair of materialized extracted
+/// objects, claimed via the `text_normalize_v1` sentinel that the
+/// text-normalization migration sets when it rewrote rows.
+///
+/// For every `done` extraction the canonical object (resolved with the
+/// same attachment preference as the `bib_get_article` router) is
+/// rewritten when missing or different from the now-normalized
+/// `text_content`. Idempotent and crash-safe: the sentinel stays claimed
+/// until the pass completes, so an interrupted startup retries.
+pub async fn repair_extracted_objects(shared: &BibShared) {
+    let Some(storage) = shared.file_storage.as_ref() else {
+        return;
+    };
+    match shared.bib.claim_text_normalize_repair().await {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to claim extracted-object repair");
+            return;
+        }
+    }
+    let rows = match shared.bib.list_extracted_for_repair().await {
+        Ok(rows) => rows,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to list extracted texts for repair");
+            return;
+        }
+    };
+    let mut repaired = 0usize;
+    for item in rows {
+        let path = match item.attachment_key.as_deref() {
+            Some(key) => extracted_attachment_object_path(&item.article_id, key, item.format),
+            None => extracted_object_path(&item.article_id, item.format),
+        };
+        let Some(virtual_path) = vfs_virtual_path(&path) else {
+            continue;
+        };
+        let stale = match read_full(storage, &virtual_path).await {
+            Ok(existing) => existing != item.text.as_bytes(),
+            Err(_) => true,
+        };
+        if !stale {
+            continue;
+        }
+        if let Err(error) = storage
+            .write_bytes(&virtual_path, item.text.clone().into_bytes())
+            .await
+        {
+            tracing::warn!(
+                article_id = %item.article_id,
+                attachment_key = ?item.attachment_key,
+                path = %path,
+                error = %error,
+                "failed to repair extracted text object"
+            );
+            continue;
+        }
+        repaired += 1;
+    }
+    if let Err(error) = shared.bib.finish_text_normalize_repair().await {
+        tracing::warn!(error = %error, "failed to complete extracted-object repair");
+        return;
+    }
+    if repaired > 0 {
+        tracing::info!(
+            objects = repaired,
+            "repaired extracted-text objects after text normalization"
+        );
     }
 }
 
@@ -1087,6 +1166,101 @@ mod tests {
         assert_eq!(extracted.images.len(), 1);
         // The figure MinerU re-derived is overwritten in place.
         assert_eq!(storage.content_length(&figure("aaa.jpg")).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn repair_pass_restores_byte_identity_of_extracted_objects() {
+        let directory = std::env::temp_dir().join(format!(
+            "bib-base-text-repair-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("legacy.db");
+
+        // Pre-normalization database: two CRLF texts that predate the
+        // normalization write path. After open, both rows are normalized in
+        // the DB and the `text_normalize_v1` sentinel schedules the object
+        // repair; the on-disk objects are then stale (or missing).
+        let mut builder = turso::Builder::new_local(db_path.to_str().unwrap());
+        builder = builder.experimental_multiprocess_wal(true);
+        let legacy = builder.build().await.unwrap();
+        let conn = legacy.connect().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE articles (\
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, abstract TEXT, year INTEGER, \
+                month INTEGER, journal TEXT, volume TEXT, issue TEXT, pages TEXT, \
+                issn TEXT, essn TEXT, language TEXT, pub_types TEXT, keywords TEXT, \
+                source TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE fulltexts (\
+                article_id TEXT PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE, \
+                file_path TEXT NOT NULL, file_format TEXT NOT NULL, text_content TEXT, \
+                source TEXT NOT NULL, file_hash TEXT, file_size INTEGER, uploaded_at TEXT);
+             INSERT INTO articles (id, title) VALUES ('doi:10.1/repair-stale', 'Stale');
+             INSERT INTO articles (id, title) VALUES ('doi:10.1/repair-missing', 'Missing');
+             INSERT INTO fulltexts (article_id, file_path, file_format, text_content, source) \
+                VALUES ('doi:10.1/repair-stale', 'vfs://literature/x/a.txt', 'txt', \
+                        'stale\r\nsource', 'user_upload');
+             INSERT INTO fulltexts (article_id, file_path, file_format, text_content, source) \
+                VALUES ('doi:10.1/repair-missing', 'vfs://literature/x/b.txt', 'txt', \
+                        'missing\r\nsource', 'user_upload');",
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        drop(legacy);
+
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        let shared = BibShared::open(&db_path)
+            .await
+            .unwrap()
+            .with_file_storage(storage.clone());
+
+        async fn object_path(shared: &BibShared, article_id: &str) -> String {
+            let fulltext = shared
+                .bib
+                .get_fulltext(article_id)
+                .await
+                .unwrap()
+                .expect("fulltext row");
+            let key = fulltext.attachment_key.expect("mirrored attachment");
+            crate::stored_files::vfs_virtual_path(
+                &crate::stored_files::extracted_attachment_object_path(
+                    article_id,
+                    &key,
+                    fulltext.text_format.unwrap_or(BibTextFormat::Plain),
+                ),
+            )
+            .unwrap()
+        }
+
+        // Article A carries a stale pre-normalization object; article B has
+        // none at all — repair must rewrite the former and create the
+        // latter, both from the normalized `text_content`.
+        let stale_path = object_path(&shared, "doi:10.1/repair-stale").await;
+        storage
+            .write_bytes(&stale_path, "stale\r\nsource".as_bytes().to_vec())
+            .await
+            .unwrap();
+        let missing_path = object_path(&shared, "doi:10.1/repair-missing").await;
+
+        repair_extracted_objects(&shared).await;
+
+        for (path, want) in [
+            (&stale_path, "stale\nsource"),
+            (&missing_path, "missing\nsource"),
+        ] {
+            let bytes = read_full(&storage, path).await.unwrap();
+            assert_eq!(
+                String::from_utf8(bytes).unwrap(),
+                want,
+                "object {path} must match the normalized DB text byte-for-byte"
+            );
+        }
+
+        // The claim is closed: a second pass is a no-op.
+        assert!(!shared.bib.claim_text_normalize_repair().await.unwrap());
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
 

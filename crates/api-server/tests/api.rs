@@ -1706,6 +1706,7 @@ async fn bib_annotation_metadata_updates_preserve_quote_geometry_and_survive_reo
             end: vec![1, 2, 17],
             quote: "Unchanged source quote".into(),
         }),
+        anchor: None,
     }];
     let original = shared
         .bib

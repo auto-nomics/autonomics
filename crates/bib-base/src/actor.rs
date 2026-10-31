@@ -332,6 +332,15 @@ pub(crate) enum BibCommand {
     ListExtractedForBackfill {
         reply: oneshot::Sender<Result<Vec<ExtractedAttachmentBackfill>>>,
     },
+    ListExtractedForRepair {
+        reply: oneshot::Sender<Result<Vec<crate::fulltext::ExtractedTextRepair>>>,
+    },
+    ClaimTextNormalizeRepair {
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    FinishTextNormalizeRepair {
+        reply: oneshot::Sender<Result<()>>,
+    },
     GetFulltext {
         article_id: String,
         reply: oneshot::Sender<Result<Option<FullText>>>,
@@ -387,6 +396,10 @@ pub(crate) enum BibCommand {
         rects: Option<Vec<AnnotationRect>>,
         attachment_key: Option<String>,
         reply: oneshot::Sender<Result<Annotation>>,
+    },
+    AddAnchoredAnnotation {
+        input: crate::annotations::AnchoredNoteInput,
+        reply: oneshot::Sender<Result<crate::types::AnchoredAnnotation>>,
     },
     ListAnnotations {
         article_id: String,
@@ -796,6 +809,15 @@ impl BibCommand {
             Self::ListExtractedForBackfill { reply } => {
                 let _ = reply.send(core.list_extracted_for_backfill().await);
             }
+            Self::ListExtractedForRepair { reply } => {
+                let _ = reply.send(core.list_extracted_for_repair().await);
+            }
+            Self::ClaimTextNormalizeRepair { reply } => {
+                let _ = reply.send(core.claim_text_normalize_repair().await);
+            }
+            Self::FinishTextNormalizeRepair { reply } => {
+                let _ = reply.send(core.finish_text_normalize_repair().await);
+            }
             Self::GetFulltext { article_id, reply } => {
                 let _ = reply.send(core.get_fulltext(&article_id).await);
             }
@@ -889,6 +911,9 @@ impl BibCommand {
                     )
                     .await,
                 );
+            }
+            Self::AddAnchoredAnnotation { input, reply } => {
+                let _ = reply.send(core.add_anchored_annotation(input).await);
             }
             Self::ListAnnotations {
                 article_id,

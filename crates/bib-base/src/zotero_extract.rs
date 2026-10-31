@@ -286,7 +286,7 @@ pub async fn structured_fulltext(
     let bytes = crate::extraction::read_full(storage, &original)
         .await
         .map_err(|error| Error::Unknown(format!("reading PDF original: {error}")))?;
-    let extracted = ZoteroExtractor.extract(&bytes, FileFormat::Pdf).await?;
+    let mut extracted = ZoteroExtractor.extract(&bytes, FileFormat::Pdf).await?;
     // A replacement during extraction must not receive the old PDF's source map.
     let current = match key.as_deref() {
         Some(key) => shared.bib.get_attachment_fulltext(article_id, key).await?,
@@ -312,6 +312,9 @@ pub async fn structured_fulltext(
     if current.extract_status != Some(bib_types::ExtractStatus::Running)
         && !extracted.text.trim().is_empty()
     {
+        // The object written here and the recorded text must both be the
+        // canonical normalized text (see `normalize_extracted_text`).
+        extracted.text = crate::fulltext::normalize_extracted_text(&extracted.text);
         let object = if let Some(key) = key.as_deref() {
             crate::stored_files::extracted_attachment_object_path(article_id, key, extracted.format)
         } else {

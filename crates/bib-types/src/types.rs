@@ -336,21 +336,22 @@ pub enum ArticleSource {
 // Annotation
 // ---------------------------------------------------------------------------
 
-/// The kind of user-added annotation. User-written remarks are `Comment`
-/// — an excerpt quoted from the source text is `Highlight`.
+/// The kind of user-added annotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationKind {
+    /// A free-text note attached to the article.
+    Note,
     /// A highlighted excerpt from the text.
     Highlight,
-    /// A user-written remark, observation, or critique.
-    #[serde(alias = "note")]
+    /// A comment or critique.
     Comment,
 }
 
 impl AnnotationKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Note => "note",
             Self::Highlight => "highlight",
             Self::Comment => "comment",
         }
@@ -359,14 +360,13 @@ impl AnnotationKind {
     pub fn from_str(s: &str) -> Self {
         match s {
             "highlight" => Self::Highlight,
-            // "note" is the retired kind: rows written before remarks were
-            // unified with comments; read them back as comments.
-            _ => Self::Comment,
+            "comment" => Self::Comment,
+            _ => Self::Note,
         }
     }
 }
 
-/// A user-created highlight or comment on an article.
+/// A user-created note, highlight, or comment on an article.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annotation {
     /// Internal annotation ID.
@@ -442,13 +442,60 @@ pub struct AnnotationRect {
     pub height: f64,
 
     /// Coordinate space. Legacy rows used display-normalized CSS boxes;
-    /// new PDF annotations use normalized PDF page space.
+    /// new PDF annotations use normalized PDF page space; text anchors
+    /// use `char` (UTF-16 offsets into the canonical normalized text).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
 
     /// Optional Reading Mode selector, stored on the first rectangle of a page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_range: Option<AnnotationTextRange>,
+
+    /// Server-verified anchor proof for text-space annotations: the quote
+    /// was located verbatim (modulo whitespace folding) in the canonical
+    /// text whose sha256 is `source_hash`, at these UTF-8 byte offsets.
+    /// Absent on legacy and GUI-geometry-only annotations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<AnnotationAnchorProof>,
+}
+
+/// Proof that an annotation anchor was validated against a canonical text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnnotationAnchorProof {
+    /// sha256 of the exact text the offsets point into.
+    pub source_hash: String,
+    /// The verbatim slice from that text (whitespace as stored).
+    pub quote: String,
+    /// Half-open UTF-8 byte range in the canonical text.
+    pub start_byte: usize,
+    pub end_byte: usize,
+}
+
+/// Server-validated anchor resolution returned to the agent alongside the
+/// created annotation — everything needed to self-check the citation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedAnchor {
+    /// Which canonical text anchored the annotation: `fulltext` or `abstract`.
+    pub source: String,
+    /// sha256 of that text; matches [`AnnotationAnchorProof::source_hash`].
+    pub source_hash: String,
+    /// The verbatim slice from the canonical text.
+    pub quote: String,
+    /// Half-open UTF-8 byte range in the canonical text.
+    pub start_byte: usize,
+    pub end_byte: usize,
+    /// 1-based inclusive line range covering the quote.
+    pub line_start: u32,
+    pub line_end: u32,
+    /// Whitespace-collapsed text around the match for eyeball verification.
+    pub context: String,
+}
+
+/// A created annotation plus its server-validated anchor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnchoredAnnotation {
+    pub annotation: Annotation,
+    pub anchor: ResolvedAnchor,
 }
 
 impl Annotation {

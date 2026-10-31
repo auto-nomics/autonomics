@@ -23,7 +23,7 @@
 //! | `bib_search_library`        | Fielded lexical search across local library (multi-query). |
 //! | `bib_get_article`           | Batch metadata plus full-text file references.          |
 //! | `bib_request_fulltext`      | Mark an article as needing full-text upload.            |
-//! | `bib_add_note`              | Quote-anchored highlight (tool-verified text match) or comment. |
+//! | `bib_add_note`              | Quote-anchored note/highlight/comment on the article's text. |
 //! | `bib_read_figure`           | Read a figure image out of stored full text.             |
 //! | `bib_export`                | Render citation formats and write them to the agent VFS. |
 
@@ -1058,19 +1058,21 @@ impl BibGetArticleTool {
         let has_fulltext = fulltext.is_some();
         let fulltext_source = fulltext.as_ref().map(|ft| ft.source.as_str().to_owned());
         let fulltext_original_path = fulltext.as_ref().map(|ft| ft.file_path.clone());
-        // Route `fulltext_path` at what the agent can actually read: for
-        // extracted rows with binary originals (pdf/html) that is the
-        // canonical extracted-text object; txt originals are readable as
-        // stored, so they are their own entry point. The path is derived
-        // by convention (`stored_files::extracted_object_path`) — legacy
-        // `done` rows get theirs materialized by the startup backfill.
+        // Route `fulltext_path` at what the agent can actually read: any
+        // extracted row (pdf/html *and* txt/html originals) points at the
+        // canonical extracted-text object. The extracted text is the one
+        // normalized (BOM/CR-folded) text shared byte-for-byte by the DB,
+        // the VFS object, and the GUI readers — the coordinate space
+        // annotation anchors live in. Routing txt originals at the raw
+        // stored file would expose un-normalized CRLF/BOM text and break
+        // that invariant; originals remain downloadable through the raw
+        // endpoint for provenance. The path is derived by convention
+        // (`stored_files::extracted_object_path`) — missing or stale
+        // objects are repaired by the startup sweep, and legacy `done`
+        // rows get theirs materialized by the startup backfill.
         let fulltext_path = fulltext.as_ref().map(|ft| {
             let extracted = ft.extract_status == Some(bib_types::ExtractStatus::Done)
-                && ft.text_format.is_some()
-                && matches!(
-                    ft.file_format,
-                    bib_types::FileFormat::Pdf | bib_types::FileFormat::Html
-                );
+                && ft.text_format.is_some();
             if extracted {
                 let format = ft.text_format.unwrap_or(bib_types::TextFormat::Plain);
                 match ft.attachment_key.as_deref() {
@@ -1154,7 +1156,14 @@ impl BibGetArticleTool {
                         "id": a.id,
                         "kind": a.kind.as_str(),
                         "content": a.content,
+                        "comment": a.comment,
+                        "tags": a.tags,
                         "page": a.page,
+                        "anchored": a
+                            .rects
+                            .as_ref()
+                            .and_then(|rects| rects.first())
+                            .is_some_and(|rect| rect.anchor.is_some()),
                         "created_at": a.created_at.map(|t| t.to_rfc3339()),
                     })
                 })
@@ -1214,40 +1223,46 @@ impl ToolFunction for BibRequestFulltextTool {
 }
 
 // ===========================================================================
-// bib_add_note — add annotation to article
+// bib_add_note — add quote-anchored annotation to article
 // ===========================================================================
 
 #[tool(
     name = "bib_add_note",
-    description = "Add a highlight or comment to an article in the library. A \
-                  `highlight` anchors a passage of the paper itself: pass the \
-                  exact sentence as `content` — copied verbatim from the \
-                  paper's full text (case-sensitive; line breaks and extra \
-                  spaces are ignored) — and the tool locates it in the PDF by \
-                  text match, verifies it, and computes the highlight \
-                  geometry. Never invent page numbers or coordinates. When \
-                  the same words occur on several pages, pass `page` as a \
-                  1-based hint. A `comment` is your own observation, key \
-                  finding, or critique. Both are searchable alongside the \
-                  article's text."
+    description = "Add a note, highlight, or comment to an article, anchored to a verified \
+                  quote of its text. `quote` is REQUIRED: a passage copied verbatim from the \
+                  article's full text — read it via `bib_get_article` (`fulltext_path`) with \
+                  the `vfs` tool (`read`/`grep`). The server verifies the quote exists and \
+                  refuses fabricated or drifted wording, returning the closest matching text \
+                  instead; when a quote matches several locations it lists them — pass \
+                  `near_line` (the 1-based line from your `vfs read`/`grep` output) to \
+                  disambiguate. Default kind=note stores `note` as the annotation body \
+                  anchored at the quote; kind=highlight stores the verified quote as the \
+                  highlighted text and requires `note` as its comment; kind=comment behaves \
+                  like note. Articles without extracted full text fall back to anchoring the \
+                  abstract (highlights refuse). Anchored notes render in the reader and are \
+                  searchable."
 )]
 pub struct BibAddNoteInput {
     #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
     pub article_id: String,
-    #[desc = "Annotation type: \"highlight\" (verbatim quote from the paper) or \"comment\" (your own remark). Default: comment"]
+    #[desc = "Verbatim passage from the article's full text (or abstract) this note anchors to"]
+    pub quote: String,
+    #[desc = "The annotation body: your observation, finding, or critique. Required"]
+    pub note: String,
+    #[desc = "Annotation kind: \"note\" (default), \"highlight\", or \"comment\""]
     pub kind: Option<String>,
-    #[desc = "For a highlight: the passage copied exactly from the paper's full text. For a comment: your remark"]
-    pub content: String,
-    #[desc = "1-based PDF page hint, required when the same quote appears on several pages; the error lists the candidate pages"]
-    pub page: Option<u32>,
+    #[desc = "1-based line number (from your vfs read/grep output) near the quote, used to disambiguate repeated passages"]
+    pub near_line: Option<u32>,
     #[desc = "Highlight color (used by the PDF reader)"]
     pub color: Option<String>,
+    #[desc = "Tags for the annotation (trimmed and deduplicated)"]
+    pub tags: Option<Vec<String>>,
     #[desc = "Optional Zotero attachment item key; defaults to the preferred attachment"]
     pub attachment_key: Option<String>,
 }
 
 pub struct BibAddNoteTool {
-    pub shared: Arc<BibShared>,
+    pub bib: Arc<BibBase>,
 }
 
 #[async_trait]
@@ -1255,145 +1270,48 @@ impl ToolFunction for BibAddNoteTool {
     type Input = BibAddNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        // Only two kinds exist: quoted excerpts (highlight) and user
-        // remarks (comment). Legacy "note" callers — remarks, back when
-        // note was its own kind — fold into comment; anything else is a
-        // hard error rather than a silent default.
-        let kind = match input
-            .kind
-            .as_deref()
-            .map(str::trim)
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            None | Some("comment") | Some("note") => bib_types::AnnotationKind::Comment,
+        let kind = match input.kind.as_deref().map(|s| s.to_lowercase()).as_deref() {
             Some("highlight") => bib_types::AnnotationKind::Highlight,
-            Some(other) => {
-                return Err(ToolError::ValidationFailed {
-                    message: format!(
-                        "unknown annotation kind `{other}`: expected \"highlight\" or \"comment\""
-                    ),
-                });
-            }
+            Some("comment") => bib_types::AnnotationKind::Comment,
+            _ => bib_types::AnnotationKind::Note,
         };
-        match kind {
-            bib_types::AnnotationKind::Comment => {
-                let ann = self
-                    .shared
-                    .bib
-                    .add_annotation(
-                        &input.article_id,
-                        kind,
-                        input.content.trim(),
-                        input.page,
-                        input.color,
-                        None,
-                        input.attachment_key.as_deref(),
-                    )
-                    .await
-                    .map_err(box_error)?;
-                Ok(AgentToolResult::success_json(serde_json::json!({
-                    "annotation_id": ann.id,
-                    "article_id": input.article_id,
-                    "kind": ann.kind.as_str(),
-                    "content": ann.content,
-                    "page": ann.page,
-                    "color": ann.color,
-                    "attachment_key": ann.attachment_key,
-                })))
-            }
-            bib_types::AnnotationKind::Highlight => {
-                let matched = self.resolve_highlight_anchor(&input).await?;
-                // The reader stores one annotation per page for selections
-                // that cross a page break; every row carries the full quote.
-                let mut annotations = Vec::new();
-                for anchor in &matched.page_anchors {
-                    let ann = self
-                        .shared
-                        .bib
-                        .add_annotation(
-                            &input.article_id,
-                            kind,
-                            &matched.quote,
-                            Some(anchor.page),
-                            input.color.clone(),
-                            Some(anchor.rects.clone()),
-                            input.attachment_key.as_deref(),
-                        )
-                        .await
-                        .map_err(box_error)?;
-                    annotations.push(serde_json::json!({
-                        "annotation_id": ann.id,
-                        "page": anchor.page,
-                        "page_quote": anchor.quote,
-                        "n_rects": anchor.rects.len(),
-                        "has_text_range": anchor
-                            .rects
-                            .first()
-                            .and_then(|rect| rect.text_range.as_ref())
-                            .is_some(),
-                        "item_key": ann.item_key,
-                        "attachment_key": ann.attachment_key,
-                    }));
-                }
-                Ok(AgentToolResult::success_json(serde_json::json!({
-                    "article_id": input.article_id,
-                    "kind": "highlight",
-                    "quote": matched.quote,
-                    "pages": matched.pages,
-                    "annotations": annotations,
-                })))
-            }
-        }
-    }
-}
 
-impl BibAddNoteTool {
-    /// Locate the highlight `content` in the article's structured PDF text
-    /// and derive validated anchors. Every failure mode is a
-    /// [`ToolError::ValidationFailed`] carrying instructions, so the agent
-    /// can correct the quote in its next call instead of persisting an
-    /// anchor that would never render.
-    async fn resolve_highlight_anchor(
-        &self,
-        input: &BibAddNoteInput,
-    ) -> std::result::Result<crate::annotation_anchor::QuoteMatch, ToolError> {
-        // Reading or (re)generating the SDT structure is the same path the
-        // GUI's Reading Mode takes, including the generation mutex and the
-        // shared extraction semaphore.
-        let structure =
-            crate::zotero_extract::structured_fulltext(
-                &self.shared,
-                &input.article_id,
-                input.attachment_key.as_deref(),
-                true,
-            )
+        let anchored = self
+            .bib
+            .add_anchored_annotation(crate::annotations::AnchoredNoteInput {
+                article_id: input.article_id.clone(),
+                kind,
+                quote: input.quote,
+                note: Some(input.note),
+                near_line: input.near_line,
+                color: input.color,
+                tags: input.tags.unwrap_or_default(),
+                attachment_key: input.attachment_key,
+            })
             .await
-            .map_err(|error| ToolError::ValidationFailed {
-                message: format!(
-                    "cannot anchor a highlight on this article: {error}. A highlight quotes \
-                     the paper's PDF full text — make sure the full text is stored, or use \
-                     kind=\"comment\" for a remark that needs no page anchor"
-                ),
-            })?
-            .ok_or_else(|| ToolError::ValidationFailed {
-                message: "cannot anchor a highlight: the PDF structured text is unavailable"
-                    .into(),
-            })?;
-        let index = crate::annotation_anchor::SdtTextIndex::build(&structure);
-        let matched = index
-            .find_quote(&input.content, input.page)
-            .map_err(|error| ToolError::ValidationFailed {
-                message: error.to_string(),
-            })?;
-        if matched.page_anchors.is_empty() {
-            return Err(ToolError::ValidationFailed {
-                message: "the quote matched text that has no highlightable PDF geometry; \
-                          this document's text layer cannot be highlighted"
-                    .into(),
-            });
-        }
-        Ok(matched)
+            .map_err(box_error)?;
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "annotation_id": anchored.annotation.id,
+            "article_id": input.article_id,
+            "kind": anchored.annotation.kind.as_str(),
+            "content": anchored.annotation.content,
+            "comment": anchored.annotation.comment,
+            "tags": anchored.annotation.tags,
+            "color": anchored.annotation.color,
+            "anchor": {
+                "source": anchored.anchor.source,
+                "source_hash": anchored.anchor.source_hash,
+                "quote": anchored.anchor.quote,
+                "start_byte": anchored.anchor.start_byte,
+                "end_byte": anchored.anchor.end_byte,
+                "line_start": anchored.anchor.line_start,
+                "line_end": anchored.anchor.line_end,
+                "context": anchored.anchor.context,
+            },
+            "message": "Note anchored: the quote was verified against the stored text and \
+                        renders as an anchored annotation in the reader.",
+        })))
     }
 }
 
@@ -1888,7 +1806,6 @@ impl ToolFunction for BibReadFigureTool {
 /// / `bib_export` / etc.) remain tools; the agent invokes them as before.
 pub fn bib_library_registrations(
     bib: Arc<BibBase>,
-    shared: Arc<BibShared>,
     file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
@@ -1902,7 +1819,7 @@ pub fn bib_library_registrations(
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
-        R::from(BibAddNoteTool { shared: shared.clone() }),
+        R::from(BibAddNoteTool { bib: bib.clone() }),
         R::from(BibDeleteTool { bib: bib.clone() }),
         R::from(BibReadFigureTool {
             bib: bib.clone(),
@@ -1934,8 +1851,6 @@ pub fn bib_library_registrations(
 /// # }
 /// ```
 pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
-    // Highlights resolve their anchors through the shared bundle (VFS storage
-    // + extraction permits), so a bare BibBase is not enough here.
     let file_storage = shared.file_storage.clone().unwrap_or_else(|| {
         // A host that never attached storage still gets the read-only tools;
         // only export/figure writes would target an ephemeral VFS.
@@ -1944,7 +1859,7 @@ pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
     // Literature *retrieval* now flows through the DAG evidence channel
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
-    bib_library_registrations(shared.bib.clone(), shared, file_storage)
+    bib_library_registrations(shared.bib.clone(), file_storage)
 }
 
 // ===========================================================================
@@ -2102,319 +2017,6 @@ mod tests {
         art.year = Some(2024);
         bib.upsert_article(&art).await.unwrap();
         (bib, art.id)
-    }
-
-    // ── bib_add_note ──────────────────────────────────────────────────────
-
-    /// One horizontal textMap run: every non-whitespace character gets a
-    /// 10-unit box advancing from x=50, line box y..y+12, on `page` (0-based).
-    fn flat_text_map(text: &str, page: u32, y: f64) -> String {
-        let mut run = vec![
-            serde_json::json!(0u64),
-            serde_json::json!(page),
-            serde_json::json!(50.0),
-            serde_json::json!(y),
-            serde_json::json!(50.0),
-            serde_json::json!(y + 12.0),
-        ];
-        run.extend(
-            text.chars()
-                .filter(|ch| !matches!(ch, ' ' | '\n' | '\t'))
-                .map(|_| serde_json::json!(10.0)),
-        );
-        serde_json::to_string(&vec![serde_json::Value::Array(run)]).unwrap()
-    }
-
-    /// A minimal valid SDT document (`StructuredCache::matches` requires the
-    /// schema version, processor type/version, content and catalog pages).
-    fn sdt_structure(content: serde_json::Value, pages: usize) -> serde_json::Value {
-        serde_json::json!({
-            "schemaVersion": "1.2.0",
-            "metadata": {
-                "source": { "hash": "hash-sdt" },
-                "processor": { "type": "pdf", "version": 15 },
-            },
-            "content": content,
-            "catalog": {
-                "pages": (0..pages).map(|_| serde_json::json!({
-                    "viewRect": [0.0, 0.0, 612.0, 792.0],
-                })).collect::<Vec<_>>(),
-            },
-        })
-    }
-
-    /// Seed an article with a stored PDF fulltext row plus a cached SDT
-    /// structure, so highlight anchoring resolves without running the real
-    /// Zotero extractor.
-    async fn seed_article_with_sdt(
-        shared: &Arc<BibShared>,
-        article_id: &str,
-        structure: serde_json::Value,
-    ) {
-        let fulltext = bib_types::FullText {
-            article_id: article_id.to_owned(),
-            attachment_key: None,
-            file_path: format!("vfs:///bib/{article_id}/paper.pdf"),
-            file_format: bib_types::FileFormat::Pdf,
-            text_content: None,
-            source: bib_types::FullTextSource::UserUpload,
-            file_hash: Some(format!("hash-{article_id}")),
-            file_size: None,
-            uploaded_at: None,
-            extract_status: None,
-            text_format: None,
-            extracted_by: None,
-            extract_error: None,
-        };
-        shared.bib.upsert_fulltext(&fulltext).await.unwrap();
-        // upsert_fulltext links (or creates) a Zotero attachment, and the
-        // structured cache is keyed by that attachment — mirror the reader's
-        // Reading Mode path so `structured_fulltext` finds the cache.
-        let key = shared
-            .bib
-            .zotero_attachment(article_id)
-            .await
-            .unwrap()
-            .map(|attachment| attachment.key);
-        let storage = shared.file_storage.clone().expect("test storage attached");
-        crate::zotero_extract::store_structure(
-            &storage,
-            article_id,
-            key.as_deref(),
-            &fulltext,
-            Some(&structure),
-        )
-        .await
-        .unwrap();
-    }
-
-
-    async fn shared_with_storage() -> Arc<BibShared> {
-        Arc::new(
-            BibShared::open_in_memory()
-                .await
-                .unwrap()
-                .with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp())),
-        )
-    }
-
-    #[tokio::test]
-    async fn test_add_note_highlight_anchors_quote_by_text_match() {
-        let shared = shared_with_storage().await;
-        let art = bib_types::Article::new("doi:10.1038/ng.2024.hl", "Highlight paper");
-        shared.bib.upsert_article(&art).await.unwrap();
-        let text = "The mitochondrion is the powerhouse of the cell";
-        seed_article_with_sdt(
-            &shared,
-            &art.id,
-            sdt_structure(
-                serde_json::json!([{
-                    "type": "paragraph",
-                    "content": [{
-                        "text": text,
-                        "anchor": { "textMap": flat_text_map(text, 0, 700.0) },
-                    }],
-                }]),
-                1,
-            ),
-        )
-        .await;
-
-        let tool = BibAddNoteTool { shared: shared.clone() };
-        let result = tool
-            .run(BibAddNoteInput {
-                article_id: art.id.clone(),
-                kind: Some("highlight".into()),
-                content: "mitochondrion is the".into(),
-                page: None,
-                color: Some("#ffd400".into()),
-                attachment_key: None,
-            })
-            .await
-            .unwrap();
-        match result.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["kind"], "highlight");
-                assert_eq!(value["quote"], "mitochondrion is the");
-                assert_eq!(value["pages"][0], 1);
-                assert_eq!(value["annotations"][0]["page"], 1);
-                assert_eq!(value["annotations"][0]["n_rects"], 1);
-                assert_eq!(value["annotations"][0]["has_text_range"], true);
-            }
-            other => panic!("unexpected tool result: {other:?}"),
-        }
-
-        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
-        assert_eq!(annotations.len(), 1);
-        let ann = &annotations[0];
-        assert_eq!(ann.kind.as_str(), "highlight");
-        assert_eq!(ann.page, Some(1));
-        assert_eq!(ann.content, "mitochondrion is the");
-        assert_eq!(ann.color.as_deref(), Some("#ffd400"));
-        let rects = ann.rects.as_ref().expect("highlight carries rects");
-        assert_eq!(rects.len(), 1);
-        assert_eq!(rects[0].space.as_deref(), Some("pdf"));
-        // 'm' is the fourth UTF-16 unit; the quote spans 20 units exclusive.
-        let range = rects[0].text_range.as_ref().unwrap();
-        assert_eq!(range.start, vec![0, 0, 4]);
-        assert_eq!(range.end, vec![0, 0, 24]);
-        assert_eq!(range.source_hash, "hash-sdt");
-    }
-
-    #[tokio::test]
-    async fn test_add_note_highlight_rejects_quote_not_in_paper() {
-        let shared = shared_with_storage().await;
-        let art = bib_types::Article::new("doi:10.1038/ng.2024.miss", "Missing quote paper");
-        shared.bib.upsert_article(&art).await.unwrap();
-        let text = "Actual sentence in the paper.";
-        seed_article_with_sdt(
-            &shared,
-            &art.id,
-            sdt_structure(
-                serde_json::json!([{
-                    "type": "paragraph",
-                    "content": [{
-                        "text": text,
-                        "anchor": { "textMap": flat_text_map(text, 0, 700.0) },
-                    }],
-                }]),
-                1,
-            ),
-        )
-        .await;
-
-        let tool = BibAddNoteTool { shared: shared.clone() };
-        let error = tool
-            .run(BibAddNoteInput {
-                article_id: art.id.clone(),
-                kind: Some("highlight".into()),
-                content: "words that appear nowhere in the document".into(),
-                page: None,
-                color: None,
-                attachment_key: None,
-            })
-            .await
-            .unwrap_err();
-        match error {
-            ToolError::ValidationFailed { message } => {
-                assert!(message.contains("quote not found"), "{message}");
-                assert!(message.contains("verbatim"), "{message}");
-            }
-            other => panic!("expected ValidationFailed, got {other:?}"),
-        }
-        // Nothing was persisted.
-        assert!(
-            shared
-                .bib
-                .list_annotations(&art.id, None)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_add_note_highlight_reports_ambiguous_pages() {
-        let shared = shared_with_storage().await;
-        let art = bib_types::Article::new("doi:10.1038/ng.2024.amb", "Repeated quote paper");
-        shared.bib.upsert_article(&art).await.unwrap();
-        let repeated = "Significant result reported in the study.";
-        seed_article_with_sdt(
-            &shared,
-            &art.id,
-            sdt_structure(
-                serde_json::json!([
-                    {
-                        "type": "paragraph",
-                        "content": [{
-                            "text": repeated,
-                            "anchor": { "textMap": flat_text_map(repeated, 0, 700.0) },
-                        }],
-                    },
-                    {
-                        "type": "paragraph",
-                        "content": [{
-                            "text": repeated,
-                            "anchor": { "textMap": flat_text_map(repeated, 1, 700.0) },
-                        }],
-                    },
-                ]),
-                2,
-            ),
-        )
-        .await;
-
-        let tool = BibAddNoteTool { shared: shared.clone() };
-        let error = tool
-            .run(BibAddNoteInput {
-                article_id: art.id.clone(),
-                kind: Some("highlight".into()),
-                content: repeated.into(),
-                page: None,
-                color: None,
-                attachment_key: None,
-            })
-            .await
-            .unwrap_err();
-        match error {
-            ToolError::ValidationFailed { message } => {
-                assert!(message.contains("2 locations"), "{message}");
-                assert!(message.contains("pages: 1, 2"), "{message}");
-            }
-            other => panic!("expected ValidationFailed, got {other:?}"),
-        }
-        // The same call with a page hint anchors only that page.
-        let result = tool
-            .run(BibAddNoteInput {
-                article_id: art.id.clone(),
-                kind: Some("highlight".into()),
-                content: repeated.into(),
-                page: Some(2),
-                color: None,
-                attachment_key: None,
-            })
-            .await
-            .unwrap();
-        match result.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["pages"][0], 2);
-            }
-            other => panic!("unexpected tool result: {other:?}"),
-        }
-        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].page, Some(2));
-    }
-
-    #[tokio::test]
-    async fn test_add_note_comment_needs_no_pdf() {
-        let shared = shared_with_storage().await;
-        let art = bib_types::Article::new("doi:10.1038/ng.2024.cmt", "Comment only paper");
-        shared.bib.upsert_article(&art).await.unwrap();
-
-        let tool = BibAddNoteTool { shared: shared.clone() };
-        let result = tool
-            .run(BibAddNoteInput {
-                article_id: art.id.clone(),
-                kind: Some("comment".into()),
-                content: "Methods are thin; the cohort is underpowered.".into(),
-                page: None,
-                color: None,
-                attachment_key: None,
-            })
-            .await
-            .unwrap();
-        match result.content {
-            ToolResultContent::Json(value) => {
-                assert_eq!(value["kind"], "comment");
-                assert!(value["annotation_id"].as_str().is_some());
-            }
-            other => panic!("unexpected tool result: {other:?}"),
-        }
-        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].kind.as_str(), "comment");
-        assert_eq!(annotations[0].rects, None);
     }
 
     #[tokio::test]
@@ -2972,5 +2574,143 @@ mod tests {
             error.contains("unsupported figure type"),
             "error was: {error}"
         );
+    }
+
+    // ── bib_get_article fulltext_path routing ────────────────────────────
+
+    #[tokio::test]
+    async fn fulltext_path_routes_txt_originals_to_the_canonical_object() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let article = bib_types::Article::new("doi:10.1/txt-route", "Txt routing");
+        bib.upsert_article(&article).await.unwrap();
+        // A txt original used to be its own entry point; the canonical
+        // extracted object is now the single anchor coordinate space, so
+        // the router must direct every extracted row at it.
+        bib.upsert_fulltext(&bib_types::FullText {
+            article_id: article.id.clone(),
+            attachment_key: None,
+            file_path: "vfs:///literature/x/paper.txt".into(),
+            file_format: bib_types::FileFormat::Txt,
+            text_content: None,
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        bib.record_extraction_success(&article.id, "body\r\nlines", TextFormat::Plain, "test")
+            .await
+            .unwrap();
+
+        let result = BibGetArticleTool { bib: bib.clone() }
+            .get_one(&article.id)
+            .await;
+        let path = result.fulltext_path.expect("routed fulltext path");
+        assert!(
+            path.ends_with("/extracted/fulltext.txt"),
+            "txt originals must route at the canonical extracted object, got {path}"
+        );
+
+        // The stored text itself is normalized — the byte-identity the
+        // router relies on.
+        let stored = bib.get_fulltext(&article.id).await.unwrap().unwrap();
+        assert_eq!(stored.text_content.as_deref(), Some("body\nlines"));
+    }
+
+    // ── bib_add_note v2 — quote-anchored agent annotations ───────────────
+
+    #[tokio::test]
+    async fn bib_add_note_anchors_verified_quote_and_reads_back() {
+        let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
+        let article = bib_types::Article::new("doi:10.1/agent-note", "Agent notes");
+        bib.upsert_article(&article).await.unwrap();
+        bib.upsert_fulltext(&bib_types::FullText {
+            article_id: article.id.clone(),
+            attachment_key: None,
+            file_path: "vfs:///literature/x/paper.pdf".into(),
+            file_format: bib_types::FileFormat::Pdf,
+            text_content: None,
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: None,
+            file_size: None,
+            uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        })
+        .await
+        .unwrap();
+        bib.record_extraction_success(
+            &article.id,
+            "Intro line\nthe treatment reduced mortality across all cohorts.",
+            TextFormat::Plain,
+            "test",
+        )
+        .await
+        .unwrap();
+
+        let tool = BibAddNoteTool { bib: bib.clone() };
+        let result = tool
+            .run(BibAddNoteInput {
+                article_id: article.id.clone(),
+                quote: "the treatment reduced mortality".into(),
+                note: "key efficacy finding".into(),
+                kind: None,
+                near_line: Some(2),
+                color: None,
+                tags: Some(vec!["efficacy".into()]),
+                attachment_key: None,
+            })
+            .await
+            .unwrap();
+        let payload: serde_json::Value = match &result.content {
+            ToolResultContent::Json(value) => value.clone(),
+            other => panic!("expected json content, got {other:?}"),
+        };
+        assert_eq!(payload["kind"], "note");
+        assert_eq!(payload["content"], "key efficacy finding");
+        assert_eq!(payload["anchor"]["source"], "fulltext");
+        assert_eq!(payload["anchor"]["line_start"], 2);
+        assert_eq!(
+            payload["anchor"]["quote"],
+            "the treatment reduced mortality"
+        );
+
+        // Read-back through bib_get_article: anchored flag, comment, tags.
+        let projection = BibGetArticleTool { bib: bib.clone() }
+            .get_one(&article.id)
+            .await;
+        assert_eq!(projection.n_annotations, 1);
+        let listed = &projection.annotations[0];
+        assert_eq!(listed["anchored"], serde_json::json!(true));
+        // Note kind carries the body in `content`; comment stays empty
+        // (that is the highlight path's field).
+        assert_eq!(listed["content"], "key efficacy finding");
+        assert_eq!(listed["comment"], "");
+        assert_eq!(listed["tags"], serde_json::json!(["efficacy"]));
+
+        // Drifted wording is refused with the closest-match hint.
+        let error = tool
+            .run(BibAddNoteInput {
+                article_id: article.id.clone(),
+                quote: "the treatment reduced morbidity".into(),
+                note: "fabricated".into(),
+                kind: None,
+                near_line: None,
+                color: None,
+                tags: None,
+                attachment_key: None,
+            })
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("not found"), "{message}");
+        assert!(message.contains("first words"), "{message}");
     }
 }

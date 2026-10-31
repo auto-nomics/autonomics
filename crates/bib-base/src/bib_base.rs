@@ -412,6 +412,10 @@ impl BibCore {
         // This runs after legacy column backfills because it reads
         // extraction provenance from `fulltexts`.
         crate::zotero_model::migrate(&conn).await?;
+        // Normalize legacy extracted text (BOM / CR line endings) after the
+        // item tables exist, so the mirror propagates to
+        // `fulltextItems.textContent` in the same pass.
+        crate::fulltext::migrate_normalize_text(&conn).await?;
         // Turso prepares statements per connection. Applying the same
         // idempotent DDL to the read side ensures freshly added extension
         // columns are visible to queries made through `BibCore::conn()`.
