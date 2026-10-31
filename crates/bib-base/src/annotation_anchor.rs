@@ -15,15 +15,16 @@
 //! The position/geometry semantics mirror the GUI side exactly (the vendored
 //! `pdf-position-mapper` and SDT renderer): run entries correspond to the
 //! text node's non-whitespace characters (only `' '`, `'\n'`, `'\t'` count as
-//! whitespace there), offsets are UTF-16 code units, and a soft-hyphen run
-//! flag drops that run's last character box because the hyphen is layout-only.
+//! whitespace there — one entry per UTF-16 code unit), offsets are UTF-16
+//! code units, `end` is exclusive, and a soft-hyphen run flag drops that
+//! run's last character box because the hyphen is layout-only.
 
 use bib_types::{AnnotationRect, AnnotationTextRange};
 use serde_json::Value;
 
 /// Per-character corpus record. Whitespace carries no geometry.
 struct UnitRecord {
-    text: String,
+    text: char,
     /// Leaf-block ref path (indices into nested `content` arrays).
     block: u32,
     /// Text node index within the block's `content`.
@@ -68,8 +69,9 @@ pub struct PageAnchor {
     pub page: u32,
     /// `space: "pdf"` rectangles; the first carries `text_range`.
     pub rects: Vec<AnnotationRect>,
-    /// Exact SDT selector for Reading Mode.
+    /// Inclusive exact SDT selector start for Reading Mode.
     pub start: Vec<u32>,
+    /// Exclusive exact SDT selector end.
     pub end: Vec<u32>,
     /// Page-local normalized quote verified against the rendered text.
     pub quote: String,
@@ -79,7 +81,7 @@ pub struct PageAnchor {
 pub enum AnchorError {
     /// The quote does not appear in the document text.
     NotFound,
-    /// The quote appears on several pages; a page hint is required.
+    /// The quote appears at several locations; a page hint is required.
     Ambiguous { pages: Vec<u32> },
     /// The quote exists but not on the hinted page.
     PageMismatch { hint: u32, actual: Vec<u32> },
@@ -163,7 +165,8 @@ impl SdtTextIndex {
     /// Locate `quote` and derive per-page anchors.
     ///
     /// `page_hint` (1-based) both disambiguates repeated quotes and is
-    /// validated against where the quote actually lives.
+    /// validated against where the quote actually lives. Repeated matches on
+    /// one and the same page resolve deterministically to the first one.
     pub fn find_quote(
         &self,
         quote: &str,
@@ -179,12 +182,8 @@ impl SdtTextIndex {
         }
         let mut selected = candidates.clone();
         if let Some(hint) = page_hint {
-            let on_page: Vec<_> = candidates
-                .iter()
-                .copied()
-                .filter(|range| self.pages_in(*range).contains(&hint))
-                .collect();
-            if on_page.is_empty() {
+            selected.retain(|range| self.pages_in(*range).contains(&hint));
+            if selected.is_empty() {
                 let mut actual: Vec<u32> = candidates
                     .iter()
                     .flat_map(|range| self.pages_in(*range))
@@ -193,26 +192,33 @@ impl SdtTextIndex {
                 actual.dedup();
                 return Err(AnchorError::PageMismatch { hint, actual });
             }
-            selected = on_page;
         }
         if selected.len() > 1 {
-            let mut pages: Vec<u32> = selected
-                .iter()
-                .filter_map(|range| self.pages_in(*range).first().copied())
-                .collect();
-            pages.sort_unstable();
-            pages.dedup();
-            return Err(AnchorError::Ambiguous { pages });
+            // Repeats of a quote confined to one page (boilerplate columns,
+            // repeated short phrases) resolve to the first occurrence;
+            // ambiguity is only actionable when the pages differ.
+            let page_sets: Vec<Vec<u32>> =
+                selected.iter().map(|range| self.pages_in(*range)).collect();
+            if page_sets.iter().any(|set| *set != page_sets[0]) {
+                let mut pages: Vec<u32> =
+                    page_sets.iter().filter_map(|set| set.first().copied()).collect();
+                pages.sort_unstable();
+                pages.dedup();
+                return Err(AnchorError::Ambiguous { pages });
+            }
         }
         let range = selected[0];
         let pages = self.pages_in(range);
         let page_anchors = pages
             .iter()
             .filter_map(|page| self.page_anchor(range, *page))
-            .collect();
+            .collect::<Vec<PageAnchor>>();
         Ok(QuoteMatch {
             quote: needle,
-            pages,
+            pages: page_anchors
+                .iter()
+                .map(|anchor| anchor.page)
+                .collect::<Vec<u32>>(),
             page_anchors,
         })
     }
@@ -224,10 +230,11 @@ impl SdtTextIndex {
         while let Some(byte) = self.norm[search_from..].find(needle) {
             let start_byte = search_from + byte;
             let end_byte = start_byte + needle.len();
+            // Both offsets are char boundaries, so the partition lands on the
+            // first matched character and one past its (last) character.
             let start_char = self
                 .norm_char_bytes
-                .partition_point(|offset| *offset < start_byte)
-                - 1;
+                .partition_point(|offset| *offset < start_byte);
             let end_char = self
                 .norm_char_bytes
                 .partition_point(|offset| *offset < end_byte)
@@ -241,10 +248,12 @@ impl SdtTextIndex {
     }
 
     /// Sorted unique 1-based pages of the geometry-bearing units in `range`.
+    /// `UnitRecord::page` is the 0-based `pageIndex` from the anchor, so every
+    /// consumer (hint comparison, error messages, anchors) sees +1 here.
     fn pages_in(&self, range: (usize, usize)) -> Vec<u32> {
         let mut pages: Vec<u32> = self.units[range.0..range.1]
             .iter()
-            .filter_map(|unit| unit.page)
+            .filter_map(|unit| unit.page.map(|page| page + 1))
             .collect();
         pages.sort_unstable();
         pages.dedup();
@@ -256,6 +265,16 @@ impl SdtTextIndex {
         let mut position = self.block_paths[unit.block as usize].clone();
         position.push(unit.node);
         position.push(unit.offset);
+        position
+    }
+
+    /// Exclusive end selector: the last character's offset plus its UTF-16
+    /// width, matching how the reader's `domPoint`/`range` count offsets.
+    fn unit_position_end(&self, index: usize) -> Vec<u32> {
+        let unit = &self.units[index];
+        let mut position = self.unit_position(index);
+        let last = position.len() - 1;
+        position[last] += unit.text.len_utf16() as u32;
         position
     }
 
@@ -272,7 +291,7 @@ impl SdtTextIndex {
             if let Some(rect) = unit.rect {
                 line_rects.push(rect);
             }
-            if !is_run_whitespace(&unit.text) {
+            if !is_run_whitespace(unit.text) {
                 if !seen_page_char {
                     first = index;
                     seen_page_char = true;
@@ -284,47 +303,31 @@ impl SdtTextIndex {
             return None;
         }
         let quote = collapse_str(&self.span_text(first, last + 1));
-        let rects = self.normalize_rects(page, &line_rects);
-        if let (Some(hash), Some(first_rect)) = (self.source_hash.clone(), rects.first()) {
-            // Only the first rectangle carries the Reading Mode selector, the
-            // same convention the reader uses when saving a selection.
-            if first_rect.text_range.is_none() {
-                if let Some(rect) = rects.first() {
-                    let _ = rect;
-                }
-            }
+        let mut rects = self.normalize_rects(page, &line_rects);
+        if rects.is_empty() {
+            return None;
         }
-        if let Some(hash) = self.source_hash.clone() {
-            if let Some(rect) = rects.first() {
-                if rect.text_range.is_none() {
-                    // set below via rebuild to keep AnnotationRect fields owned
-                }
-            }
-            let _ = hash;
-        }
-        let mut rects = rects;
+        // Only the first rectangle carries the Reading Mode selector — the
+        // same convention the reader uses when saving a selection.
         if let (Some(hash), Some(first_rect)) = (self.source_hash.clone(), rects.first_mut()) {
             first_rect.text_range = Some(AnnotationTextRange {
                 source_hash: hash,
                 start: self.unit_position(first),
-                end: self.unit_position(last),
+                end: self.unit_position_end(last),
                 quote: quote.clone(),
             });
         }
         Some(PageAnchor {
             page,
             start: self.unit_position(first),
-            end: self.unit_position(last),
+            end: self.unit_position_end(last),
             quote,
             rects,
         })
     }
 
     fn span_text(&self, start: usize, end: usize) -> String {
-        self.units[start..end]
-            .iter()
-            .map(|unit| unit.text.as_str())
-            .collect()
+        self.units[start..end].iter().map(|unit| unit.text).collect()
     }
 
     /// Merge per-character boxes into per-line rectangles in normalized page
@@ -338,7 +341,6 @@ impl SdtTextIndex {
         if view_width <= 0.0 || view_height <= 0.0 {
             return Vec::new();
         }
-        let mut out = Vec::new();
         let mut lines: Vec<[f64; 4]> = Vec::new();
         for rect in rects {
             match lines.last_mut() {
@@ -357,8 +359,9 @@ impl SdtTextIndex {
                 _ => lines.push(*rect),
             }
         }
-        for rect in lines {
-            push_rect(&mut out, rect, vx0, vy0, view_width, view_height);
+        let mut out = Vec::new();
+        for line in lines {
+            push_rect(&mut out, line, vx0, vy0, view_width, view_height);
         }
         out
     }
@@ -401,8 +404,8 @@ fn same_line(a: &[f64; 4], b: &[f64; 4]) -> bool {
 }
 
 /// Run-alignment whitespace, exactly the mapper's set (`' '`, `'\n'`, `'\t'`).
-fn is_run_whitespace(text: &str) -> bool {
-    matches!(text, " " | "\n" | "\t")
+fn is_run_whitespace(ch: char) -> bool {
+    matches!(ch, ' ' | '\n' | '\t')
 }
 
 /// Matching-time whitespace: same classes the GUI's `normalizeQuote` folds.
@@ -444,35 +447,29 @@ fn walk_block(
         block_paths.push(path.clone());
         // Blocks are separated by one collapsible space in the corpus so
         // quotes copied across a paragraph break still match.
-        if let Some(previous) = units.last() {
-            if !is_match_whitespace(previous.text.chars().next().unwrap_or(' ')) {
-                units.push(UnitRecord {
-                    text: " ".into(),
-                    block,
-                    node: 0,
-                    offset: 0,
-                    page: None,
-                    rect: None,
-                });
-            }
+        if units.last().is_some_and(|previous| !is_match_whitespace(previous.text)) {
+            units.push(UnitRecord {
+                text: ' ',
+                block,
+                node: 0,
+                offset: 0,
+                page: None,
+                rect: None,
+            });
         }
         for (index, text_node) in content.iter().enumerate() {
             let Some(text) = text_node.get("text").and_then(Value::as_str) else {
                 continue;
             };
             let runs = text_node
-                .get("anchor")
-                .and_then(|anchor| anchor.get("textMap"))
+                .pointer("/anchor/textMap")
                 .and_then(Value::as_str)
                 .map(parse_runs);
             let fallback = text_node
-                .get("anchor")
-                .and_then(|anchor| anchor.get("pageRects"))
+                .pointer("/anchor/pageRects")
                 .and_then(Value::as_array)
                 .or_else(|| {
-                    node.get("anchor")
-                        .and_then(|anchor| anchor.get("pageRects"))
-                        .and_then(Value::as_array)
+                    node.pointer("/anchor/pageRects").and_then(Value::as_array)
                 })
                 .and_then(|rects| rects.first())
                 .and_then(|rect| rect.as_array())
@@ -480,13 +477,15 @@ fn walk_block(
                     if rect.len() < 5 {
                         return None;
                     }
-                    Some([
-                        rect[0].as_f64()? as u32,
-                        rect[1].as_f64()?,
-                        rect[2].as_f64()?,
-                        rect[3].as_f64()?,
-                        rect[4].as_f64()?,
-                    ])
+                    Some((
+                        rect[0].as_u64()? as u32,
+                        [
+                            rect[1].as_f64()?,
+                            rect[2].as_f64()?,
+                            rect[3].as_f64()?,
+                            rect[4].as_f64()?,
+                        ],
+                    ))
                 });
             push_text_node(units, block, index as u32, text, runs, fallback);
         }
@@ -500,40 +499,41 @@ fn walk_block(
 }
 
 /// Index one SDT text node: align `textMap` runs with the node's non-run-
-/// whitespace characters (UTF-16-unit-exact, mirroring the JS mapper).
+/// whitespace characters (one run entry per UTF-16 unit, mirroring the JS
+/// mapper's code-unit loop).
 fn push_text_node(
     units: &mut Vec<UnitRecord>,
     block: u32,
     node: u32,
     text: &str,
     runs: Option<Vec<(u32, [f64; 4])>>,
-    fallback: Option<[f64; 5]>,
+    fallback: Option<(u32, [f64; 4])>,
 ) {
-    let mut run_boxes = runs.unwrap_or_default().into_iter();
     let use_runs = runs.is_some();
+    let mut run_boxes = runs.unwrap_or_default().into_iter();
     let mut utf16_offset = 0u32;
     for ch in text.chars() {
         let offset = utf16_offset;
         utf16_offset += ch.len_utf16() as u32;
         let (mut page, mut rect) = (None, None);
-        if !is_run_whitespace(&ch.to_string()) {
-            // JS indexes UTF-16 units, so one astral character consumes as
-            // many run entries as its code-unit width.
+        if !is_run_whitespace(ch) {
             for _ in 0..ch.len_utf16() {
                 if let Some((run_page, run_rect)) = run_boxes.next() {
                     page = Some(run_page);
                     rect = Some(run_rect);
                 }
             }
-            if !use_runs && rect.is_none() && !text.trim().is_empty() {
-                if let Some([fallback_page, x1, y1, x2, y2]) = fallback {
+            // No per-character map: the whole node shares its (or its block's)
+            // bounding box, exactly the mapper's fallback ladder.
+            if !use_runs && !text.trim().is_empty() {
+                if let Some((fallback_page, [x1, y1, x2, y2])) = fallback {
                     page = Some(fallback_page);
                     rect = Some([x1, y1, x2, y2]);
                 }
             }
         }
         units.push(UnitRecord {
-            text: ch.to_string(),
+            text: ch,
             block,
             node,
             offset,
@@ -624,14 +624,13 @@ fn collapse(units: &[UnitRecord]) -> (String, Vec<usize>, Vec<usize>) {
     let mut char_bytes: Vec<usize> = Vec::new();
     let mut map: Vec<usize> = Vec::new();
     for (index, unit) in units.iter().enumerate() {
-        let ch = unit.text.chars().next().unwrap_or(' ');
-        let whitespace = is_match_whitespace(ch);
+        let whitespace = is_match_whitespace(unit.text);
         if whitespace && norm.ends_with(' ') {
             continue;
         }
         char_bytes.push(norm.len());
         map.push(index);
-        norm.push(if whitespace { ' ' } else { ch });
+        norm.push(if whitespace { ' ' } else { unit.text });
     }
     let mut start = 0;
     let mut end = map.len();
@@ -685,11 +684,12 @@ mod tests {
     }
 
     /// A single horizontal run starting at x=50 on a 612×792 page; every
-    /// character gets a 10×12 box advancing 10 units, line box y 700..712.
+    /// non-whitespace character gets a 10-unit box advancing along x, with
+    /// the line box spanning y..y+12.
     fn run_for(text: &str, page: u32, y: f64) -> String {
         let widths: Vec<f64> = text
             .chars()
-            .filter(|ch| !matches!(ch, ' ' | '\n' | '\t'))
+            .filter(|ch| !is_run_whitespace(*ch))
             .map(|_| 10.0)
             .collect();
         let mut run = vec![
@@ -700,7 +700,7 @@ mod tests {
             json!(50.0),
             json!(y + 12.0),
         ];
-        run.extend(widths.into_iter().map(json));
+        run.extend(widths.into_iter().map(Value::from));
         serde_json::to_string(&vec![Value::Array(run)]).unwrap()
     }
 
@@ -719,20 +719,24 @@ mod tests {
         assert_eq!(m.pages, vec![1]);
         let anchor = &m.page_anchors[0];
         assert_eq!(anchor.page, 1);
-        // "The " is 4 UTF-16 units; the match starts at 'm'.
+        // "The " is 4 UTF-16 units; the match starts at 'm', end exclusive.
         assert_eq!(anchor.start, vec![0, 0, 4]);
-        assert_eq!(anchor.end, vec![0, 0, 4 + 20]);
-        // One visual line → one rect covering 21 chars × 10 units.
+        assert_eq!(anchor.end, vec![0, 0, 24]);
+        // One visual line → one rect. T,h,e occupy the first three boxes, so
+        // 'm' starts at 50+30=80; the 18 non-whitespace matched characters
+        // span 180 units (quote spaces have no boxes).
         assert_eq!(anchor.rects.len(), 1);
         let rect = &anchor.rects[0];
         assert_eq!(rect.space.as_deref(), Some("pdf"));
-        assert!((rect.left - 60.0 / 612.0).abs() < 1e-9, "{rect:?}");
+        assert!((rect.left - 80.0 / 612.0).abs() < 1e-9, "{rect:?}");
         // PDF y-up: `top` is the box's bottom edge over the page height.
         assert!((rect.top - 700.0 / 792.0).abs() < 1e-9, "{rect:?}");
-        assert!((rect.width - 210.0 / 612.0).abs() < 1e-9);
+        assert!((rect.width - 180.0 / 612.0).abs() < 1e-9);
         assert!((rect.height - 12.0 / 792.0).abs() < 1e-9);
         let range = rect.text_range.as_ref().unwrap();
         assert_eq!(range.source_hash, "abc123");
+        assert_eq!(range.start, vec![0, 0, 4]);
+        assert_eq!(range.end, vec![0, 0, 24]);
         assert_eq!(range.quote, "mitochondrion is the");
     }
 
@@ -754,7 +758,7 @@ mod tests {
         ])));
         let m = index.find_quote("introduction. Start of the methods", None).unwrap();
         let anchor = &m.page_anchors[0];
-        // Selector starts in block 0 and ends in block 1.
+        // Selector starts in block 0 and ends (exclusively) in block 1.
         assert_eq!(anchor.start[..1], vec![0]);
         assert_eq!(anchor.end[..1], vec![1]);
         // Two lines → two merged rectangles.
@@ -762,26 +766,36 @@ mod tests {
     }
 
     #[test]
-    fn repeated_quote_is_ambiguous_until_hinted() {
+    fn repeated_quote_across_pages_is_ambiguous_until_hinted() {
         let index = SdtTextIndex::build(&structure(json!([
             paragraph("Significant result reported in the study.", 0, 700.0),
             paragraph("Significant result reported in the study.", 1, 700.0),
         ])));
-        let error = index
-            .find_quote("Significant result", None)
-            .unwrap_err();
+        let error = index.find_quote("Significant result", None).unwrap_err();
         assert!(
             matches!(error, AnchorError::Ambiguous { ref pages } if pages == &vec![1, 2]),
             "{error}"
         );
         let m = index.find_quote("Significant result", Some(2)).unwrap();
         assert_eq!(m.pages, vec![2]);
+        assert_eq!(m.page_anchors[0].start[..1], vec![1]);
         let error = index.find_quote("Significant result", Some(3)).unwrap_err();
         assert!(matches!(error, AnchorError::PageMismatch { hint: 3, .. }));
     }
 
     #[test]
-    fn missing_quote_and_empty_index_report_not_found() {
+    fn same_page_repeat_resolves_deterministically_to_first() {
+        let index = SdtTextIndex::build(&structure(json!([
+            paragraph("The phrase repeats. The phrase repeats.", 0, 700.0),
+        ])));
+        let m = index.find_quote("The phrase repeats", None).unwrap();
+        assert_eq!(m.pages, vec![1]);
+        // First occurrence: offset 0, not 20.
+        assert_eq!(m.page_anchors[0].start, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn missing_quote_and_blank_input_report_not_found() {
         let index = SdtTextIndex::build(&structure(json!([paragraph("Known text only.", 0, 700.0)])));
         assert!(matches!(
             index.find_quote("totally absent phrase", None),
@@ -838,61 +852,83 @@ mod tests {
 
     #[test]
     fn vertical_runs_and_soft_hyphen_flags_decode() {
-        // Vertical run: header bits 1-2 = 1 (vertical); chars stack downward.
-        let run = json!([ [ (2u64 << 1), 0, 100.0, 700.0, 112.0, 760.0, 10.0, 10.0, 10.0 ] ]);
+        // Vertical run: header axis bits (1<<1) = axisDir 1 = vertical.
+        let run = json!([[(1u64 << 1), 0, 100.0, 700.0, 112.0, 760.0, 10.0, 10.0, 10.0]]);
         let content = json!([{
             "type": "paragraph",
             "content": [ { "text": "abc", "anchor": { "textMap": serde_json::to_string(&run).unwrap() } } ],
         }]);
         let index = SdtTextIndex::build(&structure(content));
         let m = index.find_quote("abc", None).unwrap();
-        let rect = &m.page_anchors[0].rects[0];
-        assert!((rect.left - 100.0 / 612.0).abs() < 1e-9);
-        assert!((rect.width - 12.0 / 612.0).abs() < 1e-9);
-        assert!((rect.top - 700.0 / 792.0).abs() < 1e-9);
-        assert!((rect.height - 30.0 / 792.0).abs() < 1e-9);
+        // Vertical text stacks per-character boxes along y; adjacent boxes
+        // share no vertical overlap, so — exactly like the reader's
+        // mergeLineRects — they stay one rect per character.
+        let rects = &m.page_anchors[0].rects;
+        assert_eq!(rects.len(), 3);
+        assert!((rects[0].left - 100.0 / 612.0).abs() < 1e-9);
+        assert!((rects[0].width - 12.0 / 612.0).abs() < 1e-9);
+        assert!((rects[0].top - 700.0 / 792.0).abs() < 1e-9);
+        assert!((rects[0].height - 10.0 / 792.0).abs() < 1e-9);
+        assert!((rects[2].top - 720.0 / 792.0).abs() < 1e-9);
 
         // Soft-hyphen flag: a trailing layout-only box is dropped so a 3-char
-        // text with 4 encoded boxes stays aligned.
-        let shy = json!([ [ 1u64, 0, 50.0, 700.0, 90.0, 712.0, 10.0, 10.0, 10.0 ] ]);
+        // text with 3 encoded boxes leaves 2 aligned boxes (third char has no
+        // geometry but still matches by text).
+        let shy = json!([[1u64, 0, 50.0, 700.0, 90.0, 712.0, 10.0, 10.0, 10.0]]);
         let content = json!([{
             "type": "paragraph",
-            "content": [ { "text": "abc", "anchor": { "textMap": serde_json::to_string(&shy).unwrap() } } ],
+            "content": [ { "text": "ab", "anchor": { "textMap": serde_json::to_string(&shy).unwrap() } } ],
         }]);
         let index = SdtTextIndex::build(&structure(content));
-        let m = index.find_quote("abc", None).unwrap();
+        let m = index.find_quote("ab", None).unwrap();
         let rect = &m.page_anchors[0].rects[0];
-        // Only two boxes remain → width covers 20 units, not 30.
         assert!((rect.width - 20.0 / 612.0).abs() < 1e-9);
     }
 
     #[test]
     fn nested_list_and_table_refs_follow_renderer_paths() {
+        let anchored = |text: &str| {
+            json!({ "text": text, "anchor": { "pageRects": [[0, 10.0, 700.0, 500.0, 720.0]] } })
+        };
         let content = json!([
-            { "type": "paragraph", "content": [ { "text": "Intro line." } ] },
+            { "type": "paragraph", "content": [ anchored("Intro line.") ] },
             { "type": "list", "ordered": false, "content": [
-                { "content": [ { "text": "First item body" } ] },
+                { "content": [ anchored("First item body") ] },
                 { "content": [
-                    { "type": "paragraph", "content": [ { "text": "Nested block in item" } ] },
+                    { "type": "paragraph", "content": [ anchored("Nested block in item") ] },
                 ] },
             ] },
             { "type": "table", "content": [
                 { "content": [
                     { "header": true, "content": [
-                        { "type": "paragraph", "content": [ { "text": "Header cell text" } ] },
+                        { "type": "paragraph", "content": [ anchored("Header cell text") ] },
                     ] },
                 ] },
             ] },
         ]);
         let index = SdtTextIndex::build(&structure(content));
-        // Inline list item text lives at ref [1, 0].
+        // Inline list item text lives at ref [1, 0]; selector appends
+        // [textNode, offset], so the full start is [1, 0, 0, 0].
         let m = index.find_quote("First item body", None).unwrap();
-        assert_eq!(m.page_anchors[0].start[..2], vec![1, 0]);
+        assert_eq!(m.page_anchors[0].start, vec![1, 0, 0, 0]);
         // Block child inside an item: [1, 1, 0].
         let m = index.find_quote("Nested block in item", None).unwrap();
-        assert_eq!(m.page_anchors[0].start[..2], vec![1, 1, 0]);
+        assert_eq!(m.page_anchors[0].start, vec![1, 1, 0, 0, 0]);
         // Table cell child block: [2, 0, 0, 0].
         let m = index.find_quote("Header cell text", None).unwrap();
-        assert_eq!(m.page_anchors[0].start[..2], vec![2, 0, 0, 0]);
+        assert_eq!(m.page_anchors[0].start, vec![2, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn excluded_blocks_are_skipped() {
+        let content = json!([
+            { "type": "paragraph", "flowClass": "excluded", "content": [ { "text": "Running header noise" } ] },
+            { "type": "paragraph", "content": [ { "text": "Body text only." } ] },
+        ]);
+        let index = SdtTextIndex::build(&structure(content));
+        assert!(matches!(
+            index.find_quote("Running header", None),
+            Err(AnchorError::NotFound)
+        ));
     }
 }

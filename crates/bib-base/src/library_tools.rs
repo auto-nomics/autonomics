@@ -23,13 +23,14 @@
 //! | `bib_search_library`        | Fielded lexical search across local library (multi-query). |
 //! | `bib_get_article`           | Batch metadata plus full-text file references.          |
 //! | `bib_request_fulltext`      | Mark an article as needing full-text upload.            |
-//! | `bib_add_note`              | Append a highlight / comment to an article.               |
+//! | `bib_add_note`              | Quote-anchored highlight (tool-verified text match) or comment. |
 //! | `bib_read_figure`           | Read a figure image out of stored full text.             |
 //! | `bib_export`                | Render citation formats and write them to the agent VFS. |
 
 use std::sync::Arc;
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use crate::shared::BibShared;
 use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
@@ -1219,30 +1220,34 @@ impl ToolFunction for BibRequestFulltextTool {
 #[tool(
     name = "bib_add_note",
     description = "Add a highlight or comment to an article in the library. A \
-                  `highlight` is an excerpt quoted from the paper (optionally \
-                  anchored to a PDF page/selection via `page`+`rects`); a \
-                  `comment` is your own observation, key finding, or critique. \
-                  Both are searchable alongside the article's text."
+                  `highlight` anchors a passage of the paper itself: pass the \
+                  exact sentence as `content` — copied verbatim from the \
+                  paper's full text (case-sensitive; line breaks and extra \
+                  spaces are ignored) — and the tool locates it in the PDF by \
+                  text match, verifies it, and computes the highlight \
+                  geometry. Never invent page numbers or coordinates. When \
+                  the same words occur on several pages, pass `page` as a \
+                  1-based hint. A `comment` is your own observation, key \
+                  finding, or critique. Both are searchable alongside the \
+                  article's text."
 )]
 pub struct BibAddNoteInput {
     #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
     pub article_id: String,
-    #[desc = "Annotation type: \"highlight\" (excerpt quoted from the paper) or \"comment\" (your own remark). Default: comment"]
+    #[desc = "Annotation type: \"highlight\" (verbatim quote from the paper) or \"comment\" (your own remark). Default: comment"]
     pub kind: Option<String>,
-    #[desc = "The annotation content: the quoted excerpt for a highlight, your remark for a comment"]
+    #[desc = "For a highlight: the passage copied exactly from the paper's full text. For a comment: your remark"]
     pub content: String,
-    #[desc = "PDF page number (1-based) if the annotation is anchored to a page"]
+    #[desc = "1-based PDF page hint, required when the same quote appears on several pages; the error lists the candidate pages"]
     pub page: Option<u32>,
     #[desc = "Highlight color (used by the PDF reader)"]
     pub color: Option<String>,
-    #[desc = "Normalized PDF selection rectangles encoded as JSON"]
-    pub rects: Option<String>,
     #[desc = "Optional Zotero attachment item key; defaults to the preferred attachment"]
     pub attachment_key: Option<String>,
 }
 
 pub struct BibAddNoteTool {
-    pub bib: Arc<BibBase>,
+    pub shared: Arc<BibShared>,
 }
 
 #[async_trait]
@@ -1271,42 +1276,124 @@ impl ToolFunction for BibAddNoteTool {
                 });
             }
         };
-        // A `rects` payload that fails to parse must not be silently
-        // dropped — the annotation would lose its anchor without the
-        // caller knowing.
-        let rects =
-            match input.rects {
-                Some(value) => Some(serde_json::from_str(&value).map_err(|error| {
-                    ToolError::ValidationFailed {
-                        message: format!("invalid `rects` JSON: {error}"),
-                    }
-                })?),
-                None => None,
-            };
+        match kind {
+            bib_types::AnnotationKind::Comment => {
+                let ann = self
+                    .shared
+                    .bib
+                    .add_annotation(
+                        &input.article_id,
+                        kind,
+                        input.content.trim(),
+                        input.page,
+                        input.color,
+                        None,
+                        input.attachment_key.as_deref(),
+                    )
+                    .await
+                    .map_err(box_error)?;
+                Ok(AgentToolResult::success_json(serde_json::json!({
+                    "annotation_id": ann.id,
+                    "article_id": input.article_id,
+                    "kind": ann.kind.as_str(),
+                    "content": ann.content,
+                    "page": ann.page,
+                    "color": ann.color,
+                    "attachment_key": ann.attachment_key,
+                })))
+            }
+            bib_types::AnnotationKind::Highlight => {
+                let matched = self.resolve_highlight_anchor(&input).await?;
+                // The reader stores one annotation per page for selections
+                // that cross a page break; every row carries the full quote.
+                let mut annotations = Vec::new();
+                for anchor in &matched.page_anchors {
+                    let ann = self
+                        .shared
+                        .bib
+                        .add_annotation(
+                            &input.article_id,
+                            kind,
+                            &matched.quote,
+                            Some(anchor.page),
+                            input.color.clone(),
+                            Some(anchor.rects.clone()),
+                            input.attachment_key.as_deref(),
+                        )
+                        .await
+                        .map_err(box_error)?;
+                    annotations.push(serde_json::json!({
+                        "annotation_id": ann.id,
+                        "page": anchor.page,
+                        "page_quote": anchor.quote,
+                        "n_rects": anchor.rects.len(),
+                        "has_text_range": anchor
+                            .rects
+                            .first()
+                            .and_then(|rect| rect.text_range.as_ref())
+                            .is_some(),
+                        "item_key": ann.item_key,
+                        "attachment_key": ann.attachment_key,
+                    }));
+                }
+                Ok(AgentToolResult::success_json(serde_json::json!({
+                    "article_id": input.article_id,
+                    "kind": "highlight",
+                    "quote": matched.quote,
+                    "pages": matched.pages,
+                    "annotations": annotations,
+                })))
+            }
+        }
+    }
+}
 
-        let ann = self
-            .bib
-            .add_annotation(
+impl BibAddNoteTool {
+    /// Locate the highlight `content` in the article's structured PDF text
+    /// and derive validated anchors. Every failure mode is a
+    /// [`ToolError::ValidationFailed`] carrying instructions, so the agent
+    /// can correct the quote in its next call instead of persisting an
+    /// anchor that would never render.
+    async fn resolve_highlight_anchor(
+        &self,
+        input: &BibAddNoteInput,
+    ) -> std::result::Result<crate::annotation_anchor::QuoteMatch, ToolError> {
+        // Reading or (re)generating the SDT structure is the same path the
+        // GUI's Reading Mode takes, including the generation mutex and the
+        // shared extraction semaphore.
+        let structure =
+            crate::zotero_extract::structured_fulltext(
+                &self.shared,
                 &input.article_id,
-                kind,
-                &input.content,
-                input.page,
-                input.color,
-                rects,
                 input.attachment_key.as_deref(),
+                true,
             )
             .await
-            .map_err(box_error)?;
-
-        Ok(AgentToolResult::success_json(serde_json::json!({
-            "annotation_id": ann.id,
-            "article_id": input.article_id,
-            "kind": ann.kind.as_str(),
-            "content": ann.content,
-            "page": ann.page,
-            "color": ann.color,
-            "rects": ann.rects,
-        })))
+            .map_err(|error| ToolError::ValidationFailed {
+                message: format!(
+                    "cannot anchor a highlight on this article: {error}. A highlight quotes \
+                     the paper's PDF full text — make sure the full text is stored, or use \
+                     kind=\"comment\" for a remark that needs no page anchor"
+                ),
+            })?
+            .ok_or_else(|| ToolError::ValidationFailed {
+                message: "cannot anchor a highlight: the PDF structured text is unavailable"
+                    .into(),
+            })?;
+        let index = crate::annotation_anchor::SdtTextIndex::build(&structure);
+        let matched = index
+            .find_quote(&input.content, input.page)
+            .map_err(|error| ToolError::ValidationFailed {
+                message: error.to_string(),
+            })?;
+        if matched.page_anchors.is_empty() {
+            return Err(ToolError::ValidationFailed {
+                message: "the quote matched text that has no highlightable PDF geometry; \
+                          this document's text layer cannot be highlighted"
+                    .into(),
+            });
+        }
+        Ok(matched)
     }
 }
 
@@ -1801,6 +1888,7 @@ impl ToolFunction for BibReadFigureTool {
 /// / `bib_export` / etc.) remain tools; the agent invokes them as before.
 pub fn bib_library_registrations(
     bib: Arc<BibBase>,
+    shared: Arc<BibShared>,
     file_storage: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     use agentik_core::tools::ToolRegistration as R;
@@ -1814,7 +1902,7 @@ pub fn bib_library_registrations(
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
-        R::from(BibAddNoteTool { bib: bib.clone() }),
+        R::from(BibAddNoteTool { shared: shared.clone() }),
         R::from(BibDeleteTool { bib: bib.clone() }),
         R::from(BibReadFigureTool {
             bib: bib.clone(),
@@ -1838,21 +1926,25 @@ pub fn bib_library_registrations(
 ///
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use bib_base::{BibBase, BibShared, bib_all_registrations};
+/// # use bib_base::{BibShared, bib_all_registrations};
 /// # async fn example() {
-/// let shared = BibShared::open_in_memory().await.unwrap();
-/// let file_storage = Arc::new(vfs::OpendalFileStorage::new_temp());
-/// let tools = bib_all_registrations(shared.bib.clone(), file_storage);
+/// let shared = BibShared::open_in_memory().await.unwrap()
+///     .with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp()));
+/// let tools = bib_all_registrations(Arc::new(shared));
 /// # }
 /// ```
-pub fn bib_all_registrations(
-    bib: Arc<BibBase>,
-    file_storage: Arc<vfs::OpendalFileStorage>,
-) -> Vec<ToolRegistration> {
+pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
+    // Highlights resolve their anchors through the shared bundle (VFS storage
+    // + extraction permits), so a bare BibBase is not enough here.
+    let file_storage = shared.file_storage.clone().unwrap_or_else(|| {
+        // A host that never attached storage still gets the read-only tools;
+        // only export/figure writes would target an ephemeral VFS.
+        Arc::new(vfs::OpendalFileStorage::new_temp())
+    });
     // Literature *retrieval* now flows through the DAG evidence channel
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
-    bib_library_registrations(bib, file_storage)
+    bib_library_registrations(shared.bib.clone(), shared, file_storage)
 }
 
 // ===========================================================================
@@ -2010,6 +2102,319 @@ mod tests {
         art.year = Some(2024);
         bib.upsert_article(&art).await.unwrap();
         (bib, art.id)
+    }
+
+    // ── bib_add_note ──────────────────────────────────────────────────────
+
+    /// One horizontal textMap run: every non-whitespace character gets a
+    /// 10-unit box advancing from x=50, line box y..y+12, on `page` (0-based).
+    fn flat_text_map(text: &str, page: u32, y: f64) -> String {
+        let mut run = vec![
+            serde_json::json!(0u64),
+            serde_json::json!(page),
+            serde_json::json!(50.0),
+            serde_json::json!(y),
+            serde_json::json!(50.0),
+            serde_json::json!(y + 12.0),
+        ];
+        run.extend(
+            text.chars()
+                .filter(|ch| !matches!(ch, ' ' | '\n' | '\t'))
+                .map(|_| serde_json::json!(10.0)),
+        );
+        serde_json::to_string(&vec![serde_json::Value::Array(run)]).unwrap()
+    }
+
+    /// A minimal valid SDT document (`StructuredCache::matches` requires the
+    /// schema version, processor type/version, content and catalog pages).
+    fn sdt_structure(content: serde_json::Value, pages: usize) -> serde_json::Value {
+        serde_json::json!({
+            "schemaVersion": "1.2.0",
+            "metadata": {
+                "source": { "hash": "hash-sdt" },
+                "processor": { "type": "pdf", "version": 15 },
+            },
+            "content": content,
+            "catalog": {
+                "pages": (0..pages).map(|_| serde_json::json!({
+                    "viewRect": [0.0, 0.0, 612.0, 792.0],
+                })).collect::<Vec<_>>(),
+            },
+        })
+    }
+
+    /// Seed an article with a stored PDF fulltext row plus a cached SDT
+    /// structure, so highlight anchoring resolves without running the real
+    /// Zotero extractor.
+    async fn seed_article_with_sdt(
+        shared: &Arc<BibShared>,
+        article_id: &str,
+        structure: serde_json::Value,
+    ) {
+        let fulltext = bib_types::FullText {
+            article_id: article_id.to_owned(),
+            attachment_key: None,
+            file_path: format!("vfs:///bib/{article_id}/paper.pdf"),
+            file_format: bib_types::FileFormat::Pdf,
+            text_content: None,
+            source: bib_types::FullTextSource::UserUpload,
+            file_hash: Some(format!("hash-{article_id}")),
+            file_size: None,
+            uploaded_at: None,
+            extract_status: None,
+            text_format: None,
+            extracted_by: None,
+            extract_error: None,
+        };
+        shared.bib.upsert_fulltext(&fulltext).await.unwrap();
+        // upsert_fulltext links (or creates) a Zotero attachment, and the
+        // structured cache is keyed by that attachment — mirror the reader's
+        // Reading Mode path so `structured_fulltext` finds the cache.
+        let key = shared
+            .bib
+            .zotero_attachment(article_id)
+            .await
+            .unwrap()
+            .map(|attachment| attachment.key);
+        let storage = shared.file_storage.clone().expect("test storage attached");
+        crate::zotero_extract::store_structure(
+            &storage,
+            article_id,
+            key.as_deref(),
+            &fulltext,
+            Some(&structure),
+        )
+        .await
+        .unwrap();
+    }
+
+
+    async fn shared_with_storage() -> Arc<BibShared> {
+        Arc::new(
+            BibShared::open_in_memory()
+                .await
+                .unwrap()
+                .with_file_storage(Arc::new(vfs::OpendalFileStorage::new_temp())),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_add_note_highlight_anchors_quote_by_text_match() {
+        let shared = shared_with_storage().await;
+        let art = bib_types::Article::new("doi:10.1038/ng.2024.hl", "Highlight paper");
+        shared.bib.upsert_article(&art).await.unwrap();
+        let text = "The mitochondrion is the powerhouse of the cell";
+        seed_article_with_sdt(
+            &shared,
+            &art.id,
+            sdt_structure(
+                serde_json::json!([{
+                    "type": "paragraph",
+                    "content": [{
+                        "text": text,
+                        "anchor": { "textMap": flat_text_map(text, 0, 700.0) },
+                    }],
+                }]),
+                1,
+            ),
+        )
+        .await;
+
+        let tool = BibAddNoteTool { shared: shared.clone() };
+        let result = tool
+            .run(BibAddNoteInput {
+                article_id: art.id.clone(),
+                kind: Some("highlight".into()),
+                content: "mitochondrion is the".into(),
+                page: None,
+                color: Some("#ffd400".into()),
+                attachment_key: None,
+            })
+            .await
+            .unwrap();
+        match result.content {
+            ToolResultContent::Json(value) => {
+                assert_eq!(value["kind"], "highlight");
+                assert_eq!(value["quote"], "mitochondrion is the");
+                assert_eq!(value["pages"][0], 1);
+                assert_eq!(value["annotations"][0]["page"], 1);
+                assert_eq!(value["annotations"][0]["n_rects"], 1);
+                assert_eq!(value["annotations"][0]["has_text_range"], true);
+            }
+            other => panic!("unexpected tool result: {other:?}"),
+        }
+
+        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
+        assert_eq!(annotations.len(), 1);
+        let ann = &annotations[0];
+        assert_eq!(ann.kind.as_str(), "highlight");
+        assert_eq!(ann.page, Some(1));
+        assert_eq!(ann.content, "mitochondrion is the");
+        assert_eq!(ann.color.as_deref(), Some("#ffd400"));
+        let rects = ann.rects.as_ref().expect("highlight carries rects");
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].space.as_deref(), Some("pdf"));
+        // 'm' is the fourth UTF-16 unit; the quote spans 20 units exclusive.
+        let range = rects[0].text_range.as_ref().unwrap();
+        assert_eq!(range.start, vec![0, 0, 4]);
+        assert_eq!(range.end, vec![0, 0, 24]);
+        assert_eq!(range.source_hash, "hash-sdt");
+    }
+
+    #[tokio::test]
+    async fn test_add_note_highlight_rejects_quote_not_in_paper() {
+        let shared = shared_with_storage().await;
+        let art = bib_types::Article::new("doi:10.1038/ng.2024.miss", "Missing quote paper");
+        shared.bib.upsert_article(&art).await.unwrap();
+        let text = "Actual sentence in the paper.";
+        seed_article_with_sdt(
+            &shared,
+            &art.id,
+            sdt_structure(
+                serde_json::json!([{
+                    "type": "paragraph",
+                    "content": [{
+                        "text": text,
+                        "anchor": { "textMap": flat_text_map(text, 0, 700.0) },
+                    }],
+                }]),
+                1,
+            ),
+        )
+        .await;
+
+        let tool = BibAddNoteTool { shared: shared.clone() };
+        let error = tool
+            .run(BibAddNoteInput {
+                article_id: art.id.clone(),
+                kind: Some("highlight".into()),
+                content: "words that appear nowhere in the document".into(),
+                page: None,
+                color: None,
+                attachment_key: None,
+            })
+            .await
+            .unwrap_err();
+        match error {
+            ToolError::ValidationFailed { message } => {
+                assert!(message.contains("quote not found"), "{message}");
+                assert!(message.contains("verbatim"), "{message}");
+            }
+            other => panic!("expected ValidationFailed, got {other:?}"),
+        }
+        // Nothing was persisted.
+        assert!(
+            shared
+                .bib
+                .list_annotations(&art.id, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_note_highlight_reports_ambiguous_pages() {
+        let shared = shared_with_storage().await;
+        let art = bib_types::Article::new("doi:10.1038/ng.2024.amb", "Repeated quote paper");
+        shared.bib.upsert_article(&art).await.unwrap();
+        let repeated = "Significant result reported in the study.";
+        seed_article_with_sdt(
+            &shared,
+            &art.id,
+            sdt_structure(
+                serde_json::json!([
+                    {
+                        "type": "paragraph",
+                        "content": [{
+                            "text": repeated,
+                            "anchor": { "textMap": flat_text_map(repeated, 0, 700.0) },
+                        }],
+                    },
+                    {
+                        "type": "paragraph",
+                        "content": [{
+                            "text": repeated,
+                            "anchor": { "textMap": flat_text_map(repeated, 1, 700.0) },
+                        }],
+                    },
+                ]),
+                2,
+            ),
+        )
+        .await;
+
+        let tool = BibAddNoteTool { shared: shared.clone() };
+        let error = tool
+            .run(BibAddNoteInput {
+                article_id: art.id.clone(),
+                kind: Some("highlight".into()),
+                content: repeated.into(),
+                page: None,
+                color: None,
+                attachment_key: None,
+            })
+            .await
+            .unwrap_err();
+        match error {
+            ToolError::ValidationFailed { message } => {
+                assert!(message.contains("2 locations"), "{message}");
+                assert!(message.contains("pages: 1, 2"), "{message}");
+            }
+            other => panic!("expected ValidationFailed, got {other:?}"),
+        }
+        // The same call with a page hint anchors only that page.
+        let result = tool
+            .run(BibAddNoteInput {
+                article_id: art.id.clone(),
+                kind: Some("highlight".into()),
+                content: repeated.into(),
+                page: Some(2),
+                color: None,
+                attachment_key: None,
+            })
+            .await
+            .unwrap();
+        match result.content {
+            ToolResultContent::Json(value) => {
+                assert_eq!(value["pages"][0], 2);
+            }
+            other => panic!("unexpected tool result: {other:?}"),
+        }
+        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].page, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_add_note_comment_needs_no_pdf() {
+        let shared = shared_with_storage().await;
+        let art = bib_types::Article::new("doi:10.1038/ng.2024.cmt", "Comment only paper");
+        shared.bib.upsert_article(&art).await.unwrap();
+
+        let tool = BibAddNoteTool { shared: shared.clone() };
+        let result = tool
+            .run(BibAddNoteInput {
+                article_id: art.id.clone(),
+                kind: Some("comment".into()),
+                content: "Methods are thin; the cohort is underpowered.".into(),
+                page: None,
+                color: None,
+                attachment_key: None,
+            })
+            .await
+            .unwrap();
+        match result.content {
+            ToolResultContent::Json(value) => {
+                assert_eq!(value["kind"], "comment");
+                assert!(value["annotation_id"].as_str().is_some());
+            }
+            other => panic!("unexpected tool result: {other:?}"),
+        }
+        let annotations = shared.bib.list_annotations(&art.id, None).await.unwrap();
+        assert_eq!(annotations.len(), 1);
+        assert_eq!(annotations[0].kind.as_str(), "comment");
+        assert_eq!(annotations[0].rects, None);
     }
 
     #[tokio::test]

@@ -9,8 +9,6 @@ import {
   ChevronRight,
   Link2,
   Loader2,
-  PanelRightClose,
-  PanelRightOpen,
   Pencil,
   Plus,
   RotateCcw,
@@ -84,7 +82,22 @@ export function WikiPanel() {
   const [selected, setSelected] = useState<WikiEntry | null>(null);
   const [mode, setMode] = useState<Mode>("read");
   const [creating, setCreating] = useState(false);
-  const [sideOpen, setSideOpen] = useState(true);
+  const [dockOpen, setDockOpen] = useState(() => {
+    try {
+      return localStorage.getItem("wiki.dock.open") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleDock = () =>
+    setDockOpen((value) => {
+      try {
+        localStorage.setItem("wiki.dock.open", String(!value));
+      } catch {
+        // storage unavailable — per-session default only.
+      }
+      return !value;
+    });
   const [recycleOpen, setRecycleOpen] = useState(false);
   const [recycle, setRecycle] = useState<RecycleItem[] | null>(null);
 
@@ -235,18 +248,9 @@ export function WikiPanel() {
         <Button size="sm" variant="outline" onClick={() => void createNew()} disabled={creating}>
           {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 新建
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          title={sideOpen ? "收起侧栏" : "展开侧栏"}
-          onClick={() => setSideOpen((value) => !value)}
-        >
-          <PanelRightOpen className={sideOpen ? "hidden" : "h-4 w-4"} />
-          <PanelRightClose className={sideOpen ? "h-4 w-4" : "hidden"} />
-        </Button>
       </div>
 
-      <main className="grid min-h-0 flex-1 gap-3 overflow-auto p-3 lg:grid-cols-[280px_minmax(0,1fr)_320px] lg:gap-4 lg:overflow-hidden">
+      <main className="grid min-h-0 flex-1 gap-3 overflow-auto p-3 lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-4 lg:overflow-hidden">
         <section className="flex min-h-0 flex-col lg:h-full">
           <Card className="flex h-full min-h-0 flex-col">
             <CardHeader className="pb-2">
@@ -300,30 +304,50 @@ export function WikiPanel() {
             <div className="flex h-full items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">
               选择左侧词条,或新建一个。
             </div>
-          ) : mode === "edit" ? (
-            <EntryEditor
-              entry={selected}
-              onCancel={() => setMode("read")}
-              onSaved={(entry) => {
-                setSelected(entry);
-                setMode("read");
-                void loadBrowse(tagFilter);
-              }}
-            />
           ) : (
-            <EntryReader
-              entry={selected}
-              onEdit={() => setMode("edit")}
-              onDelete={() => void softDelete()}
-            />
+            <div className="flex min-h-0 flex-1 flex-col gap-2">
+              {mode === "edit" ? (
+                <div className="flex min-h-0 flex-1 flex-col">
+                  <EntryEditor
+                    entry={selected}
+                    onCancel={() => setMode("read")}
+                    onSaved={(entry) => {
+                      setSelected(entry);
+                      setMode("read");
+                      void loadBrowse(tagFilter);
+                    }}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <EntryReader
+                      entry={selected}
+                      onEdit={() => setMode("edit")}
+                      onDelete={() => void softDelete()}
+                    />
+                  </div>
+                  {/* 折叠区块:链接 / 附件 / 历史(原右侧栏内容) */}
+                  <div className="rounded-md border">
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
+                      onClick={toggleDock}
+                    >
+                      {dockOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      链接与历史
+                    </button>
+                    {dockOpen ? (
+                      <div className="h-64 overflow-hidden border-t px-1 pb-1">
+                        <SidePanel entry={selected} />
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </section>
-
-        {sideOpen ? (
-          <section className="hidden min-h-0 lg:flex lg:h-full lg:flex-col">
-            <SidePanel entry={selected} />
-          </section>
-        ) : null}
       </main>
 
       <Dialog open={recycleOpen} onOpenChange={setRecycleOpen}>

@@ -122,8 +122,10 @@ pub async fn bib_tools(
     db_path: &str,
     file_storage: Arc<OpendalFileStorage>,
 ) -> Result<Vec<ToolRegistration>> {
-    let bib = Arc::new(BibBase::open(db_path).await?);
-    Ok(bib_base::bib_all_registrations(bib, file_storage))
+    let shared = bib_base::BibShared::open(db_path)
+        .await?
+        .with_file_storage(file_storage);
+    Ok(bib_base::bib_all_registrations(Arc::new(shared)))
 }
 
 /// Resolves the bibliography DB path: the `AUTONOMICS_BIB_DB` env var if set,

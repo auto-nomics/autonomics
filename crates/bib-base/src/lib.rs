@@ -14,6 +14,7 @@
 //! Depends on [`bib_types`] for the canonical data model.
 
 mod actor;
+pub mod annotation_anchor;
 pub mod annotations;
 pub mod bib_base;
 mod collection_schema;
