@@ -110,7 +110,6 @@ impl App {
                 | AgentEvent::SessionClosed { .. }
                 | AgentEvent::SessionList { .. }
         ) {
-
             // The backend restore emits no PlanUpdate for the activated
             // session's plan, so fetch it here (guarded by plan_requested).
             let activated = match &event {

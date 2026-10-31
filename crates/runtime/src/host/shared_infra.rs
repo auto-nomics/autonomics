@@ -148,9 +148,9 @@ pub struct SharedInfra {
     /// Optional Turso-backed KMS knowledge service.
     pub kms: Option<Arc<kms::KmsService>>,
     /// Wiki 知识库的 worker 控制句柄(附件 blob 落在
-    /// `file_storage` 的 `wiki-attachments` 虚拟目录)。`None` 表示
-    /// `enable_wiki` 关闭 —— agent 不挂 wiki 工具,API 层返回 503。
-    pub wiki: Option<Arc<WikiHandle>>,
+    /// `file_storage` 的 `wiki-attachments` 虚拟目录)。无条件启用:
+    /// 每个 agent 挂读组工具,REST 端点始终可用。
+    pub wiki: Arc<WikiHandle>,
     /// The process-wide observation hub — the upstream evidence
     /// ledger shared by skills, plugins, and gateway handlers. Neither
     /// downstream owns it; both resolve the same instance.
@@ -587,11 +587,9 @@ impl SharedInfra {
             tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
-        if let Some(wiki) = self.wiki.clone() {
-            // 与 KMS 同款:普通 agent 只拿读组;写组留给维护路径,
-            // 不经 agent 工具暴露。
-            tools.extend(wiki::tools::wiki_read_registrations(wiki));
-        }
+        // wiki 读组无条件挂载(工具面无门控);写组留给维护路径,
+        // 不经 agent 工具暴露。
+        tools.extend(wiki::tools::wiki_read_registrations(self.wiki.clone()));
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
         // Pass the agent's own path so list_agents / route_task can exclude self.
@@ -879,14 +877,16 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
     Ok(Arc::new(store))
 }
 
-/// Open the wiki knowledge db + attachment blob backend, and start the
-/// wiki worker when the runtime feature is enabled. The schema is
-/// initialized unconditionally (idempotent) so the on-disk db always
-/// exists, mirroring `open_kms`.
+/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
+/// and build the service when the feature is enabled.
+/// Open the wiki knowledge db + attachment blob backend and start the
+/// wiki worker. Unconditional — the feature has no gate: the db lives at
+/// `config.wiki_db_path`, blobs under the storage's `wiki-attachments`
+/// virtual directory, every agent gets the read tool group.
 async fn open_wiki(
     config: &RuntimeConfig,
     file_storage: &Arc<OpendalFileStorage>,
-) -> Result<Option<Arc<WikiHandle>>> {
+) -> Result<Arc<WikiHandle>> {
     let wiki_db = config.wiki_db_path.clone();
     tracing::info!(
         path = %wiki_db.display(),
@@ -901,14 +901,9 @@ async fn open_wiki(
             .await
             .map_err(|error| Error::Other(format!("open wiki storage: {error}")))?
             .with_blob_store(blobs);
-    if !config.enable_wiki {
-        return Ok(None);
-    }
-    Ok(Some(Arc::new(wiki::service::start(Arc::new(storage)))))
+    Ok(Arc::new(wiki::service::start(Arc::new(storage))))
 }
 
-/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
-/// and build the service when the feature is enabled.
 async fn open_kms(
     config: &RuntimeConfig,
     _turso_store: &Arc<TursoAgentStorage>,

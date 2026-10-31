@@ -12,6 +12,17 @@ use bib_base::{
 };
 use bib_types::{Article, Identifier, StructuredSearch, discovery::*};
 use serde_json::json;
+
+/// 每个 router 构建配一个独立内存 wiki(路由状态需要真实句柄)。
+async fn wiki_handle() -> std::sync::Arc<wiki::service::WikiHandle> {
+    let storage = std::sync::Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    std::sync::Arc::new(wiki::service::start(storage))
+}
 use std::{
     fs::OpenOptions,
     io::{BufRead, Write},
@@ -180,7 +191,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/__fixture/lease/{id}", get(observed_lease))
         .with_state(Arc::new(tokio::sync::Mutex::new(fixture_conn)));
     let server = api_server::start(
-        api_server::api_router_with_auth(shared, None, Some(TOKEN.into())).merge(fixture_routes),
+        api_server::api_router_with_auth(shared, wiki_handle().await, Some(TOKEN.into()))
+            .merge(fixture_routes),
         "127.0.0.1:0",
     )
     .await?;

@@ -86,17 +86,14 @@ fn primary_local_ip(destination: &str) -> Option<IpAddr> {
 ///
 /// Feature modules expose private route tables. This is the single place where
 /// future REST modules are mounted under the public `/api` namespace.
-pub fn api_router(
-    shared: bib_base::BibShared,
-    wiki: Option<Arc<wiki::service::WikiHandle>>,
-) -> Router {
+pub fn api_router(shared: bib_base::BibShared, wiki: Arc<wiki::service::WikiHandle>) -> Router {
     api_router_with_auth(shared, wiki, None)
 }
 
 /// Build the aggregate router with an optional bearer token for `/api` routes.
 pub fn api_router_with_auth(
     shared: bib_base::BibShared,
-    wiki: Option<Arc<wiki::service::WikiHandle>>,
+    wiki: Arc<wiki::service::WikiHandle>,
     bearer_token: Option<String>,
 ) -> Router {
     let auth_state = BearerAuthState {

@@ -69,7 +69,7 @@ async fn setup(hold: bool) -> (BibShared, Arc<Source>, Router) {
     shared.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
     let app = api_server::api_router_with_auth(
         shared.clone(),
-        None,
+        wiki_handle().await,
         Some("subscription-test-token".into()),
     );
     (shared, source, app)
@@ -389,7 +389,7 @@ async fn an_enabled_persisted_rule_resumes_on_host_startup_without_opening_subsc
     reopened.gateway = Arc::new(LiteratureGateway::new().with_source(source.clone()));
     let app = api_server::api_router_with_auth(
         reopened.clone(),
-        None,
+        wiki_handle().await,
         Some("subscription-test-token".into()),
     );
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -419,4 +419,15 @@ async fn an_enabled_persisted_rule_resumes_on_host_startup_without_opening_subsc
     drop(app);
     drop(reopened);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// 每个路由构建配一个独立内存 wiki(路由状态需要真实句柄)。
+async fn wiki_handle() -> std::sync::Arc<wiki::service::WikiHandle> {
+    let storage = std::sync::Arc::new(
+        wiki::storage::turso_wiki_storage::TursoWikiStorage::open_in_memory()
+            .await
+            .unwrap()
+            .with_blob_store(wiki::storage::blob::MemoryBlobStore::new()),
+    );
+    std::sync::Arc::new(wiki::service::start(storage))
 }
