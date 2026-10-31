@@ -148,18 +148,24 @@ export async function searchEntries(
   return data.results;
 }
 
+/** 链接目标:REST 已把 id 批量解析成词条名(查不到时 title 回退为 id)。 */
+export interface WikiLinkRef {
+  id: string;
+  title: string;
+}
+
 export interface LinkGraph {
   entry: { id: string; title: string };
-  out_links: string[];
-  in_links: string[];
+  out_links: WikiLinkRef[];
+  in_links: WikiLinkRef[];
 }
 
 export async function getLinks(id: string): Promise<LinkGraph> {
   return get<LinkGraph>(`/wiki/entries/${encodeURIComponent(id)}/links`);
 }
 
-export async function getMentions(id: string): Promise<string[]> {
-  const data = await get<{ unlinked_mentions: string[] }>(
+export async function getMentions(id: string): Promise<WikiLinkRef[]> {
+  const data = await get<{ unlinked_mentions: WikiLinkRef[] }>(
     `/wiki/entries/${encodeURIComponent(id)}/mentions`,
   );
   return data.unlinked_mentions;

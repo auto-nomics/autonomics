@@ -349,6 +349,28 @@ impl WikiHandle {
             .await
     }
 
+    /// 把一批词条 id 解析成 `(id, title)`(单次批量查询);查不到的
+    /// (已净删)title 回退为 id 本身 —— 供 REST/工具层按名称显示链接。
+    pub async fn id_title_pairs(&self, ids: Vec<String>) -> Vec<(String, String)> {
+        let uuids: Vec<uuid::Uuid> = ids
+            .iter()
+            .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+            .collect();
+        let titles: std::collections::HashMap<String, String> = self
+            .get_entry_batch(uuids)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| (e.id.clone(), e.title))
+            .collect();
+        ids.into_iter()
+            .map(|id| {
+                let title = titles.get(&id).cloned().unwrap_or_else(|| id.clone());
+                (id, title)
+            })
+            .collect()
+    }
+
     /// 无查询浏览:按过滤器列出词条摘要(mtime 降序,offset/limit 分页)。
     pub async fn list_entries(&self, filter: &ListFilter) -> Result<Vec<ListEntrySummary>> {
         let filter = filter.clone();

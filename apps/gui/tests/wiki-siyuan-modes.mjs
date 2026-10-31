@@ -4,7 +4,9 @@
 //     missing ones and routes clicks (open / create-prompt),
 //   - 编辑模式 is a block editor: click a block to edit its raw markdown,
 //     toolbar wraps the selection, Ctrl+Enter opens a fresh block, and
-//     保存 PUTs the re-joined content and returns to the reader.
+//     保存 PUTs the re-joined content and returns to the reader,
+//   - 底部 dock 的链接/提及按词条 title 显示(REST 批量解析 id→title,
+//     不再显示裸 id),行点击仍按 id 路由。
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -58,6 +60,15 @@ const NEIGHBOR = {
   ctime: 1760000000,
   mtime: 1760000000,
   content: '# 邻居词条\n\n正文。\n',
+};
+const BACKLINK = {
+  id: 'entry-3',
+  title: '反向引用',
+  alias: [],
+  tags: [],
+  ctime: 1760000000,
+  mtime: 1760000000,
+  content: '# 反向引用\n\n参见 [[番茄栽培]]。\n',
 };
 const summary = (entry) => {
   const { content: _content, ...rest } = entry;
@@ -173,9 +184,30 @@ try {
       await route.fulfill({ json: NEIGHBOR });
       return;
     }
+    if (path === '/api/v1/wiki/entries/entry-3' && request.method() === 'GET') {
+      await route.fulfill({ json: BACKLINK });
+      return;
+    }
     if (path === '/api/v1/wiki/entries/entry-1/content' && request.method() === 'PUT') {
       savedContent = request.postDataJSON().content;
       await route.fulfill({ json: {} });
+      return;
+    }
+    // REST 把链接 id 批量解析成 {id, title}(UI 只显示名称)。
+    if (path === '/api/v1/wiki/entries/entry-1/links') {
+      await route.fulfill({
+        json: {
+          entry: { id: 'entry-1', title: '番茄栽培' },
+          out_links: [{ id: 'entry-2', title: '邻居词条' }],
+          in_links: [{ id: 'entry-3', title: '反向引用' }],
+        },
+      });
+      return;
+    }
+    if (path === '/api/v1/wiki/entries/entry-1/mentions') {
+      await route.fulfill({
+        json: { count: 1, unlinked_mentions: [{ id: 'entry-4', title: '提及者' }] },
+      });
       return;
     }
     if (path.endsWith('/links')) {
@@ -183,7 +215,7 @@ try {
       return;
     }
     if (path.endsWith('/mentions')) {
-      await route.fulfill({ json: { unlinked_mentions: [] } });
+      await route.fulfill({ json: { count: 0, unlinked_mentions: [] } });
       return;
     }
     if (path.endsWith('/attachments')) {
@@ -236,10 +268,10 @@ try {
 
 
 
-  // Resolved link → opens the neighbor entry.
+  // Resolved link → pushes the neighbor entry onto this tab's stack.
   await page.locator('[data-wikilink="邻居词条"]').click();
   await wiki.getByRole('heading', { name: '邻居词条' }).first().waitFor();
-  await page.getByRole('button', { name: /番茄栽培/ }).first().click();
+  await wiki.getByRole('button', { name: '后退' }).click();
   await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
 
   // ── 编辑模式: block editor ──
@@ -285,6 +317,16 @@ try {
     'code fence survives the block split/re-join',
   );
   assert.equal(await wiki.locator('.md-wikilink').count(), 2, 'reader is back with rendered links');
+
+  // ── 底部 dock:链接按词条名显示,不再显示裸 id ──
+  await wiki.getByRole('button', { name: '链接与历史' }).click();
+  await wiki.getByText('反向引用').first().waitFor({ timeout: 10_000 });
+  assert.ok((await wiki.getByText('提及者').count()) >= 1, 'mention row shows the title');
+  assert.equal(await wiki.getByText('entry-3').count(), 0, 'raw entry ids must not be displayed');
+  assert.equal(await wiki.getByText('entry-4').count(), 0, 'raw entry ids must not be displayed');
+  // Row click still routes by id (same tab, stack push).
+  await wiki.getByText('反向引用').first().click();
+  await wiki.getByRole('heading', { name: '反向引用' }).first().waitFor();
 
   assert.deepEqual(errors, []);
   console.log('wiki siyuan modes: ok');

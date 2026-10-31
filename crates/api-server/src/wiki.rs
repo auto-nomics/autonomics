@@ -415,11 +415,22 @@ async fn links(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) ->
         .into_iter()
         .next()
         .unwrap_or_default();
+    // UI 按名称显示链接,不显示裸 id。
     Ok(Json(json!({
         "entry": { "id": entry.id, "title": entry.title },
-        "out_links": out,
-        "in_links": inn,
+        "out_links": link_refs(&handle, out).await,
+        "in_links": link_refs(&handle, inn).await,
     })))
+}
+
+/// 批量把链接 id 列表解析成 {id, title}(与 wiki_links 工具同一语义)。
+async fn link_refs(handle: &WikiHandle, ids: Vec<String>) -> Vec<serde_json::Value> {
+    handle
+        .id_title_pairs(ids)
+        .await
+        .into_iter()
+        .map(|(id, title)| json!({ "id": id, "title": title }))
+        .collect()
 }
 
 async fn mentions(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {
@@ -427,7 +438,8 @@ async fn mentions(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>)
     let entry = handle.get_entry(id).await.map_err(api_err)?;
     let ids = handle.get_mentions(&entry.id).await.map_err(api_err)?;
     let count = ids.len();
-    Ok(Json(json!({ "count": count, "unlinked_mentions": ids })))
+    let mentions = link_refs(&handle, ids).await;
+    Ok(Json(json!({ "count": count, "unlinked_mentions": mentions })))
 }
 
 // ─────────────────────── attachments ───────────────────────
