@@ -59,6 +59,7 @@ import {
   type SearchHit,
   type VersionSummary,
   type WikiEntry,
+  type WikiLinkRef,
 } from "./wiki-api";
 
 type Mode = WikiMode;
@@ -762,7 +763,7 @@ function SidePanel({ entry }: { entry: WikiEntry }) {
 
 function LinksTab({ entry }: { entry: WikiEntry }) {
   const [graph, setGraph] = useState<Awaited<ReturnType<typeof getLinks>> | null>(null);
-  const [mentions, setMentions] = useState<string[] | null>(null);
+  const [mentions, setMentions] = useState<WikiLinkRef[] | null>(null);
 
   useEffect(() => {
     setGraph(null);
@@ -774,11 +775,11 @@ function LinksTab({ entry }: { entry: WikiEntry }) {
   if (graph === null) return <Loader2 className="m-4 h-4 w-4 animate-spin" />;
   return (
     <div className="space-y-3 text-xs">
-      <LinkSection title={`出链(${graph.out_links.length})`} ids={graph.out_links} onOpen={openEntryById} />
-      <LinkSection title={`入链(${graph.in_links.length})`} ids={graph.in_links} onOpen={openEntryById} />
+      <LinkSection title={`出链(${graph.out_links.length})`} refs={graph.out_links} onOpen={openEntryById} />
+      <LinkSection title={`入链(${graph.in_links.length})`} refs={graph.in_links} onOpen={openEntryById} />
       <LinkSection
         title={`未链接提及(${mentions?.length ?? 0})`}
-        ids={mentions ?? []}
+        refs={mentions ?? []}
         onOpen={openEntryById}
         empty={mentions !== null ? "无 —— 在其他词条中添加 [[链接]] 后这里会出现候选。" : undefined}
         loading={mentions === null}
@@ -794,13 +795,13 @@ function openEntryById(id: string) {
 
 function LinkSection({
   title,
-  ids,
+  refs,
   onOpen,
   empty,
   loading,
 }: {
   title: string;
-  ids: string[];
+  refs: WikiLinkRef[];
   onOpen: (id: string) => void;
   empty?: string;
   loading?: boolean;
@@ -820,19 +821,19 @@ function LinkSection({
         <div className="space-y-0.5 pl-2">
           {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
-          ) : ids.length === 0 ? (
+          ) : refs.length === 0 ? (
             <p className="text-muted-foreground">{empty ?? "无"}</p>
           ) : (
-            ids.map((id) => (
+            refs.map((ref) => (
               <button
-                key={id}
+                key={ref.id}
                 type="button"
                 className="flex w-full items-center gap-1.5 truncate rounded px-1.5 py-1 text-left hover:bg-accent"
-                title={id}
-                onClick={() => onOpen(id)}
+                title={ref.title}
+                onClick={() => onOpen(ref.id)}
               >
                 <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span className="truncate font-mono text-[11px]">{id}</span>
+                <span className="truncate">{ref.title || ref.id}</span>
               </button>
             ))
           )}

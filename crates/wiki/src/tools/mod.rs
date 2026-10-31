@@ -126,22 +126,11 @@ fn unix_now() -> i64 {
 
 /// 把一批词条 id 解析成 {id, title} 列表(查不到的保留原 id)。
 async fn id_title_pairs(handle: &WikiHandle, ids: Vec<String>) -> Vec<serde_json::Value> {
-    let uuids: Vec<uuid::Uuid> = ids
-        .iter()
-        .filter_map(|s| uuid::Uuid::parse_str(s).ok())
-        .collect();
-    let entries = handle.get_entry_batch(uuids).await.unwrap_or_default();
-    let titles: std::collections::HashMap<String, String> = entries
+    handle
+        .id_title_pairs(ids)
+        .await
         .into_iter()
-        .map(|e| (e.id.clone(), e.title))
-        .collect();
-    ids.into_iter()
-        .map(|id| {
-            json!({
-                "id": id,
-                "title": titles.get(&id).cloned().unwrap_or_else(|| id.clone()),
-            })
-        })
+        .map(|(id, title)| json!({ "id": id, "title": title }))
         .collect()
 }
 
