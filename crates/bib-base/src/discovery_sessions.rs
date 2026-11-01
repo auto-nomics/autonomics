@@ -1,5 +1,8 @@
 //! Bounded external discovery sessions. Network futures run independently per
 //! source; cancellation/epochs prevent any old attempt from publishing later.
+//! When the pool is at capacity, creating a session evicts the oldest session
+//! with no running sources; capacity errors are reserved for pools where
+//! every slot is actively searching.
 use crate::{
     discovery_merge::CandidateStore,
     query::{LiteratureGateway, LiteratureSource},
@@ -32,6 +35,8 @@ type Result<T> = std::result::Result<T, DiscoverySessionError>;
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryLimits {
+    /// Pool cap. When full, session creation evicts the oldest session with
+    /// no running sources before failing with [`DiscoverySessionError::Capacity`].
     pub max_sessions: usize,
     pub ttl: Duration,
     pub max_records_per_session: usize,
@@ -474,6 +479,30 @@ impl DiscoverySessions {
             .unwrap()
             .retain(|_, when| when.elapsed() < Duration::from_secs(60));
     }
+    /// Whether one more session fits. At capacity, evict the oldest session
+    /// whose sources have all stopped running; sessions with in-flight
+    /// searches are never dropped. Eviction only accelerates what TTL
+    /// expiry already does: watchers see `NotFound`, and `Session::drop`
+    /// releases the evicted session's record/byte accounting.
+    fn evict_oldest_inactive(&self, sessions: &mut HashMap<String, Arc<Session>>) -> bool {
+        if sessions.len() < self.inner.resources.limits.max_sessions {
+            return true;
+        }
+        let victim = sessions
+            .values()
+            .filter(|session| {
+                let state = session.state.lock().unwrap();
+                session.phase(&state) != DiscoverySessionPhase::Running
+            })
+            .min_by_key(|session| session.created)
+            .cloned();
+        let Some(victim) = victim else {
+            return false;
+        };
+        victim.lifetime.send_replace(true);
+        sessions.remove(&victim.id);
+        true
+    }
     fn get(&self, id: &str) -> Result<Arc<Session>> {
         self.cleanup();
         self.inner
@@ -652,9 +681,11 @@ impl DiscoverySessions {
                 let state = existing.state.lock().unwrap();
                 return Ok(existing.snapshot(&state));
             }
-            if sessions.len() >= self.inner.resources.limits.max_sessions {
+            if !self.evict_oldest_inactive(&mut sessions) {
                 return Err(DiscoverySessionError::Capacity(
-                    "too many retained discovery sessions; close an old session".into(),
+                    "all discovery session slots hold running searches; \
+                     wait for one to finish or cancel it"
+                        .into(),
                 ));
             }
             sessions.insert(session.id.clone(), session.clone());
@@ -1724,6 +1755,75 @@ mod tests {
             Err(DiscoverySessionError::NotFound)
         ));
         wait_until(|| manager.inner.resources.records.load(Ordering::Acquire) == 0).await;
+    }
+    #[tokio::test]
+    async fn full_pool_evicts_the_oldest_idle_session_instead_of_failing() {
+        let source = MockSource::new(
+            "source",
+            vec![
+                Step::Page(page("source", &["one"], None)),
+                Step::Page(page("source", &["two"], None)),
+                Step::Page(page("source", &["three"], None)),
+            ],
+        );
+        let manager = DiscoverySessions::new(DiscoveryLimits {
+            max_sessions: 2,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = gateway(vec![source]);
+        let oldest = manager.create(g.clone(), request(&["source"])).unwrap();
+        idle(&manager, &oldest.id).await;
+        let kept = manager.create(g.clone(), request(&["source"])).unwrap();
+        idle(&manager, &kept.id).await;
+        // Pool is full (oldest, kept): creation must evict `oldest`, not fail.
+        let newest = manager.create(g, request(&["source"])).unwrap();
+        idle(&manager, &newest.id).await;
+        assert!(matches!(
+            manager.snapshot(&oldest.id),
+            Err(DiscoverySessionError::NotFound)
+        ));
+        assert!(manager.snapshot(&kept.id).is_ok());
+        assert!(manager.snapshot(&newest.id).is_ok());
+        wait_until(|| manager.inner.resources.records.load(Ordering::Acquire) == 2).await;
+    }
+    #[tokio::test]
+    async fn capacity_survives_while_every_slot_is_running_then_evicts_once_idle() {
+        let gate = Arc::new(Notify::new());
+        let source = MockSource::new(
+            "source",
+            vec![
+                Step::Hold(gate.clone(), page("source", &["one"], None)),
+                Step::Page(page("source", &["two"], None)),
+            ],
+        );
+        let manager = DiscoverySessions::new(DiscoveryLimits {
+            max_sessions: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = gateway(vec![source]);
+        let running = manager.create(g.clone(), request(&["source"])).unwrap();
+        wait_until(|| {
+            manager.snapshot(&running.id).unwrap().phase == DiscoverySessionPhase::Running
+        })
+        .await;
+        // The only slot holds a running search: no eviction victim exists.
+        assert!(matches!(
+            manager.create(g.clone(), request(&["source"])),
+            Err(DiscoverySessionError::Capacity(_))
+        ));
+        gate.notify_one();
+        idle(&manager, &running.id).await;
+        // The finished session is now the oldest inactive one and gets evicted.
+        let next = manager.create(g, request(&["source"])).unwrap();
+        idle(&manager, &next.id).await;
+        assert!(matches!(
+            manager.snapshot(&running.id),
+            Err(DiscoverySessionError::NotFound)
+        ));
+        assert_eq!(manager.snapshot(&next.id).unwrap().merged_candidates, 1);
+        wait_until(|| manager.inner.resources.records.load(Ordering::Acquire) == 1).await;
     }
     #[tokio::test]
     async fn retry_after_is_shared_across_sessions_and_never_bypassed_by_manual_retry() {
