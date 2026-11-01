@@ -10,7 +10,6 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { extractWikiTargets, renderWikiMarkdown } from "./markdown";
 import { findEntryByTitle, formatTime, type WikiEntry } from "./wiki-api";
@@ -38,7 +37,7 @@ export function ModeSwitch({
         title="阅读模式"
         onClick={() => onChange("read")}
       >
-        <BookOpen className="h-3.5 w-3.5" /> 阅读
+        <BookOpen className="h-3.5 w-3.5" /> <span className="hidden md:inline">阅读</span>
       </button>
       <button
         type="button"
@@ -47,7 +46,7 @@ export function ModeSwitch({
         title="编辑模式"
         onClick={() => onChange("edit")}
       >
-        <SquarePen className="h-3.5 w-3.5" /> 编辑
+        <SquarePen className="h-3.5 w-3.5" /> <span className="hidden md:inline">编辑</span>
       </button>
     </span>
   );
@@ -155,40 +154,38 @@ export function ReadingView({
   }, [onOpenEntry, onMissingLink]);
 
   return (
-    <Card className="flex h-full min-h-0 flex-col">
-      <CardHeader className="pb-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 border-b px-2 py-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h1 className="min-w-0 break-words text-lg font-semibold">{entry.title}</h1>
+          <h1 className="min-w-0 break-words text-[15px] leading-6 font-semibold">{entry.title}</h1>
           <span className="flex shrink-0 items-center gap-1">
             <ModeSwitch mode="read" onChange={onModeChange} />
-            <Button size="icon-sm" variant="outline" title="移入回收站" onClick={() => void onDelete()}>
+            <Button size="icon-sm" variant="ghost" title="移入回收站" onClick={() => void onDelete()}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </span>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           {entry.tags.map((tag) => (
-            <Badge key={tag} variant="secondary">{tag}</Badge>
+            <Badge key={tag} variant="secondary" className="px-1 py-0 text-[10px]">{tag}</Badge>
           ))}
           {entry.alias.map((name) => (
-            <Badge key={name} variant="outline">alias: {name}</Badge>
+            <Badge key={name} variant="outline" className="px-1 py-0 text-[10px]">alias: {name}</Badge>
           ))}
           <span className="ml-auto">
             创建 {formatTime(entry.ctime)} · 修改 {formatTime(entry.mtime)}
           </span>
         </div>
-      </CardHeader>
-      <CardContent className="min-h-0 flex-1">
-        <ScrollArea className="h-full pr-3">
-          {/* Wikilinks/`<a data-wikilink>` survive DOMPurify (data attrs
-              allowed) — clicks are routed by the delegated handler above. */}
-          <div
-            ref={containerRef}
-            className="md max-w-none break-words text-sm"
-            dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content) }}
-          />
-        </ScrollArea>
-      </CardContent>
-    </Card>
+      </div>
+      <ScrollArea className="min-h-0 flex-1" contentClassName="px-3 py-2">
+        {/* Wikilinks/`<a data-wikilink>` survive DOMPurify (data attrs
+            allowed) — clicks are routed by the delegated handler above. */}
+        <div
+          ref={containerRef}
+          className="md mx-auto max-w-3xl break-words text-sm"
+          dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content) }}
+        />
+      </ScrollArea>
+    </div>
   );
 }

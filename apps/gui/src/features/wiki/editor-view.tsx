@@ -9,7 +9,6 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { BlockEditor } from "./block-editor";
 import { ModeSwitch, type WikiMode } from "./reading-view";
@@ -93,15 +92,17 @@ export function EditorView({
   };
 
   return (
-    <Card className="flex h-full min-h-0 flex-col">
-      <CardHeader className="gap-2 pb-2">
-        <div className="flex items-center gap-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="shrink-0 border-b px-2 py-1.5">
+        {/* min-w-0: 行是网格/flex 布局的子项,长标题 input 的固有宽度
+            会把保存按钮挤出视口(移动端实测)。 */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
           <input
             id="wiki-title"
             value={title}
             placeholder="标题(唯一,自动 trim)"
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent text-lg font-semibold outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-[15px] leading-6 font-semibold outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground"
             onChange={(event) => setTitle(event.target.value)}
           />
           {dirty ? (
@@ -124,7 +125,7 @@ export function EditorView({
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
           </Button>
         </div>
-        <div>
+        <div className="mt-1">
           <button
             type="button"
             className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
@@ -139,7 +140,7 @@ export function EditorView({
                 <span className="text-xs text-muted-foreground">别名(逗号分隔)</span>
                 <Input
                   id="wiki-alias"
-                  className="h-8"
+                  className="h-7 text-[13px]"
                   value={alias}
                   onChange={(event) => setAlias(event.target.value)}
                 />
@@ -148,7 +149,7 @@ export function EditorView({
                 <span className="text-xs text-muted-foreground">标签(逗号分隔)</span>
                 <Input
                   id="wiki-tags"
-                  className="h-8"
+                  className="h-7 text-[13px]"
                   value={tags}
                   onChange={(event) => setTags(event.target.value)}
                 />
@@ -156,15 +157,13 @@ export function EditorView({
             </div>
           ) : null}
         </div>
-      </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col">
-        <BlockEditor
-          key={entry.id}
-          entryId={entry.id}
-          initialContent={content}
-          onChange={setContent}
-        />
-      </CardContent>
-    </Card>
+      </div>
+      <BlockEditor
+        key={entry.id}
+        entryId={entry.id}
+        initialContent={content}
+        onChange={setContent}
+      />
+    </div>
   );
 }
