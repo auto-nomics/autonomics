@@ -70,10 +70,11 @@ pub struct AgentRelation {
 /// can reconstruct the same view across process restarts.
 ///
 /// The `status_json` field is stored as a raw JSON string (rather than
-/// a typed `AgentStatus`) to avoid a `agentik-core` → `agentik-types`
-/// dependency cycle. Callers in the `runtime` layer deserialize it back
-/// to [`crate::runtime::control::AgentStatus`] (or whatever the live
-/// enum looks like at the time).
+/// a typed enum) to avoid a `agentik-core` → `agentik-types`
+/// dependency cycle. The runtime layer serializes the unified
+/// [`agentik_types::AgentLifecycleStatus`] into it (an UPPERCASE tag
+/// string); it is write-only — the restore path reads `path` /
+/// `agent_id`, never the status.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedAgentGraph {
     /// Full hierarchical agent path, e.g. `/root/researcher/worker`.

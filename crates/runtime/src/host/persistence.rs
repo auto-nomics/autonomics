@@ -18,6 +18,8 @@ use super::{HostEvent, RuntimeHost, unix_epoch_ms};
 
 impl RuntimeHost {
     /// Persist the exact set and status of currently registered agents.
+    /// The per-agent `status_json` carries the unified
+    /// [`AgentLifecycleStatus`] tag string; see [`Self::persist_agent_status`].
     pub(super) fn agent_layout_snapshot(&self, revision: u64) -> AgentLayoutSnapshot {
         let updated_at = unix_epoch_ms();
         let mut agents = Vec::with_capacity(self.agents.len());
@@ -132,10 +134,16 @@ impl RuntimeHost {
 
     /// Spawn a background task that updates the agent's persisted status.
     /// Mirrors [`Self::observe_status`] to durable storage. Fire-and-forget.
+    ///
+    /// `status_json` is the unified
+    /// [`AgentLifecycleStatus`](agentik_types::AgentLifecycleStatus)
+    /// serialized as an UPPERCASE tag string (`"IDLE"`, `"TOOLRUNNING"`,
+    /// …). Write-only: the restore path reads `path` / `agent_id` from
+    /// the layout, never the status.
     pub(super) fn persist_agent_status(
         &self,
         path: &str,
-        status: &crate::control::AgentStatus,
+        status: &agentik_types::AgentLifecycleStatus,
         last_event: &Option<String>,
     ) {
         let storage = self.infra.storage.clone();

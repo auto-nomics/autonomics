@@ -133,7 +133,7 @@ impl AgentHandle {
 
     /// Update this agent's runtime settings in place.
     ///
-    /// The same backend Arc is held by `AgentShared`, so prompt injection,
+    /// The same backend Arc is held by `AgentCore`, so prompt injection,
     /// memory tools, and background consolidation observe the update without
     /// rebuilding the agent or dropping its sessions.
     pub fn set_runtime_config(&self, config: agentik_core::AgentRuntimeConfig) {

@@ -11,7 +11,7 @@ use crate::error::AgentError;
 use crate::memory::{
     MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
 };
-use crate::session::AgentShared;
+use crate::session::AgentCore;
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
 use agentik_sdk::types::messages::Message;
@@ -212,8 +212,8 @@ impl AgentBuilder {
         registry.register_all(crate::tools::plan_registrations(plan_handle))?;
         let registry = Arc::new(registry);
 
-        // ── Build AgentShared ───────────────────────────────
-        let shared = Arc::new(AgentShared {
+        // ── Build AgentCore ───────────────────────────────
+        let shared = Arc::new(AgentCore {
             id: agent_id,
             path: self.path.unwrap_or_else(agentik_types::AgentPath::root),
             config_json: self.config_json.unwrap_or(serde_json::json!({})),

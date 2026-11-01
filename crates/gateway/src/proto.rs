@@ -9,8 +9,9 @@
 use std::collections::HashMap;
 
 use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
+use agentik_types::AgentLifecycleStatus;
 use agentik_types::SessionInfo;
-use runtime::control::{AgentInfo, AgentStatus};
+use runtime::control::AgentInfo;
 use runtime::model_actor::{DisplaySettings as DisplaySettingsData, ModelCatalogData};
 use runtime::model_bootstrap::{ModelRow, ProviderRow};
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,10 @@ pub enum HostEventView {
     },
     AgentStatusChanged {
         path: String,
-        status: AgentStatus,
+        /// The agent's unified [`AgentLifecycleStatus`], serialized as an
+        /// UPPERCASE tag string (`"IDLE"`, `"TOOLRUNNING"`, …). Tool names
+        /// and error messages ride in `last_event`.
+        status: AgentLifecycleStatus,
         last_event: Option<String>,
     },
     AgentModelChanged {
@@ -434,17 +438,18 @@ mod tests {
 
     /// The wire contract for `AgentEvent` is "serde default externally
     /// tagged enum" — pin the JSON shape so frontends can rely on it.
+    /// The status itself is the unified `AgentLifecycleStatus`, serialized
+    /// as an UPPERCASE tag string.
     #[test]
     fn host_event_view_round_trips() {
         let view = HostEventView::AgentStatusChanged {
             path: "/root/worker".into(),
-            status: AgentStatus::AwaitingTool {
-                tool: "run_bash".into(),
-            },
+            status: AgentLifecycleStatus::ToolRunning,
             last_event: Some("run_bash".into()),
         };
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains(r#""kind":"agent_status_changed""#), "{json}");
+        assert!(json.contains(r#""status":"TOOLRUNNING""#), "{json}");
         let back: HostEventView = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, HostEventView::AgentStatusChanged { .. }));
     }

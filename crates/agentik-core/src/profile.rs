@@ -102,7 +102,9 @@ impl AgentKind {
             Self::Researcher => "Full-featured biomedical research assistant.",
             Self::Developer => "Node and plugin developer for the DAG ecosystem.",
             Self::Browser => "Web-browsing specialist with a private browser session.",
-            Self::Curator => "Knowledge-base curator maintaining the shared wiki and literature library.",
+            Self::Curator => {
+                "Knowledge-base curator maintaining the shared wiki and literature library."
+            }
         }
     }
 

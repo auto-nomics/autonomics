@@ -14,15 +14,23 @@ use crate::storage::{AgentStorage, PersistOp};
 use crate::tools::ToolRegistry;
 use crate::tools::task_runtime::TaskStore;
 
-/// Stable resources shared across all sessions of one agent.
+/// An agent's core: identity plus the service wiring its parts share.
 ///
-/// Built once by [`AgentBuilder`](crate::agent_builder::AgentBuilder),
-/// frozen into `Arc`, and cloned into every [`Session`](super::Session).
-/// Fields that need runtime mutation use interior mutability (`ArcSwap`,
-/// etc.).
+/// "Shared" refers to the mechanism, not the scope — one `AgentCore` per
+/// agent, held in an `Arc` and cloned into the agent's run loop, its sole
+/// [`Session`](super::Session) (the bound context), and its toolset /
+/// task tools. Built once by
+/// [`AgentBuilder`](crate::agent_builder::AgentBuilder); fields that need
+/// runtime mutation use interior mutability (`ArcSwap`, `OnceLock`).
 ///
-/// Note that `AgentShared` is per-agent entity, each agent has its own `AgentShared` object.
-pub(crate) struct AgentShared {
+/// Naming boundaries: this is *not* process-wide sharing — that lives in
+/// `runtime::SharedInfra` (one per daemon, shared across all agents).
+/// And it is not the host-side control handle — that is
+/// `runtime::AgentHandle` (channels owned by the registry, outside
+/// view). `AgentCore` is the inside view: identity (`id`, `path`,
+/// `config_json`) plus the endpoints its parts talk through (`event_tx`,
+/// `persist_tx`, `storage`, `memory`, `tasks`).
+pub(crate) struct AgentCore {
     pub id: Uuid,
     pub path: agentik_types::AgentPath,
     pub config_json: serde_json::Value,
@@ -49,7 +57,7 @@ pub(crate) struct AgentShared {
     pub persist_tx: std::sync::OnceLock<UnboundedSender<PersistOp>>,
 }
 
-impl AgentShared {
+impl AgentCore {
     /// The agent's short name (last path segment).
     pub fn name(&self) -> &str {
         self.path.name()
@@ -72,7 +80,7 @@ impl AgentShared {
         }
     }
 
-    /// Build a minimal `AgentShared` suitable for unit-testing Session /
+    /// Build a minimal `AgentCore` suitable for unit-testing Session /
     /// add_message logic. No model, storage, persistence, or context provider
     /// is wired up.
     #[cfg(test)]

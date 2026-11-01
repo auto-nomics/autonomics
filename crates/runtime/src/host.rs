@@ -19,7 +19,7 @@
 //! - [`commands`] — `HostCommand` dispatch and name/hierarchy policy
 //! - [`delegation`] — the delegation ledger
 //! - [`persistence`] — durable projections of host state
-//! - [`status`] — `AgentEvent → AgentStatus` projection
+//! - [`status`] — `AgentEvent → AgentLifecycleStatus` projection
 //! - [`vfs_setup`] — VFS manifest, mounts, and catalog wiring
 //! - [`bundles`] — the user data-bundle registry
 //! - [`gc`] — background GC / distiller loops
@@ -44,6 +44,7 @@ mod agent_handle;
 mod bundles;
 mod commands;
 mod delegation;
+mod events;
 mod gc;
 mod persistence;
 mod relay;
@@ -52,8 +53,8 @@ mod status;
 mod vfs_setup;
 
 pub use agent_handle::AgentHandle;
+pub use events::{HostEvent, NextEvent, TaggedEvent};
 pub use shared_infra::SharedInfra;
-pub use status::is_final_status;
 pub use vfs_setup::bibliography_file_storage;
 
 use delegation::{HostDelegation, push_delegation_progress};
@@ -122,58 +123,6 @@ pub struct RuntimeHost {
     /// before any database is opened and held for the host's lifetime.
     /// See [`crate::instance_lock`].
     _instance_lock: crate::instance_lock::InstanceLock,
-}
-
-/// Lifecycle events emitted by RuntimeHost. The TUI subscribes to keep
-/// its session tabs in sync with backend agent state.
-#[derive(Debug, Clone)]
-pub enum HostEvent {
-    /// An agent was just registered with the host's relay.
-    AgentRegistered {
-        path: agentik_types::AgentPath,
-        info: crate::control::AgentInfo,
-    },
-    /// An agent was shut down and removed from the registry.
-    AgentUnregistered { path: String },
-    /// An agent's runtime status changed (e.g. `Running → AwaitingTool`,
-    /// `AwaitingTool → Completed`). Emitted from
-    /// [`RuntimeHost::recv_any`] after the new state is written to the
-    /// agent's [`AgentEntry`]. The TUI and other subscribers can use
-    /// this to keep their status panels in sync without polling
-    /// [`crate::control::HostControl::get_status`].
-    AgentStatusChanged {
-        path: String,
-        status: crate::control::AgentStatus,
-        last_event: Option<String>,
-    },
-    /// An agent's model slot was swapped (per-agent override via
-    /// `SetAgentModel`). Emitted from the command handler with the spec
-    /// taken from the command payload, so it does not race the relay's
-    /// async store into the shared slot. Frontends use it to refresh
-    /// the model shown for the agent without re-fetching `/state`.
-    AgentModelChanged {
-        path: String,
-        spec: String,
-        context_length: u64,
-    },
-}
-
-/// An `AgentEvent` tagged with the agent name that produced it.
-pub type TaggedEvent = (String, AgentEvent);
-
-/// One item produced by [`RuntimeHost::recv_next`].
-#[derive(Debug, Clone)]
-pub enum NextEvent {
-    /// An agent event, fully processed (delegation ledger, topology
-    /// routing, status derivation) — identical to what [`TaggedEvent`]
-    /// consumers of `recv_any` observe.
-    Agent(TaggedEvent),
-    /// A host lifecycle event (agent registered / unregistered / status
-    /// change).
-    Host(HostEvent),
-    /// A host command was processed, or a background spawn completed and
-    /// registered. No payload — observers react via the `Host` stream.
-    Command,
 }
 
 impl RuntimeHost {
@@ -359,18 +308,25 @@ impl RuntimeHost {
         self.observe_status(&name, &event);
 
         let (status, last_event) = derive_agent_status(&event);
-        let status = status.tag();
-        for record in self.delegations.values_mut() {
-            if record.snapshot.target_path == name
-                && record.snapshot.status == DelegationStatus::Running
-                && record.snapshot.turn_id.is_some()
-            {
-                push_delegation_progress(
-                    &record.progress,
-                    "agent_event",
-                    status,
-                    last_event.as_deref().unwrap_or_default(),
-                );
+        // Pure-noise events (text deltas, usage updates) change neither the
+        // status nor the one-liner — skip the progress push entirely.
+        if status.is_some() || last_event.is_some() {
+            let status = status
+                .as_ref()
+                .map(|status| status.tag())
+                .unwrap_or("active");
+            for record in self.delegations.values_mut() {
+                if record.snapshot.target_path == name
+                    && record.snapshot.status == DelegationStatus::Running
+                    && record.snapshot.turn_id.is_some()
+                {
+                    push_delegation_progress(
+                        &record.progress,
+                        "agent_event",
+                        status,
+                        last_event.as_deref().unwrap_or_default(),
+                    );
+                }
             }
         }
 

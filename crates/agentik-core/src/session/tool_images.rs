@@ -176,7 +176,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::agent::AgentConfig;
-    use crate::session::{AgentShared, make_test_session};
+    use crate::session::{AgentCore, make_test_session};
     use crate::testing::dummy_model_info;
     use crate::tools::error::ToolError;
     use crate::tools::function::{ToolContext, ToolFunction};
@@ -392,15 +392,15 @@ mod tests {
         }
     }
 
-    /// `AgentShared::new_for_tests` ships an empty model slot and an
+    /// `AgentCore::new_for_tests` ships an empty model slot and an
     /// empty (frozen) registry, so the workflow tests build their own
     /// with a mock-backed model and the blocks-returning tool above.
-    fn make_shared_with(model: Model) -> Arc<AgentShared> {
+    fn make_shared_with(model: Model) -> Arc<AgentCore> {
         let mut registry = crate::tools::ToolRegistry::new();
         registry
             .register(ToolRegistration::from(ReturnFigureTool))
             .unwrap();
-        Arc::new(AgentShared {
+        Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),

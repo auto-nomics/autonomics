@@ -1152,7 +1152,7 @@ fn flexible_u64(value: &serde_json::Value) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::AgentShared;
+    use super::super::AgentCore;
     use super::*;
     use crate::agent::AgentConfig;
 
@@ -1212,7 +1212,7 @@ mod tests {
                 crate::tools::builtins::PlanHandle::new(Uuid::new_v4(), None, None),
             ))
             .unwrap();
-        let shared = Arc::new(AgentShared {
+        let shared = Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),
@@ -1304,7 +1304,7 @@ mod tests {
         );
     }
 
-    /// 迁移核心行为:plan 是 per-session 状态。同一个 AgentShared(即同
+    /// 迁移核心行为:plan 是 per-session 状态。同一个 AgentCore(即同
     /// 一个 ToolRegistry / 同一个注册的 update_plan 工具)上跑两个
     /// Session,A 里模型调用 update_plan 只改 A 的 plan;B 保持为空。
     /// 这条链路端到端覆盖 ToolContext 的 session 管道(Toolset 注入 →
@@ -1345,7 +1345,7 @@ mod tests {
                 crate::tools::builtins::PlanHandle::new(Uuid::new_v4(), None, None),
             ))
             .unwrap();
-        let shared = Arc::new(AgentShared {
+        let shared = Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),
@@ -1443,7 +1443,7 @@ mod tests {
         let memory = Arc::new(MemoryBackend::new(MemoryConfig::new(), store, None));
 
         let registry = crate::tools::ToolRegistry::new();
-        let shared = Arc::new(AgentShared {
+        let shared = Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),
@@ -1512,7 +1512,7 @@ mod tests {
         let model = Model::with_client(dummy_model_info("skill-guide"), mock);
 
         let registry = crate::tools::ToolRegistry::new();
-        let shared = Arc::new(AgentShared {
+        let shared = Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),
@@ -1582,7 +1582,7 @@ mod tests {
             ))
             .unwrap();
 
-        let shared = Arc::new(AgentShared {
+        let shared = Arc::new(AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),
@@ -1627,15 +1627,15 @@ mod tests {
 
     // ── agent -> session -> turn hierarchy ───────────────────────
 
-    /// Shared fixture: an `AgentShared` whose event channel drains into
+    /// Shared fixture: an `AgentCore` whose event channel drains into
     /// `tx`, so turn lifecycle events are observable.
     fn turn_test_shared_with(
         model: agentik_sdk::model::Model,
         tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
         tool_registry: crate::tools::ToolRegistry,
         tasks: Option<Arc<tokio::sync::RwLock<crate::tools::TaskStore>>>,
-    ) -> Arc<super::super::AgentShared> {
-        Arc::new(super::super::AgentShared {
+    ) -> Arc<super::super::AgentCore> {
+        Arc::new(super::super::AgentCore {
             id: Uuid::new_v4(),
             path: agentik_types::AgentPath::root(),
             config_json: serde_json::json!({}),

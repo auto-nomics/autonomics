@@ -792,10 +792,7 @@ mod tests {
         // The quote copied across the line break matches by folding; CJK
         // bytes and code points agree here so the UTF-16 rect is checkable.
         let anchored = core
-            .add_anchored_annotation(anchored_input(
-                "方法显著降低了 死亡率。",
-                "efficacy signal",
-            ))
+            .add_anchored_annotation(anchored_input("方法显著降低了 死亡率。", "efficacy signal"))
             .await
             .unwrap();
 
@@ -844,10 +841,7 @@ mod tests {
         let core = anchored_fixture(text).await;
 
         let anchored = core
-            .add_anchored_annotation(anchored_input(
-                "reduced mortality",
-                "key efficacy finding",
-            ))
+            .add_anchored_annotation(anchored_input("reduced mortality", "key efficacy finding"))
             .await
             .unwrap();
 
@@ -882,10 +876,7 @@ mod tests {
         // A note must attach to a selectable passage; the abstract is not
         // part of the reading surface, so it is never an anchor source.
         let error = core
-            .add_anchored_annotation(anchored_input(
-                "Mortality declined",
-                "from the abstract",
-            ))
+            .add_anchored_annotation(anchored_input("Mortality declined", "from the abstract"))
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no extracted full text"));
@@ -917,10 +908,7 @@ mod tests {
 
         // Fabricated wording with a real prefix → closest-partial hint.
         let error = core
-            .add_anchored_annotation(anchored_input(
-                "repeat here midX",
-                "drifted",
-            ))
+            .add_anchored_annotation(anchored_input("repeat here midX", "drifted"))
             .await
             .unwrap_err();
         let message = error.to_string();
@@ -930,10 +918,7 @@ mod tests {
 
         // Repeated quote without a hint → the ambiguous-locations list.
         let error = core
-            .add_anchored_annotation(anchored_input(
-                "repeat here",
-                "ambiguous",
-            ))
+            .add_anchored_annotation(anchored_input("repeat here", "ambiguous"))
             .await
             .unwrap_err();
         assert!(error.to_string().contains("matches 2 locations"));

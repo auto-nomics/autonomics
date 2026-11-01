@@ -705,7 +705,7 @@ mod tests {
             tags: vec![],
             expertise: vec![],
             tools: vec![],
-            status: crate::control::AgentStatus::Idle,
+            status: agentik_types::AgentLifecycleStatus::Idle,
             last_event: None,
             model: None,
             context_length: None,

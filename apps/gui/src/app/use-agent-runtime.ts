@@ -70,20 +70,10 @@ function convertMessage(message: any): ChatItem[] {
 }
 
 function statusLabel(status?: unknown) {
-  if (status && typeof status === "object" && "kind" in status) {
-    // Coarse host projection (runtime AgentStatus). The lifecycle Waiting
-    // state collapses into AwaitingTool { tool: "wait_task" } — recover
-    // the distinction from the payload so the UI shows "waiting" instead
-    // of a generic tool indicator (or idle, pre-icon-rework).
-    const { kind, tool } = status as { kind?: unknown; tool?: unknown };
-    const tag = String(kind ?? "idle").toLowerCase();
-    if (tag === "awaiting_tool") return tool === "wait_task" ? "waiting" : "toolrunning";
-    if (tag === "failed") return "error";
-    return tag;
-  }
-  const value = (typeof status === "string" ? status : "idle").toLowerCase();
-  if (value.includes("stream") || value.includes("requesting") || value.includes("executing")) return value;
-  return value.replace(/^.*\./, "");
+  // The daemon's status is `AgentLifecycleStatus` (the unified enum, no
+  // coarse host projection anymore), serialized as an UPPERCASE tag
+  // string — "IDLE", "TOOLRUNNING", "RETRYING", …
+  return (typeof status === "string" ? status : "idle").toLowerCase().replace(/^.*\./, "");
 }
 
 export function useAgentRuntime() {
@@ -279,14 +269,9 @@ export function useAgentRuntime() {
         }
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
-        // The coarse host projection collapses Retrying into Running;
-        // recover the distinction from last_event ("retrying (2/5): …")
-        // so the spinner survives the back-off window.
         setStatuses((current) => ({
           ...current,
-          [event.path]: typeof event.last_event === "string" && event.last_event.startsWith("retrying")
-            ? "retrying"
-            : statusLabel(event.status),
+          [event.path]: statusLabel(event.status),
         }));
       }
     }

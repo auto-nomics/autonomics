@@ -812,13 +812,13 @@ mod tests {
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
     use uuid::Uuid;
 
-    /// Build an `AgentShared` whose event channel drains into `tx` — the
+    /// Build an `AgentCore` whose event channel drains into `tx` — the
     /// compaction progress events are the observable under test.
     fn shared_with_model_and_events(
         model: Model,
         tx: UnboundedSender<AgentEvent>,
-    ) -> Arc<super::super::AgentShared> {
-        Arc::new(super::super::AgentShared {
+    ) -> Arc<super::super::AgentCore> {
+        Arc::new(super::super::AgentCore {
             id: Uuid::new_v4(),
             path: AgentPath::root(),
             config_json: serde_json::json!({}),

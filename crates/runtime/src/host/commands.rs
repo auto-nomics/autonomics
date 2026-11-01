@@ -945,7 +945,7 @@ pub(super) fn capability_from_kind(
         tags,
         expertise,
         tools: Vec::new(), // populated at runtime if needed
-        status: crate::control::AgentStatus::Idle,
+        status: agentik_types::AgentLifecycleStatus::Idle,
         last_event: None,
         model: None,
         context_length: None,
@@ -1118,34 +1118,34 @@ mod interrupt_agent_tests {
         assert_eq!(raw["reason"], "wrong agent selected");
     }
 
-    /// The `is_final_status` predicate interacts with interrupt:
-    /// after `cancel_agent`, the agent emits `LifecycleChanged(Cancelled)`
-    /// which `derive_agent_status` maps to `AgentStatus::Failed`. Verify
-    /// the chain `Cancelled → Failed → is_final` returns true.
+    /// After `cancel_agent` the agent emits `LifecycleChanged(Cancelled)`;
+    /// the merged projection passes it through so observers see the
+    /// cancellation as-is (no Failed resynthesis). Delegated tasks resolve
+    /// on the turn's `TurnCompleted { status: Interrupted }` event, not on
+    /// the status value, so interrupt_agent never hangs a delegator.
     #[test]
-    fn cancelled_lifecycle_maps_to_failed_via_derive() {
+    fn cancelled_lifecycle_passes_through_derive() {
         let (status, _) = super::super::status::derive_agent_status(
             &agentik_sdk::types::AgentEvent::LifecycleChanged(
                 agentik_types::AgentLifecycleStatus::Cancelled,
             ),
         );
-        assert!(
-            super::super::status::is_final_status(&status),
-            "Cancelled must map to a terminal status so delegated tasks \
-             don't hang forever after interrupt_agent fires"
+        assert_eq!(
+            status,
+            Some(agentik_types::AgentLifecycleStatus::Cancelled),
+            "the lifecycle must reach observers untouched"
         );
     }
 
-    /// Same for `Error` lifecycle — fatal system errors must also be
-    /// terminal.
+    /// Same for `Error` lifecycle — fatal system errors surface as-is.
     #[test]
-    fn error_lifecycle_maps_to_failed_via_derive() {
+    fn error_lifecycle_passes_through_derive() {
         let (status, _) = super::super::status::derive_agent_status(
             &agentik_sdk::types::AgentEvent::LifecycleChanged(
                 agentik_types::AgentLifecycleStatus::Error,
             ),
         );
-        assert!(super::super::status::is_final_status(&status));
+        assert_eq!(status, Some(agentik_types::AgentLifecycleStatus::Error));
     }
 }
 
@@ -1494,9 +1494,9 @@ mod communication_policy_tests {
         .expect("session Arc should drop after the agent shuts down");
     }
 
-    fn set_status(host: &mut RuntimeHost, path: &str, status: crate::control::AgentStatus) {
+    fn set_status(host: &mut RuntimeHost, path: &str, status: agentik_types::AgentLifecycleStatus) {
         let entry = host.agents.get_mut(path).unwrap();
-        entry.status = status.clone();
+        entry.status = status;
         entry.info.status = status;
     }
 
@@ -1527,7 +1527,7 @@ mod communication_policy_tests {
         set_status(
             &mut host,
             "/root/a/child",
-            crate::control::AgentStatus::Running,
+            agentik_types::AgentLifecycleStatus::Requesting,
         );
         assert!(
             host.validate_delegation_paths("/root/a", "/root/a/child")
@@ -1536,7 +1536,7 @@ mod communication_policy_tests {
         set_status(
             &mut host,
             "/root/a/child",
-            crate::control::AgentStatus::Idle,
+            agentik_types::AgentLifecycleStatus::Idle,
         );
 
         // Upward delegation is rejected with the superior-specific message.

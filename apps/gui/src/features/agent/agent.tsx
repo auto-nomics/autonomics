@@ -2,7 +2,6 @@ import { DagMinimap } from "@/features/system/dag-minimap";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Layout, LayoutChangedMeta, PanelImperativeHandle } from "react-resizable-panels";
 import {
-  CheckCircle2,
   CircleDashed,
   CircleSlash,
   Copy,
@@ -128,9 +127,11 @@ export type AgentViewProps = {
 };
 
 /** Per-status icon + tone for agent lifecycle states. Backend source of
- *  truth is `AgentLifecycleStatus` (crates/agentik-types/src/lifecycle.rs);
- *  every variant must land in one of these arms — unknown values fall
- *  through to the idle marker. */
+ *  truth is `AgentLifecycleStatus` (crates/agentik-types/src/lifecycle.rs),
+ *  emitted directly by the daemon — there is no separate coarse status
+ *  anymore. Every variant must land in one of these arms — unknown values
+ *  fall through to the idle marker. A cleanly finished turn lands on
+ *  `idle` too: the chat transcript shows the response, the icon rests. */
 export function agentStatusIconMeta(status?: string) {
   const value = (status ?? "idle").toLowerCase();
   if (value.includes("error") || value.includes("fail")) return { Icon: XCircle, className: "text-destructive" };
@@ -143,9 +144,6 @@ export function agentStatusIconMeta(status?: string) {
   if (value.includes("waiting")) return { Icon: Hourglass, className: "text-violet-400" };
   if (value.includes("cancel") || value.includes("abort"))
     return { Icon: CircleSlash, className: "text-muted-foreground/70" };
-  // Host-level coarse projection: the turn finished cleanly and the agent
-  // rests until the next message (lifecycle itself never emits this).
-  if (value.includes("completed")) return { Icon: CheckCircle2, className: "text-emerald-500/80" };
   return { Icon: CircleDashed, className: "text-muted-foreground/60" };
 }
 

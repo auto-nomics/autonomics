@@ -47,10 +47,12 @@ fn main() {
         article.keywords = vec!["gene".into()];
         shared.bib.upsert_article(&article).await.unwrap();
         let db = shared.bib.clone();
-        let server =
-            api_server::start(api_server::api_router(shared, wiki_handle().await), "127.0.0.1:0")
-                .await
-                .unwrap();
+        let server = api_server::start(
+            api_server::api_router(shared, wiki_handle().await),
+            "127.0.0.1:0",
+        )
+        .await
+        .unwrap();
         let http = reqwest::Client::new();
         for (name, text, preferred) in [
             ("preferred.txt", "Unrelated preferred file.", true),

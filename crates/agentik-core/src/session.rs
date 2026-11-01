@@ -22,7 +22,7 @@
 //!
 //! - `error` — session-state errors (compaction failures, orphaned
 //!   tool_results).
-//! - `shared` — `AgentShared`: stable resources shared by all sessions of one
+//! - `shared` — `AgentCore`: stable resources shared by all sessions of one
 //!   agent (model, storage, tool registry, event channel).
 //! - `messages` — conversation storage: `remember` / `add_message` with
 //!   tool_result adjacency repair, `render_context`, `sanitize_and_persist`.
@@ -44,7 +44,7 @@ mod tool_images;
 mod workflow;
 
 pub use compaction::{DEFAULT_KEEP_TOKENS, estimate_message_tokens};
-pub(crate) use shared::AgentShared;
+pub(crate) use shared::AgentCore;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -206,20 +206,20 @@ pub struct Session {
     turn: Option<Turn>,
 
     /// Back-reference to shared agent resources.
-    pub(crate) shared: Arc<AgentShared>,
+    pub(crate) shared: Arc<AgentCore>,
 }
 
 impl Session {
-    /// Build a Session wired to a freshly-constructed `AgentShared`. Used
+    /// Build a Session wired to a freshly-constructed `AgentCore`. Used
     /// only by unit tests that exercise `remember` / `add_message` without a
     /// full agent bootstrap.
     #[cfg(test)]
-    pub(crate) fn new_for_tests(shared: Arc<AgentShared>, _path: agentik_types::AgentPath) -> Self {
+    pub(crate) fn new_for_tests(shared: Arc<AgentCore>, _path: agentik_types::AgentPath) -> Self {
         Self::new(Uuid::new_v4(), shared)
     }
 
     /// Create a new empty session.
-    pub(crate) fn new(id: Uuid, shared: Arc<AgentShared>) -> Self {
+    pub(crate) fn new(id: Uuid, shared: Arc<AgentCore>) -> Self {
         let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
             agentik_types::AgentPlan::new(),
         )));
@@ -261,7 +261,7 @@ impl Session {
     /// Create a session pre-loaded with conversation state (restore path).
     pub(crate) fn new_with_state(
         id: Uuid,
-        shared: Arc<AgentShared>,
+        shared: Arc<AgentCore>,
         state: SessionState,
         cancel_token: CancellationToken,
     ) -> Self {
@@ -443,7 +443,7 @@ impl From<&Session> for SessionInfo {
 /// Sufficient for testing `remember` / `add_message` paths in isolation.
 #[cfg(test)]
 pub(crate) fn make_test_session() -> Session {
-    let shared = AgentShared::new_for_tests();
+    let shared = AgentCore::new_for_tests();
     Session::new_for_tests(shared, agentik_types::AgentPath::root())
 }
 
@@ -455,7 +455,7 @@ mod tests {
     /// Two sessions over one shared must never observe each other's plans.
     #[test]
     fn independent_sessions_have_independent_plans() {
-        let shared = AgentShared::new_for_tests();
+        let shared = AgentCore::new_for_tests();
         let mut a = Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
         let b = Session::new_for_tests(shared, agentik_types::AgentPath::root());
 
@@ -504,7 +504,7 @@ mod tests {
     /// take-before-settle ordering is what prevents double counting.
     #[test]
     fn a_taken_turn_cannot_be_settled_twice() {
-        let shared = AgentShared::new_for_tests();
+        let shared = AgentCore::new_for_tests();
         let mut session =
             Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
 

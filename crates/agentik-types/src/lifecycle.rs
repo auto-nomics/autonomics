@@ -1,10 +1,14 @@
 /// Unified agent lifecycle status — the single source of truth across all
-/// layers (core, runtime, TUI).
+/// layers (core, runtime host, TUI, GUI).
 ///
 /// The lifecycle is driven by the [`Session`](agentik_core::Session) and
-/// propagated to observers via [`AgentEvent::LifecycleChanged`]. Consumers
-/// should track status from that event rather than inferring it from
-/// streaming events.
+/// propagated to observers via [`AgentEvent::LifecycleChanged`]. The
+/// runtime host tracks this enum directly (no separate coarse projection):
+/// `AgentInfo.status`, `HostEvent::AgentStatusChanged`, and the persisted
+/// `agent_graph.status_json` all carry it, with the tool name / error
+/// detail riding in the adjacent `last_event` line. Consumers should track
+/// status from the lifecycle event rather than inferring it from streaming
+/// events.
 ///
 /// ## State diagram
 ///
@@ -112,5 +116,51 @@ impl AgentLifecycleStatus {
     /// Returns `true` when the agent is idle and ready for new work.
     pub fn is_idle(self) -> bool {
         matches!(self, Self::Idle | Self::Aborted)
+    }
+
+    /// Short lowercase tag suitable for log lines, delegation progress
+    /// records, and frontend status labels. Spelled to match the labels
+    /// the former host-side coarse projection produced (e.g. `toolrunning`,
+    /// not `tool_running`) so existing frontend label maps keep working.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Requesting => "requesting",
+            Self::Streaming => "streaming",
+            Self::ToolRunning => "toolrunning",
+            Self::Retrying => "retrying",
+            Self::Error => "error",
+            Self::Compacting => "compacting",
+            Self::Waiting => "waiting",
+            Self::Cancelled => "cancelled",
+            Self::Aborted => "aborted",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tags are part of the wire contract: the GUI maps them to icons
+    /// and the delegation progress records persist them. Renaming a tag
+    /// here must be a conscious frontend-affecting change.
+    #[test]
+    fn tags_cover_every_variant() {
+        let cases = [
+            (AgentLifecycleStatus::Idle, "idle"),
+            (AgentLifecycleStatus::Requesting, "requesting"),
+            (AgentLifecycleStatus::Streaming, "streaming"),
+            (AgentLifecycleStatus::ToolRunning, "toolrunning"),
+            (AgentLifecycleStatus::Retrying, "retrying"),
+            (AgentLifecycleStatus::Error, "error"),
+            (AgentLifecycleStatus::Compacting, "compacting"),
+            (AgentLifecycleStatus::Waiting, "waiting"),
+            (AgentLifecycleStatus::Cancelled, "cancelled"),
+            (AgentLifecycleStatus::Aborted, "aborted"),
+        ];
+        for (status, tag) in cases {
+            assert_eq!(status.tag(), tag);
+        }
     }
 }

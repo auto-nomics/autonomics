@@ -45,10 +45,12 @@ pub(super) struct AgentEntry {
     pub(super) layout_order: u64,
     /// First time this incarnation entered the daemon layout.
     pub(super) layout_created_at: i64,
-    /// Live runtime status. Updated on every observed [`agentik_sdk::types::AgentEvent`].
-    /// Phase-1 deliverable — surfaces "what is agent X doing?" without
-    /// requiring the agent to expose anything new.
-    pub(super) status: crate::control::AgentStatus,
+    /// Live runtime status — the agent's unified
+    /// [`agentik_types::AgentLifecycleStatus`]. Updated on every observed
+    /// [`agentik_sdk::types::AgentEvent`] that carries a lifecycle signal.
+    /// Surfaces "what is agent X doing?" without requiring the agent to
+    /// expose anything new.
+    pub(super) status: agentik_types::AgentLifecycleStatus,
     /// Most recent event summary (tool name on AwaitingTool, error
     /// message on Failed, etc.). `None` until the first event lands.
     pub(super) last_event: Option<String>,
@@ -110,7 +112,7 @@ impl RuntimeHost {
             AgentEntry {
                 cmd_tx,
                 _relay_task: relay_task,
-                status: info.status.clone(),
+                status: info.status,
                 last_event: info.last_event.clone(),
                 info: info.clone(),
                 kind,

@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AgentError, Result};
-use crate::session::{AgentShared, Session};
+use crate::session::{AgentCore, Session};
 use crate::storage::{AgentRecord, AgentStorage, PersistOp, StorageError};
 use crate::tools::ToolRegistration;
 use agentik_types::SessionInfo;
@@ -112,7 +112,7 @@ pub enum InternalEvent {
 }
 
 pub struct Agent {
-    pub(crate) shared: Arc<AgentShared>,
+    pub(crate) shared: Arc<AgentCore>,
     /// The agent's sole working context. `None` only before the first
     /// message (auto-created then) or while persistence recovery is pending.
     pub(crate) context: Option<Session>,
@@ -190,7 +190,7 @@ impl Agent {
     pub fn register_tool(&mut self, registration: ToolRegistration) -> Result<()> {
         let shared = Arc::get_mut(&mut self.shared).ok_or_else(|| {
             AgentError::Tool(crate::tools::error::ToolError::RegistryError {
-                message: "AgentShared is frozen (sessions exist)".into(),
+                message: "AgentCore is frozen (sessions exist)".into(),
             })
         })?;
         Arc::get_mut(&mut shared.tool_registry)
@@ -207,7 +207,7 @@ impl Agent {
     pub fn register_tools(&mut self, registrations: Vec<ToolRegistration>) -> Result<()> {
         let shared = Arc::get_mut(&mut self.shared).ok_or_else(|| {
             AgentError::Tool(crate::tools::error::ToolError::RegistryError {
-                message: "AgentShared is frozen (sessions exist)".into(),
+                message: "AgentCore is frozen (sessions exist)".into(),
             })
         })?;
         Arc::get_mut(&mut shared.tool_registry)

@@ -615,57 +615,6 @@ pub struct AgentExecutionHistory {
     pub messages: Vec<agentik_sdk::types::messages::Message>,
 }
 
-/// Runtime lifecycle state of a registered agent.
-///
-/// Derived from the [`agentik_sdk::AgentEvent`] stream by
-/// [`crate::RuntimeHost::recv_any`]. Surfaces the live activity of every
-/// spawned agent so callers (`list_agents`, `get_agent_info`) can answer
-/// "what is agent X doing right now?" without polling the agent itself.
-///
-/// Lifecycle:
-///
-/// ```text
-/// Idle ──► Running ──► AwaitingTool { tool } ──► Running ──► …
-///   │         │                                     │
-///   │         └──► Completed                        └──► Failed(msg)
-///   └──► Completed / Failed   (one-shot tasks that never turned)
-/// ```
-///
-/// `Completed` is a terminal state: a fresh agent turn starts back at
-/// `Running` (or `AwaitingTool`) on the next message. `Failed(msg)` is
-/// sticky until the agent is shut down — the message captures the most
-/// recent error.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AgentStatus {
-    /// No message has been delivered yet, or the agent is between turns.
-    Idle,
-    /// The agent is mid-turn — either streaming an LLM response or about
-    /// to call another tool. `last_event` may carry a one-line summary.
-    Running,
-    /// The agent issued a tool call and is waiting for its result.
-    /// `tool` is the registered tool name (e.g. `run_bash`).
-    AwaitingTool { tool: String },
-    /// The agent emitted `Done` for the current turn. Stays until the
-    /// next message flips it back to `Running`. Not sticky across shutdown.
-    Completed,
-    /// The agent emitted `Error`. Sticky until shutdown.
-    Failed { message: String },
-}
-
-impl AgentStatus {
-    /// Short lowercase tag suitable for log lines and JSON.
-    pub fn tag(&self) -> &'static str {
-        match self {
-            AgentStatus::Idle => "idle",
-            AgentStatus::Running => "running",
-            AgentStatus::AwaitingTool { .. } => "awaiting_tool",
-            AgentStatus::Completed => "completed",
-            AgentStatus::Failed { .. } => "failed",
-        }
-    }
-}
-
 /// Information about one registered agent, including capability metadata
 /// and live runtime status.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -685,11 +634,14 @@ pub struct AgentInfo {
     pub expertise: Vec<String>,
     /// Tool names available to this agent.
     pub tools: Vec<String>,
-    /// Live runtime status, derived from the agent's event stream.
-    /// Defaults to [`AgentStatus::Idle`] when no message has been
+    /// Live runtime status — the agent's own
+    /// [`AgentLifecycleStatus`](agentik_types::AgentLifecycleStatus),
+    /// observed from its event stream by [`crate::RuntimeHost::recv_any`].
+    /// Tool names and error messages ride in [`Self::last_event`], not in
+    /// the status itself. Defaults to `Idle` when no message has been
     /// delivered yet.
-    #[serde(default = "default_agent_status")]
-    pub status: AgentStatus,
+    #[serde(default)]
+    pub status: agentik_types::AgentLifecycleStatus,
     /// One-line summary of the most recent event (e.g. the tool name on
     /// `AwaitingTool`, the failing message on `Failed`). `None` until
     /// the first event arrives.
@@ -703,10 +655,6 @@ pub struct AgentInfo {
     /// Context window of the agent's current model (tokens).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_length: Option<u64>,
-}
-
-fn default_agent_status() -> AgentStatus {
-    AgentStatus::Idle
 }
 
 /// A routing recommendation returned by [`HostControl::route_task`].

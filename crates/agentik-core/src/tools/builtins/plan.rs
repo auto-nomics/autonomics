@@ -33,7 +33,7 @@ use crate::tools::{ToolContext, ToolError, ToolFunction};
 /// [`ToolContext::session`](crate::tools::ToolContext), so the same registered
 /// tool serves every session of the agent without cross-talk. The handle
 /// carries the agent id and storage for persistence plus an event sender for
-/// UI notification. It decouples the tool from the full `AgentShared` struct
+/// UI notification. It decouples the tool from the full `AgentCore` struct
 /// (which is `pub(crate)`).
 #[derive(Clone)]
 pub struct PlanHandle {
