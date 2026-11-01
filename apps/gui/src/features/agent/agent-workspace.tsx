@@ -2,20 +2,23 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
+  Archive,
   ArrowDown,
   ArrowUp,
   Bot,
   Brain,
   Check,
-  Cpu,
-  GitFork,
   CheckCircle2,
   ChevronDown,
+  CircleSlash,
   Copy,
+  Cpu,
+  GitFork,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Search,
+  Square,
   Terminal,
   Wrench,
   X,
@@ -51,6 +54,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   AgentStatusIcon,
+  agentStatusTone,
   type DisplaySettings,
   copyText,
   leafName,
@@ -89,6 +93,16 @@ function effortLabel(effort: string | null | undefined) {
 const DEFAULT_WINDOW = 60;
 const LOAD_CHUNK = 80;
 const MAX_WINDOW = 500;
+
+/** Lifecycle states that mean "no turn in flight" — anything else keeps
+ * the composer's send button in cancel mode with the status ring. */
+const TERMINAL_LIFECYCLE = new Set([
+  "idle",
+  "error",
+  "cancelled",
+  "aborted",
+  "completed",
+]);
 
 function formatTime(time: number) {
   return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -345,6 +359,12 @@ export type AgentWorkspaceProps = {
   onChangeEffort: (path: string, effort: string) => Promise<void>;
   onDraftChange: (value: string) => void;
   onSendMessage: (context?: string) => void;
+  /** 终止当前回复(POST /agents/{id}/cancel)。回合进行中发送按钮变成
+   *  终止键;取消后后端发 LifecycleChanged(Cancelled),composer 露出
+   *  「已终止」状态直到下一个回合。 */
+  onCancel: () => void;
+  /** 压缩对话(POST /agents/{id}/compact)——composer 内的 Archive 图标。 */
+  onCompact: () => void;
   showInspectorToggle?: boolean;
   onSelectAgent: (path: string) => void;
   onShutdown: (path: string) => void;
@@ -426,6 +446,15 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const docked = mode === "docked";
   const activeInfo = agents.find((agent) => agent.path === activeAgent);
   const running = statusLabel(statuses[activeAgent]);
+  // Composer turn state: a turn is in flight unless the lifecycle rests on
+  // a terminal state — busy covers the POST window before the first
+  // lifecycle event, streaming covers text deltas between events.
+  const lifecycle = (statuses[activeAgent] ?? "idle").toLowerCase();
+  const turnActive =
+    busy === "send" || streaming !== null || !TERMINAL_LIFECYCLE.has(lifecycle);
+  const terminated =
+    !turnActive && (lifecycle.includes("cancel") || lifecycle.includes("abort"));
+  const tone = agentStatusTone(statuses[activeAgent]);
   const currentModelSpec = activeInfo?.model ?? null;
   const currentModelShort = currentModelSpec
     ? (currentModelSpec.split(":").filter(Boolean).pop() ?? currentModelSpec)
@@ -689,7 +718,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                 </div>
               ))}
             </div>
-            <Button size="icon-sm" variant="ghost" aria-label="View agent DAG" title="View agent DAG" disabled={!activeAgent} onClick={props.onOpenDag}><GitFork /></Button>
             {docked && props.showInspectorToggle !== false && (
               <Button
                 size="icon-sm"
@@ -899,16 +927,42 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   placeholder="输入消息…"
                   className="max-h-48 min-h-9 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 focus-visible:ring-0 md:text-sm dark:bg-transparent"
                 />
-                <Button
-                  type="submit"
-                  size="icon"
-                  className="mb-0.5 shrink-0 rounded-full"
-                  disabled={!draft.trim() || busy === "send"}
-                  aria-label="发送"
-                  title="发送（Ctrl+Enter）"
-                >
-                  <ArrowUp />
-                </Button>
+                {turnActive ? (
+                  /* 回合进行中:发送键变终止键,外圈虚线环旋转,颜色跟随
+                   * 生命周期状态(流式=天蓝、工具=琥珀、等待=紫、错误=红)。 */
+                  <span className="relative mb-0.5 flex shrink-0">
+                    <span
+                      aria-hidden
+                      data-status-ring=""
+                      className={cn(
+                        "pointer-events-none absolute -inset-1 animate-spin rounded-full border-2 border-dashed motion-reduce:animate-none",
+                        tone.border,
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="secondary"
+                      className="rounded-full"
+                      onClick={props.onCancel}
+                      aria-label="终止"
+                      title={`终止当前回复（状态：${running || "running"}）`}
+                    >
+                      <Square className="size-3.5 fill-current" />
+                    </Button>
+                  </span>
+                ) : (
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="mb-0.5 shrink-0 rounded-full"
+                    disabled={!draft.trim()}
+                    aria-label="发送"
+                    title="发送（Ctrl+Enter）"
+                  >
+                    <ArrowUp />
+                  </Button>
+                )}
               </div>
               <div className="flex items-center gap-2 px-2.5 pb-2 pt-1 text-[11px] text-muted-foreground">
                 <button
@@ -945,12 +999,44 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   <ChevronDown className={cn("size-3 shrink-0 transition-transform", effortPickerOpen && "rotate-180")} />
                 </button>
                 <span className="truncate">Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史</span>
-                {streaming && (
-                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                    <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
-                    streaming…
-                  </span>
-                )}
+                {/* 回合操作收进 composer:压缩 / DAG(fork);右侧是进行中
+                 * 或已终止的状态提示。 */}
+                <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="压缩对话"
+                    title="压缩对话（Compact）"
+                    disabled={!activeAgent}
+                    onClick={props.onCompact}
+                  >
+                    <Archive className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="查看 agent DAG"
+                    title="查看 agent DAG"
+                    disabled={!activeAgent}
+                    onClick={props.onOpenDag}
+                  >
+                    <GitFork className="size-3.5" />
+                  </Button>
+                  {turnActive ? (
+                    <span
+                      className={cn("flex items-center gap-1 pl-1", tone.text)}
+                      title={`回合进行中：${running || "running"}`}
+                    >
+                      <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
+                      {running || "running"}…
+                    </span>
+                  ) : terminated ? (
+                    <span className="flex items-center gap-1 pl-1 text-muted-foreground" title="上一回合已被终止">
+                      <CircleSlash className="size-3" />
+                      已终止
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
           </form>

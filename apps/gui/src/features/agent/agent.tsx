@@ -2,7 +2,6 @@ import { DagMinimap } from "@/features/system/dag-minimap";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Layout, LayoutChangedMeta, PanelImperativeHandle } from "react-resizable-panels";
 import {
-  Archive,
   CheckCircle2,
   CircleDashed,
   CircleSlash,
@@ -13,7 +12,6 @@ import {
   PenLine,
   RefreshCw,
   Shrink,
-  Square,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -154,6 +152,32 @@ export function agentStatusIconMeta(status?: string) {
 export function AgentStatusIcon({ status, className }: { status?: string; className?: string }) {
   const { Icon, className: tone } = agentStatusIconMeta(status);
   return <Icon aria-hidden className={cn("size-3 shrink-0 motion-reduce:animate-none", tone, className)} />;
+}
+
+/** Status → color tones for composer accents (the rotating ring around
+ * the send button while a turn runs, the in-flight chip). Arm order
+ * mirrors agentStatusIconMeta so icon color and ring color always agree. */
+export function agentStatusTone(status?: string) {
+  const value = (status ?? "idle").toLowerCase();
+  if (value.includes("error") || value.includes("fail")) {
+    return { border: "border-destructive", text: "text-destructive" };
+  }
+  if (value.includes("retry") || value.includes("tool")) {
+    return { border: "border-amber-400", text: "text-amber-400" };
+  }
+  if (value.includes("stream") || value.includes("request") || value === "running") {
+    return { border: "border-sky-400", text: "text-sky-400" };
+  }
+  if (value.includes("compact") || value.includes("waiting")) {
+    return { border: "border-violet-400", text: "text-violet-400" };
+  }
+  if (value.includes("cancel") || value.includes("abort")) {
+    return { border: "border-muted-foreground/60", text: "text-muted-foreground" };
+  }
+  if (value.includes("completed")) {
+    return { border: "border-emerald-500/80", text: "text-emerald-500/80" };
+  }
+  return { border: "border-muted-foreground/50", text: "text-muted-foreground" };
 }
 
 function planStepIcon(status: unknown) {
@@ -406,8 +430,8 @@ export function AgentView(props: AgentViewProps) {
         <Card size="sm" className="gap-0 py-0">
           <CardContent className="p-1.5">
             <div className="grid grid-cols-2 gap-1.5">
-              <Button size="xs" variant="secondary" onClick={props.onCancel}><Square />Cancel</Button>
-              <Button size="xs" variant="secondary" onClick={props.onCompact}><Archive />Compact</Button>
+              {/* Cancel(终止)与 Compact(压缩)已移入 composer:
+                  终止合并进发送按钮的运行态,压缩是 composer 图标。 */}
               <Button size="xs" variant="secondary" onClick={openCopy}><Copy />Copy</Button>
               <Button size="xs" variant="secondary" onClick={() => setHistoryOpen(true)}><History />History</Button>
               <Button size="xs" variant="secondary" onClick={props.onRefreshHistory}><RefreshCw />Refresh</Button>
