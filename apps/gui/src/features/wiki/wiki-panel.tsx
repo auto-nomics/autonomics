@@ -1,15 +1,17 @@
 /**
- * SiYuan 式 wiki 工作台:浏览器式多标签页 —— 「首页」tab 承载 BM25 检索
- * 与分页浏览(home-view),每篇词条一个 tab;tab 内维护前进/后退历史栈
- * (点 [[双链]] 压栈,Ctrl/中键开新 tab),标签页与游标持久化到
- * localStorage。底部折叠 dock(链接 / 附件 / 历史)跟随当前词条 tab。
+ * SiYuan 式 wiki 工作台:浏览器式多标签页 —— 「首页」tab 只做分页浏览
+ * (home-view),BM25 检索 + 标签过滤收进检索弹窗(search-dialog,Ctrl+K
+ * 或右上角图标)。每篇词条一个 tab,tab 内维护前进/后退历史栈(点
+ * [[双链]] 压栈,Ctrl/中键开新 tab),标签页与游标持久化到 localStorage。
+ * 顶部无独立工具条:后退/前进/检索/新建/回收站以图标并入标签行;
+ * 底部折叠 dock(链接 / 附件 / 历史)跟随当前词条 tab。
  */
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpen,
   ChevronDown,
   ChevronRight,
+  FilePlus2,
   FileText,
   Link2,
   Loader2,
@@ -35,6 +37,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditorView } from "./editor-view";
 import { HomeView, PAGE_SIZE } from "./home-view";
 import { ReadingView, type WikiMode } from "./reading-view";
+import { SearchDialog } from "./search-dialog";
 import {
   attachmentRawUrl,
   createEntry,
@@ -51,12 +54,10 @@ import {
   purgeEntry,
   restoreEntry,
   restoreVersion,
-  searchEntries,
   uploadAttachment,
   type AttachmentMeta,
   type EntrySummary,
   type RecycleItem,
-  type SearchHit,
   type VersionSummary,
   type WikiEntry,
   type WikiLinkRef,
@@ -124,13 +125,12 @@ export function WikiPanel() {
   const [activeTabId, setActiveTabId] = useState<string>(boot.activeId);
   const entryCache = useRef(new Map<string, WikiEntry>());
 
-  // —— 首页浏览状态(跨 tab 切换保留)——
+  // —— 首页浏览状态(跨 tab 切换保留;检索状态在 search-dialog 内)——
   const [entries, setEntries] = useState<EntrySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [query, setQuery] = useState("");
-  const [tagFilter, setTagFilter] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const [dockOpen, setDockOpen] = useState(() => {
     try {
@@ -155,8 +155,18 @@ export function WikiPanel() {
   const [creatingLink, setCreatingLink] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  const parseTags = (raw: string) =>
-    raw.split(",").map((tag) => tag.trim()).filter(Boolean);
+  // Ctrl/Cmd+K 打开检索弹窗;面板被其他视图隐藏时(section[hidden])不拦截。
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      if (!rootRef.current || rootRef.current.offsetParent === null) return;
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const current = activeTab.stack[activeTab.cursor];
@@ -172,12 +182,12 @@ export function WikiPanel() {
     }
   }, [tabs, activeTabId]);
 
-  // —— 首页:浏览 / 检索 / 续拉 ——
-  const loadBrowse = useCallback(async (tags: string, offset = 0) => {
+  // —— 首页:分页浏览(检索/标签过滤在 search-dialog 内自行取数)——
+  const loadBrowse = useCallback(async (offset = 0) => {
     if (offset === 0) setLoading(true);
     else setLoadingMore(true);
     try {
-      const page = await listEntries({ tags: parseTags(tags), limit: PAGE_SIZE, offset });
+      const page = await listEntries({ limit: PAGE_SIZE, offset });
       setEntries((prev) => (offset > 0 ? [...prev, ...page] : page));
       setHasMore(page.length === PAGE_SIZE);
     } catch (error) {
@@ -188,35 +198,8 @@ export function WikiPanel() {
     }
   }, []);
 
-  const loadSearch = useCallback(async (term: string, tags: string) => {
-    setLoading(true);
-    try {
-      const hits = term.trim()
-        ? await searchEntries(term, { limit: 50, tags: parseTags(tags) })
-        : await listEntries({ tags: parseTags(tags), limit: PAGE_SIZE });
-      const hydrated = await Promise.all(
-        (hits as SearchHit[]).map(async (hit) => {
-          try {
-            const entry = await getEntry(hit.entry_id);
-            const { content: _content, ...summary } = entry;
-            return summary;
-          } catch {
-            // Purged between search and hydration — drop the hit.
-            return null;
-          }
-        }),
-      );
-      setEntries(hydrated.filter((item): item is EntrySummary => item !== null));
-      setHasMore(false);
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void loadBrowse("").catch((error: Error) => toast.error(error.message));
+    void loadBrowse().catch((error: Error) => toast.error(error.message));
   }, [loadBrowse]);
 
   // —— 词条缓存与 tab 标题回填 ——
@@ -244,6 +227,23 @@ export function WikiPanel() {
         return entry;
       } catch (error) {
         toast.error((error as Error).message);
+        return null;
+      }
+    },
+    [applyEntry],
+  );
+
+  /** 静默解析 id → 标题(dock 用):失败返回 null,不弹 toast。 */
+  const resolveTitle = useCallback(
+    async (id: string): Promise<string | null> => {
+      const cached = entryCache.current.get(id);
+      if (cached) return cached.title;
+      try {
+        const entry = await getEntry(id);
+        applyEntry(entry);
+        return entry.title;
+      } catch {
+        // 词条已被净删/不在库 —— 保留 id 兜底显示。
         return null;
       }
     },
@@ -344,10 +344,7 @@ export function WikiPanel() {
     return () => window.removeEventListener("wiki:open-entry", handler);
   }, [current.kind, openEntry]);
 
-  const refreshBrowse = useCallback(
-    () => loadBrowse(tagFilter),
-    [loadBrowse, tagFilter],
-  );
+  const refreshBrowse = useCallback(() => loadBrowse(), [loadBrowse]);
 
   async function createNew() {
     setCreating(true);
@@ -356,7 +353,7 @@ export function WikiPanel() {
       const created = await createEntry({
         title: base,
         content: `# ${base}\n\n`,
-        tags: tagFilter ? parseTags(tagFilter) : [],
+        tags: [],
       });
       // 新词条开新 tab,直接进编辑模式;首页浏览位置不动。
       const id = crypto.randomUUID();
@@ -402,7 +399,7 @@ export function WikiPanel() {
       const created = await createEntry({
         title: missingLink,
         content: `# ${missingLink}\n\n`,
-        tags: tagFilter ? parseTags(tagFilter) : [],
+        tags: [],
       });
       toast.success(`已创建「${missingLink}」`);
       setMissingLink(null);
@@ -422,13 +419,10 @@ export function WikiPanel() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* 工具栏:全局动作 + 当前 tab 的前进/后退 */}
-      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-        <span className="flex items-center gap-1.5 text-sm font-semibold">
-          <BookOpen className="h-4 w-4" /> 知识库
-        </span>
-        <div className="flex items-center gap-0.5">
+    <div ref={rootRef} className="flex h-full min-h-0 flex-col">
+      {/* 顶部行:后退/前进 + 标签页 + 全局动作(图标并入标签行,无独立工具条) */}
+      <div className="flex items-center gap-0.5 border-b py-1 pl-1 pr-1.5 md:gap-1 md:pl-2 md:pr-2">
+        <div className="flex shrink-0 items-center gap-0.5">
           <Button
             size="icon-sm"
             variant="ghost"
@@ -448,97 +442,111 @@ export function WikiPanel() {
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
-        <div className="flex-1" />
-        <Button size="sm" variant="outline" onClick={() => void (async () => {
-          setRecycleOpen(true);
-          setRecycle(await listRecycle().catch(() => []));
-        })()}>
-          <Trash2 className="h-4 w-4" /> 回收站
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => void createNew()} disabled={creating}>
-          {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} 新建
-        </Button>
-      </div>
-
-      {/* 标签栏 */}
-      <div
-        className="flex items-center gap-1 overflow-x-auto border-b px-2 py-1"
-        role="tablist"
-        aria-label="wiki 标签页"
-      >
-        {tabs.map((tab) => {
-          const loc = tab.stack[tab.cursor];
-          const active = tab.id === activeTabId;
-          return (
-            <div
-              key={tab.id}
-              role="tab"
-              aria-selected={active}
-              tabIndex={0}
-              className={`group flex max-w-52 shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1.5 text-xs transition-colors ${
-                active
-                  ? "border-border bg-background text-foreground"
-                  : "border-transparent text-muted-foreground hover:bg-accent"
-              }`}
-              onClick={() => switchTab(tab.id)}
-              onAuxClick={(event) => {
-                if (event.button === 1) {
-                  event.preventDefault();
-                  closeTab(tab.id);
-                }
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") switchTab(tab.id);
-              }}
-            >
-              {loc.kind === "home" ? (
-                <Search className="h-3 w-3 shrink-0" />
-              ) : (
-                <FileText className="h-3 w-3 shrink-0" />
-              )}
-              <span className="min-w-0 truncate">
-                {loc.kind === "home" ? "首页" : loc.title}
-              </span>
-              <button
-                type="button"
-                title="关闭标签页"
-                className="rounded p-0.5 opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  closeTab(tab.id);
-                }}
-                onKeyDown={(event) => event.stopPropagation()}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          title="新建标签页"
-          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent"
-          onClick={addHomeTab}
+        <div
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          role="tablist"
+          aria-label="wiki 标签页"
         >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+          {tabs.map((tab) => {
+            const loc = tab.stack[tab.cursor];
+            const active = tab.id === activeTabId;
+            return (
+              <div
+                key={tab.id}
+                role="tab"
+                aria-selected={active}
+                tabIndex={0}
+                className={`group flex max-w-36 shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2 py-1.5 text-xs transition-colors md:max-w-52 ${
+                  active
+                    ? "border-border bg-background text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-accent"
+                }`}
+                onClick={() => switchTab(tab.id)}
+                onAuxClick={(event) => {
+                  if (event.button === 1) {
+                    event.preventDefault();
+                    closeTab(tab.id);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") switchTab(tab.id);
+                }}
+              >
+                {loc.kind === "home" ? (
+                  <Search className="h-3 w-3 shrink-0" />
+                ) : (
+                  <FileText className="h-3 w-3 shrink-0" />
+                )}
+                <span className="min-w-0 truncate">
+                  {loc.kind === "home" ? "首页" : loc.title}
+                </span>
+                <button
+                  type="button"
+                  title="关闭标签页"
+                  className="rounded p-0.5 hover:bg-accent md:opacity-0 md:transition-opacity md:group-hover:opacity-100"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTab(tab.id);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+          <button
+            type="button"
+            title="新建标签页"
+            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent"
+            onClick={addHomeTab}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="检索(Ctrl+K)"
+            onClick={() => setSearchOpen(true)}
+          >
+            <Search className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="新建词条"
+            disabled={creating}
+            onClick={() => void createNew()}
+          >
+            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FilePlus2 className="h-4 w-4" />}
+          </Button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            title="回收站"
+            onClick={() => void (async () => {
+              setRecycleOpen(true);
+              setRecycle(await listRecycle().catch(() => []));
+            })()}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
-      {/* 当前 tab 内容 */}
-      <main className="min-h-0 flex-1 overflow-hidden p-3">
+      {/* 当前 tab 内容 —— 必须是 flex col:子级 flex-1/min-h-0 的高度链
+          依赖它;块级布局下 h-full 解析失败,长词条会溢出且无法滚动。
+          密铺式:无外边距,子视图自管内边距(与文献库一致)。 */}
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {current.kind === "home" ? (
           <HomeView
             entries={entries}
             loading={loading}
             hasMore={hasMore}
             loadingMore={loadingMore}
-            query={query}
-            tagFilter={tagFilter}
-            onQueryChange={setQuery}
-            onTagFilterChange={setTagFilter}
-            onSearch={() => void loadSearch(query, tagFilter)}
-            onBrowse={() => void loadBrowse(tagFilter)}
-            onLoadMore={() => void loadBrowse(tagFilter, entries.length)}
+            onLoadMore={() => void loadBrowse(entries.length)}
             onOpen={openEntry}
           />
         ) : (
@@ -546,6 +554,7 @@ export function WikiPanel() {
             key={`${activeTab.id}:${current.entryId}`}
             entryId={current.entryId}
             fetchEntry={fetchEntry}
+            resolveTitle={resolveTitle}
             mode={activeTab.mode}
             onModeChange={setMode}
             onOpenEntry={(id, newTab) => openEntry(id, "", newTab)}
@@ -561,6 +570,8 @@ export function WikiPanel() {
           />
         )}
       </main>
+
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onOpen={openEntry} />
 
       <Dialog open={recycleOpen} onOpenChange={setRecycleOpen}>
         <DialogContent className="max-w-lg">
@@ -631,6 +642,7 @@ export function WikiPanel() {
 function EntryTabContent({
   entryId,
   fetchEntry,
+  resolveTitle,
   mode,
   onModeChange,
   onOpenEntry,
@@ -642,6 +654,7 @@ function EntryTabContent({
 }: {
   entryId: string;
   fetchEntry: (id: string) => Promise<WikiEntry | null>;
+  resolveTitle: (id: string) => Promise<string | null>;
   mode: Mode;
   onModeChange: (mode: Mode) => void;
   onOpenEntry: (id: string, newTab: boolean) => void;
@@ -685,7 +698,7 @@ function EntryTabContent({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col">
       {mode === "edit" ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <EditorView
@@ -710,11 +723,11 @@ function EntryTabContent({
               onMissingLink={onMissingLink}
             />
           </div>
-          {/* 折叠区块:链接 / 附件 / 历史 */}
-          <div className="rounded-md border">
+          {/* 折叠区块:链接 / 附件 / 历史(密铺式,上缘细线分隔) */}
+          <div className="border-t">
             <button
               type="button"
-              className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent"
+              className="flex w-full items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/70"
               onClick={onToggleDock}
             >
               {dockOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -722,7 +735,7 @@ function EntryTabContent({
             </button>
             {dockOpen ? (
               <div className="h-64 overflow-hidden border-t px-1 pb-1">
-                <SidePanel entry={entry} />
+                <SidePanel entry={entry} resolveTitle={resolveTitle} />
               </div>
             ) : null}
           </div>
@@ -732,7 +745,13 @@ function EntryTabContent({
   );
 }
 
-function SidePanel({ entry }: { entry: WikiEntry }) {
+function SidePanel({
+  entry,
+  resolveTitle,
+}: {
+  entry: WikiEntry;
+  resolveTitle: (id: string) => Promise<string | null>;
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {entry === null ? (
@@ -747,7 +766,7 @@ function SidePanel({ entry }: { entry: WikiEntry }) {
             <TabsTrigger value="history">历史</TabsTrigger>
           </TabsList>
           <TabsContent value="links" className="min-h-0 flex-1 overflow-y-auto">
-            <LinksTab entry={entry} />
+            <LinksTab entry={entry} resolveTitle={resolveTitle} />
           </TabsContent>
           <TabsContent value="files" className="min-h-0 flex-1 overflow-y-auto">
             <FilesTab entry={entry} />
@@ -761,9 +780,20 @@ function SidePanel({ entry }: { entry: WikiEntry }) {
   );
 }
 
-function LinksTab({ entry }: { entry: WikiEntry }) {
+/** 跨 tab 的 id→title 客户端缓存:后端没解析出标题(旧 daemon 裸 uuid、
+ * 新建词条)时,这里兜底补一次 getEntry;命中后 dock 行直接显示标题。 */
+const titleCache = new Map<string, string>();
+
+function LinksTab({
+  entry,
+  resolveTitle,
+}: {
+  entry: WikiEntry;
+  resolveTitle: (id: string) => Promise<string | null>;
+}) {
   const [graph, setGraph] = useState<Awaited<ReturnType<typeof getLinks>> | null>(null);
   const [mentions, setMentions] = useState<WikiLinkRef[] | null>(null);
+  const [, setResolvedTick] = useState(0);
 
   useEffect(() => {
     setGraph(null);
@@ -772,20 +802,66 @@ function LinksTab({ entry }: { entry: WikiEntry }) {
     void getMentions(entry.id).then(setMentions).catch(() => setMentions([]));
   }, [entry.id]);
 
+  // 客户端标题补全:normalizeRefs 的兜底是"显示 id";这里把仍等于 id 的
+  // 行再解析一次,拿到标题后写缓存并触发重渲染。
+  useEffect(() => {
+    let cancelled = false;
+    // 先归一(旧 daemon 的裸字符串 id 也要进解析流程)。
+    const refs = normalizeRefs([
+      ...(graph?.out_links ?? []),
+      ...(graph?.in_links ?? []),
+      ...(mentions ?? []),
+    ]).map((ref) => ({ id: ref.id, title: ref.title || ref.id }));
+    const unknown = [...new Set(refs.filter((ref) => ref.title === ref.id).map((ref) => ref.id))]
+      .filter((id) => !titleCache.has(id));
+    if (!unknown.length) return;
+    void Promise.all(
+      unknown.map(async (id) => {
+        const title = await resolveTitle(id);
+        if (title && title !== id) {
+          titleCache.set(id, title);
+          if (!cancelled) setResolvedTick((tick) => tick + 1);
+        }
+      }),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [graph, mentions, resolveTitle]);
+
   if (graph === null) return <Loader2 className="m-4 h-4 w-4 animate-spin" />;
+  const withTitles = (refs: WikiLinkRef[]) =>
+    refs.map((ref) => ({ ...ref, title: titleCache.get(ref.id) ?? (ref.title || ref.id) }));
   return (
     <div className="space-y-3 text-xs">
-      <LinkSection title={`出链(${graph.out_links.length})`} refs={graph.out_links} onOpen={openEntryById} />
-      <LinkSection title={`入链(${graph.in_links.length})`} refs={graph.in_links} onOpen={openEntryById} />
+      <LinkSection title={`出链(${graph.out_links.length})`} refs={withTitles(normalizeRefs(graph.out_links))} onOpen={openEntryById} />
+      <LinkSection title={`入链(${graph.in_links.length})`} refs={withTitles(normalizeRefs(graph.in_links))} onOpen={openEntryById} />
       <LinkSection
         title={`未链接提及(${mentions?.length ?? 0})`}
-        refs={mentions ?? []}
+        refs={withTitles(normalizeRefs(mentions ?? []))}
         onOpen={openEntryById}
         empty={mentions !== null ? "无 —— 在其他词条中添加 [[链接]] 后这里会出现候选。" : undefined}
         loading={mentions === null}
       />
     </div>
   );
+}
+
+/**
+ * 兼容两种 REST 形状:新 daemon 返回 {id,title}(title 缺省回退 id),
+ * 旧 daemon 返回裸 id 字符串数组 —— 旧形状不做归一会让 dock 行空白且
+ * 点击失效(ref.title/ref.id 双双 undefined)。行点击始终按 id 路由。
+ */
+function normalizeRefs(refs: unknown): WikiLinkRef[] {
+  if (!Array.isArray(refs)) return [];
+  return refs.flatMap((ref): WikiLinkRef[] => {
+    if (typeof ref === "string") return [{ id: ref, title: ref }];
+    if (ref !== null && typeof ref === "object" && typeof (ref as { id?: unknown }).id === "string") {
+      const { id, title } = ref as { id: string; title?: unknown };
+      return [{ id, title: typeof title === "string" && title ? title : id }];
+    }
+    return [];
+  });
 }
 
 /** 侧栏点击 → 通知面板打开词条(与阅读器双链共用一条事件通道)。 */

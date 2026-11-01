@@ -5,9 +5,8 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 
-const gatewayTarget = `http://${
-  process.env.AUTONOMICS_HTTP_API_ADDR ?? "127.0.0.1:8765"
-}`;
+const gatewayTarget = `http://${process.env.AUTONOMICS_HTTP_API_ADDR ?? "127.0.0.1:8765"
+  }`;
 
 function devGatewayToken(): string {
   if (process.env.AUTONOMICS_HTTP_API_TOKEN) {
@@ -46,6 +45,7 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
+    allowedHosts: true,
     strictPort: true,
     proxy: {
       "/api": {

@@ -8,9 +8,13 @@
  * parent's dirty tracking and save path see live markdown at all times.
  */
 import {
+  ArrowDownToLine,
+  ArrowUpToLine,
   Bold,
   Braces,
   Code,
+  Copy,
+  CopyPlus,
   Heading1,
   Heading2,
   Heading3,
@@ -24,11 +28,19 @@ import {
   Quote,
   SquareCode,
   Strikethrough,
+  Trash2,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   joinMarkdownBlocks,
@@ -63,6 +75,8 @@ const RenderedBlock = memo(function RenderedBlock({
         ) {
           return;
         }
+        // 右键留给块上下文菜单,不触发编辑。
+        if (event.button !== 0) return;
         onActivate();
       }}
       dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(raw) }}
@@ -147,6 +161,25 @@ export function BlockEditor({
     applyBlocks(fallback);
     const target = fallback[Math.min(Math.max(index - 1, 0), fallback.length - 1)];
     if (target) startEdit(target.key, "end");
+  };
+
+  /** 右键菜单:在 index 下方插入 raw 的副本块(不进入编辑态)。 */
+  const insertCopyBelow = (index: number, raw: string) => {
+    const next = [...blocks];
+    if (next[index] && !next[index].raw.endsWith("\n")) {
+      next[index] = { ...next[index], raw: `${next[index].raw}\n` };
+    }
+    next.splice(index + 1, 0, newMarkdownBlock(raw));
+    applyBlocks(next);
+  };
+
+  /** 右键菜单:与相邻块交换位置。 */
+  const moveBlock = (index: number, delta: -1 | 1) => {
+    const target = index + delta;
+    if (target < 0 || target >= blocks.length) return;
+    const next = [...blocks];
+    [next[index], next[target]] = [next[target], next[index]];
+    applyBlocks(next);
   };
 
   const mergeWithPrevious = (index: number) => {
@@ -412,10 +445,10 @@ export function BlockEditor({
         )}
         <span className="flex-1" />
         <span className="px-1 text-[11px] leading-tight text-muted-foreground">
-          点击块编辑 · 空行 Enter 结块 · Ctrl+Enter 新块 · Ctrl+B/I/K
+          点击块编辑 · 空行 Enter 结块 · Ctrl+Enter 新块 · Ctrl+B/I/K · 右键块菜单
         </span>
       </div>
-      <ScrollArea className="min-h-0 flex-1 pr-3">
+      <ScrollArea className="min-h-0 flex-1" contentClassName="px-3 py-2">
         <div className="flex flex-col gap-1.5 pb-16" onClick={onContainerClick}>
           {blocks.map((block, index) =>
             block.key === editingKey ? (
@@ -434,11 +467,53 @@ export function BlockEditor({
                 />
               </div>
             ) : (
-              <RenderedBlock
-                key={block.key}
-                raw={block.raw}
-                onActivate={() => startEdit(block.key)}
-              />
+              <ContextMenu key={block.key}>
+                <ContextMenuTrigger render={<div />}>
+                  <RenderedBlock
+                    raw={block.raw}
+                    onActivate={() => startEdit(block.key)}
+                  />
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem
+                    onClick={() => insertBlockBelow(index - 1, "", "end")}
+                  >
+                    <ArrowUpToLine /> 在上方插入空块
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => insertBlockBelow(index, "", "end")}
+                  >
+                    <ArrowDownToLine /> 在下方插入空块
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => insertCopyBelow(index, block.raw)}>
+                    <CopyPlus /> 创建副本
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={index === 0}
+                    onClick={() => moveBlock(index, -1)}
+                  >
+                    <ArrowUpToLine /> 上移
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={index === blocks.length - 1}
+                    onClick={() => moveBlock(index, 1)}
+                  >
+                    <ArrowDownToLine /> 下移
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => {
+                      void navigator.clipboard.writeText(block.raw);
+                      toast.success("已复制段落内容");
+                    }}
+                  >
+                    <Copy /> 复制段落文本
+                  </ContextMenuItem>
+                  <ContextMenuItem variant="destructive" onClick={() => removeBlock(index)}>
+                    <Trash2 /> 删除段落
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
             ),
           )}
         </div>

@@ -176,6 +176,10 @@ try {
       await route.fulfill({ json: { entries: [summary(ENTRY)] } });
       return;
     }
+    if (path === '/api/v1/wiki/search') {
+      await route.fulfill({ json: { results: [{ entry_id: 'entry-1', score: 1 }] } });
+      return;
+    }
     if (path === '/api/v1/wiki/entries/entry-1' && request.method() === 'GET') {
       await route.fulfill({ json: ENTRY });
       return;
@@ -211,7 +215,11 @@ try {
       return;
     }
     if (path.endsWith('/links')) {
-      await route.fulfill({ json: { entry: { id: 'x', title: 'x' }, out_links: [], in_links: [] } });
+      // generic fallback returns the OLD daemon shape (bare id strings) —
+      // the dock must fall back to the id as the row name and still route.
+      await route.fulfill({
+        json: { entry: { id: 'x', title: 'x' }, out_links: ['entry-1'], in_links: [] },
+      });
       return;
     }
     if (path.endsWith('/mentions')) {
@@ -318,6 +326,34 @@ try {
   );
   assert.equal(await wiki.locator('.md-wikilink').count(), 2, 'reader is back with rendered links');
 
+  // ── 编辑模式右键菜单:插入 / 上移 / 删除段落 ──
+  await page.getByTitle('编辑模式').click();
+  await wiki.locator('.wiki-block').first().waitFor();
+  // 在段落块下方插入空块并输入
+  await wiki.locator('.wiki-block', { hasText: '种植笔记' }).first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '在下方插入空块' }).click();
+  const menuTextarea = wiki.locator('.wiki-block--editing textarea');
+  await menuTextarea.waitFor();
+  await page.keyboard.type('右键插入');
+  assert.equal(await menuTextarea.inputValue(), '右键插入', 'inserted block starts editing');
+  await page.keyboard.press('Escape');
+  // 上移:右键插入块与种植笔记段落交换位置
+  await wiki.locator('.wiki-block', { hasText: '右键插入' }).first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '上移' }).click();
+  const blockTexts = await wiki.locator('.wiki-block').allTextContents();
+  const moved = blockTexts.findIndex((text) => text.includes('右键插入'));
+  const anchor = blockTexts.findIndex((text) => text.includes('种植笔记'));
+  assert.ok(moved !== -1 && anchor !== -1 && moved < anchor, '上移 swaps the block upward');
+  // 删除段落:块移除,相邻块进入编辑态
+  await wiki.locator('.wiki-block', { hasText: '右键插入' }).first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '删除段落' }).click();
+  await wiki.locator('.wiki-block--editing textarea').waitFor();
+  assert.equal(await wiki.locator('.wiki-block', { hasText: '右键插入' }).count(), 0, 'deleted block is gone');
+  // 保存并回阅读态(增删后内容与进入编辑前一致;保存绕开未保存确认)
+  await page.keyboard.press('Escape');
+  await wiki.getByRole('button', { name: '保存' }).click();
+  await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
+
   // ── 底部 dock:链接按词条名显示,不再显示裸 id ──
   await wiki.getByRole('button', { name: '链接与历史' }).click();
   await wiki.getByText('反向引用').first().waitFor({ timeout: 10_000 });
@@ -327,6 +363,33 @@ try {
   // Row click still routes by id (same tab, stack push).
   await wiki.getByText('反向引用').first().click();
   await wiki.getByRole('heading', { name: '反向引用' }).first().waitFor();
+
+  // ── 旧 daemon 兼容:裸 id 字符串先按 id 显示,随后前端补一次标题解析 ──
+  // dock 保持展开(面板级状态),entry-3 的出链走 generic /links 旧形状 stub;
+  // getEntry('entry-1') 命中后行名翻成「番茄栽培」,点击仍按 id 路由。
+  const dockRow = wiki.getByRole('button', { name: '番茄栽培' }).first();
+  await dockRow.waitFor({ timeout: 10_000 });
+  await dockRow.click();
+  await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
+
+  // ── 检索弹窗:Ctrl+K / 图标唤起,BM25 结果行点击在新 tab 打开 ──
+  const searchDialog = page.locator('[data-slot="dialog-content"]');
+  await page.keyboard.press('Control+K');
+  await searchDialog.waitFor();
+  await page.keyboard.press('Escape');
+  await searchDialog.waitFor({ state: 'hidden' });
+  await wiki.getByTitle('检索(Ctrl+K)').click();
+  await searchDialog.locator('input').first().fill('番茄');
+  await searchDialog.getByRole('button', { name: /番茄栽培/ }).first().waitFor({ timeout: 10_000 });
+  const tabCountBefore = await wiki.locator('[role="tab"]').count();
+  await searchDialog.getByRole('button', { name: /番茄栽培/ }).first().click();
+  await searchDialog.waitFor({ state: 'hidden' });
+  await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
+  assert.equal(
+    await wiki.locator('[role="tab"]').count(),
+    tabCountBefore + 1,
+    'search result opens a new tab',
+  );
 
   assert.deepEqual(errors, []);
   console.log('wiki siyuan modes: ok');
