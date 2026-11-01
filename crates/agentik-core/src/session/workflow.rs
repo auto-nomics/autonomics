@@ -1538,9 +1538,10 @@ mod tests {
 
         let system = captured.lock().unwrap().clone().expect("system captured");
         assert!(system.contains("## Skill library"), "{system}");
-        for tool in ["skill_search", "skill_get", "evo_observe", "skill_evolve"] {
+        for tool in ["skill_search", "skill_get", "memory_note", "memory_search"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
+        assert!(!system.contains("evo_observe"), "{system}");
     }
 
     /// Skills are guidance and tool users, not tool gatekeepers. Every tool

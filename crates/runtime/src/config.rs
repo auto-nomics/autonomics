@@ -1157,9 +1157,9 @@ Promptly spawn a Developer child agent with `spawn_agent`\n\
 `delegate_to`. Delegation reaches only your own direct children — reuse an\n\
 existing Developer child for follow-up requests instead of looking for a\n\
 sibling. Record the capability gap with\n\
-`evo_observe`. Provide the scientific objective, expected inputs and outputs,\n\
-data shape, error/edge cases, acceptance checks, and a small representative\n\
-sample when available.\n\
+`memory_note`: one concise note carrying the scientific objective, expected\n\
+inputs and outputs, data shape, error/edge cases, acceptance checks, and a\n\
+small representative sample when available.\n\
 \n\
 Separate capability requests from analysis requests. A Developer builds and\n\
 validates a node; it does not execute your research dataset or answer a\n\

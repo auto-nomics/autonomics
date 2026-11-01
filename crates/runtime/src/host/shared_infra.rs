@@ -496,10 +496,6 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.push(crate::evolution_tools::evo_observe_registration(
-            Arc::clone(&self.evolution_handle),
-            None,
-        ));
         tools.extend(skills::skill_registrations(
             self.skills.clone(),
             self.skill_evolution.clone(),
@@ -1258,9 +1254,10 @@ mod plugin_profile_tools_tests {
                 .any(|tool| tool.definition.name == "plugin_environments_list")
         );
         assert!(
-            researcher_tools
+            !researcher_tools
                 .iter()
-                .any(|tool| tool.definition.name == "evo_observe")
+                .any(|tool| tool.definition.name == "evo_observe"),
+            "evo_observe is unregistered: lessons flow through memory_note"
         );
         assert!(
             !researcher_tools

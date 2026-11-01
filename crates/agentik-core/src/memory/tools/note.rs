@@ -11,12 +11,20 @@ use super::util::store_error;
 
 #[tool(
     name = "memory_note",
-    description = "Queue one small user-requested memory update for the next consolidation run."
+    description = "Queue one small memory update for the next consolidation run: a \
+        lesson learned (failure + reusable fix), recipe, caveat, user-requested \
+        correction, or capability gap. Record at the moment of learning; notes \
+        distill in the background during idle time."
 )]
 pub struct MemoryNoteInput {
-    #[desc = "Concise user-requested addition, deletion, or correction."]
+    #[desc = "Concise addition, deletion, or correction — the reusable lesson, \
+        not the transcript. Name the component and the exact error text for \
+        failures."
+    ]
     pub content: String,
-    #[desc = "Short stable slug for the note."]
+    #[desc = "Short stable slug for the note (e.g. 'ldsc-input-ports'), so \
+        related lessons merge in consolidation."
+    ]
     pub slug: Option<String>,
 }
 

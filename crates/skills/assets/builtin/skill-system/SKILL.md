@@ -43,31 +43,18 @@ reusable node/edge graphs over the registered node kinds.
 3. Prefer a bundled workflow over hand-assembling an equivalent DAG:
    it encodes proven port wiring and defaults.
 
-## Growing the library (observations)
+## Growing the library (lessons)
 
 When you learn something a future session would otherwise rediscover
-the hard way, record it with `evo_observe`: a failure and its fix
-(`kind: failure`, anchored with the node kind and error text), a
-verified recipe (`recipe`), or a caveat (`caveat`) — anchor each with
-the node kind; unanchored observations stay searchable but never
-auto-distill. Repeated anchored observations of every kind cluster
-deterministically — failures by node kind and error signature,
-recipes and caveats per node kind — and surface as skill proposals
-the user reviews. Failing evals feed the same channel automatically.
-
-`skill_evolve` runs one evolution cycle immediately instead of
-waiting for the background sweep. It is propose-only by design: it
-writes and revises proposals for the user to review, and never
-approves them itself.
-
-When you can articulate a reusable procedure better than the
-distiller's raw fix listing, draft it yourself with `skill_propose`:
-supply the name, a one-line description, tags, the markdown body, and
-the ids of observations that back the claim (evidence is mandatory —
-record it with `evo_observe` first). Your proposal lands in the
-same human-review queue, marked as agent-authored; it is never
-auto-approved. Create-only: for improving an existing skill, record
-observations and let the loop propose the update.
+the hard way, record it with `memory_note`: a failure and its
+reusable fix (name the component and quote the exact error text), a
+verified recipe, or a caveat about where a usual approach breaks.
+Give each note a short stable `slug` so related lessons merge during
+consolidation. Notes queue for the background consolidation run,
+which distills lasting knowledge and skill updates from them during
+idle time — precision in what you record is precision in what the
+library learns. Consult past lessons with `memory_search` before
+repeating a diagnosis someone already paid for.
 
 ## When not to use a skill
 

@@ -1,6 +1,6 @@
 ## Skill library — use it, then feed it
 
-You have a skill library that grows from real work: every skill in it was distilled from recorded evidence, and your observations are the raw material for new ones. **Skill use is the default behavior, not an optional courtesy** — every skill encodes corrections someone already paid for, so bypassing it requires justification. The two-way contract: consume before improvising, contribute when you learn.
+You have a skill library that grows from real work: every skill in it was distilled from recorded evidence, and your recorded lessons are the raw material for new ones. **Skill use is the default behavior, not an optional courtesy** — every skill encodes corrections someone already paid for, so bypassing it requires justification. The two-way contract: consume before improvising, contribute when you learn.
 
 ### Before any work — consult first
 
@@ -11,21 +11,20 @@ Treat `skill_search` as a **mandatory first step** for every user message, not o
 - Skills marked `[workflow]` bundle executable DAG templates. `skill_workflows` shows each template's parameters; `skill_run_workflow` instantiates one into the session DAG. Prefer a bundled template over hand-assembling an equivalent graph — assembly from primitives is the exception, not the norm.
 - The only justified reason to skip `skill_search` is a single-word trivial lookup (e.g. "what time is it"). Anything substantive: search first.
 
-### While you work — record evidence
+### While you work — record lessons
 
-Every failure whose fix you just found is future skill material:
+Every failure whose fix you just found is future skill material. Record it with `memory_note` **at the moment of learning**: one concise note naming the component, the exact error text, and the reusable fix. Record the fix, never the transcript. Give each note a short stable `slug` (e.g. `ldsc-input-ports`) so the consolidation run can merge it with related lessons.
 
-- Call `evo_observe` **at the moment of learning**: kind `failure` with the node kind and the exact error text (these two fields anchor automatic routing and clustering), a one-line summary naming the component, and the reusable fix as the body. Record the fix, never the transcript.
-- Verified recipes and caveats (`recipe` / `caveat`) are equally valuable — a caveat is knowledge about where a usual approach breaks.
-- The same failure pattern recorded three times becomes a skill automatically: the loop distills it from the recorded evidence and installs it, so precision in what you record is precision in what the library learns.
-- After recording several observations, `skill_evolve` runs one distillation cycle immediately. It is cheap, idempotent, and installs what it writes (each revision archives the previous version).
+- Verified recipes and caveats are equally valuable — a caveat is knowledge about where a usual approach breaks. Record them the same way.
+- Notes queue for the background consolidation run, which distills lasting knowledge and skill updates from them during idle time. Precision in what you record is precision in what the system learns.
+- Consult past lessons the same way: `memory_search` before repeating a diagnosis someone already paid for.
 
 ### After you work — close the loop
 
 Skill use is not just consumption; it is a feedback channel:
 
-- At the end of substantive tasks, note which skills you used and which you bypassed. A bypass that turned out wrong is **not** a personal failure — it is a `candidate-skill-gap` observation that the next distillation cycle can promote.
-- If a skill you followed turned out wrong or stale, **say so in your answer** and record the correction as an observation: the evolution loop revises auto-distilled skills from new evidence.
+- At the end of substantive tasks, note which skills you used and which you bypassed. A bypass that turned out wrong is **not** a personal failure — record the gap with `memory_note` (slug `candidate-skill-gap`) so the next consolidation run can promote it.
+- If a skill you followed turned out wrong or stale, **say so in your answer** and record the correction with `memory_note`.
 
 ### Judgement
 

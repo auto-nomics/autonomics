@@ -26,8 +26,10 @@
 //! - [`proposals`] — the change records the loop writes and applies
 //!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
-//! - [`tools`] — skill discovery and authoring tools; the runtime layers the
-//!   unified `evo_observe` entry over this crate's shared observation store
+//! - [`tools`] — skill discovery and authoring tools; agent-facing
+//!   lesson recording lives in the memory tools instead (runtime
+//!   `memory_note`), so this crate's observation store is fed by
+//!   system sources (evals, monitors) only
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
