@@ -22,10 +22,9 @@
 //!   new generation. Fire-and-forget: a misbehaving or absent
 //!   subscriber can never break the install path, mirroring the
 //!   swallowed-exception contract upstream.
-//! - **usage telemetry**, the fitness signal for skill evolution: the
-//!   tools record every `get`/`search`/`run`/`eval` here, and the
-//!   future distillation loop reads the snapshot to decide which
-//!   skills earn their context-window cost and which decay.
+//! - **usage telemetry**: the tools record every `get`/`search`/`run`/
+//!   `eval` here, so the dashboard can show which skills earn their
+//!   context-window cost and which decay.
 //!
 //! ## Singleton
 //!
@@ -48,9 +47,9 @@ use crate::error::SkillError;
 use crate::install::{self, InstallOutcome};
 use crate::registry::{SkillRegistry, SkillTier};
 
-/// What a skill was used for. Evolution cares about the difference
-/// between "listed in a prompt" (free), "read" (mild interest),
-/// "run" (real adoption), and "eval'd" (being verified).
+/// What a skill was used for: "listed in a prompt" (free), "read"
+/// (mild interest), "run" (real adoption), and "eval'd" (being
+/// verified).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageKind {
     Get,
@@ -70,9 +69,9 @@ impl UsageKind {
     }
 }
 
-/// Per-skill usage counters. In-memory for now; the evolution loop
-/// Serialized in `<state_dir>/skill-usage.toml`; loading merges by
-/// per-field maxima so restarts never lose counts.
+/// Per-skill usage counters. In-memory on the hot path; persisted to
+/// `<state_dir>/skill-usage.toml` by the daemon's periodic saver;
+/// loading merges by per-field maxima so restarts never lose counts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UsageRecord {
     pub gets: u64,
@@ -111,11 +110,6 @@ pub struct SkillManager {
     generation: AtomicU64,
     changes: broadcast::Sender<u64>,
     usage: RwLock<HashMap<String, UsageRecord>>,
-    /// The upstream observation hub this manager reads evidence from.
-    /// Held by reference, not resolved through the global on every
-    /// call: parallel tests replace the global singleton, and an
-    /// instance must keep seeing the state dir it was built with.
-    hub: Arc<evolution_core::ObservationHub>,
 }
 
 static GLOBAL: arc_swap::ArcSwapOption<SkillManager> = arc_swap::ArcSwapOption::const_empty();
@@ -139,22 +133,15 @@ impl SkillManager {
         Self::init(Self::from_env())
     }
     /// Standard layout: global tier at `<state_dir>/skills`.
-    ///
-    /// Also installs the process-wide [`ObservationHub`] over the same
-    /// state dir: observations are upstream of skills, and the manager
-    /// must never read them from a different directory than the hub
-    /// hands to every other consumer.
     #[must_use]
     pub fn new(state_dir: impl Into<PathBuf>) -> Self {
         let state_dir = state_dir.into();
-        let hub = Arc::new(evolution_core::ObservationHub::new(state_dir.clone()));
         Self {
             state_dir,
             workspace_roots: Vec::new(),
             generation: AtomicU64::new(1),
             changes: broadcast::channel(16).0,
             usage: RwLock::new(HashMap::new()),
-            hub,
         }
     }
 
@@ -247,18 +234,20 @@ impl SkillManager {
 
     /// Bump the generation and broadcast it. Send errors (no
     /// receivers, or a full channel) are ignored — a subscriber must
-    /// not be able to break the mutation path.
+    /// not be able to break the mutation path. Mutations are also a
+    /// cheap moment to persist the usage counters.
     fn notify(&self) {
         let next = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         let _ = self.changes.send(next);
+        let _ = self.persist_usage();
     }
 
-    // ── telemetry: the evolution fitness signal ──
+    // ── telemetry ──
 
     /// Record one use of a skill. Unknown names are recorded too —
     /// usage of a shadowed-away skill is still signal. In-memory on
-    /// the hot path; the evolution cycle persists the table (see
-    /// [`SkillManager::persist_usage`]).
+    /// the hot path; the daemon's periodic saver persists the table
+    /// (see [`SkillManager::persist_usage`]).
     pub fn record_usage(&self, name: &str, kind: UsageKind) {
         let now = unix_now();
         if let Ok(mut usage) = self.usage.write() {
@@ -280,9 +269,10 @@ impl SkillManager {
     }
 
     /// Persist the usage table to `<state_dir>/skill-usage.toml` so
-    /// the fitness signal survives daemon restarts. Called by each
-    /// evolution cycle; atomic-ish via temp-file + rename because a
-    /// torn table must never block the loop.
+    /// the counters survive daemon restarts. Called by the daemon's
+    /// periodic saver and after library mutations; atomic-ish via
+    /// temp-file + rename because a torn table must never block a
+    /// caller.
     pub fn persist_usage(&self) -> Result<(), SkillError> {
         let Ok(usage) = self.usage.read() else {
             return Ok(());
@@ -322,100 +312,6 @@ impl SkillManager {
                 slot.last_used = slot.last_used.max(record.last_used);
             }
         }
-    }
-
-    // ── evolution loop: observations, distillation, proposals ──
-
-    /// Every recorded observation, resolved through this manager's
-    /// hub storage.
-    ///
-    /// Observations are upstream of skills: the hub owns the ledger
-    /// and this accessor only hands its view to skill-side callers.
-    pub async fn observations(&self) -> Vec<evolution_core::observation::Observation> {
-        self.hub.storage().list().await
-    }
-
-    /// Persisted clusters under the current embedder signature, as
-    /// the clustering pass wrote them (member ids only — callers
-    /// hydrate readable fields through [`Self::observations`]).
-    pub async fn clusters(&self) -> Vec<evolution_core::cluster::Cluster> {
-        self.hub.storage().load_clusters().await.unwrap_or_default()
-    }
-
-    /// The hub this manager reads evidence from.
-    pub fn observation_hub(&self) -> Arc<evolution_core::ObservationHub> {
-        Arc::clone(&self.hub)
-    }
-
-    /// The proposal area under this manager's state dir.
-    pub fn proposals(&self) -> crate::proposals::Proposals {
-        crate::proposals::Proposals::open(&self.state_dir)
-    }
-
-    /// Run one deterministic distillation pass for skill-eligible evidence.
-    ///
-    /// No model runs here: the hub embedded every observation at record
-    /// time and this pass only reads those vectors back.
-    pub async fn distill(&self) -> Result<crate::distill::DistillReport, SkillError> {
-        // Clustering is incremental and shared across consumers: it
-        // runs over every anchored observation, once, in storage.
-        let processor = evolution_core::cluster::ClusterProcessor::new(std::sync::Arc::clone(
-            self.hub.storage(),
-        ));
-        let report = processor
-            .clustering(
-                &self.hub.embedding_signature(),
-                evolution_core::cluster::DEFAULT_TRIGGER_THRESHOLD,
-            )
-            .await
-            .map_err(SkillError::Evolution)?;
-        let observations = self.hub.storage().list().await;
-        let ids: Vec<String> = observations.iter().map(|o| o.id.clone()).collect();
-        let embeddings = self
-            .hub
-            .load_embeddings(&ids)
-            .await
-            .map_err(SkillError::Evolution)?;
-        crate::distill::distill(
-            &report.surfaced,
-            &observations,
-            &embeddings,
-            &self.proposals(),
-            &self.registry(),
-        )
-    }
-
-    /// Apply a pending proposal into the live library. Creates land
-    /// in the global tier; updates overlay the tier where the existing
-    /// skill lives (its previous SKILL.md archived first). Either way
-    /// the generation advances — the change is live for the next
-    /// agent build and every cached view invalidates.
-    pub fn apply_proposal(&self, name: &str) -> Result<crate::proposals::ApplyOutcome, SkillError> {
-        let proposals = self.proposals();
-        // Route by manifest: an update targets the installed skill's
-        // own tier so the overlay lands where the skill actually
-        // lives (and tier shadowing keeps any deeper copy intact).
-        let dest_root = match proposals.find(name) {
-            Some(proposal) if proposal.update => {
-                let entry = self
-                    .registry()
-                    .list()
-                    .into_iter()
-                    .find(|e| e.meta.name == name)
-                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
-                let dir = entry
-                    .dir()
-                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?
-                    .to_path_buf();
-                dir.parent()
-                    .ok_or_else(|| SkillError::NotFound(name.to_string()))?
-                    .to_path_buf()
-            }
-            _ => self.state_dir.join("skills"),
-        };
-        let outcome = proposals.apply(name, &dest_root)?;
-        self.notify();
-        Ok(outcome)
     }
 }
 

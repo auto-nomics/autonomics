@@ -13,8 +13,8 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, gui, hydration, lifecycle, model_config, observations, plugin_environments,
-    plugins, sessions, settings, skills, storage,
+    agents, events, gui, hydration, lifecycle, model_config, plugin_environments, plugins,
+    sessions, settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -122,26 +122,11 @@ pub fn api_router(state: GatewayState) -> Router {
             "/plugins/environments/{id}",
             delete(plugin_environments::delete_environment),
         )
-        // ── observations ──
-        .route(
-            "/evolution/observations",
-            get(observations::list_observations),
-        )
-        .route("/evolution/clusters", get(observations::list_clusters))
         // ── skills ──
         .route("/skills/library", get(skills::list_skill_library))
         .route(
             "/skills/library/{name}",
             get(skills::get_skill_library_detail),
-        )
-        .route("/skills/evolution", get(skills::get_skill_evolution_status))
-        .route(
-            "/skills/evolution/trigger",
-            post(skills::trigger_skill_evolution),
-        )
-        .route(
-            "/skills/evolution/proposals",
-            get(skills::list_skill_proposals),
         )
         .with_state(state)
 }

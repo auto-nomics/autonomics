@@ -4,8 +4,7 @@
 //! One dedicated worker task owns the [`ModelStorage`] handle (SQLite
 //! today — the trait keeps the backend swappable); every consumer talks
 //! to it through [`ModelHandle`], a cheap clonable command sender, built
-//! by [`start`] on the worker side (same shape as the skill crate's
-//! evolution control service: `start` → worker task → handle).
+//! by [`start`] on the worker side (`start` → worker task → handle).
 //!
 //! Consequences of the mailbox:
 //!
@@ -414,8 +413,8 @@ const WORKER_GONE: &str = "model worker is not running";
 // ─────────────────────────────────────────────────────────────────────
 
 /// Start the model worker over `storage`: builds the mailbox, spawns the
-/// worker task, and returns the control handle (skill-crate evolution
-/// service shape). `ModelEvent`s flow out through `events`.
+/// worker task, and returns the control handle. `ModelEvent`s flow
+/// out through `events`.
 ///
 /// The startup default model is NOT loaded here — call
 /// [`ModelHandle::activate_default`] once, before any consumer observes

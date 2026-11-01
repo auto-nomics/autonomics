@@ -4,8 +4,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement
 use utoipa::{Modify, OpenApi};
 
 use super::{
-    agents, events, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
-    sessions, settings, skills, storage,
+    agents, events, hydration, lifecycle, model_config, plugin_environments, plugins, sessions,
+    settings, skills, storage,
 };
 use crate::proto::*;
 
@@ -56,12 +56,8 @@ use crate::proto::*;
         plugin_environments::inspect_docker_hub_tag,
         plugin_environments::approve_environment,
         plugin_environments::delete_environment,
-        observations::list_observations,
         skills::list_skill_library,
         skills::get_skill_library_detail,
-        skills::get_skill_evolution_status,
-        skills::trigger_skill_evolution,
-        skills::list_skill_proposals,
     ),
     components(schemas(
         GatewayStatus,
@@ -82,15 +78,8 @@ use crate::proto::*;
         FetchCatalogRequest,
         EmbeddingConfigView,
         SaveEmbeddingConfigRequest,
-        SkillEvolutionStatus,
-        ObservationView,
-        ClusterView,
-        ClusterMemberView,
-        SkillProposalView,
         SkillLibraryView,
         SkillLibraryDetail,
-        SkillEvolutionReport,
-        SkippedCluster,
         ChatgptLoginStart,
         ChatgptRefreshResponse,
         SettingsMap,

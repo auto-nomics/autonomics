@@ -11,8 +11,8 @@
 //!
 //! Instead of patching gates around shared connections, ownership moves
 //! into one spawned task using the repo's conventional actor shape (mpsc
-//! command channel + oneshot replies + `tokio::spawn` worker, as in
-//! `skills::evolution`): the actor owns both connections and drains
+//! command channel + oneshot replies + `tokio::spawn` worker): the actor
+//! owns both connections and drains
 //! commands one at a time; [`BibBase`] is a cheap handle that sends a
 //! [`BibCommand`] and awaits its reply. Serialization is structural —
 //! exactly one task can ever touch the connections — so concurrent callers

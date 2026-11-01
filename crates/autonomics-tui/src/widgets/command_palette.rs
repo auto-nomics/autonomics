@@ -54,13 +54,10 @@ pub enum CommandAction {
     CloseAgent,
     /// Delete the active agent permanently (removes all stored data).
     DeleteAgent,
-    /// Open the skill-evolution dashboard (status, proposals,
-    /// trigger/approve/reject).
-    SkillEvolutionPanel,
+    /// Open the skill library dashboard (installed skills, usage,
+    /// full SKILL.md bodies).
+    SkillLibraryPanel,
     /// Open the KMS dashboard directly on the knowledge wiki tab.
-    /// Run one skill-evolution cycle now (propose-only unless the
-    /// daemon is configured to auto-approve).
-    SkillEvolve,
     /// Toggle collapse for thinking blocks.
     ToggleCollapseThinking,
     /// Toggle collapse for tool call blocks.
@@ -357,16 +354,10 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::AgentConfig,
         },
         Command {
-            title: "Evolution dashboard".into(),
-            keywords: "kms skills evolution proposals distill observe auto refine dashboard".into(),
+            title: "Skill library".into(),
+            keywords: "skills library tiers builtin global workspace usage dashboard".into(),
             category: "skills".into(),
-            action: CommandAction::SkillEvolutionPanel,
-        },
-        Command {
-            title: "Run skill evolution cycle".into(),
-            keywords: "skills evolve distill trigger proposals cycle now".into(),
-            category: "skills".into(),
-            action: CommandAction::SkillEvolve,
+            action: CommandAction::SkillLibraryPanel,
         },
         Command {
             title: "View DAG".into(),

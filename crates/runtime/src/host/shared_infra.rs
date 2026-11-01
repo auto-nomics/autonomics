@@ -157,35 +157,11 @@ pub struct SharedInfra {
     /// `file_storage` 的 `wiki-attachments` 虚拟目录)。无条件启用:
     /// 每个 agent 挂读组工具,REST 端点始终可用。
     pub wiki: Arc<WikiHandle>,
-    /// The process-wide observation hub — the upstream evidence
-    /// ledger shared by skills, plugins, and gateway handlers. Neither
-    /// downstream owns it; both resolve the same instance.
-    pub observations: Arc<evolution_core::ObservationHub>,
-    /// Control handle for the clustering worker spawned over the
-    /// observation hub. `Arc` so multiple subsystems (tools, gateway
-    /// handlers, future mutation paths) can hold the same handle and
-    /// cheaply clone it without taking `&SharedInfra` borrows. The
-    /// inner handle's `mpsc::Sender` already shares via Arc, so this
-    /// is a thin extra layer that mostly standardizes sharing across
-    /// the host's other `Arc`-backed subsystems.
-    pub evolution_handle: Arc<evolution_core::handle::EvolutionHandle>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
-    /// eval auto-capture, gateway handlers — shares one notification
-    /// invariant.
+    /// gateway handlers — shares one notification invariant.
     pub skills: Arc<skills::SkillManager>,
-    /// Remote Ollama embedding service constructed from startup
-    /// configuration. `None` when disabled — the observation hub then
-    /// serves corpus-fitted BM25 vectors.
-    pub embedding: Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>,
-    /// The unified skill control handle, when the service is
-    /// enabled. `None` means the loop is disabled at the daemon
-    /// level — every gateway mutation request then returns HTTP
-    /// 503 (the dashboard and the agent skill tools all funnel
-    /// through this handle; the on-demand paths still run cycles
-    /// directly).
-    pub skill_evolution: Option<skills::SkillControlHandle>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -204,30 +180,6 @@ pub struct SharedInfra {
 }
 
 impl SharedInfra {
-    /// Hot-swap the observation hub's remote embedding provider and
-    /// publish the service handle. A disabled config installs the
-    /// corpus-fitted BM25 fallback.
-    pub fn configure_embedding<'a>(
-        &'a self,
-        config: &'a text_embedding::EmbeddingConfig,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            if config.enabled {
-                let service = text_embedding::RemoteEmbeddingService::init(config)
-                    .await
-                    .map_err(|error| {
-                        Error::Other(format!("Ollama embedding service unavailable: {error}"))
-                    })?;
-                swap_embedder(&self.observations, &service).await;
-                self.embedding.store(Some(Arc::new(service)));
-            } else {
-                install_bm25_fallback(&self.observations).await;
-                self.embedding.store(None);
-            }
-            Ok(())
-        })
-    }
-
     /// Open all shared resources from a global [`RuntimeConfig`].
     ///
     /// The config's `data_dir`, `state_dir`, `agent_db`, and feature flags
@@ -238,18 +190,13 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        // Skill and plugin evolution share one state dir. The
-        // observation hub is installed FIRST — evidence is upstream of
-        // both — then the skill manager re-installs the same directory
-        // (idempotent) and keeps its own reference.
+        // The skill manager is the process-wide singleton: every
+        // mutation path (agent tools, gateway handlers) shares one
+        // notification invariant.
         let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
-        // One hub instance shared by the manager, RSI, and every
-        // SharedInfra consumer — the manager built it over the same
-        // state dir; hand out its reference instead of a second one.
-        let observations = skills.observation_hub();
         skills.load_usage();
+        spawn_usage_persist_timer(&skills);
 
-        let embedding = open_embedding(config, &observations).await?;
         let (rsi, environments) = open_plugin_rsi(config).await?;
 
         let (vfs, catalog_service, file_storage, catalog_bundles) =
@@ -282,13 +229,6 @@ impl SharedInfra {
         let writing = open_writing(config, &bib).await?;
         let wiki = open_wiki(config, &file_storage).await?;
 
-        // One clustering worker over the shared hub. Triggers land on
-        // a buffered channel, so callers never block on a slow pass.
-        let evolution_handle = Arc::new(evolution_core::worker::start(Arc::clone(&observations)));
-        tracing::info!("SharedInfra::open: clustering worker started");
-
-        let skill_evolution = start_skill_evolution(config, &skills);
-
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
         let mut browser_options = BrowserOptions::default();
@@ -320,11 +260,7 @@ impl SharedInfra {
             memory,
             kms,
             wiki,
-            observations,
-            evolution_handle,
             skills,
-            embedding,
-            skill_evolution,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
             browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
@@ -496,10 +432,7 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.extend(skills::skill_registrations(
-            self.skills.clone(),
-            self.skill_evolution.clone(),
-        ));
+        tools.extend(skills::skill_registrations(self.skills.clone()));
         if kind.enable_plugin_rsi() {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
                 agent_path.as_str(),
@@ -552,7 +485,6 @@ impl SharedInfra {
         tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
             self.skills.clone(),
             engine_client,
-            self.skill_evolution.clone(),
         ));
 
         if kind.enable_bibliography() {
@@ -621,35 +553,9 @@ impl SharedInfra {
 }
 
 // ── SharedInfra::open, one section per function ─────────────────────
-// The call order below is the construction order: evidence hub first,
-// then everything downstream of it, heavy stores last. Each function
-// owns its section's inline commentary.
-
-/// Install the remote embedding service into the hub, or fit the BM25
-/// fallback when the feature is off.
-///
-/// The hub embeds every observation at record time, so the service is
-/// opened before the evolution worker starts and the swap backfills
-/// vectors recorded under whatever embedder served before. When the
-/// feature is off, BM25 statistics are fitted over the observation
-/// corpus instead: clustering keeps working on weighted lexical vectors.
-async fn open_embedding(
-    config: &RuntimeConfig,
-    observations: &Arc<evolution_core::ObservationHub>,
-) -> Result<Arc<ArcSwapOption<text_embedding::RemoteEmbeddingService>>> {
-    if config.embedding.enabled {
-        let service = text_embedding::RemoteEmbeddingService::init(&config.embedding)
-            .await
-            .map_err(|error| {
-                crate::error::Error::Other(format!("Ollama embedding service unavailable: {error}"))
-            })?;
-        swap_embedder(observations, &service).await;
-        Ok(Arc::new(ArcSwapOption::from_pointee(service)))
-    } else {
-        install_bm25_fallback(observations).await;
-        Ok(Arc::new(ArcSwapOption::empty()))
-    }
-}
+// The call order below is the construction order: VFS and plugin
+// state first, then everything downstream of them, heavy stores
+// last. Each function owns its section's inline commentary.
 
 /// Open the plugin RSI store over the shared observation hub: the
 /// state layout, the publishers, the environment registry, and the
@@ -1025,65 +931,22 @@ async fn open_writing(
     Ok(writing)
 }
 
-/// Start the unified skill evolution loop when enabled. `None` means
-/// the loop is disabled at the daemon level — every gateway mutation
-/// request then returns HTTP 503.
-fn start_skill_evolution(
-    config: &RuntimeConfig,
-    skills: &Arc<skills::SkillManager>,
-) -> Option<skills::SkillControlHandle> {
-    if !config.enable_skill_evolution {
-        tracing::info!("SharedInfra::open: skill evolution disabled");
-        return None;
-    }
-    let handle = skills::evolution::start(
-        skills.clone(),
-        skills::evolution::EvolutionOptions {
-            policy: skills::evolution::EvolutionPolicy::default(),
-            quiet_window: std::time::Duration::from_millis(500),
-            timer: Some(std::time::Duration::from_secs(
-                config.skill_evolution_interval_secs.max(60),
-            )),
-        },
-    );
-    tracing::info!(
-        interval_secs = config.skill_evolution_interval_secs,
-        "SharedInfra::open: skill evolution service started"
-    );
-    Some(handle)
-}
-
-/// Swap the service's provider into the observation hub. The swap
-/// backfills vectors recorded under the previous embedder.
-async fn swap_embedder(
-    observations: &Arc<evolution_core::ObservationHub>,
-    service: &text_embedding::RemoteEmbeddingService,
-) {
-    if let Some(provider) = service.text_embedder() {
-        if let Err(error) = observations.set_embedder(provider).await {
-            tracing::warn!(
-                %error,
-                "embedding backfill after model install failed; \
-                 the hub keeps the previous embedder"
-            );
+/// Persist the skill usage counters periodically so telemetry survives
+/// daemon restarts. Failures are logged and never retried here — the
+/// next tick (or the next library mutation, which also persists)
+/// rewrites the table.
+fn spawn_usage_persist_timer(skills: &Arc<skills::SkillManager>) {
+    let skills = Arc::clone(skills);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
+        interval.tick().await; // the first tick fires immediately; skip it
+        loop {
+            interval.tick().await;
+            if let Err(error) = skills.persist_usage() {
+                tracing::warn!(%error, "skill usage persist failed");
+            }
         }
-    }
-}
-
-/// Fit BM25 statistics over the observations already in the ledger
-/// and install the frozen snapshot as the hub's embedder. The swap
-/// backfills vectors recorded under the previous embedder — a later
-/// model swap backfills these in turn. An install failure leaves the
-/// hub on its unfitted default.
-async fn install_bm25_fallback(observations: &Arc<evolution_core::ObservationHub>) {
-    let texts = observations.embedding_texts().await;
-    let embedder = text_embedding::Bm25TextEmbedder::fit(texts);
-    if let Err(error) = observations.set_embedder(Arc::new(embedder)).await {
-        tracing::warn!(
-            %error,
-            "BM25 fallback install failed; the hub keeps its unfitted default"
-        );
-    }
+    });
 }
 
 /// Runtime adapter that lets PluginStore refresh node factories without
@@ -1122,227 +985,5 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
         plugin_rsi::validate_plugin_name(plugin_name)?;
         self.manager.remove_plugin(plugin_name);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod remote_embedding_tests {
-    use super::super::RuntimeHost;
-    use super::*;
-    use crate::config::RuntimeConfig;
-
-    fn config(dir: &tempfile::TempDir, model_dir: &str) -> RuntimeConfig {
-        let mut config = RuntimeConfig::default();
-        config.data_dir = dir.path().join("data");
-        config.state_dir = dir.path().join("state");
-        config.agent_db = dir.path().join("agent.db");
-        config.dag_history_db = dir.path().join("dag-history.db");
-        config.bib_db_path = dir.path().join("bib.db");
-        config.writing_db_path = dir.path().join("writing.db");
-        config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("kms.db");
-        config.knowledge_db_path = dir.path().join("knowledge.db");
-        config.wiki_db_path = dir.path().join("wiki.db");
-        config.use_memory = false;
-        config.generate_memory = false;
-        config.embedding = text_embedding::EmbeddingConfig {
-            enabled: true,
-            base_url: format!("http://{model_dir}"),
-            model: "test-model".into(),
-            ..Default::default()
-        };
-        config
-    }
-
-    /// End-to-end assembly: the service lands in SharedInfra and its
-    /// provider is live. Requires a prepared model directory holding
-    /// the complete default file layout (`onnx/model_quantized.onnx`
-    /// etc.) — an incomplete directory fails the inline open this
-    /// test asserts on — so point `TEXT_EMBEDDING_TEST_MODEL_DIR` at
-    /// a full default-layout export; the test is a no-op when the
-    /// variable is unset.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn remote_embedding_service_installs_into_shared_infra() {
-        let Ok(model_dir) = std::env::var("OLLAMA_EMBEDDING_TEST_MODEL") else {
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let mut host = RuntimeHost::open(&config(&dir, &model_dir)).await.unwrap();
-        let infra = host.infra();
-        let service_guard = infra.embedding.load();
-        let service = service_guard.as_deref().expect("embedding service opened");
-        let signature = service
-            .text_embedder()
-            .expect("provider opened")
-            .signature()
-            .to_string();
-        assert!(signature.contains("test-model"), "{signature}");
-        host.shutdown_all_agents_and_wait().await;
-    }
-
-    /// With the feature on, a missing model is a hard startup error
-    /// naming `prepare` — the daemon never downloads and never
-    /// silently downgrades to a lexical embedder.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn remote_embedding_service_disabled_installs_bm25() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut cfg = config(&dir, "127.0.0.1:11434");
-        cfg.embedding.enabled = false;
-        let mut host = RuntimeHost::open(&cfg).await.unwrap();
-        assert!(host.infra.embedding.load().is_none());
-        assert!(
-            host.infra
-                .observations
-                .embedding_signature()
-                .starts_with("bm25-")
-        );
-        host.shutdown_all_agents_and_wait().await;
-    }
-}
-
-#[cfg(test)]
-mod plugin_profile_tools_tests {
-    use super::super::RuntimeHost;
-    use super::*;
-    use crate::config::RuntimeConfig;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn plugin_tools_are_restricted_to_the_developer_profile() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = RuntimeConfig::default();
-        config.data_dir = dir.path().join("data");
-        config.state_dir = dir.path().join("state");
-        config.agent_db = dir.path().join("agent.db");
-        config.kms_db_path = dir.path().join("kms.db");
-        config.knowledge_db_path = dir.path().join("knowledge.db");
-        config.wiki_db_path = dir.path().join("wiki.db");
-        // Keep the embedding model (network install + ONNX session)
-        // out of this test.
-        config.embedding.enabled = false;
-        let host = RuntimeHost::open(&config).await.unwrap();
-        let agent_path = agentik_types::AgentPath::try_from("/root/developer").unwrap();
-
-        let researcher_tools = host
-            .infra
-            .tools_from_profile(&agent_path, AgentKind::Researcher)
-            .await
-            .unwrap();
-        assert!(
-            researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "vfs")
-        );
-        assert!(
-            researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "resource_download"),
-            "central resource_download tool must be registered"
-        );
-        assert!(
-            !researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "plugin_node_create")
-        );
-        assert!(
-            !researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "plugin_container_run")
-        );
-        assert!(
-            !researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "plugin_environments_list")
-        );
-        assert!(
-            !researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "evo_observe"),
-            "evo_observe is unregistered: lessons flow through memory_note"
-        );
-        assert!(
-            !researcher_tools
-                .iter()
-                .any(|tool| tool.definition.name == "skill_observe")
-        );
-        assert!(
-            !crate::config::build_system_prompt(&AgentKind::Researcher)
-                .contains("Plugin Development")
-        );
-
-        let developer_tools = host
-            .infra
-            .tools_from_profile(&agent_path, AgentKind::Developer)
-            .await
-            .unwrap();
-        assert!(
-            developer_tools
-                .iter()
-                .any(|tool| tool.definition.name == "plugin_node_create")
-        );
-        assert!(
-            !developer_tools
-                .iter()
-                .any(|tool| tool.definition.name == "resource_download"),
-            "resource_download must be scoped away from Developer"
-        );
-        assert!(
-            developer_tools
-                .iter()
-                .any(|tool| tool.definition.name == "plugin_container_run")
-        );
-        assert!(
-            crate::config::build_system_prompt(&AgentKind::Developer)
-                .contains("Plugin Development")
-        );
-    }
-
-    /// The wiki read group ships with every kind; the write group is
-    /// the curator's alone — task agents must stay read-only over the
-    /// shared long-term memory.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn wiki_write_tools_are_restricted_to_the_curator_kind() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut config = RuntimeConfig::default();
-        config.data_dir = dir.path().join("data");
-        config.state_dir = dir.path().join("state");
-        config.agent_db = dir.path().join("agent.db");
-        config.wiki_db_path = dir.path().join("wiki.db");
-        config.embedding.enabled = false;
-        let mut host = RuntimeHost::open(&config).await.unwrap();
-        let agent_path = agentik_types::AgentPath::try_from("/root/agent").unwrap();
-
-        for kind in AgentKind::ALL {
-            let tools = host
-                .infra
-                .tools_from_profile(&agent_path, kind)
-                .await
-                .unwrap();
-            let names: Vec<&str> = tools.iter().map(|t| t.definition.name.as_str()).collect();
-            for read_tool in ["wiki_search", "wiki_get", "wiki_list", "wiki_mentions"] {
-                assert!(
-                    names.contains(&read_tool),
-                    "{kind} must register `{read_tool}`"
-                );
-            }
-            for write_tool in [
-                "wiki_create",
-                "wiki_edit",
-                "wiki_patch",
-                "wiki_delete",
-                "wiki_attach_image",
-            ] {
-                assert_eq!(
-                    names.contains(&write_tool),
-                    kind == AgentKind::Curator,
-                    "{kind} unexpectedly {} `{write_tool}`",
-                    if kind == AgentKind::Curator {
-                        "lacks"
-                    } else {
-                        "holds"
-                    }
-                );
-            }
-        }
-        host.shutdown_all_agents_and_wait().await;
     }
 }

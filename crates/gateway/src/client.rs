@@ -597,53 +597,19 @@ impl GatewayClient {
             .await
     }
 
-    // ── skill evolution ──────────────────────────────────────────
+    // ── skill library ────────────────────────────────────────────
 
-    /// The unified skill library: every installed skill plus every
-    /// proposed-but-not-installed name, proposal status and usage
-    /// telemetry attached per row.
+    /// The installed skill library: every skill across tiers with
+    /// usage telemetry attached per row.
     pub async fn skill_library(&self) -> Result<Vec<SkillLibraryView>> {
         self.get("/skills/library").await
     }
 
-    /// One skill's full detail (metadata, usage, proposal record,
-    /// complete SKILL.md body).
+    /// One skill's full detail (metadata, usage, complete SKILL.md
+    /// body).
     pub async fn skill_library_detail(&self, name: &str) -> Result<SkillLibraryDetail> {
         self.get(&format!("/skills/library/{}", encode_segment(name)))
             .await
-    }
-
-    /// Dashboard snapshot: service state, counts, proposals by
-    /// status, library generation.
-    pub async fn skill_evolution_status(&self) -> Result<SkillEvolutionStatus> {
-        self.get("/skills/evolution").await
-    }
-
-    /// Recorded evolution evidence, newest first, with full bodies.
-    pub async fn observations(&self) -> Result<Vec<ObservationView>> {
-        self.get("/evolution/observations").await
-    }
-
-    /// Surfaced observation clusters (recurring patterns), largest
-    /// first, with hydrated member summaries.
-    pub async fn clusters(&self) -> Result<Vec<ClusterView>> {
-        self.get("/evolution/clusters").await
-    }
-
-    /// Run one evolution cycle now. The cycle installs what it
-    /// writes — there is no review gate.
-    pub async fn trigger_skill_evolution(&self) -> Result<SkillEvolutionReport> {
-        self.send(
-            reqwest::Method::POST,
-            "/skills/evolution/trigger",
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
-    /// Proposal listing, past-cap overflow first.
-    pub async fn skill_proposals(&self) -> Result<Vec<SkillProposalView>> {
-        self.get("/skills/evolution/proposals").await
     }
 }
 

@@ -4777,23 +4777,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "evolution-core"
-version = "0.1.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "serde",
- "sha2 0.10.9",
- "tempfile",
- "text-embedding",
- "thiserror 2.0.20",
- "tokio",
- "toml 1.1.6+spec-1.1.0",
- "tracing",
- "turso",
-]
-
-[[package]]
 name = "eyre"
 version = "0.6.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5204,7 +5187,6 @@ dependencies = [
  "container-plugin",
  "dag-core",
  "eventsource-stream",
- "evolution-core",
  "futures",
  "gateway",
  "http-body-util",
@@ -12002,7 +11984,6 @@ dependencies = [
  "data-engine",
  "data-engine-tools",
  "datafusion",
- "evolution-core",
  "futures",
  "gwascatalog-sdk",
  "kegg",
@@ -13041,14 +13022,11 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "clap",
- "evolution-core",
  "schemars 1.2.2",
  "serde",
  "serde_json",
  "serde_yaml",
- "sha2 0.10.9",
  "tempfile",
- "text-embedding",
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.6+spec-1.1.0",

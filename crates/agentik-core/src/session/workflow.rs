@@ -995,9 +995,9 @@ impl Session {
 
     async fn build_context(&mut self) -> Result<Vec<Message>> {
         // Skill-library guidance is static behavioral text (how to
-        // consume and feed the skill evolution tools), so it lives in
-        // the system prompt; the volatile skill *index* stays out
-        // (see the notice note below for why).
+        // consume skills and record lessons through the memory
+        // tools), so it lives in the system prompt; the volatile
+        // skill *index* stays out (see the notice note below for why).
         let mut builder = system_prompt_builder::SystemPromptBuilder::default()
             .build_skill_guidance()
             .build_tooluse_guidance();

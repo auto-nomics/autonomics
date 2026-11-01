@@ -353,7 +353,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 39);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 35);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -390,10 +390,6 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/events",
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
-        "/api/v1/evolution/observations",
-        "/api/v1/skills/evolution",
-        "/api/v1/skills/evolution/trigger",
-        "/api/v1/skills/evolution/proposals",
     ];
     for path in expected_paths {
         assert!(
@@ -430,115 +426,10 @@ async fn swagger_docs_expose_the_gateway_api() {
     gateway_daemon.stop().await;
 }
 
-// ── skill evolution endpoints ─────────────────────────────────────────
-
-/// Poll an async predicate until it holds or the test timeout fires —
-/// the evolution service distills on its own event path, so "who
-/// wrote the proposal" (worker or explicit trigger) is intentionally
-/// racy and the test only asserts observable state.
-async fn eventually<F, Fut>(mut pred: F)
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    tokio::time::timeout(TEST_TIMEOUT, async {
-        loop {
-            if pred().await {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("condition eventually held");
-}
+// ── skill library endpoints ───────────────────────────────────────────
 
 #[tokio::test]
-async fn skill_evolution_status_trigger_installs_automatically() {
-    let gw = start_mock_gateway("ok").await;
-    let client = gw.client();
-    let manager = gw.infra.skills.clone();
-
-    // Baseline: fresh isolated state, service armed.
-    let status = client.skill_evolution_status().await.unwrap();
-    assert!(status.service_enabled);
-    assert_eq!(status.proposals_pending, 0);
-    assert_eq!(status.proposals_applied, 0);
-
-    // Seed one anchor with three distinct fixes.
-    for body in ["cast the column", "pass format=csv", "validate header"] {
-        manager
-            .observation_hub()
-            .record(evolution_core::ObservationInput {
-                kind: evolution_core::ObservationKind::Failure,
-                source: evolution_core::ObservationSource::Agent,
-                summary: "sql boom".into(),
-                body: body.into(),
-                node_kind: Some("sql".into()),
-                error: Some("syntax error near 42".into()),
-            })
-            .await
-            .unwrap();
-    }
-
-    // Either the event-driven worker or our explicit trigger runs the
-    // cycle; both paths write AND install — no review step exists.
-    let generation_before = status.generation;
-    // Tolerate the startup-sweep race: if the boot drain outlived the
-    // seeding, the startup cycle already installed and this trigger
-    // reports the cluster as consumed — either way the evidence lands.
-    let _ = client.trigger_skill_evolution().await.unwrap();
-    eventually(|| {
-        let client = client.clone();
-        let before = generation_before;
-        async move {
-            client
-                .skill_evolution_status()
-                .await
-                .map(|s| s.proposals_applied >= 1 && s.generation > before && s.skills_auto >= 1)
-                .unwrap_or(false)
-        }
-    })
-    .await;
-
-    // Nothing waits for a human: no pending rows remain.
-    let status = client.skill_evolution_status().await.unwrap();
-    assert_eq!(status.proposals_pending, 0);
-    assert!(status.proposals_applied >= 1);
-    assert!(status.skills_auto >= 1);
-
-    // A second anchor installs the same way once a cycle runs (in the
-    // daemon the timer sweep provides one; here we nudge explicitly).
-    for body in ["io a", "io b", "io c"] {
-        manager
-            .observation_hub()
-            .record(evolution_core::ObservationInput {
-                kind: evolution_core::ObservationKind::Failure,
-                source: evolution_core::ObservationSource::Agent,
-                summary: "io crash".into(),
-                body: body.into(),
-                node_kind: Some("file_to_dataframe".into()),
-                error: Some("bad schema at 7".into()),
-            })
-            .await
-            .unwrap();
-    }
-    let _ = client.trigger_skill_evolution().await.unwrap();
-    eventually(|| {
-        let client = client.clone();
-        async move {
-            client
-                .skill_evolution_status()
-                .await
-                .map(|s| s.proposals_applied >= 2)
-                .unwrap_or(false)
-        }
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn skill_library_lists_installed_and_proposed_with_detail() {
+async fn skill_library_lists_installed_tiers_with_detail() {
     let gw = start_mock_gateway("ok").await;
     let client = gw.client();
     let manager = gw.infra.skills.clone();
@@ -551,110 +442,36 @@ async fn skill_library_lists_installed_and_proposed_with_detail() {
     );
     assert!(library.iter().any(|s| s.tier == "builtin"));
 
-    // Seed a distillation cycle through the channel; the skill lands
-    // installed, with the applied change record attached.
-    for body in ["fix a", "fix b", "fix c"] {
-        manager
-            .observation_hub()
-            .record(evolution_core::ObservationInput {
-                kind: evolution_core::ObservationKind::Failure,
-                source: evolution_core::ObservationSource::Agent,
-                summary: "lib boom".into(),
-                body: body.into(),
-                node_kind: Some("sql".into()),
-                error: Some("lib error 7".into()),
-            })
-            .await
-            .unwrap();
-    }
-    let _ = client.trigger_skill_evolution().await.unwrap();
-    eventually(|| {
-        let client = client.clone();
-        async move {
-            client
-                .skill_library()
-                .await
-                .map(|l| {
-                    l.iter().any(|s| {
-                        s.tier == "global" && s.proposal_status.as_deref() == Some("applied")
-                    })
-                })
-                .unwrap_or(false)
-        }
-    })
-    .await;
+    // Install one skill into the global tier through the manager (the
+    // same path autonomics-skills install takes) and re-list.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("demo-skill");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: Demo skill for library listing.\n---\nStep one.\n",
+    )
+    .unwrap();
+    manager.install_local(&dir).unwrap();
 
-    // Detail of the installed row: body + the applied change record
-    // with its evidence chain.
-    let name = client
-        .skill_library()
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|s| s.tier == "global" && s.proposal_status.as_deref() == Some("applied"))
-        .unwrap()
-        .name;
-    let detail = client.skill_library_detail(&name).await.unwrap();
+    let library = client.skill_library().await.unwrap();
+    assert!(library.iter().any(|s| s.tier == "builtin"));
+    let row = library
+        .iter()
+        .find(|s| s.name == "demo-skill")
+        .expect("installed skill listed");
+    assert_eq!(row.tier, "global");
+    assert!(row.installed);
+
+    // Detail of the installed row: metadata plus the SKILL.md body.
+    let detail = client.skill_library_detail("demo-skill").await.unwrap();
     assert!(detail.installed);
     assert_eq!(detail.tier, "global");
-    assert!(!detail.body.is_empty());
-    let proposal = detail
-        .proposal
-        .expect("installed row carries its change record");
-    assert_eq!(proposal.status, "applied");
-    assert_eq!(proposal.observation_count, 3, "evidence chain size");
-    assert_eq!(detail.evidence_count, 3);
+    assert!(detail.body.contains("Step one."));
 
     // Unknown names 404 rather than fabricating a row.
     let missing = client.skill_library_detail("no-such-skill").await;
     assert!(missing.is_err());
-}
-
-#[tokio::test]
-async fn observations_endpoint_returns_full_evidence_in_stable_order() {
-    let gw = start_mock_gateway("ok").await;
-    let client = gw.client();
-    assert!(client.observations().await.unwrap().is_empty());
-    let observation = gw
-        .infra
-        .skills
-        .observation_hub()
-        .record(evolution_core::ObservationInput {
-            kind: evolution_core::ObservationKind::Caveat,
-            source: evolution_core::ObservationSource::Agent,
-            summary: "Header must match".into(),
-            body: "Validate all column names.\nKeep evidence intact.".into(),
-            node_kind: Some("sql".into()),
-            error: Some("missing column".into()),
-        })
-        .await
-        .unwrap();
-    gw.infra
-        .skills
-        .observation_hub()
-        .record(evolution_core::ObservationInput {
-            kind: evolution_core::ObservationKind::Recipe,
-            source: evolution_core::ObservationSource::Cli,
-            summary: "Second fact".into(),
-            body: "Second body".into(),
-            node_kind: None,
-            error: None,
-        })
-        .await
-        .unwrap();
-    let rows = client.observations().await.unwrap();
-    assert_eq!(rows.len(), 2);
-    let row = rows.iter().find(|row| row.id == observation.id).unwrap();
-    assert_eq!(row.kind, "caveat");
-    assert_eq!(row.source, "agent");
-    assert_eq!(row.body, observation.body);
-    assert_eq!(row.node_kind.as_deref(), Some("sql"));
-    assert_eq!(row.error.as_deref(), Some("missing column"));
-    assert!(
-        rows.windows(2)
-            .all(|pair| pair[0].created_at > pair[1].created_at
-                || (pair[0].created_at == pair[1].created_at && pair[0].id < pair[1].id))
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

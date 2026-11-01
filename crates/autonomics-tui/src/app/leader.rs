@@ -97,8 +97,8 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
             },
             LeaderNode::Leaf {
                 key: 's',
-                label: "Evolution",
-                action: CommandAction::SkillEvolutionPanel,
+                label: "Skills",
+                action: CommandAction::SkillLibraryPanel,
             },
             LeaderNode::Leaf {
                 key: 't',

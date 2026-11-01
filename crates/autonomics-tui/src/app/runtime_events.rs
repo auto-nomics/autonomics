@@ -369,106 +369,15 @@ impl App {
                     .toasts
                     .error("Model swap failed", Some(format!("[{agent}] {error}")));
             }
-            crate::app_event::AppEvent::SkillEvolutionLoaded {
-                status,
-                library,
-                observations,
-                clusters,
-            } => {
-                match status {
-                    Ok(status) => {
-                        let dashboard = &mut self.state.skill_evolution;
-                        dashboard.seen_generation = status.generation;
-                        dashboard.seen_cycles_completed = status.cycles_completed;
-                        dashboard.status = Some(status);
-                        dashboard.error = None;
-                    }
-                    Err(e) => {
-                        self.state.skill_evolution.error = Some(e);
-                    }
+            crate::app_event::AppEvent::SkillLibraryLoaded { library } => match library {
+                Ok(library) => {
+                    self.state.skill_library.browser.set_library(library);
+                    self.fetch_skill_detail();
                 }
-                match library {
-                    Ok(library) => {
-                        self.state.skill_evolution.skills.set_library(library);
-                        self.fetch_skill_detail();
-                    }
-                    Err(error) => self.state.skill_evolution.skills.error = Some(error),
-                }
-                match observations {
-                    Ok(observations) => self
-                        .state
-                        .skill_evolution
-                        .observations
-                        .set_observations(observations),
-                    Err(error) => self.state.skill_evolution.observations.error = Some(error),
-                }
-                // Clusters are a derived view over the same
-                // observations: a failure degrades to the flat
-                // list rather than an error banner.
-                if let Ok(clusters) = clusters {
-                    self.state
-                        .skill_evolution
-                        .observations
-                        .set_clusters(clusters);
-                }
-            }
-            crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
-                let dashboard = &mut self.state.skill_evolution.skills;
-                dashboard.apply_detail(name, result);
-            }
-            crate::app_event::AppEvent::SkillEvolutionTriggered(result) => match result {
-                Ok(report) => {
-                    // An explicit RunCycle against an empty pool
-                    // still runs the cycle body (the operator asked
-                    // for it); the report comes back with zero
-                    // clusters. Show an info toast instead of a
-                    // success one so the operator can tell the cycle
-                    // was a no-op from causes (nothing recorded yet)
-                    // other than "wrote N".
-                    let empty_run = report.triggers.is_empty()
-                        && report.clusters_considered == 0
-                        && report.skipped.is_empty();
-                    let summary = if empty_run {
-                        "no observations to distill".to_string()
-                    } else {
-                        format!(
-                            "{} written, {} updated, {} installed, {} deferred",
-                            report.proposals_written.len(),
-                            report.updated_existing.len(),
-                            report.installed.len(),
-                            report.deferred,
-                        )
-                    };
-                    self.state.skill_evolution.last_report = Some(summary.clone());
-                    if empty_run {
-                        self.state
-                            .toasts
-                            .info("Skill evolution cycle", Some(summary));
-                    } else {
-                        self.state
-                            .toasts
-                            .success("Skill evolution cycle", Some(summary));
-                    }
-                    self.refresh_skill_evolution();
-                }
-                Err(e) => {
-                    self.state.toasts.error("Skill evolution cycle", Some(e));
-                }
+                Err(error) => self.state.skill_library.browser.error = Some(error),
             },
-            crate::app_event::AppEvent::SkillEvolutionStatusPolled { status } => {
-                // Lighter than a full load: status fields only, plus an
-                // auto-refresh when generation or cycle counts advanced
-                // (a cycle's writes have invalidated the cached library /
-                // observations / proposal listings).
-                let Ok(status) = status else { return };
-                let dashboard = &mut self.state.skill_evolution;
-                let advanced = dashboard.status.as_ref().map(|prev| prev.generation)
-                    != Some(status.generation)
-                    || dashboard.seen_cycles_completed != status.cycles_completed;
-                dashboard.status = Some(status);
-                if advanced && dashboard.visible {
-                    self.refresh_skill_evolution();
-                }
+            crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
+                self.state.skill_library.browser.apply_detail(name, result);
             }
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,

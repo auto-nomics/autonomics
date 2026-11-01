@@ -81,29 +81,15 @@ pub(crate) enum AppEvent {
         article_id: String,
         result: std::result::Result<gateway::proto::BibliographyArticleDetail, String>,
     },
-    /// Skill-evolution dashboard data arrived: service status, unified
-    /// skill library, recorded observations, and surfaced clusters.
-    SkillEvolutionLoaded {
-        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
+    /// Skill library dashboard data arrived.
+    SkillLibraryLoaded {
         library: std::result::Result<Vec<gateway::proto::SkillLibraryView>, String>,
-        observations: std::result::Result<Vec<gateway::proto::ObservationView>, String>,
-        clusters: std::result::Result<Vec<gateway::proto::ClusterView>, String>,
     },
     /// One skill's detail document arrived (fetched on selection
     /// move; rendered only while it matches the selected row).
     SkillDetailLoaded {
         name: String,
         result: std::result::Result<gateway::proto::SkillLibraryDetail, String>,
-    },
-    /// A manually triggered evolution cycle finished.
-    SkillEvolutionTriggered(std::result::Result<gateway::proto::SkillEvolutionReport, String>),
-    /// Polled status snapshot from the periodic dashboard poll —
-    /// lighter than a full `SkillEvolutionLoaded` because it carries
-    /// only the status fields. The handler promotes the snapshot
-    /// fields and re-triggers the full refresh when generation /
-    /// cycle counts have advanced since the last full load.
-    SkillEvolutionStatusPolled {
-        status: std::result::Result<gateway::proto::SkillEvolutionStatus, String>,
     },
     /// Per-agent model info arrived (render-path cache fill; render itself
     /// must never issue HTTP). The string is the `provider:model` spec.

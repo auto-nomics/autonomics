@@ -10,7 +10,7 @@
 //! - the command palette opened over the DAG/bibliography overlays via
 //!   the global `Ctrl+P` chord but painted beneath them (invisible
 //!   palette that swallowed every key);
-//! - the skill-evolution dashboard was in the key-capture chain and in
+//! - the skill library dashboard was in the key-capture chain and in
 //!   `any_overlay_open` but missing from the mouse guard, so wheel
 //!   events scrolled the hidden chat underneath it.
 //!
@@ -45,8 +45,8 @@ pub(super) enum Overlay {
     ModelConfig,
     /// Embedding model config form.
     EmbeddingConfig,
-    /// Skill-evolution dashboard.
-    SkillEvolution,
+    /// Skill library dashboard.
+    SkillLibrary,
     /// Bibliography browser.
     Bibliography,
     /// Interactive DAG view.
@@ -92,7 +92,7 @@ impl AppState {
             (AgentConfig, self.agent_config.visible),
             (ModelConfig, self.model_config_visible),
             (EmbeddingConfig, self.embedding_config_visible),
-            (SkillEvolution, self.skill_evolution.visible),
+            (SkillLibrary, self.skill_library.visible),
             (Bibliography, self.bibliography_visible),
             (DagView, self.dag_view_visible),
             (MessagePicker, self.message_picker.is_visible()),
@@ -123,7 +123,7 @@ mod tests {
         state.agent_config.visible = true;
         state.model_config_visible = true;
         state.embedding_config_visible = true;
-        state.skill_evolution.visible = true;
+        state.skill_library.visible = true;
         state.bibliography_visible = true;
         state.dag_view_visible = true;
         state.message_picker.picker.visible = true;

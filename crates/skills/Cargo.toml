@@ -10,17 +10,14 @@ agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 async-trait = { workspace = true }
-evolution-core = { path = "../evolution-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = "0.9"
 thiserror = { workspace = true }
 toml = { workspace = true }
 schemars.workspace = true
-text-embedding = { path = "../text-embedding" }
 tracing = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-sha2.workspace = true
 arc-swap.workspace = true
 tokio = { workspace = true }
 
