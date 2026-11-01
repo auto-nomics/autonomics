@@ -195,7 +195,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
       </DialogContent>
     </ConfirmDialog>
     {error && !dialog && !emptyTrashOpen && <p role="alert" className="p-2 text-xs text-destructive">{error}</p>}
-    {dialog && <dialog ref={modal} aria-labelledby="collection-dialog-title" onCancel={e => { if (busy) e.preventDefault(); else setDialog(null); }} className="fixed inset-0 m-auto w-[min(90vw,420px)] rounded-lg border bg-card p-5 text-foreground shadow-xl backdrop:bg-black/50">
+    {dialog && <dialog ref={modal} aria-labelledby="collection-dialog-title" onCancel={e => { if (busy) e.preventDefault(); else setDialog(null); }} className="fixed inset-0 m-auto w-[min(90vw,420px)] rounded-lg border bg-card p-5 text-foreground shadow-xl backdrop:bg-[var(--scrim)]">
       <form onSubmit={submit} className="space-y-4">
         <h2 id="collection-dialog-title" className="font-semibold">{({ create: "New collection", rename: "Rename collection", move: "Move collection", trash: "Move collection to trash?", erase: "Delete collection permanently?" })[dialog.kind]}</h2>
         {(dialog.kind === "create" || dialog.kind === "rename") && <label className="block text-sm">Name<Input autoFocus value={name} onChange={e => setName(e.target.value)} required /></label>}

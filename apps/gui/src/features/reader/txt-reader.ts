@@ -1,6 +1,7 @@
 import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget, type ReaderWorkspaceOptions } from "./reader-target";
 import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
 import { escapeHtml } from "@/lib/markdown";
+import { defaultAnnotationColor } from "@/lib/annotation-colors";
 import type { BibArticle } from "@/types";
 import "./pdf-reader.css";
 import "./txt-reader.css";
@@ -811,7 +812,7 @@ class ZoteroStyleTxtReader {
           top: `${rect.top - origin.top + this.container.scrollTop}px`,
           width: `${rect.width}px`,
           height: `${rect.height}px`,
-          background: annotation.color ?? "#ffd400",
+          background: annotation.color ?? defaultAnnotationColor(),
         });
         fragment.append(mark);
       }

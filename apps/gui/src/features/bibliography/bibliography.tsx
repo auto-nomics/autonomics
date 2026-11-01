@@ -843,7 +843,7 @@ function LibraryView() {
             setLibraryOpen(false);
             setDetailsOpen(false);
           }}
-          className={cn("absolute inset-0 z-30 bg-black/50 outline-none", roomy && "hidden")}
+          className={cn("absolute inset-0 z-30 bg-[var(--scrim)] outline-none", roomy && "hidden")}
         />
       )}
       <aside

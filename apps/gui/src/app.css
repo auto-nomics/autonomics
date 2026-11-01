@@ -48,40 +48,62 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/* ── GitHub Theme palette (ported from the Obsidian "GitHub Theme" by
+   @krios2146, v1.1.7). All UI chrome colors must come from these tokens;
+   the only literals allowed outside this block are content-appearance
+   palettes (reader paper themes, annotation data colors) and pure-black
+   elevation shadows. ── */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: #301919;
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --background: #ffffff;
+  --foreground: #24292f;
+  --muted: #f6f8fa;
+  --muted-foreground: #57606a;
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --primary: #0969da;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f8fa;
+  --secondary-foreground: #24292f;
+  --accent: #eaeef2;
+  --accent-foreground: #24292f;
+  --destructive: #cf222e;
+  --destructive-foreground: #ffffff;
+  --card: #ffffff;
+  --card-foreground: #24292f;
+  --popover: #ffffff;
+  --popover-foreground: #24292f;
+  --ring: #0969da;
+  --chart-1: #086ddd;
+  --chart-2: #0cb54f;
+  --chart-3: #876be0;
+  --chart-4: #d96c00;
+  --chart-5: #cf222e;
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #24292f;
+  --sidebar-primary: #0969da;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #eaeef2;
+  --sidebar-accent-foreground: #24292f;
+  --sidebar-border: #d0d7de;
+  --sidebar-ring: #0969da;
+  /* Markdown headings: GitHub theme keeps light-mode headings as normal
+     text; dark mode turns them green (#7ee787). */
+  --md-heading-color: var(--foreground);
+  --inline-code-bg: rgb(175 184 193 / 20%);
+  --code-block-bg: #f6f8fa;
+  --code-head-bg: #ffffff;
+  --scrim: rgb(0 0 0 / 40%);
+  /* Zotero-style annotation data colors — theme-independent by design
+     (they are stored with the annotation). */
+  --annotation-yellow: #ffd400;
+  --annotation-red: #ff6666;
+  --annotation-green: #5fb236;
+  --annotation-blue: #2ea8e5;
+  --annotation-purple: #a28ae5;
+  --annotation-magenta: #e56eee;
+  --annotation-orange: #f19837;
+  --annotation-gray: #aaaaaa;
 }
 
 * {
@@ -101,37 +123,43 @@ body {
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: #0d1117;
+  --foreground: #c9d1d9;
+  --card: #161b22;
+  --card-foreground: #c9d1d9;
+  --popover: #161b22;
+  --popover-foreground: #c9d1d9;
+  --primary: #4493f8;
+  --primary-foreground: #ffffff;
+  --secondary: #21262d;
+  --secondary-foreground: #c9d1d9;
+  --muted: #161b22;
+  --muted-foreground: #8b949e;
+  --accent: #21262d;
+  --accent-foreground: #c9d1d9;
+  --destructive: #f47067;
+  --border: #30363d;
+  --input: #30363d;
+  --ring: #4493f8;
+  --chart-1: #6cb6ff;
+  --chart-2: #7ee787;
+  --chart-3: #d2a8ff;
+  --chart-4: #ffa657;
+  --chart-5: #f47067;
+  --sidebar: #161b22;
+  --sidebar-foreground: #c9d1d9;
+  --sidebar-primary: #4493f8;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #21262d;
+  --sidebar-accent-foreground: #c9d1d9;
+  --sidebar-border: #30363d;
+  --sidebar-ring: #4493f8;
+  /* GitHub theme's signature dark-mode green headings (#7ee787). */
+  --md-heading-color: #7ee787;
+  --inline-code-bg: rgb(110 118 129 / 40%);
+  --code-block-bg: #161b22;
+  --code-head-bg: #0d1117;
+  --scrim: rgb(0 0 0 / 50%);
 }
 
 @layer base {
@@ -182,6 +210,9 @@ body {
   font-weight: 600;
   line-height: 1.3;
 }
+.md :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--md-heading-color);
+}
 .md h1 { font-size: 1.25em; }
 .md h2 { font-size: 1.15em; }
 .md h3 { font-size: 1.05em; }
@@ -225,7 +256,7 @@ body {
 .md :not(pre, pre *) > code {
   padding: 0.15em 0.35em;
   border-radius: 4px;
-  background: var(--muted);
+  background: var(--inline-code-bg);
   font-size: 0.85em;
   font-family: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
 }
@@ -248,7 +279,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 0.5em;
   overflow: hidden;
-  background: oklch(0.17 0 0);
+  background: var(--code-block-bg);
 }
 .md-code-head {
   display: flex;
@@ -256,7 +287,7 @@ body {
   justify-content: space-between;
   padding: 0.25em 0.75em;
   border-bottom: 1px solid var(--border);
-  background: oklch(0.22 0 0);
+  background: var(--code-head-bg);
   color: var(--muted-foreground);
   font-size: 0.7rem;
   letter-spacing: 0.05em;
@@ -303,6 +334,47 @@ body {
   max-width: 100%;
   border-radius: 0.5em;
 }
+
+/* ── wiki math (KaTeX MathML output — the browser renders `<math>`) ── */
+.md-math--display {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  margin: 0.5em 0;
+}
+.md-math math {
+  font-size: 1.06em;
+}
+
+/* ── wiki reading view: outline level in the heading gutter ──
+   Every rendered h1–h6 shows a persistent "H1"–"H6" tag to its left, in
+   a reserved gutter (SiYuan-style). Pure CSS — no pipeline changes. */
+.wiki-md {
+  padding-left: 2.75rem;
+}
+.wiki-md :is(h1, h2, h3, h4, h5, h6) {
+  position: relative;
+}
+.wiki-md :is(h1, h2, h3, h4, h5, h6)::before {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 0.55em);
+  translate: 0 -50%;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: color-mix(in oklch, var(--muted-foreground) 85%, transparent);
+  user-select: none;
+  pointer-events: none;
+}
+.wiki-md h1::before { content: "H1"; }
+.wiki-md h2::before { content: "H2"; }
+.wiki-md h3::before { content: "H3"; }
+.wiki-md h4::before { content: "H4"; }
+.wiki-md h5::before { content: "H5"; }
+.wiki-md h6::before { content: "H6"; }
 
 /* ── wiki SiYuan-style block editor ── */
 .wiki-block {

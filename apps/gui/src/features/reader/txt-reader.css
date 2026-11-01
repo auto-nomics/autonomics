@@ -17,7 +17,7 @@
 .reader-txt-flash {
   position: absolute;
   border-radius: 2px;
-  background: #8ab4f8;
+  background: var(--primary);
   mix-blend-mode: multiply;
   opacity: .45;
   pointer-events: none;

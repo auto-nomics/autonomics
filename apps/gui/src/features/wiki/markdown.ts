@@ -5,11 +5,16 @@
  *
  * - `[[target]]` / `[[target|display]]` wikilinks render as inert
  *   `<a data-wikilink>` chips — click routing stays in React.
+ * - `$…$` / `$$…$$` / `\(…\)` / `\[…\]` math renders through KaTeX. The
+ *   gateway serves the SPA as three embedded text assets, so we use
+ *   KaTeX's MathML output (rendered natively by the browser) — no font
+ *   files to host.
  * - the lexer powers the SiYuan-style block editor: content splits into
  *   top-level markdown blocks whose `raw` fragments re-join losslessly,
  *   so "blocks ⇄ content" never rewrites the document.
  */
 import DOMPurify from "dompurify";
+import katex from "katex";
 import { Marked, type Tokens } from "marked";
 
 import { escapeHtml } from "@/lib/markdown";
@@ -22,12 +27,110 @@ interface WikilinkToken extends Tokens.Generic {
   display: string;
 }
 
+interface MathToken extends Tokens.Generic {
+  tex: string;
+  displayMode: boolean;
+}
+
+/**
+ * `$$…$$` / `\[…\]` may span lines; `$…$` / `\(…\)` are single-line and
+ * must not open or close with whitespace (keeps "$5 and $10" out of the
+ * math pipeline).
+ */
+const MATH_DISPLAY_TOKEN_RE = /^\$\$([\s\S]+?)\$\$/;
+const MATH_INLINE_TOKEN_RE = /^\$([^\$\n]+)\$/;
+const MATH_DISPLAY_BRACKET_RE = /^\\\[([\s\S]+?)\\\]/;
+const MATH_INLINE_PAREN_RE = /^\\\(([\s\S]+?)\\\)/;
+
+function mathTokenizer(
+  src: string,
+  pattern: RegExp,
+  name: string,
+  displayMode: boolean,
+): MathToken | undefined {
+  const match = pattern.exec(src);
+  if (!match) return undefined;
+  const tex = match[1].trim();
+  if (!tex) return undefined;
+  if (!displayMode && (/^\s/.test(match[1]) || /\s$/.test(match[1]))) {
+    return undefined;
+  }
+  // The token type must equal the extension name — marked resolves the
+  // renderer through it.
+  return { type: name, raw: match[0], tex, displayMode };
+}
+
+function mathRenderer(token: Tokens.Generic): string {
+  const math = token as MathToken;
+  const cssClass = math.displayMode ? "md-math md-math--display" : "md-math";
+  const rendered = katex.renderToString(math.tex, {
+    displayMode: math.displayMode,
+    throwOnError: false,
+    strict: false,
+    // The gateway embeds the SPA as text assets — MathML needs no fonts.
+    output: "mathml",
+  });
+  return `<span class="${cssClass}">${rendered}</span>`;
+}
+
 const wikiMarked = new Marked();
 
 wikiMarked.use({
   gfm: true,
   breaks: true,
   extensions: [
+    {
+      name: "math-display",
+      level: "inline",
+      start(src: string) {
+        const index = src.indexOf("$$");
+        return index === -1 ? undefined : index;
+      },
+      tokenizer(src: string) {
+        return mathTokenizer(src, MATH_DISPLAY_TOKEN_RE, "math-display", true);
+      },
+      renderer: mathRenderer,
+    },
+    {
+      // LaTeX bracket display form. Lives before marked's escape tokenizer
+      // (extensions run first), so `\[…\]` wins; an unclosed `\[` falls
+      // through to the escape tokenizer and renders a literal `[`.
+      name: "math-display-bracket",
+      level: "inline",
+      start(src: string) {
+        const index = src.indexOf("\\[");
+        return index === -1 ? undefined : index;
+      },
+      tokenizer(src: string) {
+        return mathTokenizer(src, MATH_DISPLAY_BRACKET_RE, "math-display-bracket", true);
+      },
+      renderer: mathRenderer,
+    },
+    {
+      // LaTeX parenthesis inline form.
+      name: "math-inline-paren",
+      level: "inline",
+      start(src: string) {
+        const index = src.indexOf("\\(");
+        return index === -1 ? undefined : index;
+      },
+      tokenizer(src: string) {
+        return mathTokenizer(src, MATH_INLINE_PAREN_RE, "math-inline-paren", false);
+      },
+      renderer: mathRenderer,
+    },
+    {
+      name: "math-inline",
+      level: "inline",
+      start(src: string) {
+        const index = src.indexOf("$");
+        return index === -1 ? undefined : index;
+      },
+      tokenizer(src: string) {
+        return mathTokenizer(src, MATH_INLINE_TOKEN_RE, "math-inline", false);
+      },
+      renderer: mathRenderer,
+    },
     {
       name: "wikilink",
       level: "inline",
@@ -70,7 +173,12 @@ wikiMarked.use({
 
 export function renderWikiMarkdown(text: string): string {
   return DOMPurify.sanitize(wikiMarked.parse(text, { async: false }), {
-    USE_PROFILES: { html: true },
+    // html for the markdown body, mathMl for KaTeX's `<math>` output.
+    // KaTeX also nests the original TeX in <semantics><annotation> — not
+    // in DOMPurify's mathMl profile, added back as inert text so the
+    // formula source stays copyable.
+    USE_PROFILES: { html: true, mathMl: true },
+    ADD_TAGS: ["semantics", "annotation"],
   });
 }
 

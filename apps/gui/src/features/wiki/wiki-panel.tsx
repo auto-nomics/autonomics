@@ -62,6 +62,7 @@ import {
   type WikiEntry,
   type WikiLinkRef,
 } from "./wiki-api";
+import { newId } from "@/lib/utils";
 
 type Mode = WikiMode;
 
@@ -80,7 +81,7 @@ const TABS_STORAGE_KEY = "wiki.tabs.v1";
 
 function freshHomeTab(): WikiTab {
   return {
-    id: crypto.randomUUID(),
+    id: newId(),
     stack: [{ kind: "home" }],
     cursor: 0,
     mode: "read",
@@ -278,7 +279,7 @@ export function WikiPanel() {
     (entryId: string, title: string, newTab: boolean) => {
       const loc: TabLocation = { kind: "entry", entryId, title: title || "…" };
       if (newTab || current.kind === "home") {
-        const id = crypto.randomUUID();
+        const id = newId();
         setTabs((prev) => [...prev, { id, stack: [loc], cursor: 0, mode: "read" }]);
         setActiveTabId(id);
       } else {
@@ -356,7 +357,7 @@ export function WikiPanel() {
         tags: [],
       });
       // 新词条开新 tab,直接进编辑模式;首页浏览位置不动。
-      const id = crypto.randomUUID();
+      const id = newId();
       const loc: TabLocation = { kind: "entry", entryId: created.id, title: base };
       setTabs((prev) => [...prev, { id, stack: [loc], cursor: 0, mode: "edit" }]);
       setActiveTabId(id);

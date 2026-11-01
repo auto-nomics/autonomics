@@ -182,7 +182,7 @@ export function ReadingView({
             allowed) — clicks are routed by the delegated handler above. */}
         <div
           ref={containerRef}
-          className="md mx-auto max-w-3xl break-words text-sm"
+          className="md wiki-md mx-auto max-w-3xl break-words text-sm"
           dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content) }}
         />
       </ScrollArea>

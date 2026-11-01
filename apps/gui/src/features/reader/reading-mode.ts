@@ -1,5 +1,6 @@
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import { highlightNoteIndicator } from './highlight-note-indicator';
+import { defaultAnnotationColor } from '@/lib/annotation-colors';
 import { TextQuoteIndex, normalizeQuote, type ReadingTextRange } from './reading-text-range';
 import { ReadingImagePreview } from './reading-image-preview';
 import {
@@ -278,7 +279,7 @@ export class ReadingModeView {
           left: `${rect.left - origin.left + this.container.scrollLeft}px`,
           top: `${rect.top - origin.top + this.container.scrollTop}px`,
           width: `${rect.width}px`, height: `${rect.height}px`,
-          background: annotation.color ?? '#ffd400',
+          background: annotation.color ?? defaultAnnotationColor(),
         });
         fragment.append(mark);
       }

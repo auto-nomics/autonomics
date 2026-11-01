@@ -5,6 +5,7 @@ import { TextLayer } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
 import { escapeHtml } from "@/lib/markdown";
+import { ANNOTATION_COLOR_NAMES, annotationColor, defaultAnnotationColor, type AnnotationColorName } from "@/lib/annotation-colors";
 import type { BibArticle } from "@/types";
 import "./pdf-reader.css";
 import type { ReadingTextRange } from "./reading-text-range";
@@ -701,7 +702,9 @@ class ZoteroStylePdfReader {
   private readTheme(): ReaderTheme {
     const saved = window.localStorage.getItem(READER_THEME_KEY);
     if (saved === "light" || saved === "dark") return saved;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    // Default follows the app color theme (html.dark), not the OS setting:
+    // the reader chrome tracks the app, so the pages should too.
+    return document.documentElement.classList.contains("dark") ? "dark" : "light";
   }
 
   private applyTheme() {
@@ -758,7 +761,7 @@ class ZoteroStylePdfReader {
     action("tool-highlight", () => {
       const selected = this.anchor;
       this.setAnnotationTool(this.annotationTool === "highlight" ? "pointer" : "highlight");
-      if (this.annotationTool === "highlight" && selected) void this.addHighlight("#ffd400");
+      if (this.annotationTool === "highlight" && selected) void this.addHighlight(defaultAnnotationColor());
     });
     action("tool-note", () => {
       const selected = this.anchor;
@@ -801,7 +804,7 @@ class ZoteroStylePdfReader {
     action("m-highlight", () => {
       const selected = this.anchor;
       this.setAnnotationTool(this.annotationTool === "highlight" ? "pointer" : "highlight");
-      if (this.annotationTool === "highlight" && selected) void this.addHighlight("#ffd400");
+      if (this.annotationTool === "highlight" && selected) void this.addHighlight(defaultAnnotationColor());
     });
     action("m-note", () => {
       const selected = this.anchor;
@@ -1277,7 +1280,11 @@ class ZoteroStylePdfReader {
         node.style.top = `${box.top * 100}%`;
         node.style.width = `${box.width * 100}%`;
         node.style.height = `${box.height * 100}%`;
-        node.style.background = annotation.color ?? "rgba(255, 214, 0, .38)";
+        // Saved colors render opaque here — the .reader-annotation blend /
+        // opacity vars adapt them per PDF theme. Only the missing-color
+        // fallback carries alpha (as the old rgba literal did).
+        node.style.background = annotation.color
+          ?? `color-mix(in srgb, ${defaultAnnotationColor()} 38%, transparent)`;
         if (isNote) {
           node.classList.add("reader-note-marker");
           node.style.left = `${(box.left + box.width / 2) * 100}%`;
@@ -1576,7 +1583,7 @@ class ZoteroStylePdfReader {
     this.captureSelection();
     if (this.annotationTool === "highlight" && this.anchor) {
       this.selectionPopup.hidden = true;
-      void this.addHighlight("#ffd400");
+      void this.addHighlight(defaultAnnotationColor());
     }
   }
 
@@ -1599,10 +1606,9 @@ class ZoteroStylePdfReader {
   private async addHighlight(color: string) {
     if (!this.anchor || this.savingHighlights.has(this.anchor)) return;
     const anchor = this.anchor;
-    color = ({
-      yellow: "#ffd400", green: "#5fb236", red: "#ff6666", blue: "#2ea8e5",
-      purple: "#a28ae5", magenta: "#e56eee", orange: "#f19837", gray: "#aaaaaa",
-    } as Record<string, string>)[color] ?? color;
+    color = ANNOTATION_COLOR_NAMES.includes(color as AnnotationColorName)
+      ? annotationColor(color)
+      : color;
     this.savingHighlights.add(anchor);
     try {
       for (const target of [{ page: anchor.page, rects: anchor.rects }, ...(anchor.extraPages ?? [])]) {
@@ -1663,7 +1669,7 @@ class ZoteroStylePdfReader {
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
     this.noteComposer.open(point ?? target, async content => {
-      const annotation = await this.saveAnnotation({ content, kind: "comment", page: target.page, rects: target.rects, color: "#ffd400" });
+      const annotation = await this.saveAnnotation({ content, kind: "comment", page: target.page, rects: target.rects, color: defaultAnnotationColor() });
       if (!annotation) return false;
       toast.success("Note saved");
       this.annotationInspector.select(annotation.id);

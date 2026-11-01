@@ -1,5 +1,6 @@
 import type { ReadingTextRange } from './reading-text-range';
 import { escapeHtml } from '@/lib/markdown';
+import { defaultAnnotationColor, annotationPalette } from '@/lib/annotation-colors';
 import { AnnotationHoverCard } from './annotation-hover-card';
 
 export type ReaderAnnotation = {
@@ -119,12 +120,12 @@ export class AnnotationInspector {
       <div class="reader-annotation-tags"></div>
       <input class="reader-annotation-tag-input" aria-label="Add annotation tags" placeholder="Add tags…" />
       <div class="reader-annotation-options" hidden>
-        <div class="reader-annotation-colors" role="group" aria-label="Highlight color">${['#ffd400','#ff6666','#5fb236','#2ea8e5','#a28ae5','#e56eee','#f19837','#aaaaaa'].map(color => `<button type="button" data-annotation-color="${color}" aria-label="Color ${color}" style="--annotation-color:${color}"></button>`).join('')}</div>
+        <div class="reader-annotation-colors" role="group" aria-label="Highlight color">${annotationPalette().map(color => `<button type="button" data-annotation-color="${color}" aria-label="Color ${color}" style="--annotation-color:${color}"></button>`).join('')}</div>
         <button type="button" data-annotation-action="copy">Copy highlighted text</button>
         <button type="button" data-annotation-action="delete">Delete annotation</button>
       </div>
       <div class="reader-annotation-save-status" role="status"></div>`;
-    this.popup.querySelector<HTMLElement>('.reader-annotation-icon')!.style.color = annotation.color ?? '#ffd400';
+    this.popup.querySelector<HTMLElement>('.reader-annotation-icon')!.style.color = annotation.color ?? defaultAnnotationColor();
     this.renderTags(tags);
     if (this.failed.has(annotation.id)) this.status('Could not save. ', true);
     const textarea = this.popup.querySelector('textarea')!;

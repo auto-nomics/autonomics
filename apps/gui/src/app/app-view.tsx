@@ -2,7 +2,7 @@
 // login/boot screens. All agent state and gateway wiring lives in
 // use-agent-runtime; this component only renders it.
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { BookMarked, BookOpen, Bot, Camera, Compass, Library, Settings, PanelRight, PanelLeft, LogOut, Rss } from "lucide-react";
+import { BookMarked, BookOpen, Bot, Camera, Compass, Library, Settings, PanelRight, PanelLeft, LogOut, Rss, Sun, Moon, Monitor } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
@@ -14,6 +14,8 @@ import { BibliographyView, type BibliographyWorkspace } from "@/features/bibliog
 import { WikiPanel } from "@/features/wiki";
 import { ConfigView, DagView } from "@/features/system";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { useTheme } from "@/hooks/use-theme";
+import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -29,6 +31,31 @@ const bibWorkspaces = [
   { id: "snapshots", label: "快照", name: "Snapshots", icon: Camera },
   { id: "subscriptions", label: "订阅", name: "Subscriptions", icon: Rss },
 ] as const satisfies readonly { id: BibliographyWorkspace; label: string; name: string; icon: LucideIcon }[];
+
+const THEME_META: Record<ThemeMode, { label: string; icon: LucideIcon }> = {
+  light: { label: "浅色主题", icon: Sun },
+  dark: { label: "深色主题", icon: Moon },
+  system: { label: "跟随系统", icon: Monitor },
+};
+
+/** Sidebar footer control: cycles 浅色 → 深色 → 跟随系统. */
+function ThemeToggleButton({ collapsed }: { collapsed: boolean }) {
+  const { mode } = useTheme();
+  const meta = THEME_META[mode];
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className={cn("w-full justify-start gap-2", collapsed && "h-9 w-9 min-w-9 justify-center p-0")}
+      aria-label={`色彩主题:${meta.label},点击切换`}
+      title={collapsed ? meta.label : `色彩主题:${meta.label}(点击切换)`}
+      onClick={cycleThemeMode}
+    >
+      <meta.icon />
+      {!collapsed && <span className="truncate">{meta.label}</span>}
+    </Button>
+  );
+}
 
 export function App() {
   const runtime = useAgentRuntime();
@@ -246,15 +273,6 @@ export function App() {
       onAdd={() => { if (placement === "hidden") setPlacement("docked"); }}
     >
     <main data-workbench="" data-sidebar-collapsed={sidebarCollapsed || undefined} className={cn("relative grid h-full min-h-0 grid-rows-[minmax(0,1fr)] bg-background", mobile ? "grid-cols-[minmax(0,1fr)]" : railCollapsed ? "grid-cols-[56px_minmax(0,1fr)]" : "grid-cols-[136px_minmax(0,1fr)] sm:grid-cols-[160px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,1fr)]")}>
-      {mobile && sidebarCollapsed && (
-        <button
-          type="button"
-          aria-label="展开侧栏"
-          title="展开侧栏"
-          onClick={() => setSidebarCollapsed(false)}
-          className="absolute inset-y-0 left-0 z-30 w-4 outline-none transition-colors hover:bg-accent/25"
-        />
-      )}
       {mobile && (
         <button
           type="button"
@@ -262,7 +280,7 @@ export function App() {
           aria-label="收起侧栏"
           onClick={closeDrawer}
           className={cn(
-            "absolute inset-0 z-[35] bg-black/50 outline-none",
+            "absolute inset-0 z-[35] bg-[var(--scrim)] outline-none",
             "transition-[opacity,visibility] duration-200 ease-out motion-reduce:transition-none",
             drawerOpen ? "visible opacity-100" : "invisible opacity-0 pointer-events-none",
           )}
@@ -319,6 +337,7 @@ export function App() {
             <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", runtime.connected ? "bg-primary" : "bg-destructive")} />
             {!railCollapsed && <span className="truncate text-xs text-muted-foreground">{runtime.connected ? "Gateway 已连接" : "Gateway 已断开"}</span>}
           </div>
+          <ThemeToggleButton collapsed={railCollapsed} />
           <Button
             size="sm"
             variant={placement === "docked" ? "secondary" : "ghost"}
