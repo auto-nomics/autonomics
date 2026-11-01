@@ -71,7 +71,6 @@ export function ContextBasket() {
         <Button size="icon-xs" variant="ghost" aria-label={`移除引用：${resource.title}`} onClick={() => basket.remove(resource)}><X /></Button>
       </li>)}
     </ul>}
-    {basket.resources.length > 0 && <p className="text-xs text-muted-foreground">随每条消息发送这些快照；浏览其他资源不会改变引用。</p>}
     <Dialog open={Boolean(preview)} onOpenChange={open => { if (!open) setPreview(null); }}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader><DialogTitle>{preview?.title}</DialogTitle><DialogDescription>{preview?.scope}</DialogDescription></DialogHeader>

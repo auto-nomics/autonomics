@@ -4,7 +4,7 @@ import { escapeHtml } from "@/lib/markdown";
 import type { BibArticle } from "@/types";
 import "./pdf-reader.css";
 import "./txt-reader.css";
-import { Toast } from "@/components/ui/toast";
+import { toast } from "sonner";
 import { ReaderAlertDialog } from "./reader-alert-dialog";
 import { NoteComposer } from "./note-composer";
 import {
@@ -149,7 +149,6 @@ class ZoteroStyleTxtReader {
   private returnFocus: Element | null = null;
 
   private root: HTMLDivElement;
-  private toast: Toast;
   private alertDialog: ReaderAlertDialog;
   private noteComposer: NoteComposer;
   private container: HTMLDivElement;
@@ -292,7 +291,6 @@ class ZoteroStyleTxtReader {
     `;
     if (this.workspace.host) this.root.dataset.hosted = "true";
     (this.workspace.host ?? document.body).append(this.root);
-    this.toast = new Toast(this.root);
     this.alertDialog = new ReaderAlertDialog(this.root);
     this.noteComposer = new NoteComposer(this.root);
 
@@ -548,9 +546,9 @@ class ZoteroStyleTxtReader {
     action("tool-note", () => void this.addNote());
     action("copy-selection-toolbar", () => void this.copySelection());
     const addReference = () => {
-      if (!this.anchor?.text) { this.toast.show("请先选择要引用的文本", "info"); return; }
+      if (!this.anchor?.text) { toast.info("请先选择要引用的文本"); return; }
       this.workspace.onReference?.({ text: this.anchor.text, start: this.anchor.start, end: this.anchor.end });
-      this.toast.show("已加入当前会话引用");
+      toast.success("已加入当前会话引用");
     };
     action("add-context", addReference);
     action("add-selection-context", addReference);
@@ -738,16 +736,16 @@ class ZoteroStyleTxtReader {
   private async copySelection(closePopup = false) {
     const text = this.anchor?.text;
     if (!text) {
-      this.toast.show("Select text to copy first", "info");
+      toast.info("Select text to copy first");
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       if (this.destroyed) return;
       if (closePopup) this.hideSelectionPopup();
-      this.toast.show("Copied to clipboard");
+      toast.success("Copied to clipboard");
     } catch {
-      if (!this.destroyed) this.toast.show("Unable to copy. Please try again.", "error");
+      if (!this.destroyed) toast.error("Unable to copy. Please try again.");
     }
   }
 
@@ -879,7 +877,7 @@ class ZoteroStyleTxtReader {
         this.renderSidebarTags();
         return true;
       } catch (error) {
-        this.toast.show(`Failed to save note: ${String(error)}`);
+        if (!this.destroyed) toast.error(`Failed to save note: ${String(error)}`);
         return false;
       }
     });
@@ -1130,7 +1128,6 @@ class ZoteroStyleTxtReader {
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
     this.events.abort();
-    this.toast.destroy();
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
