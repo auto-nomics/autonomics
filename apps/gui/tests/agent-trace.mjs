@@ -42,7 +42,7 @@ try {
       { type: 'tool_result', content: 'a.txt\nb.txt' },
       { type: 'tool_result', content: { files: ['a.txt', 'b.txt'], count: 2 } },
       { type: 'tool_result', is_error: true, content: 'boom' },
-      { type: 'text', text: 'alpha answer' },
+      { type: 'text', text: 'alpha answer\n\n动量 $p = mv$ 守恒。\n\n$$\n\\hat{H}\\psi = E\\psi\n$$' },
     ] },
   ] } }));
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
@@ -50,6 +50,12 @@ try {
   await page.goto(origin);
   await page.getByPlaceholder('输入消息…').waitFor({ state: 'visible' });
   await page.getByText('alpha answer').waitFor({ state: 'visible' });
+
+  // Unified pipeline: the transcript renders KaTeX math exactly like the
+  // wiki reading view (shared lib/markdown factory).
+  const answer = page.locator('.md', { hasText: 'alpha answer' }).first();
+  await answer.locator('.md-math:not(.md-math--display)').waitFor();
+  assert.equal(await answer.locator('.md-math').count(), 2, 'inline + display math render in the transcript');
 
   // The four consecutive steps render as one Trace list between the text messages.
   const trace = page.locator('[data-slot="trace"]');

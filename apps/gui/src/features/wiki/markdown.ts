@@ -1,186 +1,19 @@
 /**
- * Wiki markdown pipeline: a private `Marked` instance (the shared one in
- * lib/markdown must stay untouched for the agent transcript) with two
- * wiki-specific behaviours:
+ * Wiki markdown surface. Rendering itself lives in the shared pipeline
+ * (`lib/markdown`) — same marked factory as the agent transcript, with
+ * `[[wikilink]]` chips on top; click routing stays in React. This module
+ * keeps only the wiki-specific extras:
  *
- * - `[[target]]` / `[[target|display]]` wikilinks render as inert
- *   `<a data-wikilink>` chips — click routing stays in React.
- * - `$…$` / `$$…$$` / `\(…\)` / `\[…\]` math renders through KaTeX. The
- *   gateway serves the SPA as three embedded text assets, so we use
- *   KaTeX's MathML output (rendered natively by the browser) — no font
- *   files to host.
- * - the lexer powers the SiYuan-style block editor: content splits into
+ * - `extractWikiTargets` for backlink/mention resolution,
+ * - the SiYuan-style block editor model: the lexer splits content into
  *   top-level markdown blocks whose `raw` fragments re-join losslessly,
  *   so "blocks ⇄ content" never rewrites the document.
  */
-import DOMPurify from "dompurify";
-import katex from "katex";
-import { Marked, type Tokens } from "marked";
+import { wikiLexer } from "@/lib/markdown";
 
-import { escapeHtml } from "@/lib/markdown";
+export { renderWikiMarkdown } from "@/lib/markdown";
 
-const WIKILINK_TOKEN_RE = /^\[\[([^\[\]\n]+)\]\]/;
 const WIKILINK_SCAN_RE = /\[\[([^\[\]\n]+)\]\]/g;
-
-interface WikilinkToken extends Tokens.Generic {
-  target: string;
-  display: string;
-}
-
-interface MathToken extends Tokens.Generic {
-  tex: string;
-  displayMode: boolean;
-}
-
-/**
- * `$$…$$` / `\[…\]` may span lines; `$…$` / `\(…\)` are single-line and
- * must not open or close with whitespace (keeps "$5 and $10" out of the
- * math pipeline).
- */
-const MATH_DISPLAY_TOKEN_RE = /^\$\$([\s\S]+?)\$\$/;
-const MATH_INLINE_TOKEN_RE = /^\$([^\$\n]+)\$/;
-const MATH_DISPLAY_BRACKET_RE = /^\\\[([\s\S]+?)\\\]/;
-const MATH_INLINE_PAREN_RE = /^\\\(([\s\S]+?)\\\)/;
-
-function mathTokenizer(
-  src: string,
-  pattern: RegExp,
-  name: string,
-  displayMode: boolean,
-): MathToken | undefined {
-  const match = pattern.exec(src);
-  if (!match) return undefined;
-  const tex = match[1].trim();
-  if (!tex) return undefined;
-  if (!displayMode && (/^\s/.test(match[1]) || /\s$/.test(match[1]))) {
-    return undefined;
-  }
-  // The token type must equal the extension name — marked resolves the
-  // renderer through it.
-  return { type: name, raw: match[0], tex, displayMode };
-}
-
-function mathRenderer(token: Tokens.Generic): string {
-  const math = token as MathToken;
-  const cssClass = math.displayMode ? "md-math md-math--display" : "md-math";
-  const rendered = katex.renderToString(math.tex, {
-    displayMode: math.displayMode,
-    throwOnError: false,
-    strict: false,
-    // The gateway embeds the SPA as text assets — MathML needs no fonts.
-    output: "mathml",
-  });
-  return `<span class="${cssClass}">${rendered}</span>`;
-}
-
-const wikiMarked = new Marked();
-
-wikiMarked.use({
-  gfm: true,
-  breaks: true,
-  extensions: [
-    {
-      name: "math-display",
-      level: "inline",
-      start(src: string) {
-        const index = src.indexOf("$$");
-        return index === -1 ? undefined : index;
-      },
-      tokenizer(src: string) {
-        return mathTokenizer(src, MATH_DISPLAY_TOKEN_RE, "math-display", true);
-      },
-      renderer: mathRenderer,
-    },
-    {
-      // LaTeX bracket display form. Lives before marked's escape tokenizer
-      // (extensions run first), so `\[…\]` wins; an unclosed `\[` falls
-      // through to the escape tokenizer and renders a literal `[`.
-      name: "math-display-bracket",
-      level: "inline",
-      start(src: string) {
-        const index = src.indexOf("\\[");
-        return index === -1 ? undefined : index;
-      },
-      tokenizer(src: string) {
-        return mathTokenizer(src, MATH_DISPLAY_BRACKET_RE, "math-display-bracket", true);
-      },
-      renderer: mathRenderer,
-    },
-    {
-      // LaTeX parenthesis inline form.
-      name: "math-inline-paren",
-      level: "inline",
-      start(src: string) {
-        const index = src.indexOf("\\(");
-        return index === -1 ? undefined : index;
-      },
-      tokenizer(src: string) {
-        return mathTokenizer(src, MATH_INLINE_PAREN_RE, "math-inline-paren", false);
-      },
-      renderer: mathRenderer,
-    },
-    {
-      name: "math-inline",
-      level: "inline",
-      start(src: string) {
-        const index = src.indexOf("$");
-        return index === -1 ? undefined : index;
-      },
-      tokenizer(src: string) {
-        return mathTokenizer(src, MATH_INLINE_TOKEN_RE, "math-inline", false);
-      },
-      renderer: mathRenderer,
-    },
-    {
-      name: "wikilink",
-      level: "inline",
-      start(src: string) {
-        const index = src.indexOf("[[");
-        return index === -1 ? undefined : index;
-      },
-      tokenizer(src: string): WikilinkToken | undefined {
-        const match = WIKILINK_TOKEN_RE.exec(src);
-        if (!match) return undefined;
-        const pipe = match[1].indexOf("|");
-        const target = (pipe === -1 ? match[1] : match[1].slice(0, pipe)).trim();
-        const display = (pipe === -1 ? match[1] : match[1].slice(pipe + 1)).trim();
-        if (!target) return undefined;
-        return { type: "wikilink", raw: match[0], target, display: display || target };
-      },
-      renderer(token: Tokens.Generic) {
-        const link = token as WikilinkToken;
-        return `<a data-wikilink="${escapeHtml(link.target)}" class="md-wikilink">${escapeHtml(link.display)}</a>`;
-      },
-    },
-  ],
-  renderer: {
-    // Same shell as lib/markdown (language header + copy button) — the
-    // wiki views wire their own delegated copy handler.
-    code(token: Tokens.Code) {
-      const language = (token.lang ?? "").trim().split(/\s+/)[0] ?? "";
-      return [
-        '<div class="md-code">',
-        '<div class="md-code-head">',
-        `<span>${escapeHtml(language)}</span>`,
-        '<button type="button" data-copy-code>Copy</button>',
-        "</div>",
-        `<pre><code>${escapeHtml(token.text)}</code></pre>`,
-        "</div>",
-      ].join("");
-    },
-  },
-});
-
-export function renderWikiMarkdown(text: string): string {
-  return DOMPurify.sanitize(wikiMarked.parse(text, { async: false }), {
-    // html for the markdown body, mathMl for KaTeX's `<math>` output.
-    // KaTeX also nests the original TeX in <semantics><annotation> — not
-    // in DOMPurify's mathMl profile, added back as inert text so the
-    // formula source stays copyable.
-    USE_PROFILES: { html: true, mathMl: true },
-    ADD_TAGS: ["semantics", "annotation"],
-  });
-}
 
 /** Unique `[[target]]` names in document order (display text ignored). */
 export function extractWikiTargets(text: string): string[] {
@@ -211,7 +44,7 @@ export function newMarkdownBlock(raw: string, kind = "paragraph"): MarkdownBlock
  * whole document degrades to one editable block instead of corrupting it.
  */
 export function splitMarkdownBlocks(content: string): MarkdownBlock[] {
-  const tokens = wikiMarked.lexer(content);
+  const tokens = wikiLexer(content);
   const blocks = tokens
     .map((token) => ({ raw: token.raw ?? "", kind: token.type }))
     .filter((block) => block.raw.length > 0)

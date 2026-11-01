@@ -2092,6 +2092,33 @@ mod tests {
     }
 
     #[test]
+    fn system_prompt_advertises_literature_for_researcher_and_curator_only() {
+        use agentik_core::AgentKind;
+
+        for kind in [AgentKind::Researcher, AgentKind::Curator] {
+            let prompt = build_system_prompt(&kind);
+            assert!(
+                prompt.contains("### Literature & Evidence"),
+                "{} must advertise the literature group",
+                kind.name()
+            );
+            assert!(
+                prompt.contains("literature_search"),
+                "{} must name the unified retrieval tool",
+                kind.name()
+            );
+        }
+        for kind in [AgentKind::Developer, AgentKind::Browser] {
+            let prompt = build_system_prompt(&kind);
+            assert!(
+                !prompt.contains("### Literature & Evidence"),
+                "{} must not advertise the literature group",
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
     fn system_prompt_advertises_wiki_read_for_every_kind_and_write_for_curator_only() {
         use agentik_core::AgentKind;
 

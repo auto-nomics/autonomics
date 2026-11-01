@@ -38,7 +38,10 @@ pub enum AgentKind {
     /// shared wiki; only `Curator` holds the `wiki_*` write group
     /// (create/edit/patch entries, tags, attachments, recycle bin), so
     /// task agents stay read-only over the organization's long-term
-    /// memory and all curation flows through one auditable role.
+    /// memory and all curation flows through one auditable role. The
+    /// curator additionally holds the bibliography group (`bib_*`,
+    /// `literature_search` / `literature_import`) so it can feed sourced
+    /// literature into the knowledge base.
     Curator,
 }
 
@@ -99,7 +102,7 @@ impl AgentKind {
             Self::Researcher => "Full-featured biomedical research assistant.",
             Self::Developer => "Node and plugin developer for the DAG ecosystem.",
             Self::Browser => "Web-browsing specialist with a private browser session.",
-            Self::Curator => "Knowledge-base curator maintaining the shared wiki.",
+            Self::Curator => "Knowledge-base curator maintaining the shared wiki and literature library.",
         }
     }
 
@@ -115,7 +118,7 @@ impl AgentKind {
                 "You are a headless web-browsing specialist. You operate a private browser session to navigate, extract, and interact with the web on behalf of a caller. Every action is mediated through the `browser_*` tool group; you do not perform direct DOM mutation, networking, or filesystem access outside the browser sandbox."
             }
             Self::Curator => {
-                "You are a knowledge-base curator. You create, structure, and maintain the shared wiki through the `wiki_*` tool group: entries, aliases, tags, `[[wiki links]]`, attachments, and version history. You are the only role that writes to the knowledge base; keep entries concise, well-titled, cross-linked, and deduplicated."
+                "You are a knowledge-base curator. You create, structure, and maintain the shared wiki through the `wiki_*` tool group: entries, aliases, tags, `[[wiki links]]`, attachments, and version history. You also manage the shared literature library through the bibliography tools: search it with `literature_search` and `bib_search_library`, and import and organize sources with `literature_import`, collections, and `bib_export`. You are the only role that writes to the knowledge base; keep entries concise, well-titled, cross-linked, and deduplicated."
             }
         }
     }
@@ -130,8 +133,13 @@ impl AgentKind {
 
     // ── Tool capability flags ────────────────────────────────
 
+    /// Expose the bibliography tool group (local-library management via
+    /// `bib_*`, unified `literature_search` / `literature_import`, and the
+    /// DAG evidence channel). Researcher by default; the curator also holds
+    /// it because importing and organizing literature is part of
+    /// maintaining the knowledge base.
     pub const fn enable_bibliography(self) -> bool {
-        self.is_researcher()
+        matches!(self, Self::Researcher | Self::Curator)
     }
 
     pub const fn enable_writing(self) -> bool {
@@ -516,7 +524,7 @@ mod tests {
         assert!(browser.enable_browser());
 
         let curator = AgentKind::Curator;
-        assert!(!curator.enable_bibliography());
+        assert!(curator.enable_bibliography());
         assert!(!curator.enable_writing());
         assert!(!curator.enable_opengwas());
         assert!(!curator.enable_opentargets());
@@ -528,6 +536,24 @@ mod tests {
         assert!(curator.enable_dag_history());
         assert!(!curator.enable_plugin_rsi());
         assert!(!curator.enable_browser());
+    }
+
+    #[test]
+    fn bibliography_goes_to_researcher_and_curator_only() {
+        for kind in [AgentKind::Researcher, AgentKind::Curator] {
+            assert!(
+                kind.enable_bibliography(),
+                "{} must hold the bibliography group",
+                kind.name()
+            );
+        }
+        for kind in [AgentKind::Developer, AgentKind::Browser] {
+            assert!(
+                !kind.enable_bibliography(),
+                "{} must not hold the bibliography group",
+                kind.name()
+            );
+        }
     }
 
     #[test]

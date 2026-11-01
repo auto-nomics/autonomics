@@ -87,9 +87,15 @@
   --sidebar-accent-foreground: #24292f;
   --sidebar-border: #d0d7de;
   --sidebar-ring: #0969da;
-  /* Markdown headings: GitHub theme keeps light-mode headings as normal
-     text; dark mode turns them green (#7ee787). */
-  --md-heading-color: var(--foreground);
+  /* Markdown headings carry a per-level color ramp (all values from the
+     GitHub theme palettes): h1 anchors the document, deeper levels step
+     through the theme's accent hues and h6 settles at muted text. */
+  --md-h1-color: var(--foreground);
+  --md-h2-color: #086ddd;
+  --md-h3-color: #876be0;
+  --md-h4-color: #d96c00;
+  --md-h5-color: #bd8e37;
+  --md-h6-color: var(--muted-foreground);
   --inline-code-bg: rgb(175 184 193 / 20%);
   --code-block-bg: #f6f8fa;
   --code-head-bg: #ffffff;
@@ -154,8 +160,13 @@ body {
   --sidebar-accent-foreground: #c9d1d9;
   --sidebar-border: #30363d;
   --sidebar-ring: #4493f8;
-  /* GitHub theme's signature dark-mode green headings (#7ee787). */
-  --md-heading-color: #7ee787;
+  /* GitHub theme's signature dark-mode green leads the heading ramp. */
+  --md-h1-color: #7ee787;
+  --md-h2-color: #6cb6ff;
+  --md-h3-color: #d2a8ff;
+  --md-h4-color: #ffa657;
+  --md-h5-color: #d29922;
+  --md-h6-color: #8b949e;
   --inline-code-bg: rgb(110 118 129 / 40%);
   --code-block-bg: #161b22;
   --code-head-bg: #0d1117;
@@ -210,12 +221,12 @@ body {
   font-weight: 600;
   line-height: 1.3;
 }
-.md :is(h1, h2, h3, h4, h5, h6) {
-  color: var(--md-heading-color);
-}
-.md h1 { font-size: 1.25em; }
-.md h2 { font-size: 1.15em; }
-.md h3 { font-size: 1.05em; }
+.md h1 { color: var(--md-h1-color); font-size: 1.25em; }
+.md h2 { color: var(--md-h2-color); font-size: 1.15em; }
+.md h3 { color: var(--md-h3-color); font-size: 1.05em; }
+.md h4 { color: var(--md-h4-color); }
+.md h5 { color: var(--md-h5-color); }
+.md h6 { color: var(--md-h6-color); }
 .md ul, .md ol { margin: 0.5em 0; padding-left: 1.4em; }
 .md ul { list-style: disc; }
 .md ol { list-style: decimal; }

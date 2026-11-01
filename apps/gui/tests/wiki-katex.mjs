@@ -255,7 +255,12 @@ try {
     '"H2"',
     'H2 shows its outline level in the gutter',
   );
-  assert.equal(await mdH1.evaluate((el) => getComputedStyle(el).color), 'rgb(126, 231, 135)', 'dark headings use the GitHub green');
+  assert.equal(await mdH1.evaluate((el) => getComputedStyle(el).color), 'rgb(126, 231, 135)', 'H1 keeps the GitHub green');
+  assert.equal(
+    await wiki.locator('.wiki-md h2').first().evaluate((el) => getComputedStyle(el).color),
+    'rgb(108, 182, 255)',
+    'H2 steps to the blue ramp color — levels are distinguishable',
+  );
 
   // ── currency prose stays plain ──
   const prose = wiki.locator('p', { hasText: '学费' });
