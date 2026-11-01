@@ -1,8 +1,6 @@
 export type GatewayProbe = {
   running: boolean;
   addr: string;
-  /** Whether the caller holds a usable credential. */
-  authenticated: boolean;
 };
 
 import type { GatewayFrame } from "./types";
@@ -156,35 +154,24 @@ export async function logoutGateway(): Promise<void> {
   }).catch(() => {});
 }
 
-/** Whether the browser holds a live session cookie. */
-export async function sessionAuthenticated(): Promise<boolean> {
-  if (isTauri) {
-    const view = await tauriInvoke<{ token_found: boolean }>("probe");
-    return Boolean(view.token_found);
-  }
-  const response = await fetch(WEB_SESSION_PATH, {
-    credentials: "same-origin",
-  }).catch(() => null);
-  return Boolean(response?.ok);
-}
-
 export async function probeGateway(): Promise<GatewayProbe> {
   if (isTauri) {
     const view = await tauriInvoke<{
       running: boolean;
       addr: string;
-      token_found: boolean;
     }>("probe");
     return {
       running: view.running,
       addr: view.addr,
-      authenticated: Boolean(view.token_found),
     };
   }
+  // The web build does not pre-probe the session: any guarded call
+  // (hydrate's `/state`) answers 401 on its own and flips the UI to the
+  // login card. Pinging `/api/session` here would only put a
+  // guaranteed-401 request in the console on every boot.
   return {
     running: true,
     addr: window.location.host,
-    authenticated: await sessionAuthenticated(),
   };
 }
 
