@@ -38,6 +38,7 @@ mod keyboard;
 mod leader;
 mod model_config;
 mod naming;
+mod overlays;
 mod render;
 mod runtime_events;
 mod skill_evolution;

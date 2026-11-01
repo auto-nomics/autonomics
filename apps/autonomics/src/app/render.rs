@@ -1,5 +1,6 @@
 //! Workspace and overlay rendering.
 
+use super::overlays::Overlay;
 use super::*;
 
 impl App {
@@ -267,6 +268,187 @@ impl App {
         );
     }
 
+    /// Render one overlay by variant, called bottom→top over
+    /// [`AppState::overlay_stack`]. The variant set and their stacking
+    /// order are defined in `app::overlays` — this match only maps each
+    /// variant to its drawing code.
+    fn render_overlay(&mut self, frame: &mut Frame, overlay: Overlay) {
+        match overlay {
+            Overlay::CommandPalette => {
+                crate::widgets::command_palette::render_command_palette(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.command_palette,
+                );
+                if let Some((cx, cy)) = self.state.command_palette.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                }
+            }
+            Overlay::DeleteConfirm => {
+                self.render_delete_confirm_popup(frame.area(), frame.buffer_mut());
+            }
+            Overlay::ProfilePicker => {
+                use ratatui::widgets::StatefulWidget as _;
+                crate::widgets::profile_picker::ProfilePicker::new()
+                    .popup_width((frame.area().width * 8 / 10).max(70))
+                    .list_width(28)
+                    .render(
+                        frame.area(),
+                        frame.buffer_mut(),
+                        &mut self.state.profile_picker,
+                    );
+            }
+            Overlay::AgentProfilePicker => {
+                use ratatui::widgets::StatefulWidget as _;
+                crate::widgets::agent_profile_picker::AgentProfilePicker::new()
+                    .popup_width((frame.area().width * 8 / 10).max(70))
+                    .list_width(28)
+                    .render(
+                        frame.area(),
+                        frame.buffer_mut(),
+                        &mut self.state.agent_profile_picker,
+                    );
+            }
+            Overlay::AgentsPopup => {
+                crate::widgets::agents_popup::render_agents_popup(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agents_popup,
+                );
+                if let Some((cx, cy)) = self.state.agents_popup.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                }
+            }
+            Overlay::PlanPopup => {
+                let plan = self.state.active_tab_state().plan.clone();
+                crate::widgets::plan_popup::render_plan_popup(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.plan_popup,
+                    &plan,
+                );
+            }
+            Overlay::TasksPopup => {
+                let tasks = self.state.active_tab_state().tool_tasks.clone();
+                crate::widgets::tasks_popup::render_tasks_popup(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.tasks_popup,
+                    &tasks,
+                );
+            }
+            Overlay::AgentModelPicker => {
+                crate::widgets::agent_model_picker::render_agent_model_picker(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agent_model_picker,
+                );
+                if let Some((cx, cy)) = self.state.agent_model_picker.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                }
+            }
+            Overlay::AgentEffortPicker => {
+                crate::widgets::agent_effort_picker::render_agent_effort_picker(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agent_effort_picker,
+                );
+            }
+            Overlay::BulkConfirm => {
+                self.render_bulk_confirm_popup(frame.area(), frame.buffer_mut());
+            }
+            Overlay::MessagePicker => {
+                crate::widgets::message_picker::render_message_picker(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.message_picker,
+                );
+                // Position the hardware cursor inside the search input so
+                // the user sees the caret where they are typing.
+                if let Some((cx, cy)) = self.state.message_picker.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
+                }
+            }
+            Overlay::NameInput => {
+                crate::widgets::name_input::render_name_input(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.name_input,
+                );
+                if let Some((x, y)) = self.state.name_input.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x, y });
+                }
+            }
+            Overlay::ModelConfig => {
+                use ratatui::widgets::StatefulWidgetRef as _;
+                let popup_width = frame.area().width * 9 / 10;
+                let popup_height = frame.area().height * 9 / 10;
+                let popup = crate::widgets::popup::Popup::new(
+                    " Model Config ",
+                    crate::widgets::popup::PopupControls::default(),
+                )
+                .width(popup_width)
+                .height(popup_height)
+                .accent(ratatui::style::Color::Magenta);
+                let inner = popup.render(frame.area(), frame.buffer_mut());
+                let widget = crate::widgets::model_config_widget::ModelConfigWidget;
+                widget.render_ref(
+                    inner,
+                    frame.buffer_mut(),
+                    &mut self.state.model_config_state,
+                );
+                if let Some((x, y)) = self.state.model_config_state.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x, y });
+                }
+            }
+            Overlay::EmbeddingConfig => {
+                use ratatui::widgets::StatefulWidgetRef as _;
+                let popup_width = frame.area().width * 7 / 10;
+                let popup_height = frame.area().height * 8 / 10;
+                let popup = crate::widgets::popup::Popup::new(
+                    " Embedding Model ",
+                    crate::widgets::popup::PopupControls::default(),
+                )
+                .width(popup_width)
+                .height(popup_height)
+                .accent(ratatui::style::Color::Magenta);
+                let inner = popup.render(frame.area(), frame.buffer_mut());
+                crate::widgets::embedding_config_widget::EmbeddingConfigWidget.render_ref(
+                    inner,
+                    frame.buffer_mut(),
+                    &mut self.state.embedding_config_state,
+                );
+                if let Some((x, y)) = self.state.embedding_config_state.cursor_pos {
+                    frame.set_cursor_position(ratatui::layout::Position { x, y });
+                }
+            }
+            Overlay::DagView => {
+                self.render_dag_view(frame.area(), frame.buffer_mut());
+            }
+            Overlay::Bibliography => {
+                self.render_bibliography(frame.area(), frame.buffer_mut());
+            }
+            Overlay::AgentConfig => {
+                crate::widgets::agent_config_widget::render_agent_config(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.agent_config,
+                );
+            }
+            Overlay::SkillEvolution => {
+                use ratatui::widgets::StatefulWidget as _;
+                crate::widgets::evolution_widget::SkillEvolutionWidget::new()
+                    .popup_width(frame.area().width * 9 / 10)
+                    .popup_height((frame.area().height * 3 / 4).max(12))
+                    .render(
+                        frame.area(),
+                        frame.buffer_mut(),
+                        &mut self.state.skill_evolution,
+                    );
+            }
+        }
+    }
+
     pub(super) fn render(&mut self, frame: &mut Frame) {
         // Remember the frame area for mouse hit-testing (tab-bar stub).
         self.state.last_frame_area = frame.area();
@@ -320,204 +502,12 @@ impl App {
             }
         }
 
-        // ── Command palette overlay ──
-        if self.state.command_palette.is_visible() {
-            crate::widgets::command_palette::render_command_palette(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.command_palette,
-            );
-            if let Some((cx, cy)) = self.state.command_palette.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
-            }
-        }
-
-        // ── Delete-agent confirmation popup ──
-        if self.state.delete_agent_confirm {
-            self.render_delete_confirm_popup(frame.area(), frame.buffer_mut());
-        }
-
-        // ── Profile picker popup ──
-        if self.state.profile_picker.visible {
-            use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::profile_picker::ProfilePicker::new()
-                .popup_width((frame.area().width * 8 / 10).max(70))
-                .list_width(28)
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.profile_picker,
-                );
-        }
-
-        // ── Agent resume picker popup ──
-        if self.state.agent_profile_picker.visible {
-            use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::agent_profile_picker::AgentProfilePicker::new()
-                .popup_width((frame.area().width * 8 / 10).max(70))
-                .list_width(28)
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.agent_profile_picker,
-                );
-        }
-
-        // ── Agents popup (Ctrl+T) ──
-        if self.state.agents_popup.is_visible() {
-            crate::widgets::agents_popup::render_agents_popup(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.agents_popup,
-            );
-            if let Some((cx, cy)) = self.state.agents_popup.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
-            }
-        }
-
-        // ── Plan / Tasks popups (<leader>p / <leader>T) ──
-        if self.state.plan_popup.visible {
-            let plan = self.state.active_tab_state().plan.clone();
-            crate::widgets::plan_popup::render_plan_popup(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.plan_popup,
-                &plan,
-            );
-        }
-        if self.state.tasks_popup.visible {
-            let tasks = self.state.active_tab_state().tool_tasks.clone();
-            crate::widgets::tasks_popup::render_tasks_popup(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.tasks_popup,
-                &tasks,
-            );
-        }
-
-        // ── Agents-popup model / effort quick-pickers ──
-        if self.state.agent_model_picker.is_visible() {
-            crate::widgets::agent_model_picker::render_agent_model_picker(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.agent_model_picker,
-            );
-            if let Some((cx, cy)) = self.state.agent_model_picker.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
-            }
-        }
-        if self.state.agent_effort_picker.visible {
-            crate::widgets::agent_effort_picker::render_agent_effort_picker(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.agent_effort_picker,
-            );
-        }
-
-        // ── Bulk apply confirmation popup (y / n) ──
-        if self.state.bulk_confirm.is_some() {
-            self.render_bulk_confirm_popup(frame.area(), frame.buffer_mut());
-        }
-
-        // ── Message picker popup (top-most overlay) ──
-        if self.state.message_picker.is_visible() {
-            crate::widgets::message_picker::render_message_picker(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.message_picker,
-            );
-            // Position the hardware cursor inside the search input so the
-            // user sees the caret where they are typing.
-            if let Some((cx, cy)) = self.state.message_picker.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
-            }
-        }
-
-        // ── Name input popup ──
-        crate::widgets::name_input::render_name_input(
-            frame.area(),
-            frame.buffer_mut(),
-            &mut self.state.name_input,
-        );
-        if let Some((x, y)) = self.state.name_input.cursor_pos {
-            frame.set_cursor_position(ratatui::layout::Position { x, y });
-        }
-
-        // ── Model config popup ──
-        if self.state.model_config_visible {
-            use ratatui::widgets::StatefulWidgetRef as _;
-            let popup_width = frame.area().width * 9 / 10;
-            let popup_height = frame.area().height * 9 / 10;
-            let popup = crate::widgets::popup::Popup::new(
-                " Model Config ",
-                crate::widgets::popup::PopupControls::default(),
-            )
-            .width(popup_width)
-            .height(popup_height)
-            .accent(ratatui::style::Color::Magenta);
-            let inner = popup.render(frame.area(), frame.buffer_mut());
-            let widget = crate::widgets::model_config_widget::ModelConfigWidget;
-            widget.render_ref(
-                inner,
-                frame.buffer_mut(),
-                &mut self.state.model_config_state,
-            );
-            if let Some((x, y)) = self.state.model_config_state.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x, y });
-            }
-        }
-
-        // ── Embedding config popup ──
-        if self.state.embedding_config_visible {
-            use ratatui::widgets::StatefulWidgetRef as _;
-            let popup_width = frame.area().width * 7 / 10;
-            let popup_height = frame.area().height * 8 / 10;
-            let popup = crate::widgets::popup::Popup::new(
-                " Embedding Model ",
-                crate::widgets::popup::PopupControls::default(),
-            )
-            .width(popup_width)
-            .height(popup_height)
-            .accent(ratatui::style::Color::Magenta);
-            let inner = popup.render(frame.area(), frame.buffer_mut());
-            crate::widgets::embedding_config_widget::EmbeddingConfigWidget.render_ref(
-                inner,
-                frame.buffer_mut(),
-                &mut self.state.embedding_config_state,
-            );
-            if let Some((x, y)) = self.state.embedding_config_state.cursor_pos {
-                frame.set_cursor_position(ratatui::layout::Position { x, y });
-            }
-        }
-
-        // ── DAG view overlay ──
-        if self.state.dag_view_visible {
-            self.render_dag_view(frame.area(), frame.buffer_mut());
-        }
-
-        if self.state.bibliography_visible {
-            self.render_bibliography(frame.area(), frame.buffer_mut());
-        }
-
-        if self.state.agent_config.visible {
-            crate::widgets::agent_config_widget::render_agent_config(
-                frame.area(),
-                frame.buffer_mut(),
-                &mut self.state.agent_config,
-            );
-        }
-
-        // ── Skill-evolution dashboard ──
-        if self.state.skill_evolution.visible {
-            use ratatui::widgets::StatefulWidget as _;
-            crate::widgets::evolution_widget::SkillEvolutionWidget::new()
-                .popup_width(frame.area().width * 9 / 10)
-                .popup_height((frame.area().height * 3 / 4).max(12))
-                .render(
-                    frame.area(),
-                    frame.buffer_mut(),
-                    &mut self.state.skill_evolution,
-                );
+        // ── Overlays, bottom→top ──
+        // One z-order for the whole app: [`AppState::overlay_stack`] is the
+        // same ordered list the key dispatcher consults (app::overlays), so
+        // what is painted on top is exactly what captures input.
+        for overlay in self.state.overlay_stack() {
+            self.render_overlay(frame, overlay);
         }
 
         // ── Which-key panel (leader prefix active) ──

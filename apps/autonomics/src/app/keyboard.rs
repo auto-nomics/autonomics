@@ -1,5 +1,6 @@
 //! Global terminal-input routing and top-level key dispatch.
 
+use super::overlays::Overlay;
 use super::*;
 
 impl App {
@@ -69,27 +70,10 @@ impl App {
     /// clicking the tab bar's collapse stub opens the switch-agent picker.
     /// Returns the scroll delta to be batched with other scroll events.
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> i32 {
-        // Mouse input is not routed by screen area yet. While an overlay is
-        // visible, ignore wheel events instead of moving the hidden chat.
-        let state = &self.state;
-        if state.delete_agent_confirm
-            || state.bulk_confirm.is_some()
-            || state.command_palette.is_visible()
-            || state.profile_picker.visible
-            || state.agent_profile_picker.visible
-            || state.agents_popup.is_visible()
-            || state.plan_popup.visible
-            || state.tasks_popup.visible
-            || state.agent_model_picker.is_visible()
-            || state.agent_effort_picker.visible
-            || state.name_input.visible
-            || state.message_picker.is_visible()
-            || state.dag_view_visible
-            || state.bibliography_visible
-            || state.model_config_visible
-            || state.embedding_config_visible
-            || state.agent_config.visible
-        {
+        // Mouse input is not routed by screen area yet. While any overlay
+        // is visible, ignore wheel events instead of moving the hidden
+        // chat. Same single source of truth as rendering and key capture.
+        if !self.state.overlay_stack().is_empty() {
             return 0;
         }
 
@@ -118,30 +102,6 @@ impl App {
         } else {
             ts.scroll_offset = ts.scroll_offset.saturating_sub((-delta) as usize);
         }
-    }
-
-    /// True while any modal surface owns the screen (leader keys are a
-    /// browse-mode affordance and must not fight an open popup).
-    fn any_overlay_open(&self) -> bool {
-        let state = &self.state;
-        state.delete_agent_confirm
-            || state.bulk_confirm.is_some()
-            || state.command_palette.is_visible()
-            || state.profile_picker.visible
-            || state.agent_profile_picker.visible
-            || state.agents_popup.is_visible()
-            || state.plan_popup.visible
-            || state.tasks_popup.visible
-            || state.agent_model_picker.is_visible()
-            || state.agent_effort_picker.visible
-            || state.name_input.visible
-            || state.message_picker.is_visible()
-            || state.dag_view_visible
-            || state.bibliography_visible
-            || state.model_config_visible
-            || state.embedding_config_visible
-            || state.agent_config.visible
-            || state.skill_evolution.visible
     }
 
     /// Feed one key to the pending leader prefix. Returns `true` when the
@@ -194,17 +154,21 @@ impl App {
     }
 
     pub(super) fn handle_key(&mut self, key: &KeyEvent) {
-        // Delete-agent confirmation popup captures keys when visible.
-        if self.state.delete_agent_confirm {
-            self.handle_delete_confirm_key(key);
-            return;
-        }
+        let top_overlay = self.state.overlay_stack().pop();
 
-        // Bulk model/effort apply confirmation captures keys when visible
-        // (same y/n pattern as the delete confirmation above it).
-        if self.state.bulk_confirm.is_some() {
-            self.handle_bulk_confirm_key(key);
-            return;
+        // Confirmation dialogs outrank everything — including the global
+        // chords below: a y/n prompt must never be sidestepped by opening
+        // the palette on top of it.
+        match top_overlay {
+            Some(Overlay::DeleteConfirm) => {
+                self.handle_delete_confirm_key(key);
+                return;
+            }
+            Some(Overlay::BulkConfirm) => {
+                self.handle_bulk_confirm_key(key);
+                return;
+            }
+            _ => {}
         }
 
         // An active leader prefix consumes the next key (which-key hint is
@@ -240,16 +204,41 @@ impl App {
             return;
         }
 
-        // While the command palette is open it captures all remaining keys
-        // (navigation, filtering, execution, dismissal) — tab handlers never
-        // see them.
-        if self.state.command_palette.is_visible() {
-            self.handle_command_palette_key(key);
+        // The top-most visible overlay captures all remaining keys. The
+        // stack ([`AppState::overlay_stack`]) is the same ordered list the
+        // render pass paints with, so the surface the user sees on top is
+        // always the one receiving input.
+        if let Some(overlay) = top_overlay {
+            match overlay {
+                Overlay::CommandPalette => self.handle_command_palette_key(key),
+                Overlay::ProfilePicker => self.handle_profile_picker_key(key),
+                Overlay::AgentProfilePicker => self.handle_agent_profile_picker_key(key),
+                Overlay::NameInput => self.handle_name_input_key(key),
+                Overlay::AgentsPopup => self.handle_agents_popup_key(key),
+                Overlay::PlanPopup => self.handle_plan_popup_key(key),
+                Overlay::TasksPopup => self.handle_tasks_popup_key(key),
+                Overlay::AgentModelPicker => self.handle_agent_model_picker_key(key),
+                Overlay::AgentEffortPicker => self.handle_agent_effort_picker_key(key),
+                Overlay::MessagePicker => self.handle_message_picker_key(key),
+                Overlay::DagView => self.handle_dag_view_key(key),
+                Overlay::Bibliography => self.handle_bibliography_key(key),
+                Overlay::SkillEvolution => self.handle_skill_evolution_key(key),
+                Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
+                Overlay::ModelConfig => self.handle_model_config_key(key),
+                Overlay::AgentConfig => self.handle_agent_config_key(key),
+                // Captured above, before the global chords; handled here
+                // too so a future reorder degrades to "the confirm
+                // captures keys" instead of panicking.
+                Overlay::DeleteConfirm => self.handle_delete_confirm_key(key),
+                Overlay::BulkConfirm => self.handle_bulk_confirm_key(key),
+            }
             return;
         }
 
         // Ctrl+W: close the active agent leaf (and terminate its background
-        // process). Inside the agents popup it closes the selected leaf.
+        // process). Only reachable with no overlay open — an open overlay
+        // captured the key above. Inside the agents popup, its own handler
+        // closes the selected leaf.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
             if self.state.sessions.is_empty() {
                 return;
@@ -258,99 +247,12 @@ impl App {
             return;
         }
 
-        // Profile picker popup captures keys when visible.
-        if self.state.profile_picker.visible {
-            self.handle_profile_picker_key(key);
-            return;
-        }
-
-        // Agent resume picker popup captures keys when visible.
-        if self.state.agent_profile_picker.visible {
-            self.handle_agent_profile_picker_key(key);
-            return;
-        }
-
-        // Name input popup captures keys when visible.
-        if self.state.name_input.visible {
-            self.handle_name_input_key(key);
-            return;
-        }
-
-        // Agents popup (Ctrl+T) captures keys when visible; its quick
-        // pickers sit just below it, then the plan/tasks popups.
-        if self.state.agents_popup.is_visible() {
-            self.handle_agents_popup_key(key);
-            return;
-        }
-        if self.state.plan_popup.visible {
-            self.handle_plan_popup_key(key);
-            return;
-        }
-        if self.state.tasks_popup.visible {
-            self.handle_tasks_popup_key(key);
-            return;
-        }
-
-        // Agents-popup model quick-picker (m / M) captures keys when
-        // visible; the effort picker (E) sits just below it.
-        if self.state.agent_model_picker.is_visible() {
-            self.handle_agent_model_picker_key(key);
-            return;
-        }
-        if self.state.agent_effort_picker.visible {
-            self.handle_agent_effort_picker_key(key);
-            return;
-        }
-
-        // Message picker popup captures keys when visible. Sits below the
-        // session/profile/agent pickers so they remain authoritative when
-        // a higher-level picker is also open.
-        if self.state.message_picker.is_visible() {
-            self.handle_message_picker_key(key);
-            return;
-        }
-
-        // The DAG overlay captures keys after all high-level pickers so it can
-        // be closed from beneath them, but before the agent composer sees
-        // navigation keys as text.
-        if self.state.dag_view_visible {
-            self.handle_dag_view_key(key);
-            return;
-        }
-
-        if self.state.bibliography_visible {
-            self.handle_bibliography_key(key);
-            return;
-        }
-
-        // Skill-evolution dashboard captures keys when visible.
-        if self.state.skill_evolution.visible {
-            self.handle_skill_evolution_key(key);
-            return;
-        }
-
-        if self.state.embedding_config_visible {
-            self.handle_embedding_config_key(key);
-            return;
-        }
-
-        // Model config popup captures keys when visible.
-        if self.state.model_config_visible {
-            self.handle_model_config_key(key);
-            return;
-        }
-
-        if self.state.agent_config.visible {
-            self.handle_agent_config_key(key);
-            return;
-        }
-
         // <Space> enters the leader prefix (LazyVim-style), available in
-        // browse mode whenever no popup owns the screen. The composer is
-        // never active in browse mode, so the space is free.
+        // browse mode whenever no overlay owns the screen (guaranteed here:
+        // every visible overlay returned in the dispatch above). The
+        // composer is never active in browse mode, so the space is free.
         if key.code == KeyCode::Char(' ')
             && key.modifiers.is_empty()
-            && !self.any_overlay_open()
             && self.state.active_tab_state().input_mode == InputMode::Browse
         {
             // Empty prefix = the root menu.
