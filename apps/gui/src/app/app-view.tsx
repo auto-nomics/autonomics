@@ -420,6 +420,8 @@ export function App() {
         rightOpen={rightOpen}
         onDraftChange={runtime.setDraft}
         onSendMessage={(context) => void runtime.sendMessage(context)}
+        onCancel={() => void gatewayRequest("POST", `/agents/${runtime.activeAgent}/cancel`).catch((cause) => window.alert(String(cause)))}
+        onCompact={() => void gatewayRequest("POST", `/agents/${runtime.activeAgent}/compact`).catch((cause) => window.alert(String(cause)))}
         modelCatalog={runtime.modelCatalog}
         onLoadModelCatalog={runtime.loadModelCatalog}
         onChangeModel={(path, spec) => runtime.setAgentModel(path, spec)}
