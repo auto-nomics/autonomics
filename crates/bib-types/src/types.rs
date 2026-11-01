@@ -336,12 +336,12 @@ pub enum ArticleSource {
 // Annotation
 // ---------------------------------------------------------------------------
 
-/// The kind of user-added annotation.
+/// The kind of user-added annotation. Notes never exist on their own: a
+/// remark is always the `comment` of the highlighted passage it explains
+/// (`Highlight`), or a free-standing remark on the article (`Comment`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationKind {
-    /// A free-text note attached to the article.
-    Note,
     /// A highlighted excerpt from the text.
     Highlight,
     /// A comment or critique.
@@ -351,7 +351,6 @@ pub enum AnnotationKind {
 impl AnnotationKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Note => "note",
             Self::Highlight => "highlight",
             Self::Comment => "comment",
         }
@@ -359,9 +358,10 @@ impl AnnotationKind {
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "highlight" => Self::Highlight,
             "comment" => Self::Comment,
-            _ => Self::Note,
+            // Legacy spellings ("note" among them) read back as the only
+            // kind that can carry quoted text; migrate() rewrites the rows.
+            _ => Self::Highlight,
         }
     }
 }

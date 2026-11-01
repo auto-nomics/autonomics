@@ -1,8 +1,7 @@
 //! Test harness for the skill-evolution dashboard widget.
 //!
-//! The app crate is binary-only (no lib target), so the widget
-//! sources are pulled in with `#[path]` module shims — the same code
-//! the binary compiles, no duplication.
+//! Compiles against the `autonomics-tui` library target — the same
+//! code the TUI runs, no `#[path]` shims.
 //!
 //! Two feedback modes:
 //!
@@ -11,8 +10,8 @@
 //! inline in your terminal; assertions keep each frame honest:
 //!
 //! ```text
-//! cargo test -p autonomics --test test_skill_dashboard -- --nocapture
-//! cargo test -p autonomics --test test_skill_dashboard snapshot_loaded -- --nocapture
+//! cargo test -p autonomics-tui --test test_skill_dashboard -- --nocapture
+//! cargo test -p autonomics-tui --test test_skill_dashboard snapshot_loaded -- --nocapture
 //! ```
 //!
 //! **Interactive preview** (ignored by default) — runs the widget
@@ -22,12 +21,12 @@
 //! the error path:
 //!
 //! ```text
-//! cargo test -p autonomics --test test_skill_dashboard -- --ignored interactive_preview --nocapture
+//! cargo test -p autonomics-tui --test test_skill_dashboard -- --ignored interactive_preview --nocapture
 //! ```
 
-// ── Source shims: compile the real widget into this test crate ──
-mod widgets;
-
+use autonomics_tui::widgets::evolution_widget::{
+    EvolutionTab, PanelFocus, SkillEvolutionState, SkillEvolutionWidget,
+};
 use gateway::proto::{
     ObservationView, SkillEvolutionStatus, SkillLibraryDetail, SkillLibraryView, SkillProposalView,
 };
@@ -39,9 +38,6 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Paragraph, StatefulWidget as _, Widget as _},
-};
-use widgets::evolution_widget::{
-    EvolutionTab, PanelFocus, SkillEvolutionState, SkillEvolutionWidget,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -521,7 +517,7 @@ fn run_interactive_loop(
     use crossterm::event::{self, Event, KeyCode, KeyEventKind};
     use std::time::Duration;
 
-    use widgets::evolution_widget::EvolutionTab;
+    use autonomics_tui::widgets::evolution_widget::EvolutionTab;
 
     let mut state = fixture_state();
     let mut next_canned = 0;

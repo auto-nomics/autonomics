@@ -6,7 +6,7 @@
 
 当前 autonomics 唯一的 LLM agent 运行入口是交互式 TUI。RuntimeHost、agentik-core
 会话循环、工具体系本身是 UI 无关的,但全部初始化逻辑绑在 ratatui `App` 的生命周期里
-(`apps/autonomics/src/app/mod.rs:79`),导致:
+(`crates/autonomics-tui/src/app/mod.rs:79`),导致:
 
 - benchmark(ReproBioBench)只能用纯 DAG 适配器绕过 agent(`token_count: 0`);
 - 脚本 / CI / 定时任务无法复用 agent 能力;
@@ -94,7 +94,7 @@ RunArgs → RuntimeConfig(默认 + 覆盖)
 ```
 
 **关键前置解耦**:把 `App::build_model` / `build_model_from_spec`
-(`apps/autonomics/src/app/model_config.rs:13,31`)与 profile 引导
+(`crates/autonomics-tui/src/app/model_config.rs:13,31`)与 profile 引导
 (`seed_defaults_if_empty` + `list_profiles`)从 TUI 下沉到 runtime crate。
 这是 headless 不复制 TUI 初始化逻辑的前提,也是保证两条入口配置同源的唯一办法。
 

@@ -394,9 +394,11 @@ impl BibCore {
             )
             .await?;
         }
-        // The `note` annotation kind was retired: user-written remarks are
-        // `comment` now (an excerpt quoted from the text is `highlight`).
-        // Idempotent — no-ops once no legacy rows remain.
+        // Legacy standalone notes: the `note` kind was retired, and remarks
+        // written by the pre-unification agent tool carried their quote only
+        // inside the anchor proof. First relabel `note` rows, then re-attach
+        // every proof-backed remark to its quoted passage as a highlight
+        // (content ← quote, comment ← remark). Both steps idempotent.
         conn.execute(
             "UPDATE annotations SET kind = 'comment' WHERE kind = 'note'",
             turso::params![],
@@ -416,6 +418,9 @@ impl BibCore {
         // item tables exist, so the mirror propagates to
         // `fulltextItems.textContent` in the same pass.
         crate::fulltext::migrate_normalize_text(&conn).await?;
+        // Re-attach pre-unification floating agent notes to their quoted
+        // passages; needs the item tables above to already exist.
+        crate::annotations::migrate_floating_notes(&conn).await?;
         // Turso prepares statements per connection. Applying the same
         // idempotent DDL to the read side ensures freshly added extension
         // columns are visible to queries made through `BibCore::conn()`.

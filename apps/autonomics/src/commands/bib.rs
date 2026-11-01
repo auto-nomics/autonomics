@@ -3,7 +3,7 @@
 use crate::cli::{
     BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, ReextractArgs, RequestsArgs, UploadArgs,
 };
-use crate::widgets::bibliography::{BibliographyState, BibliographyWidget};
+use autonomics_tui::widgets::bibliography::{BibliographyState, BibliographyWidget};
 use bib_base::{stored_fulltext, vfs_virtual_path};
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::prelude::StatefulWidget as _;
@@ -433,7 +433,7 @@ async fn run_bibliography_loop(
             break Ok(());
         }
         if key.code == KeyCode::Char('r')
-            && state.focus != crate::widgets::bibliography::BibliographyFocus::Search
+            && state.focus != autonomics_tui::widgets::bibliography::BibliographyFocus::Search
         {
             if let Err(error) = reload_bibliography(db, state).await {
                 state.error = Some(error.to_string());
@@ -442,7 +442,7 @@ async fn run_bibliography_loop(
             continue;
         }
         if matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-            && state.focus != crate::widgets::bibliography::BibliographyFocus::Search
+            && state.focus != autonomics_tui::widgets::bibliography::BibliographyFocus::Search
         {
             break Ok(());
         }

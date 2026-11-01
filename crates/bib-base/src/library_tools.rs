@@ -23,7 +23,7 @@
 //! | `bib_search_library`        | Fielded lexical search across local library (multi-query). |
 //! | `bib_get_article`           | Batch metadata plus full-text file references.          |
 //! | `bib_request_fulltext`      | Mark an article as needing full-text upload.            |
-//! | `bib_add_note`              | Quote-anchored note/highlight/comment on the article's text. |
+//! | `bib_add_note`              | Highlight a verified quote and attach the note to it (one record). |
 //! | `bib_read_figure`           | Read a figure image out of stored full text.             |
 //! | `bib_export`                | Render citation formats and write them to the agent VFS. |
 
@@ -1228,29 +1228,27 @@ impl ToolFunction for BibRequestFulltextTool {
 
 #[tool(
     name = "bib_add_note",
-    description = "Add a note, highlight, or comment to an article, anchored to a verified \
-                  quote of its text. `quote` is REQUIRED: a passage copied verbatim from the \
-                  article's full text — read it via `bib_get_article` (`fulltext_path`) with \
-                  the `vfs` tool (`read`/`grep`). The server verifies the quote exists and \
-                  refuses fabricated or drifted wording, returning the closest matching text \
-                  instead; when a quote matches several locations it lists them — pass \
-                  `near_line` (the 1-based line from your `vfs read`/`grep` output) to \
-                  disambiguate. Default kind=note stores `note` as the annotation body \
-                  anchored at the quote; kind=highlight stores the verified quote as the \
-                  highlighted text and requires `note` as its comment; kind=comment behaves \
-                  like note. Articles without extracted full text fall back to anchoring the \
-                  abstract (highlights refuse). Anchored notes render in the reader and are \
-                  searchable."
+    description = "Highlight a passage of the article's text and attach your note to it — one \
+                  call, one record: the highlight and the note are never separate. `quote` is \
+                  REQUIRED: a passage copied verbatim from the article's full text — read it \
+                  via `bib_get_article` (`fulltext_path`) with the `vfs` tool (`read`/`grep`). \
+                  The server verifies the quote exists and refuses fabricated or drifted \
+                  wording, returning the closest matching text instead; when a quote matches \
+                  several locations it lists them — pass `near_line` (the 1-based line from \
+                  your `vfs read`/`grep` output) to disambiguate. `note` is REQUIRED: your \
+                  observation, finding, or critique, stored as the highlight's comment and \
+                  rendered under the highlighted passage. Articles without extracted full \
+                  text are refused — request it with bib_request_fulltext first (the abstract \
+                  is not a highlightable surface). Highlighted notes render in the reader and \
+                  are searchable."
 )]
 pub struct BibAddNoteInput {
     #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
     pub article_id: String,
-    #[desc = "Verbatim passage from the article's full text (or abstract) this note anchors to"]
+    #[desc = "Verbatim passage from the article's full text this note is attached to"]
     pub quote: String,
-    #[desc = "The annotation body: your observation, finding, or critique. Required"]
+    #[desc = "Your observation, finding, or critique — attached to the highlighted quote"]
     pub note: String,
-    #[desc = "Annotation kind: \"note\" (default), \"highlight\", or \"comment\""]
-    pub kind: Option<String>,
     #[desc = "1-based line number (from your vfs read/grep output) near the quote, used to disambiguate repeated passages"]
     pub near_line: Option<u32>,
     #[desc = "Highlight color (used by the PDF reader)"]
@@ -1270,17 +1268,10 @@ impl ToolFunction for BibAddNoteTool {
     type Input = BibAddNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let kind = match input.kind.as_deref().map(|s| s.to_lowercase()).as_deref() {
-            Some("highlight") => bib_types::AnnotationKind::Highlight,
-            Some("comment") => bib_types::AnnotationKind::Comment,
-            _ => bib_types::AnnotationKind::Note,
-        };
-
         let anchored = self
             .bib
             .add_anchored_annotation(crate::annotations::AnchoredNoteInput {
                 article_id: input.article_id.clone(),
-                kind,
                 quote: input.quote,
                 note: Some(input.note),
                 near_line: input.near_line,
@@ -1309,8 +1300,8 @@ impl ToolFunction for BibAddNoteTool {
                 "line_end": anchored.anchor.line_end,
                 "context": anchored.anchor.context,
             },
-            "message": "Note anchored: the quote was verified against the stored text and \
-                        renders as an anchored annotation in the reader.",
+            "message": "Anchored: the quote was verified against the stored text and \
+                        the note is attached to the highlighted passage.",
         })))
     }
 }
@@ -2661,7 +2652,6 @@ mod tests {
                 article_id: article.id.clone(),
                 quote: "the treatment reduced mortality".into(),
                 note: "key efficacy finding".into(),
-                kind: None,
                 near_line: Some(2),
                 color: None,
                 tags: Some(vec!["efficacy".into()]),
@@ -2673,8 +2663,10 @@ mod tests {
             ToolResultContent::Json(value) => value.clone(),
             other => panic!("expected json content, got {other:?}"),
         };
-        assert_eq!(payload["kind"], "note");
-        assert_eq!(payload["content"], "key efficacy finding");
+        // One record: kind=highlight, quote is the text, note is the comment.
+        assert_eq!(payload["kind"], "highlight");
+        assert_eq!(payload["content"], "the treatment reduced mortality");
+        assert_eq!(payload["comment"], "key efficacy finding");
         assert_eq!(payload["anchor"]["source"], "fulltext");
         assert_eq!(payload["anchor"]["line_start"], 2);
         assert_eq!(
@@ -2689,10 +2681,10 @@ mod tests {
         assert_eq!(projection.n_annotations, 1);
         let listed = &projection.annotations[0];
         assert_eq!(listed["anchored"], serde_json::json!(true));
-        // Note kind carries the body in `content`; comment stays empty
-        // (that is the highlight path's field).
-        assert_eq!(listed["content"], "key efficacy finding");
-        assert_eq!(listed["comment"], "");
+        // The highlight text is the verified quote; the note body rides in
+        // `comment` — never a standalone record.
+        assert_eq!(listed["content"], "the treatment reduced mortality");
+        assert_eq!(listed["comment"], "key efficacy finding");
         assert_eq!(listed["tags"], serde_json::json!(["efficacy"]));
 
         // Drifted wording is refused with the closest-match hint.
@@ -2701,7 +2693,6 @@ mod tests {
                 article_id: article.id.clone(),
                 quote: "the treatment reduced morbidity".into(),
                 note: "fabricated".into(),
-                kind: None,
                 near_line: None,
                 color: None,
                 tags: None,

@@ -7,19 +7,15 @@ rust-version.workspace = true
 
 [dependencies]
 color-eyre = "0.6.5"
+# The interactive frontend (app/widgets/xai_textarea) lives in the
+# autonomics-tui crate; the binary keeps the CLI, one-shot commands,
+# the daemon (`serve`) and readiness diagnostics.
+autonomics-tui = { path = "../../crates/autonomics-tui" }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
-ratatui = { version = "0.30.0", features = [
-  "unstable-rendered-line-info",
-  "unstable-widget-ref",
-] }
-ratatui-comfy-tabs = "0.5"
-ratatui-core = "0.1"
-tui-scrollbar = "0.2"
-textwrap = "0.16"
-agentik-core = { path = "../../crates/agentik-core" }
-agentik-sdk = { path = "../../crates/agentik-sdk" }
-agentik-types = { path = "../../crates/agentik-types" }
+ratatui = "0.30.0"
 gateway = { path = "../../crates/gateway" }
+agentik-core = { path = "../../crates/agentik-core" }
+agentik-types = { path = "../../crates/agentik-types" }
 container-plugin = { path = "../../crates/container-plugin" }
 text-embedding = { path = "../../crates/text-embedding" }
 plugin-rsi = { path = "../../crates/plugin-rsi" }
@@ -29,46 +25,20 @@ tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
 kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
-ascii-dag-core = { path = "../../crates/ascii-dag-core", default-features = false, features = [
-  "std",
-  "layout-horizontal",
-] }
 nodes-io = { path = "../../crates/node-bundles/nodes-io" }
 opengwas = { path = "../../crates/opengwas" }
 bib-base = { path = "../../crates/bib-base" }
 vfs = { path = "../../crates/vfs" }
 chrono = { workspace = true }
-pulldown-cmark = "0.13"
-syntect = { version = "5.3.0", default-features = false, features = [
-  "default-fancy",
-] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-appender = "0.2"
 time = { version = "0.3", features = ["macros"] }
 uuid = "1.23.3"
 tokio = { workspace = true, features = ["signal"] }
-tokio-stream = "0.1"
-unicode-width = "0.2"
-unicode-segmentation = "1.12"
 serde_json.workspace = true
 clap = { version = "4.6.1", features = ["derive"] }
-arc-swap.workspace = true
-arboard = "3.6"
-base64 = "0.22"
 
 [lints]
 workspace = true
 
-[features]
-# Enables tracing debug logs in the xai_textarea module.
-debug-logs = []
-
-[dev-dependencies]
-rand = "0.9"
-pretty_assertions = "1"
-chrono = "0.4"
-arboard = "3.6"
-itertools = "0.14"
-fuzzy-matcher = "0.3"
-ignore = "0.4"

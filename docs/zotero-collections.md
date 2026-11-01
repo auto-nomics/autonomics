@@ -14,7 +14,7 @@
 | 主 GUI | `apps/gui/src/features/bibliography.tsx` 使用 collections.map 和 SidebarItem 平铺 | 新增树视图及创建、重命名、移动、删除入口；类型在 apps/gui/src/types.ts |
 | 另一套 Web UI | `crates/api-server/frontend/src/components/bibliography/collection-tree.tsx` 名为 Tree，实际平铺 | 还需修改 app.tsx 的创建、删除、查询和详情中的 collection 选择器 |
 | Agent | `crates/bib-base/src/library_tools.rs` 的 create 输入没有 parent；list 输出手写 JSON | 即使 Collection 增加字段，工具输出也不会自动带上 parent_id |
-| TUI | `apps/autonomics/src/widgets/bibliography/collection_pane.rs` 平铺；相关导航状态在 bibliography 模块 | 更新树的可见行及键盘索引，避免渲染顺序与选择顺序错位 |
+| TUI | `crates/autonomics-tui/src/widgets/bibliography/collection_pane.rs` 平铺；相关导航状态在 bibliography 模块 | 更新树的可见行及键盘索引，避免渲染顺序与选择顺序错位 |
 
 实际 gateway 根页面挂载的是 `apps/gui` 构建到 `crates/gateway/gui-dist` 的资源，见 `crates/gateway/src/server/router.rs::router_with_bib`、`server/gui.rs` 和 `apps/gui/README.md`。实施应以 apps/gui 为主，另一套 UI 做兼容适配。
 

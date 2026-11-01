@@ -7,6 +7,7 @@ import "./txt-reader.css";
 import { Toast } from "@/components/ui/toast";
 import { ReaderAlertDialog } from "./reader-alert-dialog";
 import { NoteComposer } from "./note-composer";
+import { highlightNoteIndicator } from "./highlight-note-indicator";
 import {
   AnnotationInspector,
   type AnnotationPatch,
@@ -795,16 +796,18 @@ class ZoteroStyleTxtReader {
     const origin = this.container.getBoundingClientRect();
     const fragment = document.createDocumentFragment();
     for (const annotation of this.annotations) {
-      if (annotation.kind !== "highlight") continue;
+      const isNote = annotation.kind === "comment";
+      if (annotation.kind !== "highlight" && !isNote) continue;
       const span = this.charSpan(annotation);
       if (!span) continue;
       const range = this.rangeForSpan(span.start, span.end);
       if (!range) continue;
-      for (const rect of range.getClientRects()) {
-        if (rect.width <= 0 || rect.height <= 0 || rect.bottom < origin.top || rect.top > origin.bottom) continue;
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0 && rect.bottom >= origin.top && rect.top <= origin.bottom);
+      for (const rect of (isNote ? rects.slice(0, 1) : rects)) {
         const mark = document.createElement("div");
-        mark.className = "reader-reflow-highlight";
+        mark.className = isNote ? "reader-reflow-highlight reader-note-marker" : "reader-reflow-highlight";
         mark.dataset.annotationId = annotation.id;
+        if (isNote) { mark.textContent = "✎"; mark.title = "Note"; }
         Object.assign(mark.style, {
           left: `${rect.left - origin.left + this.container.scrollLeft}px`,
           top: `${rect.top - origin.top + this.container.scrollTop}px`,
@@ -813,6 +816,24 @@ class ZoteroStyleTxtReader {
           background: annotation.color ?? "#ffd400",
         });
         fragment.append(mark);
+      }
+      // A highlight carrying a note shows the note affordance right at the
+      // highlighted passage — the note lives under its highlight, never as
+      // a free-floating sidebar row.
+      if (!isNote && rects.length) {
+        const indicator = highlightNoteIndicator(annotation, id => {
+          const span = this.charSpan(this.annotations.find(note => note.id === id) ?? annotation);
+          if (span) this.flashSpan(span.start, span.end);
+          this.annotationInspector.select(id);
+        });
+        if (indicator) {
+          const first = rects[0];
+          Object.assign(indicator.style, {
+            left: `${this.container.scrollLeft + Math.min(this.container.clientWidth - 12, first.right - origin.left + 17)}px`,
+            top: `${this.container.scrollTop + Math.max(12, Math.min(this.container.clientHeight - 12, first.top - origin.top + first.height / 2))}px`,
+          });
+          fragment.append(indicator);
+        }
       }
     }
     this.overlay.append(fragment);

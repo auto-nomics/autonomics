@@ -954,14 +954,12 @@ pub(crate) async fn sync_annotation_item(
     let item_id = if let Some(attachment) = attachment {
         let annotation_type = match annotation.kind {
             AnnotationKind::Highlight => 1,
-            AnnotationKind::Note | AnnotationKind::Comment => 2,
+            AnnotationKind::Comment => 2,
         };
         let annotation_item = insert_item(conn, ITEM_TYPE_ANNOTATION).await?;
         let (text, comment) = match annotation.kind {
             AnnotationKind::Comment => (None, Some(annotation.content.clone())),
-            AnnotationKind::Highlight | AnnotationKind::Note => {
-                (Some(annotation.content.clone()), None)
-            }
+            AnnotationKind::Highlight => (Some(annotation.content.clone()), None),
         };
         // An explicit comment (agent note on a highlight) wins over the
         // kind-based default, but `text` keeps the quoted source text.

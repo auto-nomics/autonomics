@@ -5,7 +5,7 @@
 
 use chrono::Utc;
 use turso::{
-    Value,
+    Connection, Value,
     transaction::{Transaction, TransactionBehavior},
 };
 
@@ -43,14 +43,19 @@ impl BibCore {
     /// Add an agent annotation anchored to a verified quote of the
     /// canonical text.
     ///
-    /// The `quote` must exist in the article's extracted full text
+    /// There is exactly one record shape: a `highlight` whose `content` is
+    /// the verified verbatim quote and whose `comment` is the agent's note.
+    /// Notes never exist as standalone rows — they are always attached to
+    /// the highlighted passage they explain, so the reader can render the
+    /// note under its highlight and the sidebar never shows a floating
+    /// remark. The `quote` must exist in the article's extracted full text
     /// (whitespace-folded comparison, everything else exact) — the anchor
     /// is refused otherwise, with a closest-partial-match hint or the list
-    /// of ambiguous locations. Notes and comments fall back to anchoring
-    /// the abstract when no full text is stored; highlights require the
-    /// full text. On success the quote's exact byte range is persisted as
-    /// an anchor proof inside `rects[0]`, and the rect itself carries
-    /// UTF-16 `space:"char"` offsets the GUI text reader renders directly.
+    /// of ambiguous locations. Articles without extracted full text are
+    /// refused: nothing is selectable to attach a note to. On success the
+    /// quote's exact byte range is persisted as an anchor proof inside
+    /// `rects[0]`, and the rect itself carries UTF-16 `space:"char"`
+    /// offsets the GUI text reader renders directly.
     pub async fn add_anchored_annotation(
         &self,
         input: AnchoredNoteInput,
@@ -67,40 +72,22 @@ impl BibCore {
             ));
         }
 
-        // Canonical text: the extracted full text; notes and comments may
-        // fall back to the abstract, highlights may not (a highlight not
-        // grounded in the real text would be fabrication).
-        let fulltext = self.get_fulltext(&input.article_id).await?;
-        let canonical = fulltext
+        // Canonical text: the extracted full text. There is no abstract
+        // fallback — a note must attach to a passage the reader can
+        // highlight, and the abstract is not part of the reading surface.
+        let canonical = self
+            .get_fulltext(&input.article_id)
+            .await?
             .and_then(|ft| ft.text_content)
             .filter(|text| !text.trim().is_empty());
-        let (source, text) = match canonical {
-            Some(text) => ("fulltext", text),
-            None if input.kind != AnnotationKind::Highlight => {
-                let article = self
-                    .get_article(&input.article_id)
-                    .await?
-                    .ok_or_else(|| Error::NotFound(input.article_id.clone()))?;
-                match article.abstract_text.filter(|a| !a.trim().is_empty()) {
-                    Some(abstract_text) => ("abstract", abstract_text),
-                    None => {
-                        return Err(Error::Anchor(format!(
-                            "article '{}' has neither extracted full text nor an abstract to \
-                             anchor to; save it with a `bib_save` DAG node and attach the file",
-                            input.article_id
-                        )));
-                    }
-                }
-            }
-            None => {
-                return Err(Error::Anchor(format!(
-                    "kind=highlight requires the article's full text, but none is stored for \
-                     '{}'; request it with bib_request_fulltext or upload the file, or use \
-                     kind=note to anchor to the abstract instead",
-                    input.article_id
-                )));
-            }
-        };
+        let text = canonical.ok_or_else(|| {
+            Error::Anchor(format!(
+                "no extracted full text is stored for '{}'; a note must anchor to a \
+                 selectable passage of the article's text — request it with \
+                 bib_request_fulltext or upload the file, then retry",
+                input.article_id
+            ))
+        })?;
 
         // Locate the quote; every refusal tells the agent how to fix its
         // input instead of leaving it guessing.
@@ -109,7 +96,7 @@ impl BibCore {
         let matched = match matches.len() {
             0 => {
                 let hint = locator.longest_prefix_match(input.quote.trim(), MIN_HINT_CHARS);
-                return Err(Error::Anchor(not_found_message(source, &text, hint)));
+                return Err(Error::Anchor(not_found_message(&text, hint)));
             }
             1 => matches[0],
             _ if input.near_line.is_none() => {
@@ -126,35 +113,20 @@ impl BibCore {
                     .expect("non-empty")
             }
         };
-        let resolved = resolve_anchor(source, &text, matched);
+        let resolved = resolve_anchor("fulltext", &text, matched);
 
         let note = input
             .note
             .as_deref()
             .map(str::trim)
-            .filter(|n| !n.is_empty());
-        let (content, comment) = match input.kind {
-            AnnotationKind::Highlight => {
-                let note = note.ok_or_else(|| {
-                    Error::Anchor(
-                        "kind=highlight requires `note`: the comment explaining why this \
-                         passage is highlighted (the quote itself is stored as the text)"
-                            .into(),
-                    )
-                })?;
-                (resolved.quote.clone(), Some(note.to_owned()))
-            }
-            AnnotationKind::Note | AnnotationKind::Comment => {
-                let note = note.ok_or_else(|| {
-                    Error::Anchor(format!(
-                        "kind={} requires `note` (the annotation body); `quote` only anchors \
-                         it to the source text",
-                        input.kind.as_str()
-                    ))
-                })?;
-                (note.to_owned(), None)
-            }
-        };
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| {
+                Error::Anchor(
+                    "`note` is required: the remark attached to the highlighted \
+                     passage — highlight and note are one record, never two"
+                        .into(),
+                )
+            })?;
 
         // `space:"char"` rects in UTF-16 units render in the GUI text
         // reader; the anchor proof records the verified byte range.
@@ -178,9 +150,9 @@ impl BibCore {
         let annotation = self
             .insert_annotation(AnnotationDraft {
                 article_id: &input.article_id,
-                kind: input.kind,
-                content: &content,
-                comment: comment.as_deref(),
+                kind: AnnotationKind::Highlight,
+                content: &resolved.quote,
+                comment: Some(note),
                 tags: input.tags,
                 // GUI text-reader annotations are page 1 by convention.
                 page: Some(1),
@@ -422,10 +394,9 @@ struct AnnotationDraft<'a> {
 /// Input for [`BibCore::add_anchored_annotation`].
 pub struct AnchoredNoteInput {
     pub article_id: String,
-    pub kind: AnnotationKind,
     /// Verbatim passage from the canonical text the note anchors to.
     pub quote: String,
-    /// The agent's annotation body (highlight comment, note/comment text).
+    /// The agent's annotation body, stored as the highlight's comment.
     pub note: Option<String>,
     /// 1-based line hint used to disambiguate repeated quotes.
     pub near_line: Option<u32>,
@@ -441,6 +412,82 @@ const MAX_QUOTE_HITS: usize = 64;
 /// Smallest prefix still worth reporting as a partial-match hint.
 const MIN_HINT_CHARS: usize = 4;
 
+/// One-time repair for agent notes written by the pre-unification
+/// `bib_add_note`: rows whose `content` held the remark body while the
+/// anchor proof inside `rects[0]` still held the verified quote — the
+/// "floating notes" the reader could not attach to any highlight. Each is
+/// re-attached to its quoted passage: `kind` becomes `highlight`,
+/// `content` becomes the verified quote, and the remark body moves into
+/// `comment`, so the note renders under its highlight like every other
+/// annotation. GUI-created remark rows (no anchor proof) and rows that
+/// already carry a comment are left untouched, which also makes the
+/// migration idempotent.
+pub(crate) async fn migrate_floating_notes(conn: &Connection) -> Result<()> {
+    let mut rows = conn
+        .query(
+            "SELECT id, article_id, content, comment, rects FROM annotations \
+             WHERE kind IN ('note', 'comment')",
+            turso::params![],
+        )
+        .await?;
+    let mut legacy: Vec<(String, String, String, String, Option<String>)> = Vec::new();
+    while let Some(row) = rows.next().await? {
+        legacy.push((
+            row.get::<String>(0)?,
+            row.get::<String>(1)?,
+            row.get::<String>(2)?,
+            row.get::<String>(3)?,
+            opt_string(row.get_value(4)?),
+        ));
+    }
+    drop(rows);
+
+    let mut touched: Vec<String> = Vec::new();
+    for (id, article_id, content, comment, rects_json) in legacy {
+        // Only rows the agent tool wrote carry an anchor proof; the reader's
+        // own remark rows have plain char/PDF rects and stay as they are.
+        let proof = rects_json
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<Vec<crate::types::AnnotationRect>>(value).ok())
+            .and_then(|rects| rects.into_iter().next())
+            .and_then(|rect| rect.anchor)
+            .filter(|_| comment.trim().is_empty());
+        let Some(proof) = proof else {
+            continue;
+        };
+        let quote = proof.quote;
+        conn.execute(
+            "UPDATE annotations SET kind = 'highlight', content = ?2, comment = ?3 \
+             WHERE id = ?1 AND comment = ''",
+            turso::params![id.clone(), quote.clone(), content.clone()],
+        )
+        .await?;
+        // Keep the Zotero mirror consistent: an anchored remark becomes a
+        // real highlight item (type 1) whose text is the quote and whose
+        // comment is the remark.
+        conn.execute(
+            "UPDATE itemAnnotations SET type = 1, text = ?2, textNormalized = ?3, \
+                    comment = ?4, commentNormalized = ?5 \
+             WHERE itemID = (SELECT itemID FROM annotationItems WHERE annotation_id = ?1)",
+            turso::params![
+                id,
+                quote.clone(),
+                quote.to_lowercase(),
+                content.clone(),
+                content.to_lowercase(),
+            ],
+        )
+        .await?;
+        touched.push(article_id);
+    }
+    touched.sort();
+    touched.dedup();
+    for article_id in touched {
+        crate::bib_base::sync_search_index(conn, &article_id).await?;
+    }
+    Ok(())
+}
+
 fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     tags.into_iter()
         .map(|tag| tag.trim().to_owned())
@@ -450,11 +497,11 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn not_found_message(source: &str, text: &str, hint: Option<crate::anchor::Match>) -> String {
+fn not_found_message(text: &str, hint: Option<crate::anchor::Match>) -> String {
     use crate::anchor::{LineIndex, collapse_context};
     let lines = LineIndex::new(text);
     let mut message = format!(
-        "quote not found in the article's {source}; copy it verbatim from `vfs read`/`grep` \
+        "quote not found in the article's fulltext; copy it verbatim from `vfs read`/`grep` \
          of the article's fulltext_path (whitespace may differ, wording may not)"
     );
     match hint {
@@ -467,7 +514,7 @@ fn not_found_message(source: &str, text: &str, hint: Option<crate::anchor::Match
         }
         None => {
             message.push_str(&format!(
-                ". The {source} has {} lines; re-read the relevant part first",
+                ". The fulltext has {} lines; re-read the relevant part first",
                 lines.line_count()
             ));
         }
@@ -725,10 +772,9 @@ mod tests {
         core
     }
 
-    fn anchored_input(kind: AnnotationKind, quote: &str, note: &str) -> AnchoredNoteInput {
+    fn anchored_input(quote: &str, note: &str) -> AnchoredNoteInput {
         AnchoredNoteInput {
             article_id: "test".into(),
-            kind,
             quote: quote.into(),
             note: Some(note.into()),
             near_line: None,
@@ -739,7 +785,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anchored_note_verifies_quote_and_records_proof() {
+    async fn anchored_highlight_verifies_quote_and_records_proof() {
         let text = "前置句。\n方法显著降低了\n死亡率。";
         let core = anchored_fixture(text).await;
 
@@ -747,15 +793,17 @@ mod tests {
         // bytes and code points agree here so the UTF-16 rect is checkable.
         let anchored = core
             .add_anchored_annotation(anchored_input(
-                AnnotationKind::Note,
                 "方法显著降低了 死亡率。",
                 "efficacy signal",
             ))
             .await
             .unwrap();
 
-        assert_eq!(anchored.annotation.kind, AnnotationKind::Note);
-        assert_eq!(anchored.annotation.content, "efficacy signal");
+        // One record, not two: the highlight carries the verified quote as
+        // its text and the remark as its comment.
+        assert_eq!(anchored.annotation.kind, AnnotationKind::Highlight);
+        assert_eq!(anchored.annotation.content, "方法显著降低了\n死亡率。");
+        assert_eq!(anchored.annotation.comment, "efficacy signal");
         assert_eq!(anchored.anchor.source, "fulltext");
         assert_eq!(anchored.anchor.quote, "方法显著降低了\n死亡率。");
         assert_eq!(anchored.anchor.line_start, 2);
@@ -776,7 +824,8 @@ mod tests {
         assert_eq!(proof.end_byte, anchored.anchor.end_byte);
         assert_eq!(proof.source_hash, anchored.anchor.source_hash);
 
-        // Note bodies are searchable, tags persisted on the row.
+        // The attached remark stays searchable (content + comment + tags are
+        // indexed together), and exactly one annotation row exists.
         let hits = core
             .search_articles("efficacy signal", 10, 0)
             .await
@@ -784,7 +833,9 @@ mod tests {
         assert_eq!(hits[0].article_id, "test");
         let listed = core.list_annotations("test", None).await.unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].content, "efficacy signal");
+        assert_eq!(listed[0].kind, AnnotationKind::Highlight);
+        assert_eq!(listed[0].content, "方法显著降低了\n死亡率。");
+        assert_eq!(listed[0].comment, "efficacy signal");
     }
 
     #[tokio::test]
@@ -794,7 +845,6 @@ mod tests {
 
         let anchored = core
             .add_anchored_annotation(anchored_input(
-                AnnotationKind::Highlight,
                 "reduced mortality",
                 "key efficacy finding",
             ))
@@ -823,37 +873,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anchored_note_falls_back_to_abstract_but_highlight_refuses() {
+    async fn anchored_notes_refuse_without_fulltext_and_never_anchor_the_abstract() {
         let core = BibCore::open(":memory:").await.unwrap();
         let mut article = Article::new("test", "Abstract only");
         article.abstract_text = Some("Mortality declined after the intervention began.".into());
         core.upsert_article(&article).await.unwrap();
 
-        let note = core
+        // A note must attach to a selectable passage; the abstract is not
+        // part of the reading surface, so it is never an anchor source.
+        let error = core
             .add_anchored_annotation(anchored_input(
-                AnnotationKind::Note,
                 "Mortality declined",
                 "from the abstract",
             ))
             .await
-            .unwrap();
-        assert_eq!(note.anchor.source, "abstract");
-
-        let error = core
-            .add_anchored_annotation(anchored_input(
-                AnnotationKind::Highlight,
-                "Mortality declined",
-                "no fulltext",
-            ))
-            .await
             .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("requires the article's full text")
-        );
+        assert!(error.to_string().contains("no extracted full text"));
 
-        // Neither text nor abstract → both kinds refuse.
+        // Neither text nor abstract → the same refusal.
         let bare = BibCore::open(":memory:").await.unwrap();
         bare.upsert_article(&Article::new("bare", "No text"))
             .await
@@ -861,7 +898,6 @@ mod tests {
         let error = bare
             .add_anchored_annotation(AnchoredNoteInput {
                 article_id: "bare".into(),
-                kind: AnnotationKind::Note,
                 quote: "anything".into(),
                 note: Some("body".into()),
                 near_line: None,
@@ -871,7 +907,7 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("neither extracted full text"));
+        assert!(error.to_string().contains("no extracted full text"));
     }
 
     #[tokio::test]
@@ -882,7 +918,6 @@ mod tests {
         // Fabricated wording with a real prefix → closest-partial hint.
         let error = core
             .add_anchored_annotation(anchored_input(
-                AnnotationKind::Note,
                 "repeat here midX",
                 "drifted",
             ))
@@ -896,7 +931,6 @@ mod tests {
         // Repeated quote without a hint → the ambiguous-locations list.
         let error = core
             .add_anchored_annotation(anchored_input(
-                AnnotationKind::Note,
                 "repeat here",
                 "ambiguous",
             ))
@@ -908,21 +942,132 @@ mod tests {
         let anchored = core
             .add_anchored_annotation(AnchoredNoteInput {
                 near_line: Some(3),
-                ..anchored_input(AnnotationKind::Note, "repeat here", "disambiguated")
+                ..anchored_input("repeat here", "disambiguated")
             })
             .await
             .unwrap();
         assert_eq!(anchored.anchor.line_start, 3);
         assert_eq!(anchored.anchor.quote, "repeat here");
 
-        // Highlight without a note is refused.
+        // A highlight without an attached remark is refused: highlight and
+        // note are one record.
         let error = core
             .add_anchored_annotation(AnchoredNoteInput {
                 note: None,
-                ..anchored_input(AnnotationKind::Highlight, "middle line", "")
+                ..anchored_input("middle line", "")
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("requires `note`"));
+        assert!(error.to_string().contains("`note` is required"));
+    }
+
+    #[tokio::test]
+    async fn migration_reattaches_floating_agent_notes_to_their_quotes() {
+        let text = "intro line\nthe treatment reduced mortality across cohorts\noutro";
+        let core = anchored_fixture(text).await;
+        // Establish the Zotero mirror (attachments included) before writing
+        // the legacy rows, so their items are attachment-backed annotations.
+        core.migrate().await.unwrap();
+
+        // A pre-unification agent note: kind=comment (after the earlier
+        // note→comment relabel), remark body in `content`, empty `comment`,
+        // and the anchor proof still holding the verified quote.
+        let byte_start = text.find("the treatment").unwrap();
+        let byte_end = byte_start + "the treatment reduced mortality".len();
+        let floating = core
+            .add_annotation(
+                "test",
+                AnnotationKind::Comment,
+                "key efficacy finding",
+                Some(1),
+                Some("yellow".into()),
+                Some(vec![crate::types::AnnotationRect {
+                    left: 11.0,
+                    top: 0.0,
+                    width: 31.0,
+                    height: 0.0,
+                    space: Some("char".into()),
+                    text_range: None,
+                    anchor: Some(crate::types::AnnotationAnchorProof {
+                        source_hash: "abc".into(),
+                        quote: "the treatment reduced mortality".into(),
+                        start_byte: byte_start,
+                        end_byte: byte_end,
+                    }),
+                }]),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // A reader-created remark: anchored to a selection by plain char
+        // rects, no anchor proof — must stay untouched.
+        let reader_note = core
+            .add_annotation(
+                "test",
+                AnnotationKind::Comment,
+                "reader's own remark",
+                Some(1),
+                None,
+                Some(vec![crate::types::AnnotationRect {
+                    left: 0.0,
+                    top: 0.0,
+                    width: 5.0,
+                    height: 0.0,
+                    space: Some("char".into()),
+                    text_range: None,
+                    anchor: None,
+                }]),
+                None,
+            )
+            .await
+            .unwrap();
+
+        crate::annotations::migrate_floating_notes(&core.write_conn())
+            .await
+            .unwrap();
+
+        let listed = core.list_annotations("test", None).await.unwrap();
+        let converted = listed
+            .iter()
+            .find(|a| a.id == floating.id)
+            .expect("floating row survives");
+        assert_eq!(converted.kind, AnnotationKind::Highlight);
+        assert_eq!(converted.content, "the treatment reduced mortality");
+        assert_eq!(converted.comment, "key efficacy finding");
+        let untouched = listed
+            .iter()
+            .find(|a| a.id == reader_note.id)
+            .expect("reader remark survives");
+        assert_eq!(untouched.kind, AnnotationKind::Comment);
+        assert_eq!(untouched.content, "reader's own remark");
+        assert_eq!(untouched.comment, "");
+
+        // The Zotero mirror flips to a highlight item carrying both parts.
+        let conn = core.conn();
+        let mut rows = conn
+            .query(
+                "SELECT IA.type, IA.text, IA.comment FROM itemAnnotations IA \
+                 JOIN annotationItems M ON M.itemID = IA.itemID \
+                 WHERE M.annotation_id = ?1",
+                turso::params![floating.id.clone()],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(row.get::<i64>(0).unwrap(), 1);
+        assert_eq!(
+            row.get::<String>(1).unwrap(),
+            "the treatment reduced mortality"
+        );
+        assert_eq!(row.get::<String>(2).unwrap(), "key efficacy finding");
+        drop(rows);
+
+        // Idempotent: a second pass changes nothing.
+        crate::annotations::migrate_floating_notes(&core.write_conn())
+            .await
+            .unwrap();
+        let listed = core.list_annotations("test", None).await.unwrap();
+        assert_eq!(listed.len(), 2);
     }
 }

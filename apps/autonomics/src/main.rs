@@ -8,20 +8,14 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
-// Pure binary layout: all application modules are declared here. There is no
-// library target — reusable logic belongs in crates/ (e.g. `runtime`,
-// `agentik-core`), not in this app.
-mod app;
-mod app_event;
-mod app_event_sender;
+// Pure binary layout: all application modules are declared here. The
+// interactive TUI frontend lives in the `autonomics-tui` crate; this
+// binary keeps the CLI, one-shot commands, the daemon (`serve`) and the
+// readiness diagnostics, and calls into `autonomics_tui` for everything
+// terminal-interactive.
 mod cli;
-mod clipboard_copy;
 mod commands;
 mod diagnostics;
-mod kms_tui;
-mod state;
-mod widgets;
-mod xai_textarea;
 
 /// Logging for frontend / one-shot commands (everything except the
 /// daemon `serve` path, which runs `init_gateway_logging` instead).
@@ -72,8 +66,8 @@ fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
     // exactly as agentik_core is spelled below.
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(
-            "autonomics=debug,agentik_core=debug,agentik_sdk=debug,runtime=debug,\
-             data_engine=info",
+            "autonomics=debug,autonomics_tui=debug,agentik_core=debug,agentik_sdk=debug,\
+             runtime=debug,data_engine=info",
         )
     });
 
