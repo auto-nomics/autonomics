@@ -10,7 +10,7 @@ import "./pdf-reader.css";
 import type { ReadingTextRange } from "./reading-text-range";
 import { highlightNoteIndicator } from "./highlight-note-indicator";
 import { NoteComposer } from "./note-composer";
-import { Toast } from "@/components/ui/toast";
+import { toast } from "sonner";
 import { ReaderAlertDialog as AlertDialog } from "./reader-alert-dialog";
 import { PdfTextSelection } from "./pdf-text-selection";
 import { AnnotationInspector, type AnnotationPatch, type ReaderAnnotation } from "./annotation-inspector";
@@ -185,7 +185,6 @@ class ZoteroStylePdfReader {
   private wheelZoomRunning = false;
 
   private root: HTMLDivElement;
-  private toast: Toast;
   private alertDialog: AlertDialog;
   private noteComposer: NoteComposer;
   private annotationTool: AnnotationTool = "pointer";
@@ -376,7 +375,6 @@ class ZoteroStylePdfReader {
     `;
     if (this.workspace.host) this.root.dataset.hosted = "true";
     (this.workspace.host ?? document.body).append(this.root);
-    this.toast = new Toast(this.root);
     this.alertDialog = new AlertDialog(this.root);
     this.noteComposer = new NoteComposer(this.root);
 
@@ -769,9 +767,9 @@ class ZoteroStylePdfReader {
     });
     action("copy-selection-toolbar", () => void this.copySelection());
     const addReference = () => {
-      if (!this.anchor?.text) { this.toast.show("请先选择要引用的文本", "info"); return; }
+      if (!this.anchor?.text) { toast.info("请先选择要引用的文本"); return; }
       this.workspace.onReference?.({ text: this.anchor.text, page: this.anchor.page });
-      this.toast.show("已加入当前会话引用");
+      toast.success("已加入当前会话引用");
     };
     action("add-context", addReference);
     action("add-selection-context", addReference);
@@ -1456,16 +1454,16 @@ class ZoteroStylePdfReader {
   private async copySelection(closePopup = false) {
     const text = this.anchor?.text;
     if (!text) {
-      this.toast.show("Select text to copy first", "info");
+      toast.info("Select text to copy first");
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       if (this.destroyed) return;
       if (closePopup) this.hideSelectionPopup();
-      this.toast.show("Copied to clipboard");
+      toast.success("Copied to clipboard");
     } catch {
-      if (!this.destroyed) this.toast.show("Unable to copy. Please try again.", "error");
+      if (!this.destroyed) toast.error("Unable to copy. Please try again.");
     }
   }
 
@@ -1569,8 +1567,8 @@ class ZoteroStylePdfReader {
       }
     }
     this.annotationInspector.close();
-    if (tool === "highlight") this.toast.show("Drag across text to highlight it", "info");
-    if (tool === "note") this.toast.show("Click on the page to place a note", "info");
+    if (tool === "highlight") toast.info("Drag across text to highlight it");
+    if (tool === "note") toast.info("Click on the page to place a note");
   }
 
   private finishTextSelection() {
@@ -1593,7 +1591,7 @@ class ZoteroStylePdfReader {
       this.renderAnnotations(); this.renderAnnotationList(); this.renderSidebarTags();
       return annotation;
     } catch {
-      if (!this.destroyed) this.toast.show("Could not save annotation. Please try again.", "error");
+      if (!this.destroyed) toast.error("Could not save annotation. Please try again.");
       return null;
     }
   }
@@ -1618,7 +1616,7 @@ class ZoteroStylePdfReader {
       if (this.anchor === anchor) {
         this.hideSelectionPopup(); window.getSelection()?.removeAllRanges();
       }
-      if (!this.destroyed) this.toast.show("Highlight saved");
+      if (!this.destroyed) toast.success("Highlight saved");
     } finally {
       this.savingHighlights.delete(anchor);
     }
@@ -1630,7 +1628,7 @@ class ZoteroStylePdfReader {
     if (this.readingEnabled) {
       const range = document.caretRangeFromPoint?.(event.clientX, event.clientY);
       if (!range || !this.readingArea.contains(range.startContainer) || range.startContainer.nodeType !== Node.TEXT_NODE) {
-        this.toast.show("Click on text to place a note in Reading Mode", "info"); return;
+        toast.info("Click on text to place a note in Reading Mode"); return;
       }
       const node = range.startContainer as Text;
       const offset = Math.min(range.startOffset, node.length - 1);
@@ -1667,7 +1665,7 @@ class ZoteroStylePdfReader {
     this.noteComposer.open(point ?? target, async content => {
       const annotation = await this.saveAnnotation({ content, kind: "comment", page: target.page, rects: target.rects, color: "#ffd400" });
       if (!annotation) return false;
-      this.toast.show("Note saved");
+      toast.success("Note saved");
       this.annotationInspector.select(annotation.id);
       return true;
     });
@@ -2040,7 +2038,6 @@ class ZoteroStylePdfReader {
     this.saveReadingLocation();
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
-    this.toast.destroy();
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.readingSaveTimer !== null) clearTimeout(this.readingSaveTimer);
