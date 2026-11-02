@@ -56,33 +56,33 @@ impl ToolFunction for DagLogicalSchemaTool {
                 "dynamic_for_each": {
                     "path_note": "Replace /absolute/path/input-a.tsv with an existing file before running.",
                     "dag_shell_script": r#"
-add_logical_graph(#{
-    nodes: [
-        #{id: "items", definition: #{Channel: #{operator: "of_items", items: ["/absolute/path/input-a.tsv"]}}, strategy: "Once"},
-        #{id: "jobs", definition: #{Registry: #{kind: "file_reference", spec: #{path: "{{item}}", hash_content: false}}}, strategy: #{DynamicForEach: #{axis: "item"}}},
-        #{id: "collected", definition: #{Channel: #{operator: "collect"}}, strategy: "Once"}
+add_logical_graph({
+    "nodes": [
+        {"id": "items", "definition": {"Channel": {"operator": "of_items", "items": ["/absolute/path/input-a.tsv"]}}, "strategy": "Once"},
+        {"id": "jobs", "definition": {"Registry": {"kind": "file_reference", "spec": {"path": "{{item}}", "hash_content": False}}}, "strategy": {"DynamicForEach": {"axis": "item"}}},
+        {"id": "collected", "definition": {"Channel": {"operator": "collect"}}, "strategy": "Once"}
     ],
-    edges: [
-        #{from: "items", from_port: 0, to: "jobs", to_port: 0},
-        #{from: "jobs", from_port: 0, to: "collected", to_port: 0}
+    "edges": [
+        {"from": "items", "from_port": 0, "to": "jobs", "to_port": 0},
+        {"from": "jobs", "from_port": 0, "to": "collected", "to_port": 0}
     ]
-});
-commit();
+})
+commit()
 "#
                 },
                 "static_for_each": {
                     "path_note": "Replace /absolute/path/input-a.tsv and /absolute/path/input-b.tsv with existing files before running.",
                     "dag_shell_script": r#"
-add_logical_graph(#{
-    nodes: [
-        #{id: "jobs", definition: #{Registry: #{kind: "file_reference", spec: #{path: "{{item}}", hash_content: false}}}, strategy: #{ForEach: #{axis: "sample", items: ["/absolute/path/input-a.tsv", "/absolute/path/input-b.tsv"]}}},
-        #{id: "gathered", definition: "Gather", strategy: "Gather"}
+add_logical_graph({
+    "nodes": [
+        {"id": "jobs", "definition": {"Registry": {"kind": "file_reference", "spec": {"path": "{{item}}", "hash_content": False}}}, "strategy": {"ForEach": {"axis": "sample", "items": ["/absolute/path/input-a.tsv", "/absolute/path/input-b.tsv"]}}},
+        {"id": "gathered", "definition": "Gather", "strategy": "Gather"}
     ],
-    edges: [
-        #{from: "jobs", from_port: 0, to: "gathered", to_port: 0}
+    "edges": [
+        {"from": "jobs", "from_port": 0, "to": "gathered", "to_port": 0}
     ]
-});
-commit();
+})
+commit()
 "#
                 }
             }

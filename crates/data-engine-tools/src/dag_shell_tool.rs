@@ -11,16 +11,19 @@ use crate::ExecError;
 #[tool(
     name = "dag_shell",
     description = "Build or modify several DAG nodes, edges, and logical subgraphs in one \
-                  transactional Rhai script. Use node(id, kind, spec), update_node, remove_node, \
-                  edge, remove_edge, and add_logical_graph. remove_node also accepts \
-                  remove_node(id, true) or remove_node(id, #{cascade: true}) to delete all \
-                  downstream nodes in the same transaction. All modifications must be followed by \
-                  commit(). Queries see the DAG snapshot from script start. Dry-run validates the \
-                  plan without applying it. The shell cannot read files, access the network or \
-                  environment, inspect output data, or execute the DAG; call run_dag separately."
+                  transactional Python script (a sandboxed subset of Python syntax: loops, \
+                  comprehensions, functions, f-strings; no imports, I/O, or classes). Use \
+                  node(id, kind, spec), update_node, remove_node, edge, remove_edge, and \
+                  add_logical_graph; specs are plain dicts. remove_node also accepts \
+                  remove_node(id, cascade=True) to delete all downstream nodes in the same \
+                  transaction. All modifications must be followed by commit(). Queries see the \
+                  DAG snapshot from script start. Dry-run validates the plan without applying \
+                  it. The shell cannot read files, access the network or environment, inspect \
+                  output data, or execute the DAG; call run_dag separately."
 )]
 pub struct DagShellInput {
-    /// Rhai graph-orchestration script. Use #{} for JSON-like specs/maps.
+    /// Python-syntax graph-orchestration script (sandboxed subset). Specs are
+    /// plain dicts.
     pub script: String,
     /// Validate and return the staged operation plan without applying it.
     pub dry_run: Option<bool>,
@@ -84,12 +87,10 @@ mod tests {
         let result = tool
             .run(input(
                 r#"
-                for sample in ["a", "b"] {
-                    let id = "echo_" + sample;
-                    node(id, "echo", #{});
-                }
-                edge("echo_a", 0, "echo_b", 0);
-                commit();
+                for sample in ["a", "b"]:
+                    node("echo_" + sample, "echo", {})
+                edge("echo_a", 0, "echo_b", 0)
+                commit()
                 "done"
                 "#,
                 false,
@@ -119,9 +120,9 @@ mod tests {
         let result = tool
             .run(input(
                 r#"
-                node("first", "echo", #{});
-                node("second", "not_a_registered_kind", #{});
-                commit();
+                node("first", "echo", {})
+                node("second", "not_a_registered_kind", {})
+                commit()
                 "#,
                 false,
             ))
@@ -147,13 +148,13 @@ mod tests {
         let built = tool
             .run(input(
                 r#"
-                node("source", "echo", #{});
-                node("transform", "echo", #{});
-                node("sink", "echo", #{});
-                node("independent", "echo", #{});
-                edge("source", 0, "transform", 0);
-                edge("transform", 0, "sink", 0);
-                commit();
+                node("source", "echo", {})
+                node("transform", "echo", {})
+                node("sink", "echo", {})
+                node("independent", "echo", {})
+                edge("source", 0, "transform", 0)
+                edge("transform", 0, "sink", 0)
+                commit()
                 "#,
                 false,
             ))
@@ -167,9 +168,9 @@ mod tests {
         let removed = tool
             .run(input(
                 r#"
-                remove_node("source", #{cascade: true});
-                node("replacement", "echo", #{});
-                commit();
+                remove_node("source", cascade=True)
+                node("replacement", "echo", {})
+                commit()
                 "#,
                 false,
             ))
@@ -196,7 +197,7 @@ mod tests {
         let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
         let tool = DagShellTool::new(Arc::new(client.clone()));
         let dry = tool
-            .run(input(r#"node("dry", "echo", #{}); commit(); "#, true))
+            .run(input(r#"node("dry", "echo", {}); commit()"#, true))
             .await
             .unwrap();
         let ToolResultContent::Json(report) = dry.content else {
@@ -207,7 +208,7 @@ mod tests {
         assert!(!client.node_exists("dry".into()).await.unwrap());
 
         let uncommitted = tool
-            .run(input(r#"node("not_committed", "echo", #{}); "#, false))
+            .run(input(r#"node("not_committed", "echo", {})"#, false))
             .await
             .unwrap();
         let ToolResultContent::Json(report) = uncommitted.content else {
@@ -225,14 +226,14 @@ mod tests {
         let result = tool
             .run(input(
                 r#"
-                add_logical_graph(#{
-                    nodes: [
-                        #{id: "items", definition: #{Channel: #{operator: "of_items", items: [#{id: "a"}]}}, strategy: "Once"},
-                        #{id: "mapped", definition: #{Channel: #{operator: "map", template: #{name: "{{item.id}}"}}}, strategy: "Once"}
+                add_logical_graph({
+                    "nodes": [
+                        {"id": "items", "definition": {"Channel": {"operator": "of_items", "items": [{"id": "a"}]}}, "strategy": "Once"},
+                        {"id": "mapped", "definition": {"Channel": {"operator": "map", "template": {"name": "{{item.id}}"}}}, "strategy": "Once"}
                     ],
-                    edges: [#{from: "items", from_port: 0, to: "mapped", to_port: 0}]
-                });
-                commit();
+                    "edges": [{"from": "items", "from_port": 0, "to": "mapped", "to_port": 0}]
+                })
+                commit()
                 "#,
                 false,
             ))
@@ -253,18 +254,18 @@ mod tests {
         let result = tool
             .run(input(
                 r#"
-                add_logical_graph(#{
-                    nodes: [
-                        #{id: "items", definition: #{Channel: #{operator: "of_items", items: [#{id: "a"}]}}, strategy: "Once"},
-                        #{id: "jobs", definition: #{Registry: #{kind: "not_a_registered_kind", spec: #{}}}, strategy: #{DynamicForEach: #{axis: "item"}}},
-                        #{id: "collected", definition: #{Channel: #{operator: "collect"}}, strategy: "Once"}
+                add_logical_graph({
+                    "nodes": [
+                        {"id": "items", "definition": {"Channel": {"operator": "of_items", "items": [{"id": "a"}]}}, "strategy": "Once"},
+                        {"id": "jobs", "definition": {"Registry": {"kind": "not_a_registered_kind", "spec": {}}}, "strategy": {"DynamicForEach": {"axis": "item"}}},
+                        {"id": "collected", "definition": {"Channel": {"operator": "collect"}}, "strategy": "Once"}
                     ],
-                    edges: [
-                        #{from: "items", from_port: 0, to: "jobs", to_port: 0},
-                        #{from: "jobs", from_port: 0, to: "collected", to_port: 0}
+                    "edges": [
+                        {"from": "items", "from_port": 0, "to": "jobs", "to_port": 0},
+                        {"from": "jobs", "from_port": 0, "to": "collected", "to_port": 0}
                     ]
-                });
-                commit();
+                })
+                commit()
                 "#,
                 true,
             ))
@@ -294,16 +295,16 @@ mod tests {
         let result = tool
             .run(input(
                 r#"
-                add_logical_graph(#{
-                    nodes: [
-                        #{id: "frame", definition: #{Registry: #{kind: "echo", spec: #{}}}, strategy: "Once"},
-                        #{id: "collected", definition: #{Channel: #{operator: "collect"}}, strategy: "Once"}
+                add_logical_graph({
+                    "nodes": [
+                        {"id": "frame", "definition": {"Registry": {"kind": "echo", "spec": {}}}, "strategy": "Once"},
+                        {"id": "collected", "definition": {"Channel": {"operator": "collect"}}, "strategy": "Once"}
                     ],
-                    edges: [
-                        #{from: "frame", from_port: 0, to: "collected", to_port: 0}
+                    "edges": [
+                        {"from": "frame", "from_port": 0, "to": "collected", "to_port": 0}
                     ]
-                });
-                commit();
+                })
+                commit()
                 "#,
                 true,
             ))
