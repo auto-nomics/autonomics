@@ -48,7 +48,38 @@ pub enum NextEvent {
     /// A host lifecycle event (agent registered / unregistered / status
     /// change).
     Host(HostEvent),
-    /// A host command was processed, or a background spawn completed and
-    /// registered. No payload — observers react via the `Host` stream.
+    /// A host command was processed, a background spawn completed and
+    /// registered, or the idle-passivation sweep ran. No payload —
+    /// observers react via the `Host` stream.
     Command,
+}
+
+/// Outcome of a background activation task, reported back to the host
+/// pump through the registration channel.
+///
+/// Virtual-actor mode: deliveries to a dormant identity spawn a
+/// background task that materializes the instance from its stored
+/// record; the pump registers successes and fails everything buffered
+/// for the path on errors.
+pub(crate) enum SpawnNotice {
+    /// The instance spawned successfully — register it and flush the
+    /// activation buffer for its path.
+    Activated {
+        handle: super::agent_handle::AgentHandle,
+        info: crate::control::AgentInfo,
+    },
+    /// The identity could not be activated (no record, model unavailable,
+    /// spawn error).
+    Failed { path: String, reason: String },
+}
+
+/// One delivery held in the host's activation buffer while its target
+/// agent activates. Ordering is the activation race-safety mechanism:
+/// buffered deliveries land in arrival order, after the instance is
+/// registered, on the single pump.
+pub(super) struct PendingDelivery {
+    pub(super) text: String,
+    pub(super) delegation_id: Option<uuid::Uuid>,
+    pub(super) from_user: bool,
+    pub(super) reply_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }

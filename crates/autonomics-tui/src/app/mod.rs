@@ -168,7 +168,6 @@ impl App {
 
         // Sync profiles to the command palette and picker.
         state.command_palette.set_profiles(&state.profiles);
-        state.profile_picker.set_profiles(state.profiles.clone());
 
         let (app_event_tx, app_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let runtime_handle = runtime.handle().clone();

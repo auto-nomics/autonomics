@@ -64,6 +64,15 @@ pub(super) struct AgentEntry {
     /// not yet emitted `TurnStarted`. This closes the Idle-status race where
     /// several peer messages could queue before the runtime status caught up.
     pub(super) inbound_pending: Arc<AtomicBool>,
+    /// When the entry last settled into a passivation-idle state with no
+    /// pending work (virtual-actor passivation timer). `None` while busy
+    /// or while background tasks / queued input remain.
+    pub(super) idle_since: Option<std::time::Instant>,
+    /// Background tool tasks dispatched without their completion observed
+    /// yet (ToolCallBackground without ToolBackgroundComplete). The
+    /// passivation sweep waits for these to drain — a fire-and-forget
+    /// download outlives its turn, and evicting the instance would kill it.
+    pub(super) background_pending: usize,
 }
 
 impl RuntimeHost {
@@ -121,6 +130,8 @@ impl RuntimeHost {
                 model,
                 memory,
                 inbound_pending: Arc::new(AtomicBool::new(false)),
+                idle_since: Some(std::time::Instant::now()),
+                background_pending: 0,
             },
         );
 

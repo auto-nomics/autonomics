@@ -133,6 +133,9 @@ pub async fn run_daemon(
     spawn_model_event_bridge(model_event_rx, hub.clone());
     let model_slot = models.model_slot();
     host.set_model(model_slot.clone());
+    // Virtual-actor activation resolves per-agent `preferred_model`
+    // specs through the model actor (token rotation included).
+    host.set_model_resolver(models.clone());
     // Install the startup default before restoring agents — the restore
     // loop skips preference-less agents while the slot is empty.
     models.activate_default().await;

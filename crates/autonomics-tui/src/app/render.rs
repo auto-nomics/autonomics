@@ -287,17 +287,6 @@ impl App {
             Overlay::DeleteConfirm => {
                 self.render_delete_confirm_popup(frame.area(), frame.buffer_mut());
             }
-            Overlay::ProfilePicker => {
-                use ratatui::widgets::StatefulWidget as _;
-                crate::widgets::profile_picker::ProfilePicker::new()
-                    .popup_width((frame.area().width * 8 / 10).max(70))
-                    .list_width(28)
-                    .render(
-                        frame.area(),
-                        frame.buffer_mut(),
-                        &mut self.state.profile_picker,
-                    );
-            }
             Overlay::AgentProfilePicker => {
                 use ratatui::widgets::StatefulWidget as _;
                 crate::widgets::agent_profile_picker::AgentProfilePicker::new()
@@ -450,8 +439,26 @@ impl App {
     }
 
     pub(super) fn render(&mut self, frame: &mut Frame) {
-        // Remember the frame area for mouse hit-testing (tab-bar stub).
+        // Remember the frame area for mouse hit-testing (tab strip).
         self.state.last_frame_area = frame.area();
+
+        // ── Tab strip (view-only) ──
+        // One row listing the open agent leaves. Tabs are windows, not
+        // lifecycle: opening/closing/switching never touches the agent.
+        let mut workspace_area = frame.area();
+        if !self.state.sessions.is_empty() {
+            let [bar_area, rest] = ratatui::layout::Layout::vertical([
+                ratatui::layout::Constraint::Length(1),
+                ratatui::layout::Constraint::Min(0),
+            ])
+            .areas(frame.area());
+            crate::widgets::tab_bar::TabBar {
+                sessions: &self.state.sessions,
+                active_idx: self.state.active_agent_idx,
+            }
+            .render(bar_area, frame.buffer_mut());
+            workspace_area = rest;
+        }
 
         // ── Workspace (full screen) ──
         // Model info comes from the per-agent render cache (render must
@@ -490,7 +497,7 @@ impl App {
             display: &display,
         };
         workspace.render(
-            frame.area(),
+            workspace_area,
             frame.buffer_mut(),
             self.state.active_tab_state_mut(),
         );

@@ -39,12 +39,12 @@ pub mod error;
 
 mod compaction;
 mod messages;
-mod shared;
+mod core;
 mod tool_images;
 mod workflow;
 
 pub use compaction::{DEFAULT_KEEP_TOKENS, estimate_message_tokens};
-pub(crate) use shared::AgentCore;
+pub(crate) use core::AgentCore;
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  CircleDashed,
   CircleSlash,
   Copy,
   Cpu,
@@ -27,7 +28,7 @@ import {
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
 import { renderMarkdown } from "@/lib/markdown";
-import type { AgentInfo, ChatItem, ModelRow } from "@/types";
+import type { AgentInfo, ChatItem, ModelRow, StoredAgent } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -367,8 +368,17 @@ export type AgentWorkspaceProps = {
   onCompact: () => void;
   showInspectorToggle?: boolean;
   onSelectAgent: (path: string) => void;
-  onShutdown: (path: string) => void;
+  /** 关闭当前标签页——纯视图操作。virtual-actor 模式下实例归 daemon
+   *  所有,空闲 TTL 到期后自动钝化;这里绝不调用 shutdown。 */
+  onCloseAgent: (path: string) => void;
   onSpawn: () => void;
+  /** Persisted identities (GET /storage/agents) backing the merged
+   *  agent picker: resume targets whether or not an instance is live. */
+  storedAgents: StoredAgent[];
+  onRefreshStoredAgents: () => void;
+  /** Activates a stored identity (switch if live, respawn otherwise)
+   *  and makes it the active tab. */
+  onResumeAgent: (agent: StoredAgent) => void;
   onToggleRight: () => void;
   onOpenDag: () => void;
 };
@@ -598,6 +608,14 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     return () => document.removeEventListener("click", onClick);
   }, []);
 
+  // Persisted identities that are not currently open as tabs — the
+  // merged picker's resume section. Live-but-unstored agents still show
+  // in the open group; stored-but-live ones are hidden here because the
+  // open entry already covers them.
+  const storedOnly = props.storedAgents.filter(
+    (stored) => !agents.some((agent) => agent.agent_id === stored.id),
+  );
+
   const clampedStart = Math.min(windowStart, Math.max(0, messages.length - 1));
   const visibleMessages = messages.slice(clampedStart, atBottom ? undefined : clampedStart + MAX_WINDOW);
   const hiddenCount = clampedStart;
@@ -609,7 +627,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       aria-label="Search agents"
       aria-expanded={agentPickerOpen}
       title={agentPickerOpen ? "关闭 agent 搜索" : "搜索 agent"}
-      onClick={() => setAgentPickerOpen((open) => !open)}
+      onClick={() => {
+        if (!agentPickerOpen) props.onRefreshStoredAgents();
+        setAgentPickerOpen((open) => !open);
+      }}
     >
       <Search />
     </Button>
@@ -653,11 +674,24 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             </div>
             <CommandList className="max-h-64 rounded-none! border-t">
               <CommandEmpty>没有匹配的 agent</CommandEmpty>
-              <CommandGroup>
+              <CommandGroup heading="新建">
+                <CommandItem
+                  key="new-agent"
+                  value="新建 agent new spawn create"
+                  onSelect={() => {
+                    setAgentPickerOpen(false);
+                    props.onSpawn();
+                  }}
+                >
+                  <Plus className="size-3.5" />
+                  <span>新建 agent…</span>
+                </CommandItem>
+              </CommandGroup>
+              <CommandGroup heading="打开的 agent">
                 {agents.map((agent) => (
                   <CommandItem
                     key={agent.path}
-                    value={`${leafName(agent.path)} ${agent.path}`}
+                    value={`打开 ${leafName(agent.path)} ${agent.path}`}
                     data-checked={agent.path === activeAgent ? "true" : undefined}
                     onSelect={() => {
                       props.onSelectAgent(agent.path);
@@ -671,6 +705,33 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                     </span>
                   </CommandItem>
                 ))}
+              </CommandGroup>
+              <CommandGroup heading="已存储的 agent（选择即恢复）">
+                {storedOnly.map((stored) => {
+                  const live = agents.find((agent) => agent.agent_id === stored.id);
+                  return (
+                    <CommandItem
+                      key={stored.id}
+                      value={`恢复 ${stored.name}`}
+                      onSelect={() => {
+                        setAgentPickerOpen(false);
+                        if (live) {
+                          props.onSelectAgent(live.path);
+                        } else {
+                          void props.onResumeAgent(stored);
+                        }
+                      }}
+                    >
+                      {live
+                        ? <AgentStatusIcon status={statuses[live.path]} />
+                        : <CircleDashed className="size-3 shrink-0 text-muted-foreground" />}
+                      <span className="truncate">{leafName(stored.name)}</span>
+                      <span title={stored.name} className="min-w-0 truncate pl-2 text-xs text-muted-foreground">
+                        {stored.name}
+                      </span>
+                    </CommandItem>
+                  );
+                })}
               </CommandGroup>
             </CommandList>
           </Command>
@@ -708,9 +769,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   </button>
                   <button
                     type="button"
-                    aria-label="Shutdown agent"
-                    title="关闭并停止 agent"
-                    onClick={() => props.onShutdown(agent.path)}
+                    aria-label="Close tab"
+                    title="关闭标签页（不影响 agent 运行状态）"
+                    onClick={() => props.onCloseAgent(agent.path)}
                     className="rounded-sm p-1 opacity-0 transition hover:bg-accent group-hover/tab:opacity-100"
                   >
                     <X className="size-3" />

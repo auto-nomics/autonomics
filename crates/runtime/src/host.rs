@@ -57,6 +57,8 @@ pub use events::{HostEvent, NextEvent, TaggedEvent};
 pub use shared_infra::SharedInfra;
 pub use vfs_setup::bibliography_file_storage;
 
+use events::{PendingDelivery, SpawnNotice};
+
 use delegation::{HostDelegation, push_delegation_progress};
 use relay::AgentEntry;
 use status::derive_agent_status;
@@ -101,11 +103,23 @@ pub struct RuntimeHost {
     next_layout_revision: u64,
     /// Current model (for spawning agents from tools). Set by TUI at startup.
     model: Option<Arc<ArcSwapOption<Model>>>,
-    /// Channel for receiving spawned agent handles from background tasks.
-    /// Background spawn tasks send (handle, info) here; the main loop
-    /// drains and registers them.
-    registration_rx: tokio::sync::mpsc::UnboundedReceiver<(AgentHandle, crate::control::AgentInfo)>,
-    registration_tx: tokio::sync::mpsc::UnboundedSender<(AgentHandle, crate::control::AgentInfo)>,
+    /// Channel for receiving background spawn outcomes. Background spawn
+    /// and virtual-actor activation tasks report here; the main loop
+    /// registers successes and fails buffered deliveries on errors.
+    registration_rx: tokio::sync::mpsc::UnboundedReceiver<SpawnNotice>,
+    registration_tx: tokio::sync::mpsc::UnboundedSender<SpawnNotice>,
+    /// Deliveries deferred until a dormant identity finishes activating
+    /// (virtual-actor mode). Keyed by registry path; flushed by
+    /// [`Self::register_background_spawn`] once the instance is live.
+    activation_pending: HashMap<String, Vec<PendingDelivery>>,
+    /// Resolves per-agent `preferred_model` specs during virtual-actor
+    /// activation. Installed by the daemon (the model actor lives there);
+    /// without it only preference-less identities can activate.
+    model_resolver: Option<crate::model_actor::ModelHandle>,
+    /// Virtual-actor idle passivation TTL (from the runtime config).
+    /// `None` disables passivation — instances live until explicitly
+    /// shut down.
+    agent_idle_ttl: Option<std::time::Duration>,
     /// Notification channel — fires when an agent is registered or
     /// shut down. The TUI subscribes to this to keep its session list
     /// in sync with RuntimeHost's agent registry.
@@ -166,6 +180,9 @@ impl RuntimeHost {
             model: None,
             registration_rx,
             registration_tx,
+            activation_pending: HashMap::new(),
+            model_resolver: None,
+            agent_idle_ttl: config.agent_idle_ttl,
             notify_tx,
             notify_rx,
             event_broadcast,
@@ -183,6 +200,14 @@ impl RuntimeHost {
     /// Set the current model (for spawning agents from tools).
     pub fn set_model(&mut self, model: Arc<ArcSwapOption<Model>>) {
         self.model = Some(model);
+    }
+
+    /// Install the resolver used to materialize an agent's
+    /// `preferred_model` during virtual-actor activation. The daemon
+    /// wires its model-actor handle here (token rotation included).
+    /// Without a resolver, only preference-less identities activate.
+    pub fn set_model_resolver(&mut self, resolver: crate::model_actor::ModelHandle) {
+        self.model_resolver = Some(resolver);
     }
 
     /// Receive the next event from any registered agent.
@@ -335,8 +360,9 @@ impl RuntimeHost {
 
     /// Multiplexed receive for gateway-style drivers: awaits the next item
     /// from ANY of the host's input sources — agent events (with the same
-    /// in-band processing as [`Self::recv_any`]), host lifecycle events, or
-    /// host commands / background spawn registrations — in a single future.
+    /// in-band processing as [`Self::recv_any`]), host lifecycle events,
+    /// host commands / background spawn notices, or the virtual-actor
+    /// idle-passivation sweep timer — in a single future.
     ///
     /// Single consumer, same contract as [`Self::recv_any`]: the daemon
     /// driver must be the only caller, or delegation bookkeeping and
@@ -345,6 +371,10 @@ impl RuntimeHost {
     /// via pointer aliasing), this method borrows the host once and keeps
     /// every channel fairly polled.
     pub async fn recv_next(&mut self) -> NextEvent {
+        // Computed before the select — the deadline call borrows all of
+        // `self`, which would fight the per-field channel borrows below.
+        let passivation_at =
+            tokio::time::Instant::from_std(self.next_passivation_deadline());
         tokio::select! {
             tagged = self.event_rx.recv() => {
                 match tagged {
@@ -368,12 +398,16 @@ impl RuntimeHost {
             }
             reg = self.registration_rx.recv() => {
                 match reg {
-                    Some((handle, info)) => {
-                        self.register_background_spawn(handle, info);
-                        NextEvent::Command
-                    }
+                    Some(notice) => self.process_spawn_notice(notice),
                     None => std::future::pending().await,
                 }
+                NextEvent::Command
+            }
+            // Virtual-actor passivation sweep: a periodic tick that
+            // evicts instances whose idle timer exceeded the TTL.
+            _ = tokio::time::sleep_until(passivation_at) => {
+                self.sweep_idle_agents();
+                NextEvent::Command
             }
         }
     }

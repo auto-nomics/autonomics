@@ -248,7 +248,17 @@ impl App {
                     self.state.agent_profile_picker.toggle_expand();
                     return;
                 }
-                if let Some(item) = self.state.agent_profile_picker.selected_item() {
+                match self.state.agent_profile_picker.selected() {
+                Some(crate::widgets::agent_profile_picker::PickerSelection::NewAgent(kind)) => {
+                    // Merged picker: same naming flow the old profile
+                    // picker drove — stash the kind, open the name input.
+                    self.state.agent_profile_picker.close();
+                    self.state.pending_profile = Some(kind);
+                    self.state
+                        .name_input
+                        .open(format!(" New Agent ({kind}) "), kind.name());
+                }
+                Some(crate::widgets::agent_profile_picker::PickerSelection::Stored(item)) => {
                     // If this agent is already open in a leaf, just switch focus
                     // instead of spawning a duplicate.
                     if let Some(idx) = self
@@ -275,6 +285,11 @@ impl App {
                     // shape and legacy full-profile rows.
                     let config = agentik_core::AgentProfileConfig::from_json(&config_json);
                     self.spawn_agent_at_path(config, item.path);
+                }
+                None => {
+                    // Folder row — expand/collapse.
+                    self.state.agent_profile_picker.toggle_expand();
+                }
                 }
             }
             _ => {}
@@ -320,40 +335,6 @@ impl App {
             tx.send(crate::app_event::AppEvent::AgentRenamed { agent_id, new_path });
         });
     }
-    /// Key handling while the profile picker popup is open.
-    pub(super) fn handle_profile_picker_key(&mut self, key: &KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => {
-                self.state.profile_picker.close();
-            }
-            KeyCode::Up => self.state.profile_picker.move_up(),
-            KeyCode::Down => self.state.profile_picker.move_down(),
-            // Expand/collapse folder nodes. Tab and Right both expand;
-            // Left collapses.
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('+') => {
-                self.state.profile_picker.toggle_expand();
-            }
-            KeyCode::Left | KeyCode::BackTab => {
-                self.state.profile_picker.toggle_expand();
-            }
-            KeyCode::Backspace => self.state.profile_picker.pop_char(),
-            KeyCode::Char(c) if !ctrl => self.state.profile_picker.push_char(c),
-            KeyCode::Enter => {
-                if let Some(kind) = self.state.profile_picker.selected_item() {
-                    self.state.profile_picker.close();
-                    // Stash the selected kind; the name input popup
-                    // will open next and prompt the user for an agent
-                    // name (pre-filled with the kind name).
-                    self.state.pending_profile = Some(kind);
-                    self.state
-                        .name_input
-                        .open(format!(" New Agent ({kind}) "), kind.name());
-                }
-            }
-            _ => {}
-        }
-    }
     /// Key handling while the delete-agent confirmation popup is open.
     ///
     /// y or Enter confirms; n or Esc cancels.
@@ -393,11 +374,12 @@ impl App {
         tracing::info!(%agent_id, "agent permanently deleted");
     }
 
-    /// Close the active agent leaf: terminate the background agent process
-    /// and remove the corresponding handle + UI session state.
+    /// Close the active agent leaf: remove the UI session only.
     ///
-    /// This is the "close tab" operation. The agent's conversation history
-    /// remains in storage and can be resumed later via the resume picker.
+    /// This is the "close tab" operation, and under virtual-actor mode it
+    /// is a pure view change — the daemon owns the instance, which idles
+    /// on until the idle TTL passivates it. Conversation history remains
+    /// in storage and the resume picker re-opens it at any time.
     pub(super) fn close_active_agent(&mut self) {
         let idx = self.state.active_agent_idx;
         let Some(session) = self.state.sessions.get(idx) else {
@@ -405,10 +387,7 @@ impl App {
             return;
         };
         let name = session.name.clone();
-
-        // Shutdown the agent via the daemon (relay task handles cleanup).
-        self.shutdown_agent_remotely(&name);
-        tracing::info!(agent = %name, idx, "agent leaf closed — daemon agent shut down");
+        tracing::info!(agent = %name, idx, "agent leaf closed — view detached, daemon instance untouched");
 
         // Remove UI session.
         self.state.sessions.remove(idx);
@@ -439,10 +418,7 @@ impl App {
         };
 
         let name = self.state.sessions[idx].name.clone();
-
-        // Shutdown the agent via the daemon (relay task handles cleanup).
-        self.shutdown_agent_remotely(&name);
-        tracing::info!(agent = %name, %agent_id, "agent leaf closed by id — daemon agent shut down");
+        tracing::info!(agent = %name, %agent_id, "agent leaf closed by id — view detached, daemon instance untouched");
 
         // Remove UI session.
         self.state.sessions.remove(idx);
@@ -462,14 +438,15 @@ impl App {
 }
 
 impl App {
-    /// Fire-and-forget agent shutdown on the daemon (leaf close).
-    pub(super) fn shutdown_agent_remotely(&self, name: &str) {
-        let client = self.client.clone();
-        let name = name.to_string();
-        self.spawn_client_task("shutdown_agent", move || async move {
-            if let Err(e) = client.shutdown_agent(&name).await {
-                tracing::warn!(agent = %name, error = %e, "daemon agent shutdown request failed");
-            }
-        });
+    /// Cycle the visible agent leaf (Alt+Left/Right). Wraps around.
+    /// View switching only — never touches agent lifecycle.
+    pub(super) fn cycle_agent_tab(&mut self, direction: i32) {
+        if self.state.sessions.is_empty() {
+            return;
+        }
+        let count = self.state.sessions.len() as i32;
+        let next = (self.state.active_agent_idx as i32 + direction).rem_euclid(count);
+        self.state.active_agent_idx = next as usize;
+        self.dirty = true;
     }
 }

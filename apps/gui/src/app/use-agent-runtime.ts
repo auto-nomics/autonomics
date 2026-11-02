@@ -87,6 +87,9 @@ export function useAgentRuntime() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  // Persisted identities (GET /storage/agents) for the merged agent
+  // picker: resume targets whether or not the instance is live.
+  const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo[]>>({});
   const [activeSessions, setActiveSessions] = useState<Record<string, string | null>>({});
   const [activeAgent, setActiveAgent] = useState("");
@@ -280,6 +283,18 @@ export function useAgentRuntime() {
   const handleFrameRef = useRef(handleFrame);
   handleFrameRef.current = handleFrame;
 
+  /** Refreshes the persisted identity list for the agent picker. Under
+   *  virtual-actor mode the daemon owns instance lifecycle (idle TTL
+   *  passivation), so the picker lists identities from storage, not the
+   *  live registry. */
+  const refreshStoredAgents = useCallback(async () => {
+    try {
+      setStoredAgents(await gatewayRequest("GET", "/storage/agents"));
+    } catch {
+      // The picker degrades to live-only; a transient storage failure
+      // should not surface as a modal error.
+    }
+  }, []);
   const hydrate = useCallback(async () => {
     try {
       const probe = await probeGateway();
@@ -311,6 +326,7 @@ export function useAgentRuntime() {
       setConnected(true);
       setConnectionError(null);
       setBooting(false);
+      void refreshStoredAgents();
       await startGatewayEvents(snapshot.last_seq, {
         onFrame: (frame) => handleFrameRef.current(frame),
         onStatus: (status) => {
@@ -326,7 +342,7 @@ export function useAgentRuntime() {
       setConnectionError(unauthorized ? "需要 Gateway 令牌" : String(cause));
       setBooting(false);
     }
-  }, [loadHistory]);
+  }, [loadHistory, refreshStoredAgents]);
 
   const hydrateRef = useRef(hydrate);
   hydrateRef.current = hydrate;
@@ -397,6 +413,21 @@ export function useAgentRuntime() {
     }
   };
 
+  /** Admin op: passivate a live instance now (fire-and-forget reply).
+   *  Used by the delete-agent flow so a deleted identity leaves no live
+   *  zombie behind. Tabs never call this — the daemon owns lifecycle. */
+  const shutdownAgent = useCallback(async (path: string) => {
+    setBusy(`shutdown:${path}`);
+    try {
+      await gatewayRequest("POST", `/agents/${path}/shutdown`);
+      forgetAgent(path);
+    } catch (cause) {
+      window.alert(String(cause));
+    } finally {
+      setBusy(null);
+    }
+  }, [forgetAgent]);
+
   const spawnAgent = async (input: { name: string; parentPath: string; profile: string }) => {
     setBusy("spawn");
     try {
@@ -420,17 +451,6 @@ export function useAgentRuntime() {
     }
   };
 
-  const shutdownAgent = async (path: string) => {
-    setBusy(`shutdown:${path}`);
-    try {
-      await gatewayRequest("POST", `/agents/${path}/shutdown`);
-      forgetAgent(path);
-    } catch (cause) {
-      window.alert(String(cause));
-    } finally {
-      setBusy(null);
-    }
-  };
 
   const resumeAgent = async (stored: StoredAgent) => {
     const running = agents.find((agent) => agent.agent_id === stored.id);
@@ -544,6 +564,9 @@ export function useAgentRuntime() {
     spawnAgent,
     shutdownAgent,
     resumeAgent,
+    storedAgents,
+    refreshStoredAgents,
+    forgetAgent,
     // sessions (the agent's sole working context)
     sessions,
     activeSessions,

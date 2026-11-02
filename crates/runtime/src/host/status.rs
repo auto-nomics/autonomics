@@ -177,6 +177,20 @@ pub(super) fn truncate_preview(s: &str, max: usize) -> String {
 /// `TurnCompleted` (`Failed` included), so letting them through would
 /// clobber the status the turn just landed on within milliseconds of it
 /// appearing. They must never reach the status bookkeeping.
+/// Statuses from which a virtual-actor instance may be passivated: the
+/// soft-terminal set plus plain `Idle`. Excludes `Waiting` (a background
+/// watcher is alive and a wake-up injection may still land) and every
+/// active state.
+fn is_passivation_idle_status(status: AgentLifecycleStatus) -> bool {
+    matches!(
+        status,
+        AgentLifecycleStatus::Idle
+            | AgentLifecycleStatus::Cancelled
+            | AgentLifecycleStatus::Error
+            | AgentLifecycleStatus::Aborted
+    )
+}
+
 fn is_session_bookkeeping(event: &AgentEvent) -> bool {
     matches!(
         event,
@@ -227,6 +241,28 @@ impl RuntimeHost {
         // Mirror into AgentInfo so list_agents / get_agent_info see it.
         entry.info.status = next_status;
         entry.info.last_event = next_last_event.clone();
+
+        // Virtual-actor bookkeeping. Background-task dispatch/completion
+        // always moves the status or the one-liner (they pass the no-op
+        // guard above), so this sees every transition. `idle_since` is
+        // Some only while the entry is passivation-idle with no pending
+        // work — the sweep's whole predicate, precomputed.
+        match event {
+            AgentEvent::ToolCallBackground { .. } => entry.background_pending += 1,
+            AgentEvent::ToolBackgroundComplete { .. } => {
+                entry.background_pending = entry.background_pending.saturating_sub(1);
+            }
+            _ => {}
+        }
+        entry.idle_since = if is_passivation_idle_status(entry.status)
+            && entry.background_pending == 0
+            && !entry.inbound_pending.load(std::sync::atomic::Ordering::Acquire)
+        {
+            Some(entry.idle_since.unwrap_or_else(std::time::Instant::now))
+        } else {
+            None
+        };
+
         // Copy out of `entry` — the emit below needs `&mut self` again.
         let status = entry.status;
 
@@ -242,6 +278,54 @@ impl RuntimeHost {
         // live runtime; persistence is a read-side projection.
         self.persist_agent_status(name, &status, &next_last_event);
         self.persist_current_agent_layout();
+    }
+
+    /// Passivate every registered agent whose idle timer has exceeded the
+    /// configured TTL (virtual-actor mode).
+    ///
+    /// Passivation IS the existing graceful shutdown: the agent's run
+    /// loop pauses its context (persisting the snapshot and ending the
+    /// WAL session) before exiting, and the next message to the identity
+    /// re-activates it from storage. The idle timer already encodes the
+    /// full eligibility predicate — idle-compatible status, no
+    /// outstanding background tasks — so only the inbound-queue race
+    /// needs a re-check here (a delivery may land between the last event
+    /// and this sweep).
+    pub(crate) fn sweep_idle_agents(&mut self) {
+        let Some(ttl) = self.agent_idle_ttl else {
+            return;
+        };
+        let eligible: Vec<String> = self
+            .agents
+            .iter()
+            .filter(|(_, entry)| {
+                !entry.inbound_pending.load(std::sync::atomic::Ordering::Acquire)
+                    && entry.idle_since.is_some_and(|since| since.elapsed() >= ttl)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in eligible {
+            tracing::info!(agent = %name, ttl_secs = ttl.as_secs(), "passivating idle agent");
+            self.shutdown_agent(&name);
+        }
+    }
+
+    /// Next deadline at which the passivation sweep should run. Wakes at
+    /// most a minute early/late against status changes — the sweep itself
+    /// re-validates eligibility, so a stale deadline is harmless.
+    pub(super) fn next_passivation_deadline(&self) -> std::time::Instant {
+        let now = std::time::Instant::now();
+        let tick = std::time::Duration::from_secs(60);
+        let Some(ttl) = self.agent_idle_ttl else {
+            // Disabled — park the timer; the sweep no-ops anyway.
+            return now + std::time::Duration::from_secs(3600);
+        };
+        let earliest = self
+            .agents
+            .values()
+            .filter_map(|entry| entry.idle_since.map(|since| since + ttl))
+            .min();
+        earliest.unwrap_or(now + tick).min(now + tick)
     }
 }
 

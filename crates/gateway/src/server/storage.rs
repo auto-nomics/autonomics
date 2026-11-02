@@ -31,12 +31,19 @@ pub(crate) async fn delete_storage_agent(
     State(state): State<GatewayState>,
     Path(id): Path<Uuid>,
 ) -> GatewayResult<StatusCode> {
+    // Resolve the path before the record disappears so the live instance
+    // (if any) can be evicted — deleting an identity must not leave a
+    // zombie instance running until the idle TTL.
+    let record = state.infra.storage.get_agent(id).await.ok().flatten();
     state
         .infra
         .storage
         .delete_agent(id)
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(record) = record {
+        state.control.shutdown_agent(&record.name);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

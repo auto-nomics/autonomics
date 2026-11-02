@@ -105,10 +105,9 @@ impl App {
             CommandAction::ReloadConfig => {
                 self.spawn_catalog_reload();
             }
-            CommandAction::NewAgent => {
-                self.state.profile_picker.open();
-            }
-            CommandAction::ResumeAgent => {
+            CommandAction::NewAgent | CommandAction::ResumeAgent => {
+                // One merged picker: "New agent" section on top, stored
+                // identities below (rename/delete/preview included).
                 self.open_agent_profile_picker();
             }
             CommandAction::CloseAgent => {

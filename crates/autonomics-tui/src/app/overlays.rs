@@ -69,7 +69,6 @@ pub(super) enum Overlay {
     /// Agent resume picker.
     AgentProfilePicker,
     /// Profile picker (spawn-agent kind list).
-    ProfilePicker,
     /// Command palette (`Ctrl+P`).
     CommandPalette,
     // ── Confirmations (top of the stack) ──
@@ -103,7 +102,6 @@ impl AppState {
             (AgentsPopup, self.agents_popup.is_visible()),
             (NameInput, self.name_input.visible),
             (AgentProfilePicker, self.agent_profile_picker.visible),
-            (ProfilePicker, self.profile_picker.visible),
             (CommandPalette, self.command_palette.is_visible()),
             (BulkConfirm, self.bulk_confirm.is_some()),
             (DeleteConfirm, self.delete_agent_confirm),
@@ -134,7 +132,6 @@ mod tests {
         state.agents_popup.picker.visible = true;
         state.name_input.visible = true;
         state.agent_profile_picker.visible = true;
-        state.profile_picker.visible = true;
         state.command_palette.open();
         state.bulk_confirm = Some(crate::state::BulkConfirm {
             title: "t".into(),
@@ -158,7 +155,7 @@ mod tests {
         let mut state = AppState::default();
         all_visible(&mut state);
         let stack = state.overlay_stack();
-        assert_eq!(stack.len(), 18, "every overlay variant must be listed");
+        assert_eq!(stack.len(), 17, "every overlay variant must be listed");
         let unique: std::collections::HashSet<_> = stack.iter().collect();
         assert_eq!(unique.len(), stack.len(), "no duplicates in the stack");
     }

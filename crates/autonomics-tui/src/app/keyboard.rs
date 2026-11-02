@@ -80,6 +80,21 @@ impl App {
         let lines_per_tick: i32 = 3;
 
         match mouse.kind {
+            MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+                // Tab strip (top row): click switches the visible leaf —
+                // a pure view switch, never a lifecycle operation.
+                if mouse.row == 0
+                    && let Some(idx) = crate::widgets::tab_bar::hit_test(
+                        &self.state.sessions,
+                        self.state.last_frame_area.width,
+                        mouse.column,
+                    )
+                {
+                    self.state.active_agent_idx = idx;
+                    self.dirty = true;
+                }
+                0
+            }
             MouseEventKind::ScrollDown => {
                 let ts = self.state.active_tab_state_mut();
                 ts.auto_scroll = false;
@@ -196,6 +211,22 @@ impl App {
             return;
         }
 
+        // Alt+Left / Alt+Right: previous/next agent tab. View switching
+        // only — the daemon owns agent lifecycle.
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Left => {
+                    self.cycle_agent_tab(-1);
+                    return;
+                }
+                KeyCode::Right => {
+                    self.cycle_agent_tab(1);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Ctrl+O opens a read-only view of the active agent's data DAG. This
         // is intentionally global: the overlay is useful while an agent is
         // composing or executing pipeline changes.
@@ -211,7 +242,6 @@ impl App {
         if let Some(overlay) = top_overlay {
             match overlay {
                 Overlay::CommandPalette => self.handle_command_palette_key(key),
-                Overlay::ProfilePicker => self.handle_profile_picker_key(key),
                 Overlay::AgentProfilePicker => self.handle_agent_profile_picker_key(key),
                 Overlay::NameInput => self.handle_name_input_key(key),
                 Overlay::AgentsPopup => self.handle_agents_popup_key(key),

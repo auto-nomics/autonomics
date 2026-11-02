@@ -448,8 +448,11 @@ export function App() {
         onRefreshEffort={refreshEffort}
         onChangeEffort={(path, effort) => runtime.setAgentEffort(path, effort)}
         onSelectAgent={runtime.selectAgent}
-        onShutdown={(path) => void runtime.shutdownAgent(path)}
+        onCloseAgent={runtime.forgetAgent}
         onSpawn={() => setSpawnOpen(true)}
+        storedAgents={runtime.storedAgents}
+        onRefreshStoredAgents={() => void runtime.refreshStoredAgents()}
+        onResumeAgent={(agent) => void runtime.resumeAgent(agent)}
         onToggleRight={() => setRightOpen((current) => !current)}
         onOpenDag={() => { if (runtime.activeAgent) setDagAgent(runtime.activeAgent); }}
       />

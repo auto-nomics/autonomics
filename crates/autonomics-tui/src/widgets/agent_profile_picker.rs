@@ -16,6 +16,7 @@
 
 use std::collections::HashSet;
 
+use agentik_core::profile::AgentKind;
 use agentik_core::storage::AgentRecord;
 use agentik_types::AgentPath;
 use ratatui::{
@@ -35,6 +36,18 @@ use crate::widgets::tree_picker::{
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
 // ═══════════════════════════════════════════════════════════════════════
+
+/// Synthetic tree key for the "New agent" section — contains a `::`
+/// separator so it can never collide with a real [`AgentPath`].
+const NEW_SECTION: &str = "::new-agent::";
+
+/// What the cursor is on: a stored identity (resume) or a profile kind
+/// (create).
+#[derive(Clone)]
+pub enum PickerSelection {
+    NewAgent(AgentKind),
+    Stored(AgentRecordItem),
+}
 
 /// One selectable agent record entry.
 #[derive(Clone)]
@@ -61,6 +74,9 @@ struct TreeNode {
     is_leaf: bool,
     /// Agent record index, if this is a leaf.
     item_idx: Option<usize>,
+    /// Profile kind for the virtual "new agent" leaves — `None` for
+    /// stored-agent rows and folders.
+    kind: Option<AgentKind>,
     /// `true` if this folder is currently expanded.
     expanded: bool,
 }
@@ -269,11 +285,25 @@ impl AgentProfilePickerState {
     }
 
     /// Returns a clone of the currently selected agent item, if the cursor
-    /// is on a leaf row.
+    /// is on a stored-agent leaf row.
     pub fn selected_item(&self) -> Option<AgentRecordItem> {
         let node = self.rows.get(self.selected)?;
         let idx = node.item_idx?;
         self.items.get(idx).cloned()
+    }
+
+    /// The profile kind, if the cursor is on a virtual "new agent" leaf.
+    pub fn selected_kind(&self) -> Option<AgentKind> {
+        let node = self.rows.get(self.selected)?;
+        node.kind
+    }
+
+    /// What Enter should act on.
+    pub fn selected(&self) -> Option<PickerSelection> {
+        if let Some(kind) = self.selected_kind() {
+            return Some(PickerSelection::NewAgent(kind));
+        }
+        self.selected_item().map(PickerSelection::Stored)
     }
 
     /// Number of rows currently displayed.
@@ -367,8 +397,41 @@ impl AgentProfilePickerState {
         }
 
         // Build the tree recursively.
+        let mut stored_rows = Vec::new();
+        build_tree(&agent_paths, &self.collapsed, &force_expand, &mut stored_rows, 0);
+
+        // ── "New agent" section ──
+        // Merged create flow: the resume picker doubles as the profile
+        // picker. One virtual folder at the top lists one leaf per
+        // profile kind; Enter starts the new-agent naming flow.
         let mut rows = Vec::new();
-        build_tree(&agent_paths, &self.collapsed, &force_expand, &mut rows, 0);
+        let section_collapsed = self.collapsed.contains(NEW_SECTION) && matching.is_none();
+        rows.push(TreeNode {
+            path: NEW_SECTION.to_string(),
+            name: "＋ New agent".to_string(),
+            depth: 0,
+            is_leaf: false,
+            item_idx: None,
+            kind: None,
+            expanded: !section_collapsed,
+        });
+        if !section_collapsed {
+            for kind in AgentKind::ALL {
+                if matching.is_some() && !kind.name().contains(&needle) {
+                    continue;
+                }
+                rows.push(TreeNode {
+                    path: format!("{NEW_SECTION}/{}", kind.name()),
+                    name: kind.name().to_string(),
+                    depth: 1,
+                    is_leaf: true,
+                    item_idx: None,
+                    kind: Some(kind),
+                    expanded: false,
+                });
+            }
+        }
+        rows.extend(stored_rows);
 
         self.rows = rows;
         // Clamp selection.
@@ -454,6 +517,7 @@ fn build_tree(
             depth,
             is_leaf,
             item_idx,
+            kind: None,
             expanded: has_children && expanded,
         });
 
@@ -512,7 +576,7 @@ impl StatefulWidget for AgentProfilePicker {
             return;
         }
 
-        let layout = render_chrome(area, buf, " Resume Agent ", self.accent, self.popup_width);
+        let layout = render_chrome(area, buf, " Agents ", self.accent, self.popup_width);
         render_search(layout.search, buf, self.accent, &state.query, "agents");
         render_separator(layout.separator, buf);
 
@@ -529,7 +593,14 @@ impl StatefulWidget for AgentProfilePicker {
         );
 
         let preview_inner = render_preview_frame(content.preview, buf, self.accent);
-        if let Some(item) = state.selected_item() {
+        if let Some(kind) = state.selected_kind() {
+            let lines = kind_preview_lines(kind, vec![("Action", "create a new agent".to_string())]);
+            Widget::render(
+                Paragraph::new(truncate_preview_lines(lines, preview_inner.height as usize)),
+                preview_inner,
+                buf,
+            );
+        } else if let Some(item) = state.selected_item() {
             let last_active = chrono::DateTime::from_timestamp_millis(item.last_active)
                 .map(|time| time.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_else(|| "unknown".to_string());
@@ -585,7 +656,7 @@ impl StatefulWidget for AgentProfilePicker {
                 item_name
             )
         } else {
-            " Enter resume  →/← expand/fold  Ctrl+R rename  Ctrl+D delete  ↑↓ navigate  Esc cancel"
+            " Enter open/new  →/← expand/fold  Ctrl+R rename  Ctrl+D delete  ↑↓ navigate  Esc cancel"
                 .to_string()
         };
         render_footer(layout.footer, buf, &hint);

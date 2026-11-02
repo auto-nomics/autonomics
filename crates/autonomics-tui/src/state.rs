@@ -923,7 +923,6 @@ pub struct AppState {
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub embedding_config_state: crate::widgets::embedding_config_widget::EmbeddingConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
-    pub profile_picker: crate::widgets::profile_picker::ProfilePickerState,
     pub agent_profile_picker: crate::widgets::agent_profile_picker::AgentProfilePickerState,
     /// Terminal area of the last rendered frame. Used by mouse handlers for
     /// hit-testing (e.g. the tab-bar collapse stub). Refreshed every render.
