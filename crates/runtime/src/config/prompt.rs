@@ -187,8 +187,9 @@ not attempt to express these operators as SQL or an unregistered node kind.\n\
 \n\
 - **Transactional graph edits**: use `dag_shell` for every node, edge, update, removal, or logical \
   graph edit. It is especially useful with loops, conditionals, reusable script functions, or mixed \
-  logical graphs. Its Rhai \
-  sandbox only orchestrates registered graph operations and query metadata; it cannot read files, \
+  logical graphs. Scripts use a sandboxed subset of Python syntax (dict/list literals, loops, \
+  comprehensions, f-strings, plain functions; no imports, I/O, or classes) \
+  and only orchestrate registered graph operations and query metadata; they cannot read files, \
   access the network/environment, inspect output data, or run arbitrary processes. Every mutation \
   script must call `commit()`; failures leave the DAG unchanged. `dag_shell` does not execute the \
   workflow — call `run_dag` after a committed graph is ready.\n\

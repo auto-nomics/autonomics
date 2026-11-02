@@ -41,8 +41,8 @@ async fn dag_shell(toolset: &Toolset, id: &str, script: &str) -> serde_json::Val
 async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
     let script = format!(
         r#"
-        node("src", "file_to_dataframe", #{{path: "/insurance.csv"}});
-        node("sink", "dataframe_to_file", #{{path: "{output}", format: "csv", mode: "overwrite"}});
+        node("src", "file_to_dataframe", {{"path": "/insurance.csv"}});
+        node("sink", "dataframe_to_file", {{"path": "{output}", "format": "csv", "mode": "overwrite"}});
         edge("src", 0, "sink", 0);
         commit();
         "#,
@@ -66,22 +66,22 @@ async fn agent_controls_channel_operators_with_dag_shell() {
         &toolset,
         "channel-graph",
         r#"
-        add_logical_graph(#{
-            nodes: [
-                #{
-                    id: "agent_items",
-                    definition: #{Channel: #{operator: "of_items", items: [#{id: "one"}, #{id: "two"}]}},
-                    strategy: "Once"
+        add_logical_graph({
+            "nodes": [
+                {
+                    "id": "agent_items",
+                    "definition": {"Channel": {"operator": "of_items", "items": [{"id": "one"}, {"id": "two"}]}},
+                    "strategy": "Once"
                 },
-                #{
-                    id: "agent_mapped",
-                    definition: #{Channel: #{operator: "map", template: #{name: "{{item.id}}"}}},
-                    strategy: "Once"
+                {
+                    "id": "agent_mapped",
+                    "definition": {"Channel": {"operator": "map", "template": {"name": "{{item.id}}"}}},
+                    "strategy": "Once"
                 }
             ],
-            edges: [#{from: "agent_items", from_port: 0, to: "agent_mapped", to_port: 0}]
-        });
-        commit();
+            "edges": [{"from": "agent_items", "from_port": 0, "to": "agent_mapped", "to_port": 0}]
+        })
+        commit()
         "#,
     )
     .await;
@@ -224,12 +224,12 @@ async fn test_add_source_sql_run_dag() {
         &toolset,
         "build",
         r#"
-        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
-        node("sql", "sql", #{sql_query: "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5"});
-        node("sink", "dataframe_to_file", #{path: "/output.csv", format: "csv", mode: "overwrite"});
+        node("src", "file_to_dataframe", {"path": "/insurance.csv"});
+        node("sql", "sql", {"sql_query": "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5"});
+        node("sink", "dataframe_to_file", {"path": "/output.csv", "format": "csv", "mode": "overwrite"});
         edge("src", 0, "sql", 0);
         edge("sql", 0, "sink", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -330,7 +330,7 @@ async fn test_get_output_file_to_dataframe_csv_parquet_json() {
 
     for format in ["csv", "json", "parquet"] {
         let script = format!(
-            r#"node("source", "file_to_dataframe", #{{path: "/source.{format}"}}); commit();"#
+            r#"node("source", "file_to_dataframe", {{"path": "/source.{format}"}}); commit();"#
         );
         dag_shell(&toolset, "add", &script).await;
 
@@ -397,10 +397,10 @@ async fn dag_shell_builds_then_removes_edge_and_node() {
         &toolset,
         "build",
         r#"
-        node("source", "file_to_dataframe", #{path: ()});
-        node("transform", "sql", #{sql_query: "SELECT * FROM port_0"});
+        node("source", "file_to_dataframe", {"path": None});
+        node("transform", "sql", {"sql_query": "SELECT * FROM port_0"});
         edge("source", 0, "transform", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -411,7 +411,7 @@ async fn dag_shell_builds_then_removes_edge_and_node() {
         r#"
         remove_edge("source", 0, "transform", 0);
         remove_node("transform");
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -458,10 +458,10 @@ async fn test_get_output_vcf_select_star_returns_correct_rows() {
         &toolset,
         "build",
         r#"
-        node("vcf_src", "file_to_dataframe", #{path: "/sample.vcf.gz"});
-        node("preview", "sql", #{sql_query: "SELECT * FROM port_0 LIMIT 5"});
+        node("vcf_src", "file_to_dataframe", {"path": "/sample.vcf.gz"});
+        node("preview", "sql", {"sql_query": "SELECT * FROM port_0 LIMIT 5"});
         edge("vcf_src", 0, "preview", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -547,10 +547,10 @@ async fn test_get_output_failed_node_returns_structured_error() {
         &toolset,
         "build",
         r#"
-        node("src", "file_to_dataframe", #{path: "/badcast.csv"});
-        node("badcast", "sql", #{sql_query: "SELECT sum(age) / 0 AS n FROM port_0"});
+        node("src", "file_to_dataframe", {"path": "/badcast.csv"});
+        node("badcast", "sql", {"sql_query": "SELECT sum(age) / 0 AS n FROM port_0"});
         edge("src", 0, "badcast", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -617,10 +617,10 @@ async fn test_get_output_synthetic_struct_column_baseline() {
         &toolset,
         "build",
         r#"
-        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
-        node("struct_node", "sql", #{sql_query: "SELECT age, named_struct('lo', 0.0, 'hi', charges) AS bounds FROM port_0 WHERE age > 30 LIMIT 5"});
+        node("src", "file_to_dataframe", {"path": "/insurance.csv"});
+        node("struct_node", "sql", {"sql_query": "SELECT age, named_struct('lo', 0.0, 'hi', charges) AS bounds FROM port_0 WHERE age > 30 LIMIT 5"});
         edge("src", 0, "struct_node", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
@@ -688,10 +688,10 @@ async fn test_inspect_node_returns_live_spec() {
     let original_query = "SELECT age, charges FROM port_0 WHERE age > 30 LIMIT 5";
     let script = format!(
         r#"
-        node("src", "file_to_dataframe", #{{path: "/insurance.csv"}});
-        node("sql", "sql", #{{sql_query: "{original_query}"}});
+        node("src", "file_to_dataframe", {{"path": "/insurance.csv"}});
+        node("sql", "sql", {{"sql_query": "{original_query}"}});
         edge("src", 0, "sql", 0);
-        commit();
+        commit()
         "#,
     );
     dag_shell(&toolset, "build", &script).await;
@@ -716,7 +716,7 @@ async fn test_inspect_node_returns_live_spec() {
 
     // 3. Update the spec; inspect_node must reflect the change.
     let updated_query = "SELECT age FROM port_0 LIMIT 10";
-    let script = format!(r#"update_node("sql", #{{sql_query: "{updated_query}"}}); commit();"#);
+    let script = format!(r#"update_node("sql", {{"sql_query": "{updated_query}"}}); commit();"#);
     dag_shell(&toolset, "update", &script).await;
 
     let results = toolset
@@ -836,10 +836,10 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
         &toolset,
         "build",
         r#"
-        node("src", "file_to_dataframe", #{path: "/insurance.csv"});
-        node("sql", "sql", #{sql_query: "SELECT age FROM port_0 LIMIT 3"});
+        node("src", "file_to_dataframe", {"path": "/insurance.csv"});
+        node("sql", "sql", {"sql_query": "SELECT age FROM port_0 LIMIT 3"});
         edge("src", 0, "sql", 0);
-        commit();
+        commit()
         "#,
     )
     .await;
