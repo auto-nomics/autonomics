@@ -4,7 +4,7 @@ use agentik_sdk::AgentMessageExt as _;
 use agentik_sdk::types::messages::Message;
 use agentik_types::AgentPlan;
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use uuid::Uuid;
 
@@ -14,13 +14,28 @@ use crate::proto::*;
 
 // ── storage ──────────────────────────────────────────────────────────
 
+/// Search persisted identities for the frontend agent picker. Optional
+/// `q` (path substring) and `limit` (default 100, max 500) — identities
+/// are never listed in full; the picker pages and searches server-side.
 #[utoipa::path(get, path = "/api/v1/storage/agents", tag = "storage", responses((status = 200, body = Object), (status = 500, description = "Storage query failed")))]
 pub(crate) async fn list_storage_agents(
     State(state): State<GatewayState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> GatewayResult<Json<Vec<agentik_core::storage::AgentRecord>>> {
+    let query = params
+        .get("q")
+        .map(|q| q.trim())
+        .filter(|q| !q.is_empty())
+        .map(|q| q.to_string());
+    let limit = params
+        .get("limit")
+        .and_then(|limit| limit.parse::<u32>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(100)
+        .min(500);
     let storage = state.infra.storage.clone();
     let records = storage
-        .list_agents()
+        .search_agents(query.as_deref(), limit)
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(records))

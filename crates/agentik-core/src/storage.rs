@@ -59,65 +59,6 @@ pub struct AgentRelation {
     pub kind: RelationKind,
 }
 
-/// Runtime metadata for an active or recently-active agent in the
-/// multi-agent host. Persisted by [`AgentStorage::upsert_agent_graph_entry`]
-/// and updated on every status transition by
-/// [`AgentStorage::update_agent_graph_status`].
-///
-/// Mirrors codex's `AgentGraphStore` design
-/// (`codex-rs/agent-graph-store/src/store.rs:17-60`) but scoped to
-/// autonomics: keyed by hierarchical `path` (not UUID) so the dashboard
-/// can reconstruct the same view across process restarts.
-///
-/// The `status_json` field is stored as a raw JSON string (rather than
-/// a typed enum) to avoid a `agentik-core` → `agentik-types`
-/// dependency cycle. The runtime layer serializes the unified
-/// [`agentik_types::AgentLifecycleStatus`] into it (an UPPERCASE tag
-/// string); it is write-only — the restore path reads `path` /
-/// `agent_id`, never the status.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PersistedAgentGraph {
-    /// Full hierarchical agent path, e.g. `/root/researcher/worker`.
-    /// Primary key.
-    pub path: String,
-    /// Parent agent's path, if this agent was spawned by another.
-    /// `None` for root-level agents (e.g. `/root/...`).
-    pub parent_path: Option<String>,
-    /// Profile path used to instantiate the agent.
-    pub profile_path: String,
-    /// Runtime UUID of the underlying agent (mirrors `agents.id` so
-    /// rollback / data migration can find the agent's own snapshot +
-    /// session WAL even if the graph entry is stale).
-    pub agent_id: Uuid,
-    /// JSON-serialized runtime status. Forward-compatible: future
-    /// status variants can be added without breaking the schema.
-    pub status_json: String,
-    /// One-line summary of the most recent event (tool name on
-    /// AwaitingTool, error message on Failed, …).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_event: Option<String>,
-    /// Unix-epoch millis when this entry was first written.
-    pub created_at: i64,
-    /// Unix-epoch millis when this entry was last updated (status change
-    /// or registration refresh).
-    pub updated_at: i64,
-}
-
-/// The daemon's currently-open multi-agent layout.
-///
-/// Unlike `agent_graph`, which can retain historical rows after abnormal
-/// process exits, this snapshot names the exact set that should be restored on
-/// the next daemon start. It is persisted as one atomic JSON document so a
-/// crash can observe either the previous layout or the new layout, never a
-/// mixture of registrations/removals.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct AgentLayoutSnapshot {
-    /// Monotonic writer-side version. Out-of-order persistence tasks compare
-    /// revisions and never overwrite a newer snapshot with an older one.
-    #[serde(default)]
-    pub revision: u64,
-    pub agents: Vec<PersistedAgentGraph>,
-}
 
 /// The kind of relationship between two agents.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -280,59 +221,21 @@ pub trait AgentStorage: Send + Sync {
     async fn get_agent(&self, agent_id: Uuid) -> Result<Option<AgentRecord>, StorageError>;
     async fn get_agent_by_name(&self, name: &str) -> Result<Option<AgentRecord>, StorageError>;
     async fn list_agents(&self) -> Result<Vec<AgentRecord>, StorageError>;
+    /// Search persisted identities by path substring (case-insensitive
+    /// SQL `LIKE`), newest activity first, capped to `limit`. Backs the
+    /// frontend agent picker: identities are searched and paged, never
+    /// listed in full — the record count is unbounded under virtual-actor
+    /// mode (every first message materializes a record).
+    async fn search_agents(
+        &self,
+        query: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<AgentRecord>, StorageError>;
     async fn delete_agent(&self, agent_id: Uuid) -> Result<(), StorageError>;
     async fn add_relation(&self, relation: AgentRelation) -> Result<(), StorageError>;
     async fn list_children(&self, agent_id: Uuid) -> Result<Vec<AgentRelation>, StorageError>;
     async fn list_parents(&self, agent_id: Uuid) -> Result<Vec<AgentRelation>, StorageError>;
     async fn touch_agent(&self, agent_id: Uuid) -> Result<(), StorageError>;
-
-    // ── Runtime agent graph (Phase 4) ────────────────────────
-    //
-    // Persists a historical graph projection of agents seen by the host,
-    // keyed by hierarchical path (not UUID) so dashboards and history views
-    // can reconstruct topology. Daemon restart uses the separate atomic
-    // current-layout snapshot above instead of treating every graph row as
-    // still-open.
-    //
-    // Update semantics: `upsert_agent_graph_entry` writes on spawn
-    // (created_at = updated_at = now); `update_agent_graph_status` is
-    // called on every observed status transition by the runtime host;
-    // `remove_agent_graph_entry` is called on shutdown. The latter
-    // happens before the agent is removed from the in-memory registry.
-
-    /// Insert or update an agent's runtime metadata. Called when an
-    /// agent is registered with the host for the first time (or when
-    /// it is re-registered after a profile change).
-    async fn upsert_agent_graph_entry(
-        &self,
-        entry: PersistedAgentGraph,
-    ) -> Result<(), StorageError>;
-
-    /// Update only the `status_json` / `last_event` / `updated_at`
-    /// fields of an existing entry. `path` is the primary key. Called
-    /// on every observed status transition by `RuntimeHost::observe_status`.
-    async fn update_agent_graph_status(
-        &self,
-        path: &str,
-        status_json: &str,
-        last_event: Option<&str>,
-    ) -> Result<(), StorageError>;
-
-    /// Remove an entry (called on `RuntimeHost::shutdown_agent`). After
-    /// this returns, `list_persisted_agents` will not include the path.
-    /// Idempotent — removing a non-existent path is not an error.
-    async fn remove_agent_graph_entry(&self, path: &str) -> Result<(), StorageError>;
-
-    /// Read all persisted agent metadata. Used by the dashboard on
-    /// process startup to surface agents that ran in the previous
-    /// session. Returns entries ordered by `updated_at` descending.
-    async fn list_persisted_agents(&self) -> Result<Vec<PersistedAgentGraph>, StorageError>;
-
-    /// Persist the exact current daemon layout as one atomic snapshot.
-    async fn save_agent_layout(&self, snapshot: &AgentLayoutSnapshot) -> Result<(), StorageError>;
-
-    /// Load the current daemon layout, if one has been written.
-    async fn load_agent_layout(&self) -> Result<Option<AgentLayoutSnapshot>, StorageError>;
 
     // ── Session log (WAL) ────────────────────────────────────
 

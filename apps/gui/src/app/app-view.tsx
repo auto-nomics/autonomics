@@ -451,7 +451,7 @@ export function App() {
         onCloseAgent={runtime.forgetAgent}
         onSpawn={() => setSpawnOpen(true)}
         storedAgents={runtime.storedAgents}
-        onRefreshStoredAgents={() => void runtime.refreshStoredAgents()}
+        onSearchStoredAgents={(query) => void runtime.refreshStoredAgents(query)}
         onResumeAgent={(agent) => void runtime.resumeAgent(agent)}
         onToggleRight={() => setRightOpen((current) => !current)}
         onOpenDag={() => { if (runtime.activeAgent) setDagAgent(runtime.activeAgent); }}

@@ -148,10 +148,42 @@ impl App {
     /// Apply an internal [`AppEvent`] to state.
     pub(super) fn handle_app_event(&mut self, event: crate::app_event::AppEvent) {
         match event {
-            crate::app_event::AppEvent::AgentRecordsLoaded(records) => {
+            crate::app_event::AppEvent::AgentRecordsLoaded { query, records } => {
+                // Stale-guard: a newer keystroke may have moved the query
+                // while this page was in flight.
+                if self.state.agent_profile_picker.query != query {
+                    tracing::debug!(%query, current = %self.state.agent_profile_picker.query, "dropping stale agent records page");
+                    return;
+                }
+                let already_open = self.state.agent_profile_picker.visible;
                 self.state.agent_profile_picker.set_records(&records);
-                self.state.agent_profile_picker.open();
-                tracing::info!(count = records.len(), "agent records loaded for picker");
+                // Only the initial open resets the picker — a search
+                // refresh must keep the query and cursor in place.
+                if !already_open {
+                    self.state.agent_profile_picker.open();
+                }
+                tracing::info!(count = records.len(), "agent records page applied");
+            }
+            crate::app_event::AppEvent::SearchStoredAgents(query) => {
+                // Only the newest query matters.
+                if self.state.agent_profile_picker.query != query {
+                    return;
+                }
+                let client = self.client.clone();
+                let tx = self.app_event_tx.clone();
+                self.spawn_client_task("search_stored_agents", move || async move {
+                    match client.search_storage_agents(&query, 100).await {
+                        Ok(records) => {
+                            let _ = tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
+                                query,
+                                records,
+                            });
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "stored agent search failed");
+                        }
+                    }
+                });
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
                 self.state.agent_profile_picker.remove_by_id(agent_id);

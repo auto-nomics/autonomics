@@ -96,11 +96,6 @@ pub struct RuntimeHost {
     /// First-class delegation ledger. Keyed by stable delegation ID, so the
     /// same target can safely process multiple queued requests.
     delegations: HashMap<uuid::Uuid, HostDelegation>,
-    /// Stable insertion order for the persisted multi-agent layout.
-    next_layout_order: u64,
-    /// Monotonic version for layout snapshots. Persistence tasks can finish
-    /// out of order, but the storage layer ignores stale revisions.
-    next_layout_revision: u64,
     /// Current model (for spawning agents from tools). Set by TUI at startup.
     model: Option<Arc<ArcSwapOption<Model>>>,
     /// Channel for receiving background spawn outcomes. Background spawn
@@ -159,12 +154,6 @@ impl RuntimeHost {
         let (event_broadcast, _) = tokio::sync::broadcast::channel(256);
         let control = crate::control::HostControl::new(cmd_tx, event_broadcast.clone());
         infra.host_control = Some(control.clone());
-        let next_layout_revision = infra
-            .storage
-            .load_agent_layout()
-            .await?
-            .map(|snapshot| snapshot.revision.saturating_add(1))
-            .unwrap_or(0);
         tracing::info!("RuntimeHost::open: host created successfully");
         Ok(Self {
             infra,
@@ -175,8 +164,6 @@ impl RuntimeHost {
             cmd_rx,
             control,
             delegations: HashMap::new(),
-            next_layout_order: 0,
-            next_layout_revision,
             model: None,
             registration_rx,
             registration_tx,

@@ -375,7 +375,8 @@ export type AgentWorkspaceProps = {
   /** Persisted identities (GET /storage/agents) backing the merged
    *  agent picker: resume targets whether or not an instance is live. */
   storedAgents: StoredAgent[];
-  onRefreshStoredAgents: () => void;
+  /** Server-side identity search (debounced by the caller's picker). */
+  onSearchStoredAgents: (query: string) => void;
   /** Activates a stored identity (switch if live, respawn otherwise)
    *  and makes it the active tab. */
   onResumeAgent: (agent: StoredAgent) => void;
@@ -431,6 +432,13 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  // Server-side identity search: keystrokes debounce into one bounded
+  // `GET /storage/agents?q=…` page instead of loading the whole table.
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchStoredDebounced = (query: string) => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => props.onSearchStoredAgents(query), 250);
+  };
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [effortPickerOpen, setEffortPickerOpen] = useState(false);
   // Set when the catalog fetch fails; the open list shows the error
@@ -612,9 +620,13 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   // merged picker's resume section. Live-but-unstored agents still show
   // in the open group; stored-but-live ones are hidden here because the
   // open entry already covers them.
-  const storedOnly = props.storedAgents.filter(
-    (stored) => !agents.some((agent) => agent.agent_id === stored.id),
-  );
+  const openPaths = new Set(agents.map((agent) => agent.path));
+  const storedOnly = props.storedAgents.filter((stored) => {
+    if (agents.some((agent) => agent.agent_id === stored.id)) return false;
+    // The server page is bounded — dedupe by path too, so an open tab
+    // whose record fell outside the page cannot render twice.
+    return !openPaths.has(stored.name);
+  });
 
   const clampedStart = Math.min(windowStart, Math.max(0, messages.length - 1));
   const visibleMessages = messages.slice(clampedStart, atBottom ? undefined : clampedStart + MAX_WINDOW);
@@ -628,7 +640,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       aria-expanded={agentPickerOpen}
       title={agentPickerOpen ? "关闭 agent 搜索" : "搜索 agent"}
       onClick={() => {
-        if (!agentPickerOpen) props.onRefreshStoredAgents();
+        if (!agentPickerOpen) props.onSearchStoredAgents("");
         setAgentPickerOpen((open) => !open);
       }}
     >
@@ -659,7 +671,11 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             <div className="flex h-10 items-center gap-1 px-1.5">
               {searchToggle}
               <div className="min-w-0 flex-1 [&>div]:p-0">
-                <CommandInput autoFocus placeholder="输入以切换 agent，Esc 返回" />
+                <CommandInput
+                  autoFocus
+                  placeholder="输入以切换 / 搜索 agent，Esc 返回"
+                  onValueChange={(value) => searchStoredDebounced(value)}
+                />
               </div>
               {docked && props.showInspectorToggle !== false && (
                 <Button

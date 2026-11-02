@@ -4,11 +4,10 @@
 /// The lifecycle is driven by the [`Session`](agentik_core::Session) and
 /// propagated to observers via [`AgentEvent::LifecycleChanged`]. The
 /// runtime host tracks this enum directly (no separate coarse projection):
-/// `AgentInfo.status`, `HostEvent::AgentStatusChanged`, and the persisted
-/// `agent_graph.status_json` all carry it, with the tool name / error
-/// detail riding in the adjacent `last_event` line. Consumers should track
-/// status from the lifecycle event rather than inferring it from streaming
-/// events.
+/// `AgentInfo.status` and `HostEvent::AgentStatusChanged` carry it, with
+/// the tool name / error detail riding in the adjacent `last_event` line.
+/// Consumers should track status from the lifecycle event rather than
+/// inferring it from streaming events.
 ///
 /// ## State diagram
 ///

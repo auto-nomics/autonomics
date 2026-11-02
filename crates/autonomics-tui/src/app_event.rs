@@ -11,8 +11,16 @@ pub(crate) enum AppEvent {
         profile_name: String,
         result: std::result::Result<String, String>,
     },
-    /// Agent records loaded from storage (for the resume picker).
-    AgentRecordsLoaded(Vec<agentik_core::storage::AgentRecord>),
+    /// One bounded page of agent records for the resume picker, tagged
+    /// with the query it answers — stale pages (query moved on) are
+    /// dropped at apply time.
+    AgentRecordsLoaded {
+        query: String,
+        records: Vec<agentik_core::storage::AgentRecord>,
+    },
+    /// A keystroke in the resume picker settled (debounce elapsed) —
+    /// fetch the matching server-side page.
+    SearchStoredAgents(String),
     /// An agent was deleted from storage. Carries the agent ID.
     AgentDeleted(uuid::Uuid),
     /// An agent was renamed in storage. Carries the agent ID and new path.

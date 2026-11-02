@@ -169,10 +169,21 @@ impl RuntimeHost {
                         return;
                     }
                 };
-                // Reject duplicate paths.
-                if self.agents.contains_key(child_path.as_str()) {
-                    let _ =
-                        reply_tx.send(Err(format!("agent at path `{child_path}` already exists")));
+                // Idempotent activate: an already-live identity is
+                // returned as-is, not an error. Virtual-actor resume
+                // (frontend re-opens a tab whose instance the daemon
+                // still holds — close-tab no longer shuts down) flows
+                // through this same call. The replayed AgentRegistered
+                // event makes the reply indistinguishable from a fresh
+                // spawn, so frontends populate the reopened tab.
+                if let Some(entry) = self.agents.get(child_path.as_str()) {
+                    let info = self.snapshot_info(entry);
+                    let _ = reply_tx.send(Ok(child_path.as_str().to_string()));
+                    self.emit_host_event(super::events::HostEvent::AgentRegistered {
+                        path: child_path.clone(),
+                        info,
+                    });
+                    tracing::info!(agent = %child_path, "spawn hit a live instance — resumed in place");
                     return;
                 }
                 // Resolve model: use override if provided, else global model.
@@ -631,51 +642,6 @@ impl RuntimeHost {
                 let _ = reply_tx.send(info);
             }
 
-            // ── Phase 4: query persisted agent graph ──
-            // Synchronous read of the `agent_graph` table — the storage
-            // backend is a local SQLite DB so the query is cheap. Returns an
-            // empty vec on storage error (rather than blocking the
-            // caller's reply channel with an Err) so the dashboard can
-            // render an empty state instead of crashing.
-            HostCommand::ListPersistedAgents { reply_tx } => {
-                let storage = self.infra.storage.clone();
-                let runtime_handle = self.infra.runtime_handle.clone();
-                runtime_handle.spawn(async move {
-                    let result = AssertUnwindSafe(async {
-                        match storage.list_persisted_agents().await {
-                            Ok(entries) => entries,
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "list_persisted_agents failed; returning empty list"
-                                );
-                                Vec::new()
-                            }
-                        }
-                    })
-                    .catch_unwind()
-                    .await;
-                    match result {
-                        Ok(entries) => {
-                            let _ = reply_tx.send(entries);
-                        }
-                        Err(panic_payload) => {
-                            let msg = panic_payload
-                                .downcast_ref::<&'static str>()
-                                .map(|s| (*s).to_string())
-                                .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "<panic in list_persisted_agents>".to_string());
-                            tracing::error!(
-                                target: "spawn_safe",
-                                task = "host::list_persisted_agents",
-                                panic = %msg,
-                                "list_persisted_agents task panicked"
-                            );
-                            let _ = reply_tx.send(Vec::new());
-                        }
-                    }
-                });
-            }
         }
     }
 
@@ -1191,36 +1157,20 @@ async fn read_persisted_agent_history(
     requested_path: String,
     limit: usize,
 ) -> AgentExecutionHistory {
-    let Ok(entries) = storage.list_persisted_agents().await else {
-        return AgentExecutionHistory {
-            agent_path: requested_path,
-            agent_id: uuid::Uuid::nil(),
-            session_id: None,
-            messages: Vec::new(),
-        };
+    // Identity resolution goes straight to the `agents` table (name IS
+    // the full path) — there is no separate persisted agent graph.
+    let record = match storage.get_agent_by_name(&requested_path).await {
+        Ok(Some(record)) => record,
+        _ => {
+            return AgentExecutionHistory {
+                agent_path: requested_path,
+                agent_id: uuid::Uuid::nil(),
+                session_id: None,
+                messages: Vec::new(),
+            };
+        }
     };
-
-    let matches: Vec<_> = entries
-        .into_iter()
-        .filter(|entry| {
-            entry.path == requested_path
-                || entry
-                    .path
-                    .rsplit('/')
-                    .next()
-                    .is_some_and(|segment| segment == requested_path)
-        })
-        .collect();
-
-    match matches.as_slice() {
-        [entry] => read_agent_history(storage, entry.agent_id, entry.path.clone(), limit).await,
-        _ => AgentExecutionHistory {
-            agent_path: requested_path,
-            agent_id: uuid::Uuid::nil(),
-            session_id: None,
-            messages: Vec::new(),
-        },
-    }
+    read_agent_history(storage, record.id, record.name, limit).await
 }
 
 #[cfg(test)]

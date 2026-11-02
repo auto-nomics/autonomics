@@ -1,180 +1,17 @@
-//! Durable projections of the in-memory host state: the persisted agent
-//! graph, the atomic layout snapshot, delegation records, and per-turn
-//! telemetry. All writes are fire-and-forget background tasks — the
-//! in-memory registry is authoritative for the live runtime.
+//! Durable projections of the in-memory host state: delegation records
+//! and per-turn telemetry. All writes are fire-and-forget background
+//! tasks — the in-memory registry is authoritative for the live runtime.
+//!
+//! There is intentionally NO persisted agent layout: which agents are
+//! open is frontend view state, and under virtual-actor mode instances
+//! materialize from their stored records on demand (`activate_identity`
+//! in `commands.rs`). The `agents` table alone is the identity source.
 
-use std::sync::Arc;
+use agentik_core::storage::{AgentDelegationRecord, AgentTurnRecord};
 
-use agentik_core::profile::AgentProfileConfig;
-use agentik_core::storage::{
-    AgentDelegationRecord, AgentLayoutSnapshot, AgentTurnRecord, PersistedAgentGraph,
-};
-use agentik_sdk::model::Model;
-use arc_swap::ArcSwapOption;
-
-use crate::error::Result;
-
-use super::{HostEvent, RuntimeHost, unix_epoch_ms};
+use super::RuntimeHost;
 
 impl RuntimeHost {
-    /// Persist the exact set and status of currently registered agents.
-    /// The per-agent `status_json` carries the unified
-    /// [`AgentLifecycleStatus`] tag string; see [`Self::persist_agent_status`].
-    pub(super) fn agent_layout_snapshot(&self, revision: u64) -> AgentLayoutSnapshot {
-        let updated_at = unix_epoch_ms();
-        let mut agents = Vec::with_capacity(self.agents.len());
-
-        for entry in self.agents.values() {
-            let Some(agent_id) = entry.info.agent_id else {
-                continue;
-            };
-            let Ok(status_json) = serde_json::to_string(&entry.status) else {
-                continue;
-            };
-            let parent_path = agentik_types::AgentPath::try_from(entry.info.path.as_str())
-                .ok()
-                .and_then(|path| path.parent().map(|parent| parent.as_str().to_string()));
-            agents.push((
-                entry.layout_order,
-                PersistedAgentGraph {
-                    path: entry.info.path.clone(),
-                    parent_path,
-                    profile_path: entry.kind.name().to_string(),
-                    agent_id,
-                    status_json,
-                    last_event: entry.last_event.clone(),
-                    created_at: entry.layout_created_at,
-                    updated_at,
-                },
-            ));
-        }
-        agents.sort_by_key(|(order, _)| *order);
-        let agents = agents
-            .into_iter()
-            .map(|(_, entry)| entry)
-            .collect::<Vec<_>>();
-
-        AgentLayoutSnapshot { revision, agents }
-    }
-
-    /// Queue an atomic layout snapshot write without blocking the host pump.
-    pub(super) fn persist_current_agent_layout(&mut self) {
-        let revision = self.next_layout_revision;
-        self.next_layout_revision = self.next_layout_revision.saturating_add(1);
-        let snapshot = self.agent_layout_snapshot(revision);
-        let storage = self.infra.storage.clone();
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.infra.runtime_handle,
-            "persist_current_agent_layout",
-            async move {
-                if let Err(error) = storage.save_agent_layout(&snapshot).await {
-                    tracing::warn!(%error, "failed to persist agent layout");
-                }
-            },
-        );
-    }
-
-    /// Spawn a background task that upserts the agent's graph row in storage.
-    ///
-    /// Caller has already inserted the in-memory entry. This mirrors the
-    /// registration into the `agent_graph` table so the dashboard can
-    /// reconstruct the topology across process restarts. Errors are
-    /// logged at WARN — persistence is best-effort.
-    pub(super) fn persist_upsert_agent_graph(
-        &self,
-        path: &agentik_types::AgentPath,
-        agent_id: uuid::Uuid,
-        profile_path: &str,
-        info: &crate::control::AgentInfo,
-    ) {
-        let storage = self.infra.storage.clone();
-        let path_str = path.as_str().to_string();
-        let parent_path = path.parent().map(|p| p.as_str().to_string());
-        let profile_path = profile_path.to_string();
-        let status_json = match serde_json::to_string(&info.status) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(agent = %path_str, error = %e, "skip persistence: status serialization failed");
-                return;
-            }
-        };
-        let last_event = info.last_event.clone();
-
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.infra.runtime_handle,
-            &format!("persist_upsert_agent_graph::{path_str}"),
-            async move {
-                // Wall-clock millis since the unix epoch. std::time::SystemTime
-                // is the only reliable source here (the runtime crate doesn't
-                // depend on chrono at runtime — it's a dev-dep only).
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                let entry = PersistedAgentGraph {
-                    path: path_str.clone(),
-                    parent_path,
-                    profile_path,
-                    agent_id,
-                    status_json,
-                    last_event,
-                    created_at: now,
-                    updated_at: now,
-                };
-                if let Err(e) = storage.upsert_agent_graph_entry(entry).await {
-                    tracing::warn!(
-                        agent = %path_str,
-                        error = %e,
-                        "failed to persist agent graph entry (non-fatal)"
-                    );
-                }
-            },
-        );
-    }
-
-    /// Spawn a background task that updates the agent's persisted status.
-    /// Mirrors [`Self::observe_status`] to durable storage. Fire-and-forget.
-    ///
-    /// `status_json` is the unified
-    /// [`AgentLifecycleStatus`](agentik_types::AgentLifecycleStatus)
-    /// serialized as an UPPERCASE tag string (`"IDLE"`, `"TOOLRUNNING"`,
-    /// …). Write-only: the restore path reads `path` / `agent_id` from
-    /// the layout, never the status.
-    pub(super) fn persist_agent_status(
-        &self,
-        path: &str,
-        status: &agentik_types::AgentLifecycleStatus,
-        last_event: &Option<String>,
-    ) {
-        let storage = self.infra.storage.clone();
-        let path_str = path.to_string();
-        let status_json = match serde_json::to_string(status) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(agent = %path_str, error = %e, "skip status persistence: serialization failed");
-                return;
-            }
-        };
-        let last_event = last_event.clone();
-
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.infra.runtime_handle,
-            &format!("persist_agent_status::{path_str}"),
-            async move {
-                if let Err(e) = storage
-                    .update_agent_graph_status(&path_str, &status_json, last_event.as_deref())
-                    .await
-                {
-                    tracing::warn!(
-                        agent = %path_str,
-                        error = %e,
-                        "failed to persist agent status (non-fatal)"
-                    );
-                }
-            },
-        );
-    }
-
     pub(super) fn persist_delegation(&self, delegation_id: uuid::Uuid) {
         let Some(snapshot) = self
             .delegations
@@ -285,172 +122,25 @@ impl RuntimeHost {
             },
         );
     }
+}
 
-    /// Spawn a background task that removes the agent's persisted graph row.
-    /// Called on shutdown. Fire-and-forget.
-    pub(super) fn persist_remove_agent_graph(&self, path: &str) {
-        let storage = self.infra.storage.clone();
-        let path_str = path.to_string();
-
-        agentik_core::supervise::spawn_safe_on_drop(
-            &self.infra.runtime_handle,
-            &format!("persist_remove_agent_graph::{path_str}"),
-            async move {
-                if let Err(e) = storage.remove_agent_graph_entry(&path_str).await {
-                    tracing::warn!(
-                        agent = %path_str,
-                        error = %e,
-                        "failed to remove persisted agent graph entry (non-fatal)"
-                    );
-                }
-            },
-        );
-    }
-
-    /// Restore the multi-agent layout left behind by the previous daemon.
-    ///
-    /// The current-layout snapshot records the exact set of agents that were
-    /// open when the daemon stopped, along with their hierarchical paths and
-    /// stable IDs. The record in `agents` carries the per-agent
-    /// configuration used by that incarnation (kind, model preference,
-    /// runtime overrides), parsed tolerantly so rows written by the old
-    /// profile registry still restore. Individual corrupt or unresolvable
-    /// entries are skipped so one stale row cannot prevent the daemon and
-    /// the remaining agents from starting.
-    pub async fn restore_persisted_agents<F>(
-        &mut self,
-        global_model: Arc<ArcSwapOption<Model>>,
-        mut resolve_model: F,
-    ) -> Result<usize>
-    where
-        F: AsyncFnMut(&str) -> std::result::Result<Model, String>,
-    {
-        let entries = self
-            .infra
-            .storage
-            .load_agent_layout()
-            .await?
-            .map(|snapshot| snapshot.agents)
-            .unwrap_or_default();
-
-        let mut restored = 0;
-        for entry in entries {
-            let path = match agentik_types::AgentPath::try_from(entry.path.as_str()) {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(
-                        path = %entry.path,
-                        error = %error,
-                        "skipping persisted agent with invalid path"
-                    );
-                    continue;
-                }
-            };
-
-            let record = match self
-                .infra
-                .storage
-                .get_agent(entry.agent_id)
-                .await
-                .ok()
-                .flatten()
-            {
-                Some(record) => record,
-                None => match self
-                    .infra
-                    .storage
-                    .get_agent_by_name(entry.path.as_str())
-                    .await
-                {
-                    Ok(Some(record)) => record,
-                    Ok(None) => {
-                        tracing::warn!(
-                            path = %entry.path,
-                            agent_id = %entry.agent_id,
-                            "skipping persisted agent without an agents record"
-                        );
-                        continue;
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            path = %entry.path,
-                            error = %error,
-                            "failed to load persisted agent record"
-                        );
-                        continue;
-                    }
-                },
-            };
-
-            let config = AgentProfileConfig::from_json(&record.config_json);
-
-            let model_override = match config.preferred_model.as_deref() {
-                Some(spec) => match resolve_model(spec).await {
-                    Ok(model) => Some(model),
-                    Err(error) => {
-                        tracing::warn!(
-                            path = %entry.path,
-                            model = spec,
-                            error = %error,
-                            "skipping persisted agent because its preferred model is unavailable"
-                        );
-                        continue;
-                    }
-                },
-                None => None,
-            };
-
-            if model_override.is_none() && global_model.load_full().is_none() {
-                tracing::warn!(
-                    path = %entry.path,
-                    "skipping persisted agent because no default model is configured"
-                );
-                continue;
-            }
-
-            match self
-                .spawn_agent(&path, &config, global_model.clone(), model_override)
-                .await
-            {
-                Ok(handle) => {
-                    let info = super::commands::capability_from_kind(
-                        handle.path.name(),
-                        handle.path.as_str(),
-                        config.kind,
-                    );
-                    let event_info = self.register_agent(handle, info);
-                    self.emit_host_event(HostEvent::AgentRegistered {
-                        path: path.clone(),
-                        info: event_info,
-                    });
-                    restored += 1;
-                    tracing::info!(
-                        agent = %entry.path,
-                        agent_id = %entry.agent_id,
-                        "restored persisted agent layout entry"
-                    );
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        path = %entry.path,
-                        error = %error,
-                        "failed to restore persisted agent"
-                    );
-                }
-            }
-        }
-
-        Ok(restored)
-    }
+fn unix_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
 mod agent_persistence_tests {
     use super::*;
+    use crate::HostEvent;
     use crate::config::RuntimeConfig;
-    use agentik_core::profile::AgentKind;
-    use agentik_core::profile::AgentProfileConfig;
+    use agentik_core::profile::{AgentKind, AgentProfileConfig};
+    use agentik_sdk::model::Model;
     use agentik_sdk::types::{AgentEvent, ContentBlock};
+    use arc_swap::ArcSwapOption;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::timeout;
 
@@ -478,29 +168,34 @@ mod agent_persistence_tests {
         config
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn child_agent_inter_agent_messages_survive_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
-        // Install a mock model up front so the delegated child turn
-        // actually completes — the delegation reply only resolves on
-        // TurnCompleted. The expectation matches ANY request (no `.with`)
-        // and answers with a plain assistant text message.
+    /// A mock model that answers any request with one assistant text
+    /// message; `times(..)` so drop verification tolerates idle instances.
+    fn answering_model(name: &str) -> Arc<ArcSwapOption<Model>> {
         let mut mock = agentik_sdk::provider::client::MockApiClient::new();
         mock.expect_request_stream_with_system()
-            .times(1..)
+            .times(..)
             .returning(|_, _, _, _| {
                 Ok(agentik_sdk::streaming::MessageStream::from_events(
                     Vec::new(),
                     agentik_sdk::AgentMessageExt::assistant_text("delegated work done"),
                 ))
             });
-        let model: Arc<ArcSwapOption<Model>> =
-            Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
-                agentik_core::testing::dummy_model_info("child-delegation-restart"),
-                mock,
-            ))));
-        host.set_model(model);
+        Arc::new(ArcSwapOption::from_pointee(Some(Model::with_client(
+            agentik_core::testing::dummy_model_info(name),
+            mock,
+        ))))
+    }
+
+    /// Delegation survives a daemon restart WITHOUT any persisted layout:
+    /// after restart the registry starts empty, and the first message to
+    /// the child identity activates it from its stored record — same
+    /// agent ID, same sole context, WAL intact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn child_agent_inter_agent_messages_survive_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
+        let model = answering_model("child-delegation-restart");
+        host.set_model(model.clone());
         let path = agentik_types::AgentPath::root()
             .join("researcher")
             .unwrap()
@@ -550,10 +245,11 @@ mod agent_persistence_tests {
         host.register_agent(parent_handle, parent_info);
 
         let control = host.control();
+        let delegate_control = control.clone();
         let delivery_path = path.clone();
         let caller_path = parent_path.as_str().to_string();
         let delivery = tokio::spawn(async move {
-            control
+            delegate_control
                 .delegate_tracked(
                     delivery_path.as_str(),
                     "persist child message",
@@ -608,6 +304,24 @@ mod agent_persistence_tests {
             "delegation must return the child's response"
         );
 
+        // host1 sanity: the live incarnation answers list_sessions.
+        control.list_sessions(path.as_str());
+        host.recv_and_process_command().await;
+        timeout(Duration::from_secs(3), async {
+            loop {
+                let Some((event_path, event)) = host.recv_any().await else {
+                    panic!("host1 event channel closed");
+                };
+                if event_path == path.as_str()
+                    && matches!(event, AgentEvent::SessionList { .. })
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("host1 must answer list_sessions");
+
         // The WAL write is asynchronous and is not tied to event delivery.
         tokio::time::sleep(Duration::from_millis(100)).await;
         host.shutdown_all_agents_and_wait().await;
@@ -635,46 +349,123 @@ mod agent_persistence_tests {
         drop(storage);
         drop(host);
 
+        // ── Restart: no layout restore — an empty registry — and the
+        // first message activates the identity from its record. ──
         let mut host = RuntimeHost::open(&config(&dir)).await.unwrap();
-        let model: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(
-            agentik_core::testing::get_mock_model("layout-restart-test"),
-        )));
-        let restored = host
-            .restore_persisted_agents(model, async |spec| {
-                panic!("unexpected model preference `{spec}`")
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            restored, 2,
-            "persisted parent + child layout entries must both be restored"
+        assert!(
+            host.agent_names().is_empty(),
+            "restart must start with an empty registry (virtual actor)"
         );
-        assert!(host.agent_names().contains(&path.as_str()));
+        host.set_model(answering_model("layout-restart-test"));
 
+        let control = host.control();
+        let delivery_path = path.clone();
+        let delivery = tokio::spawn(async move {
+            control
+                .deliver_message_tracked(delivery_path.as_str(), "ping")
+                .await
+        });
+        host.recv_and_process_command().await; // DeliverMessage → activation task
+        host.recv_and_process_command().await; // SpawnNotice::Activated → register + flush
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let Some((event_path, event)) = host.recv_any().await else {
+                    panic!("host agent event channel closed");
+                };
+                if event_path == path.as_str()
+                    && let AgentEvent::UserMessageAcknowledged(text) = event
+                    && text == "ping"
+                {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("activated agent must acknowledge the delivery");
+        assert_eq!(delivery.await.unwrap(), Some(Ok(())));
+        assert!(host.contains_agent(path.as_str()));
         assert_eq!(
             host.agents
                 .get(path.as_str())
                 .and_then(|entry| entry.info.agent_id),
             Some(agent_id),
-            "same child path must restore its ID"
+            "activation must reuse the stored identity"
         );
 
-        let control = host.control();
-        control.list_sessions(path.as_str());
-        host.recv_and_process_command().await;
-        let sessions = timeout(Duration::from_secs(2), async {
+        // Wait for the turn to finish before asking for the session list:
+        // run_session owns the internal-event channel mid-turn, and a
+        // ListSessions arriving then is swallowed by its loop (pre-existing
+        // behavior — the daemon driver also fires only after TurnCompleted).
+        timeout(Duration::from_secs(10), async {
             loop {
-                let Some((event_path, event)) = host.recv_any().await else {
+                let Some((_, event)) = host.recv_any().await else {
                     panic!("host agent event channel closed");
                 };
-                assert_eq!(event_path, path.as_str());
-                if let AgentEvent::SessionList { sessions } = event {
-                    return sessions;
+                if matches!(event, AgentEvent::Done)
+                    || matches!(event, AgentEvent::LifecycleChanged(
+                        agentik_types::AgentLifecycleStatus::Idle,
+                    ))
+                {
+                    return;
                 }
             }
         })
         .await
-        .expect("expected restored session list");
+        .expect("activated turn must complete");
+
+        // The activated agent re-bound its sole context: the persisted
+        // session is still the only one, with the same ID.
+        let control = host.control();
+        control.list_sessions(path.as_str());
+        host.recv_and_process_command().await; // pump the ListSessions command
+        let outcome = timeout(Duration::from_secs(10), async {
+            let mut seen: Vec<String> = Vec::new();
+            loop {
+                let Some((event_path, event)) = host.recv_any().await else {
+                    panic!("host agent event channel closed");
+                };
+                if event_path == path.as_str()
+                    && let AgentEvent::SessionList { sessions } = event
+                {
+                    return sessions;
+                }
+                seen.push(format!("{event_path}::{event:?}"));
+                if seen.len() > 40 {
+                    panic!("no SessionList; events seen: {seen:?}; live={} ", host.contains_agent(path.as_str()));
+                }
+            }
+        })
+        .await;
+        let sessions = match outcome {
+            Ok(sessions) => sessions,
+            Err(_) => {
+            let mut buffered = Vec::new();
+            while let Some((event_path, event)) = host.try_recv_any() {
+                buffered.push(format!("{event_path}::{event:?}"));
+            }
+            let status = host
+                .agents
+                .get(path.as_str())
+                .map(|entry| (entry.status.clone(), entry.background_pending, entry.last_event.clone()));
+            let probe_storage = host.storage().clone();
+            let probe_agent_id = agent_id;
+            let probe = tokio::time::timeout(
+                Duration::from_secs(3),
+                probe_storage.list_session_records(probe_agent_id),
+            )
+            .await;
+            let probe_result = match probe {
+                Err(_) => "list_session_records TIMED OUT (storage lock held?)".to_string(),
+                Ok(Err(e)) => format!("list_session_records errored: {e}"),
+                Ok(Ok(records)) => format!("list_session_records ok: {} rows", records.len()),
+            };
+            panic!(
+                "no SessionList; {probe_result}; live={} agents={:?}; status={status:?}; buffered after timeout: {buffered:#?}",
+                host.contains_agent(path.as_str()),
+                host.agent_names()
+            );
+            }
+        };
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, session_id);
     }

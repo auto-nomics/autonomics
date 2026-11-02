@@ -368,14 +368,6 @@ impl HostControl {
     /// is responsible for filtering / joining with the in-memory
     /// registry.
     ///
-    /// Returns `None` if the host command channel closed.
-    pub async fn list_persisted_agents(
-        &self,
-    ) -> Option<Vec<agentik_core::storage::PersistedAgentGraph>> {
-        self.ask(|tx| HostCommand::ListPersistedAgents { reply_tx: tx })
-            .await
-    }
-
     /// List delegation records, newest first.
     pub async fn list_delegations(
         &self,
@@ -492,17 +484,6 @@ pub enum HostCommand {
     GetAgentInfo {
         name: String,
         reply_tx: oneshot::Sender<Option<AgentInfo>>,
-    },
-
-    /// List all agents currently persisted in the storage graph
-    /// (`agent_graph` table). Includes both live agents (registered with
-    /// this host) AND agents persisted by previous process runs that may
-    /// have been shut down or orphaned. Reply: persisted rows ordered by
-    /// `updated_at DESC` (most recent first).
-    ///
-    /// Phase 4 query entry. Mirrors codex's `AgentGraphStore::list()`.
-    ListPersistedAgents {
-        reply_tx: oneshot::Sender<Vec<agentik_core::storage::PersistedAgentGraph>>,
     },
 
     // ── Session management ──

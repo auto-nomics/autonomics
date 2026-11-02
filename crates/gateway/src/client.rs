@@ -381,6 +381,28 @@ impl GatewayClient {
         self.get("/storage/agents").await
     }
 
+    /// Server-side identity search for the resume picker — one bounded
+    /// page (path substring, newest activity first). Never the full
+    /// table: the record count is unbounded under virtual-actor mode.
+    pub async fn search_storage_agents(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<agentik_core::storage::AgentRecord>> {
+        let limit = limit.to_string();
+        let query = query.trim();
+        if query.is_empty() {
+            self.get_with_query("/storage/agents", &[("limit", limit.as_str())])
+                .await
+        } else {
+            self.get_with_query(
+                "/storage/agents",
+                &[("q", query), ("limit", limit.as_str())],
+            )
+            .await
+        }
+    }
+
     pub async fn list_stored_sessions(&self, agent_id: Uuid) -> Result<Vec<StoredSession>> {
         self.get(&format!("/storage/agents/{agent_id}/sessions"))
             .await

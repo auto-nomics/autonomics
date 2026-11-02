@@ -283,13 +283,17 @@ export function useAgentRuntime() {
   const handleFrameRef = useRef(handleFrame);
   handleFrameRef.current = handleFrame;
 
-  /** Refreshes the persisted identity list for the agent picker. Under
-   *  virtual-actor mode the daemon owns instance lifecycle (idle TTL
-   *  passivation), so the picker lists identities from storage, not the
-   *  live registry. */
-  const refreshStoredAgents = useCallback(async () => {
+  /** Searches the persisted identity list for the agent picker — one
+   *  bounded page (server-side `q` + `limit`, newest first), never the
+   *  full table: under virtual-actor mode the record count is unbounded
+   *  and loading it all stalled the UI. */
+  const refreshStoredAgents = useCallback(async (query?: string) => {
     try {
-      setStoredAgents(await gatewayRequest("GET", "/storage/agents"));
+      const needle = query?.trim() ?? "";
+      const suffix = needle
+        ? `?q=${encodeURIComponent(needle)}&limit=100`
+        : "?limit=100";
+      setStoredAgents(await gatewayRequest("GET", `/storage/agents${suffix}`));
     } catch {
       // The picker degrades to live-only; a transient storage failure
       // should not surface as a modal error.

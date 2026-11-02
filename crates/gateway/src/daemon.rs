@@ -136,24 +136,9 @@ pub async fn run_daemon(
     // Virtual-actor activation resolves per-agent `preferred_model`
     // specs through the model actor (token rotation included).
     host.set_model_resolver(models.clone());
-    // Install the startup default before restoring agents — the restore
-    // loop skips preference-less agents while the slot is empty.
+    // Install the startup default model before any agent activates —
+    // preference-less identities inherit this slot.
     models.activate_default().await;
-
-    // Rehydrate the daemon-owned multi-agent layout before HTTP state is
-    // built, so the first frontend snapshot already sees the restored agents.
-    // A startup-storage failure is fatal; malformed individual rows are
-    // logged and skipped by the restore loop itself.
-    let restored_agents = host
-        .restore_persisted_agents(model_slot.clone(), async |spec: &str| {
-            models.resolve(spec).await
-        })
-        .await
-        .map_err(|e| DaemonError::Message(format!("restore agent layout: {e}")))?;
-    tracing::info!(
-        count = restored_agents,
-        "persisted multi-agent layout restored"
-    );
 
     // Startup proactive ChatGPT token refresh (8-day/24h rule).
     let _ = models.ensure_fresh();

@@ -155,22 +155,40 @@ impl App {
         true
     }
 
-    /// Query stored agents and open the resume picker.
+    /// Query stored agents and open the resume picker. The initial page
+    /// is the newest identities (server-bounded); typing searches
+    /// server-side via [`Self::schedule_stored_agent_search`].
     pub(super) fn open_agent_profile_picker(&mut self) {
         tracing::info!("open_agent_profile_picker called");
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
         self.spawn_client_task("list_agents", move || async move {
-            tracing::debug!("querying list_agents from the daemon's storage");
-            match client.list_storage_agents().await {
+            tracing::debug!("querying stored agents from the daemon's storage");
+            match client.search_storage_agents("", 100).await {
                 Ok(records) => {
-                    tracing::info!(count = records.len(), "list_agents succeeded");
-                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded(records));
+                    tracing::info!(count = records.len(), "stored agents page loaded");
+                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
+                        query: String::new(),
+                        records,
+                    });
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "failed to list agents");
+                    tracing::error!(error = %e, "failed to search stored agents");
                 }
             }
+        });
+    }
+
+    /// Debounced server-side search: 250ms after the last keystroke,
+    /// fetch one bounded page for the picker's current query. The apply
+    /// side drops pages whose query has already moved on.
+    pub(super) fn schedule_stored_agent_search(&mut self) {
+        let query = self.state.agent_profile_picker.query.clone();
+        let client = self.client.clone();
+        let tx = self.app_event_tx.clone();
+        self.spawn_client_task("search_stored_agents_debounce", move || async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tx.send(crate::app_event::AppEvent::SearchStoredAgents(query));
         });
     }
 
@@ -233,7 +251,10 @@ impl App {
             KeyCode::Down => self.state.agent_profile_picker.move_down(),
             KeyCode::Left | KeyCode::Tab => self.state.agent_profile_picker.toggle_expand(),
             KeyCode::Right => self.state.agent_profile_picker.toggle_expand(),
-            KeyCode::Backspace => self.state.agent_profile_picker.pop_char(),
+            KeyCode::Backspace => {
+                self.state.agent_profile_picker.pop_char();
+                self.schedule_stored_agent_search();
+            }
             KeyCode::Char('d') if ctrl => {
                 self.state.agent_profile_picker.start_delete_confirm();
             }

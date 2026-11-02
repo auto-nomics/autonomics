@@ -240,12 +240,23 @@ export function AgentView(props: AgentViewProps) {
     window.setTimeout(() => setToast((current) => current === message ? null : current), 2200);
   };
 
-  const loadStoredAgents = async () => {
+  // Bounded server-side search for the resume dialog — one page per
+  // (debounced) query, never the full identities table.
+  const resumeSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadStoredAgents = async (query = "") => {
     try {
-      setStoredAgents(await gatewayRequest("GET", "/storage/agents"));
+      const suffix = query.trim()
+        ? `?q=${encodeURIComponent(query.trim())}&limit=100`
+        : "?limit=100";
+      setStoredAgents(await gatewayRequest("GET", `/storage/agents${suffix}`));
     } catch (cause) {
       showToast(`Failed to load persisted agents: ${String(cause)}`);
     }
+  };
+
+  const searchStoredAgentsDebounced = (query: string) => {
+    if (resumeSearchTimer.current) clearTimeout(resumeSearchTimer.current);
+    resumeSearchTimer.current = setTimeout(() => void loadStoredAgents(query), 250);
   };
 
   const openResume = () => {
@@ -500,7 +511,14 @@ export function AgentView(props: AgentViewProps) {
             <DialogTitle>Resume persisted agent</DialogTitle>
             <DialogDescription>Restore a stored agent. Existing runtime instances are focused.</DialogDescription>
           </DialogHeader>
-          <Input value={resumeQuery} placeholder="Filter by path or profile" onChange={(event) => setResumeQuery(event.target.value)} />
+          <Input
+            value={resumeQuery}
+            placeholder="Search by path or profile"
+            onChange={(event) => {
+              setResumeQuery(event.target.value);
+              searchStoredAgentsDebounced(event.target.value);
+            }}
+          />
           <ScrollArea className="max-h-[60vh] min-h-0" contentClassName="space-y-2">
             {filteredStored.slice(0, 300).map((agent) => {
               const running = agents.find((item) => item.agent_id === agent.id);

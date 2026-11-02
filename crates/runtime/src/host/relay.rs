@@ -11,7 +11,7 @@ use arc_swap::ArcSwapOption;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
-use super::{AgentHandle, HostEvent, RuntimeHost, TaggedEvent, unix_epoch_ms};
+use super::{AgentHandle, HostEvent, RuntimeHost, TaggedEvent};
 
 /// Commands sent to a per-agent relay task.
 pub(super) enum AgentCommand {
@@ -38,13 +38,9 @@ pub(super) struct AgentEntry {
     /// `GetAgentInfo` / `GetStatus` (which serialize `AgentInfo`) see the
     /// same value that `update_agent_status` last set.
     pub(super) info: crate::control::AgentInfo,
-    /// Agent kind used to instantiate this agent; needed to rebuild the
-    /// layout without re-reading `agents.config_json`.
+    /// Agent kind used to instantiate this agent (capability metadata
+    /// and tool assembly).
     pub(super) kind: AgentKind,
-    /// Layout insertion position assigned by [`RuntimeHost`].
-    pub(super) layout_order: u64,
-    /// First time this incarnation entered the daemon layout.
-    pub(super) layout_created_at: i64,
     /// Live runtime status — the agent's unified
     /// [`agentik_types::AgentLifecycleStatus`]. Updated on every observed
     /// [`agentik_sdk::types::AgentEvent`] that carries a lifecycle signal.
@@ -104,9 +100,6 @@ impl RuntimeHost {
         fill_model_fields(&mut info, &model);
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
-        let layout_order = self.next_layout_order;
-        self.next_layout_order = self.next_layout_order.saturating_add(1);
-        let layout_created_at = unix_epoch_ms();
 
         let relay_task = agentik_core::supervise::spawn_safe_on(
             &self.infra.runtime_handle,
@@ -125,8 +118,6 @@ impl RuntimeHost {
                 last_event: info.last_event.clone(),
                 info: info.clone(),
                 kind,
-                layout_order,
-                layout_created_at,
                 model,
                 memory,
                 inbound_pending: Arc::new(AtomicBool::new(false)),
@@ -135,13 +126,6 @@ impl RuntimeHost {
             },
         );
 
-        // ── Phase 4: persist agent graph entry ──
-        // Fire-and-forget: registration semantics are owned by the in-memory
-        // registry; the dashboard's persistence is a read-side projection that
-        // can tolerate eventual consistency. Failure here is logged but does
-        // not abort the spawn flow.
-        self.persist_upsert_agent_graph(&path, agent_id, kind.name(), &info);
-        self.persist_current_agent_layout();
         info
     }
 
@@ -241,10 +225,6 @@ impl RuntimeHost {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
         self.notify_unregistered(name);
-        // Phase 4: remove the persisted graph row so the dashboard doesn't
-        // resurrect a stale entry on the next process start.
-        self.persist_remove_agent_graph(name);
-        self.persist_current_agent_layout();
     }
 
     /// Shut down all registered agents and await their graceful exit.
@@ -258,9 +238,6 @@ impl RuntimeHost {
     /// `block_on`) so that background tasks can make progress while we
     /// await their completion.
     pub async fn shutdown_all_agents_and_wait(&mut self) {
-        let shutdown_revision = self.next_layout_revision;
-        self.next_layout_revision = self.next_layout_revision.saturating_add(1);
-        let shutdown_snapshot = self.agent_layout_snapshot(shutdown_revision);
         let names: Vec<String> = self.agents.keys().cloned().collect();
         for name in &names {
             self.fail_pending_delegations(name, "target agent shut down before completion");
@@ -272,14 +249,6 @@ impl RuntimeHost {
         }
         for name in names {
             self.notify_unregistered(&name);
-        }
-        if let Err(error) = self
-            .infra
-            .storage
-            .save_agent_layout(&shutdown_snapshot)
-            .await
-        {
-            tracing::warn!(%error, "failed to persist final agent layout during shutdown");
         }
         // Wait for all relay tasks to finish. Each relay loop calls
         // `handle.join().await` before exiting, which in turn waits for

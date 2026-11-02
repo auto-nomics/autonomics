@@ -272,12 +272,6 @@ impl RuntimeHost {
             last_event: next_last_event.clone(),
         });
 
-        // Phase 4: persist the status change so the dashboard can
-        // reconstruct the agent's runtime state after a process restart.
-        // Fire-and-forget — the in-memory state is authoritative for the
-        // live runtime; persistence is a read-side projection.
-        self.persist_agent_status(name, &status, &next_last_event);
-        self.persist_current_agent_layout();
     }
 
     /// Passivate every registered agent whose idle timer has exceeded the
