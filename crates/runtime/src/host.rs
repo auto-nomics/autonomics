@@ -512,7 +512,7 @@ impl RuntimeHost {
     /// this is a read-only projection of exactly the DAG that agent's tools
     /// mutate—not a separate global graph.
     pub fn data_engine_client(&self, session_id: &str) -> DataEngineClient {
-        self.infra.engine_manager.client_for_session(session_id)
+        self.infra.engine_manager.client_for_agent(session_id)
     }
 }
 

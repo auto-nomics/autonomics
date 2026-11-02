@@ -213,7 +213,7 @@ pub(crate) async fn get_agent_dag(
     Path(name): Path<String>,
 ) -> GatewayResult<Json<DagTuiSnapshot>> {
     // Pure SharedInfra operation — no host lock involved.
-    let client = state.infra.engine_manager.client_for_session(&name);
+    let client = state.infra.engine_manager.client_for_agent(&name);
     let snapshot = client
         .dag_tui_snapshot()
         .await

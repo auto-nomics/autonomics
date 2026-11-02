@@ -543,7 +543,7 @@ node = "b"
             .build();
         Arc::new(
             data_engine::runtime::DataEngineManager::new(engine)
-                .client_for_session("skill-workflow-test"),
+                .client_for_agent("skill-workflow-test"),
         )
     }
 

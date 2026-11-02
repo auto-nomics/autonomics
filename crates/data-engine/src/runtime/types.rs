@@ -9,14 +9,13 @@ use crate::dag_shell::DagShellOutcome;
 use crate::data_engine::{ClearDagOutcome, LogicalInstallReport};
 use crate::error::Result as EngineResult;
 
-/// Envelope that routes a [`DataEngineCmd`] to a session's actor.
+/// Envelope that routes a [`DataEngineCmd`] to an agent's actor.
 ///
-/// In the per-agent architecture, each session has its own channel and
-/// tokio task (`SessionServer`), so `session_id` is kept for logging only.
+/// In the per-agent architecture, each agent has its own channel and
+/// tokio task ([`AgentEngineActor`](crate::runtime::AgentEngineActor)).
 /// Metadata queries (list/spec/ports/doc) bypass this channel entirely —
 /// they are served synchronously from `Arc<NodeRegistry>` on the client.
 pub struct EngineMsg {
-    pub session_id: String,
     pub cmd: DataEngineCmd,
 }
 
@@ -81,7 +80,7 @@ pub enum DataEngineCmd {
         /// the reply receiver (e.g. the agent task is cancelled), this token
         /// fires and the spawned DAG run task aborts early — releasing the
         /// engine mutex and resetting the `running` flag instead of leaving
-        /// the session stuck.
+        /// the actor stuck.
         cancel_token: CancellationToken,
     },
     GetOutput {
@@ -206,7 +205,7 @@ pub enum DataEngineCmd {
     ReleaseOutputs {
         reply: oneshot::Sender<EngineResult<bool>>,
     },
-    /// Stop this session actor. Replies `false` when a DAG run is active.
+    /// Stop this engine actor. Replies `false` when a DAG run is active.
     Shutdown {
         reply: oneshot::Sender<EngineResult<bool>>,
     },

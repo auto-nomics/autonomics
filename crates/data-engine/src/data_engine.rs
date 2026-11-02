@@ -56,7 +56,7 @@ pub struct DataEngine {
     engine_ctx: crate::node_registry::registry::NodeCtx,
     dag: DAG,
     /// Shared, immutable after construction. Wrapped in `Arc` so that
-    /// [`DataEngine::new_session`] can share it across per-agent engines
+    /// [`DataEngine::new_isolated_engine`] can share it across per-agent engines
     /// without rebuilding the ~70 factories.
     node_registry: Arc<NodeRegistry>,
     /// Process-wide container execution resources, injected by the runtime
@@ -173,7 +173,7 @@ impl DataEngine {
         container_execution: Arc<ContainerExecutionInfra>,
     ) -> Self {
         let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
-        // Global concurrency limiter shared across all agent sessions.
+        // Global concurrency limiter shared across all agents.
         // Sized to leave ≥ 2 worker threads for SessionServer actors +
         // tool execution, preventing CPU-bound node work from starving
         // inter-agent communication on the shared tokio runtime.
@@ -1185,7 +1185,7 @@ impl DataEngine {
     ///
     /// A no-op (returns `Ok(false)`) when no history store is attached, the
     /// ref has no snapshots yet, or the in-memory DAG is non-empty — never
-    /// wipes live state. Session servers call this right after a session is
+    /// wipes live state. Engine actors call this right after an agent is
     /// created so a restarted agent resumes its previous workspace instead of
     /// facing an empty DAG (the run snapshots were always committed; only the
     /// in-memory graph was lost).
@@ -1404,7 +1404,7 @@ impl DataEngine {
         self
     }
 
-    /// Create a new **isolated session** sharing all heavy infrastructure
+    /// Create a new **isolated engine** sharing all heavy infrastructure
     /// (NodeRegistry, RuntimeEnv, DagHistory DB) but with
     /// a fresh empty DAG and an independent history ref.
     ///
@@ -1413,8 +1413,8 @@ impl DataEngine {
     /// runtime, or Turso DB connection. The cost is negligible — every
     /// shared field is `Arc`-backed or `Clone`-cheap.
     ///
-    /// The new session starts with `history_ref = "main"`.
-    pub fn new_session(&self) -> Self {
+    /// The new engine starts with `history_ref = "main"`.
+    pub fn new_isolated_engine(&self) -> Self {
         let mut dag = DAG::default();
         dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
         Self {
@@ -2184,7 +2184,7 @@ mod tests {
         let engine = DataEngine::builder()
             .with_container_execution(Arc::clone(&infra))
             .build();
-        let session = engine.new_session();
+        let session = engine.new_isolated_engine();
 
         assert!(Arc::ptr_eq(engine.container_execution(), &infra));
         assert!(Arc::ptr_eq(session.container_execution(), &infra));
@@ -2239,7 +2239,7 @@ mod tests {
         assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
 
         // A fresh session starts with an empty DAG...
-        let mut session = engine.new_session();
+        let mut session = engine.new_isolated_engine();
         assert!(!session.node_exists("read"));
         // ...and restore_ref_head materializes the ref head into it.
         assert!(session.restore_ref_head().await.unwrap());
@@ -2250,7 +2250,7 @@ mod tests {
         assert!(session.node_exists("read"));
 
         // A ref with no snapshots restores nothing.
-        let mut fresh = engine.new_session().with_history_ref("never-run");
+        let mut fresh = engine.new_isolated_engine().with_history_ref("never-run");
         assert!(!fresh.restore_ref_head().await.unwrap());
     }
 

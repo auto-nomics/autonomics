@@ -8,12 +8,12 @@
 //! enter the actor channel, so they cannot be blocked by a running DAG.
 //!
 //! **Layer 2 — RunDag fire-and-forget.** `RunDag` is spawned as a background
-//! task inside the session actor; the actor loop returns immediately and keeps
-//! processing subsequent commands. A per-session `AtomicBool` guards against
+//! task inside the engine actor; the actor loop returns immediately and keeps
+//! processing subsequent commands. A per-actor `AtomicBool` guards against
 //! concurrent runs; mutation commands during a run return an immediate error
 //! instead of blocking.
 //!
-//! **Layer 3 — Per-agent actors.** Each agent session gets its own tokio task
+//! **Layer 3 — Per-agent actors.** Each agent gets its own tokio task
 //! and its own mpsc channel, managed by `DataEngineManager`. A long DAG run in
 //! agent-A's actor never blocks agent-B's commands. Heavy infrastructure
 //! (`NodeRegistry`, `DagHistory`, `RuntimeEnv`) is shared via `Arc`.
@@ -40,26 +40,26 @@ pub mod types;
 
 pub use storage::{
     ArtifactEntry, CachedFileOutput, MaintenancePolicy, ReferenceEntry, ResultCache,
-    RunAwareCleanReport, SessionTracker, StorageCoordinator, StorageStatus,
+    RunAwareCleanReport, AgentActivityTracker, StorageCoordinator, StorageStatus,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// Per-session actor (Layer 2 + 3)
+// Per-agent actor (Layer 2 + 3)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Single-session DataEngine actor.
+// Single-engine DataEngine actor (one per agent).
 ///
-/// One instance per agent session. The engine is behind a `Mutex` so that
+/// One instance per agent. The engine is behind a `Mutex` so that
 /// `RunDag` can be spawned as a background task while the actor loop continues
 /// processing other commands. The `running` flag prevents concurrent DAG runs
 /// and allows mutation commands to fast-fail instead of blocking.
-struct SessionServer {
-    session_id: String,
+struct AgentEngineActor {
+    agent_id: String,
     engine: Arc<tokio::sync::Mutex<DataEngine>>,
     running: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
-    /// Set by the manager when this session generation is being evicted.
-    /// Queued runs are rejected instead of executing on a session the manager
+    /// Set by the manager when this actor generation is being evicted.
+    /// Queued runs are rejected instead of executing on an actor the manager
     /// has already removed from its map.
     closing: Arc<AtomicBool>,
     result_cache: Arc<ResultCache>,
@@ -67,14 +67,14 @@ struct SessionServer {
     rx: mpsc::UnboundedReceiver<EngineMsg>,
 }
 
-impl SessionServer {
+impl AgentEngineActor {
     async fn run(mut self) {
-        Self::restore_session_workspace(&self.engine, &self.session_id).await;
+        Self::restore_agent_workspace(&self.engine, &self.agent_id).await;
         while let Some(msg) = self.rx.recv().await {
             if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
                 tracing::error!(
-                    session_id = %self.session_id,
-                    "session actor handler panicked: {:?}",
+                    agent_id = %self.agent_id,
+                    "engine actor handler panicked: {:?}",
                     panic
                 );
             }
@@ -82,24 +82,24 @@ impl SessionServer {
                 break;
             }
         }
-        tracing::debug!(session_id = %self.session_id, "session actor exited");
+        tracing::debug!(agent_id = %self.agent_id, "engine actor exited");
     }
 
     /// Materialize the history ref's head snapshot into a freshly created
-    /// session so a restarted agent resumes its previous DAG instead of an
+    /// agent so a restarted agent resumes its previous DAG instead of an
     /// empty workspace. Runs before the actor loop, so it can never race a
     /// client command. Failures are logged and swallowed: an unrestorable
-    /// history must not stop the session from serving commands.
-    async fn restore_session_workspace(engine: &tokio::sync::Mutex<DataEngine>, session_id: &str) {
-        if !session_auto_restore_enabled() {
+    /// history must not stop the actor from serving commands.
+    async fn restore_agent_workspace(engine: &tokio::sync::Mutex<DataEngine>, agent_id: &str) {
+        if !agent_workspace_auto_restore_enabled() {
             return;
         }
         let mut engine = engine.lock().await;
         match engine.restore_ref_head().await {
-            Ok(true) => tracing::info!(session_id, "restored DAG from history ref head"),
+            Ok(true) => tracing::info!(agent_id, "restored DAG from history ref head"),
             Ok(false) => {}
             Err(error) => tracing::warn!(
-                session_id,
+                agent_id,
                 error = %error,
                 "could not restore DAG from history ref head; starting with an empty workspace"
             ),
@@ -107,7 +107,7 @@ impl SessionServer {
     }
 
     async fn handle(&self, msg: EngineMsg) {
-        let EngineMsg { cmd, .. } = msg;
+        let EngineMsg { cmd } = msg;
 
         match cmd {
             // ── DAG execution (fire-and-forget) ──────────────────────────
@@ -121,20 +121,20 @@ impl SessionServer {
             } => {
                 if self.closing.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
-                        "session is shutting down; reconnect to start a new run".to_string(),
+                        "engine actor is shutting down; reconnect to start a new run".to_string(),
                     )));
                     return;
                 }
                 if self.running.swap(true, Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is already running for this session; wait for the current run to complete"
+                        "DAG is already running for this agent; wait for the current run to complete"
                             .to_string(),
                     )));
                     return;
                 }
                 // Seed matching file outputs from the manager-wide fingerprint
                 // cache before the run task takes the engine lock. DataFrame
-                // results intentionally remain session-local.
+                // results intentionally remain agent-local.
                 {
                     let entries = self.result_cache.snapshot();
                     if !entries.is_empty() {
@@ -142,16 +142,16 @@ impl SessionServer {
                         let restored = engine.restore_cached_file_outputs(&entries).await;
                         if restored > 0 {
                             tracing::debug!(
-                                session_id = %self.session_id,
+                                agent_id = %self.agent_id,
                                 restored,
-                                "restored cross-session file outputs"
+                                "restored cross-agent file outputs"
                             );
                         }
                     }
                 }
                 let engine = Arc::clone(&self.engine);
                 let running = Arc::clone(&self.running);
-                let session_id = self.session_id.clone();
+                let agent_id = self.agent_id.clone();
                 let result_cache = Arc::clone(&self.result_cache);
                 let storage = Arc::clone(&self.storage);
                 tokio::spawn(async move {
@@ -159,7 +159,7 @@ impl SessionServer {
                     // drops the reply receiver (e.g. the agent task is
                     // cancelled), `cancel_token` fires and we abort early —
                     // releasing the engine mutex and resetting `running`
-                    // instead of leaving the session stuck.
+                    // instead of leaving the actor stuck.
                     let run_fut = AssertUnwindSafe(async {
                         let mut engine = engine.lock().await;
                         engine.set_commit_message(commit_message);
@@ -210,7 +210,7 @@ impl SessionServer {
                             if let Ok(report) = &res {
                                 if report.ok {
                                     let (cached, displaced) =
-                                        result_cache.record_report_collected(&session_id, report);
+                                        result_cache.record_report_collected(&agent_id, report);
                                     if !cached.is_empty() {
                                         storage.retain_cache_owner(&cached);
                                     }
@@ -218,7 +218,7 @@ impl SessionServer {
                                         storage.release_cache_owner(&displaced);
                                     }
                                 }
-                                storage.retain_report(&session_id, report);
+                                storage.retain_report(&agent_id, report);
                             }
                             let _ = reply.send(res);
                         }
@@ -236,7 +236,7 @@ impl SessionServer {
             //
             // When a DAG is running, the mutex is held by the run task.
             // Instead of blocking, these commands fast-fail so the actor
-            // loop stays responsive for other messages (and other sessions).
+            // loop stays responsive for other messages (and other agents).
             DataEngineCmd::RunDagShell {
                 script,
                 dry_run,
@@ -420,8 +420,8 @@ impl SessionServer {
                     engine.release_output_cache();
                 }
                 // Shared storage references are released by the manager after
-                // the shutdown ack, guarded against a newer session generation
-                // having recreated this session id in the meantime.
+                // the shutdown ack, guarded against a newer actor generation
+                // having recreated this agent id in the meantime.
                 self.shutdown.store(true, Ordering::SeqCst);
                 let _ = reply.send(Ok(true));
             }
@@ -715,16 +715,16 @@ impl SessionServer {
 // Session workspace auto-restore
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Env gate for the session-start auto-restore (default on). Set
+/// Env gate for the actor-start workspace auto-restore (default on). Set
 /// `AUTONOMICS_SESSION_AUTO_RESTORE=0|false|off|disabled` to start every
-/// session with an empty DAG regardless of snapshot history.
+/// agent with an empty DAG regardless of snapshot history.
 const SESSION_AUTO_RESTORE_ENV: &str = "AUTONOMICS_SESSION_AUTO_RESTORE";
 
-fn session_auto_restore_enabled() -> bool {
-    session_auto_restore_from(std::env::var_os(SESSION_AUTO_RESTORE_ENV).as_deref())
+fn agent_workspace_auto_restore_enabled() -> bool {
+    agent_workspace_auto_restore_from(std::env::var_os(SESSION_AUTO_RESTORE_ENV).as_deref())
 }
 
-fn session_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
+fn agent_workspace_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
     !value.is_some_and(|value| {
         matches!(
             value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
@@ -743,7 +743,7 @@ fn session_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
 /// When the agent task is cancelled (e.g. user interrupts), the tool's
 /// future — and therefore this receiver — is dropped. The `Drop`
 /// implementation fires the shared `CancellationToken`, which the spawned
-/// DAG run task in `SessionServer` listens on via `select!`. Without this
+/// DAG run task in `AgentEngineActor` listens on via `select!`. Without this
 /// guard the DAG task would continue running in the background, holding the
 /// engine mutex and leaving `running = true` forever.
 pub struct CancelOnDropReceiver {
@@ -772,25 +772,25 @@ impl Drop for CancelOnDropReceiver {
 
 /// Channel-based client for the DataEngine actor.
 ///
-/// Each client carries a `session_id` that routes to the right per-agent
-/// `SessionServer`. Metadata queries (`list_node_factories`, `get_node_spec`,
+/// Each client carries an `agent_id` that routes to the right per-agent
+/// `AgentEngineActor`. Metadata queries (`list_node_factories`, `get_node_spec`,
 /// `get_node_ports`, `get_node_doc`) bypass the actor entirely — they read
 /// from the shared `Arc<NodeRegistry>` synchronously and therefore never
 /// block on a running DAG.
 #[derive(Clone)]
 pub struct DataEngineClient {
     tx: mpsc::UnboundedSender<EngineMsg>,
-    /// Shared, immutable node registry. Cloned once at session creation;
+    /// Shared, immutable node registry. Cloned once at actor creation;
     /// subsequent metadata queries are zero-cost reads with no channel hop.
     node_registry: Arc<NodeRegistry>,
-    session_id: String,
-    activity: Arc<SessionTracker>,
+    agent_id: String,
+    activity: Arc<AgentActivityTracker>,
 }
 
 impl DataEngineClient {
-    /// Returns the session ID this client routes to.
-    pub fn session_id(&self) -> &str {
-        &self.session_id
+    /// Returns the agent ID this client routes to.
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
     }
 
     // ── Metadata queries (Layer 1: synchronous, bypass actor) ────────────
@@ -847,10 +847,9 @@ impl DataEngineClient {
                 >,
             >,
     {
-        self.activity.touch(&self.session_id);
+        self.activity.touch(&self.agent_id);
         self.tx
             .send(EngineMsg {
-                session_id: self.session_id.clone(),
                 cmd,
             })
             .map_err(|_| ClientError::ServerClosed)?;
@@ -985,7 +984,6 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let cancel = CancellationToken::new();
         let _ = self.tx.send(EngineMsg {
-            session_id: self.session_id.clone(),
             cmd: DataEngineCmd::RunDag {
                 event_tx: Some(event_tx),
                 commit_message,
@@ -1329,17 +1327,17 @@ impl DataEngineClient {
 // Manager (Layer 3: per-agent actors)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Lazily spawns a dedicated `SessionServer` (tokio task + channel) per agent
-/// session, all sharing the same heavy infrastructure from the template engine.
+/// Lazily spawns a dedicated `AgentEngineActor` (tokio task + channel) per agent
+/// agent, all sharing the same heavy infrastructure from the template engine.
 ///
 /// This provides **full cross-agent isolation**: a long DAG run in agent-A's
-/// actor never blocks agent-B's commands, and a panic in one session's handler
+/// actor never blocks agent-B's commands, and a panic in one agent's handler
 /// does not affect others.
 pub struct DataEngineManager {
     template: DataEngine,
     node_registry: Arc<NodeRegistry>,
-    sessions: std::sync::Mutex<HashMap<String, SessionHandle>>,
-    activity: Arc<SessionTracker>,
+    actors: std::sync::Mutex<HashMap<String, SessionHandle>>,
+    activity: Arc<AgentActivityTracker>,
     result_cache: Arc<ResultCache>,
     storage: Arc<StorageCoordinator>,
     policy: MaintenancePolicy,
@@ -1348,8 +1346,8 @@ pub struct DataEngineManager {
 struct SessionHandle {
     tx: mpsc::UnboundedSender<EngineMsg>,
     running: Arc<AtomicBool>,
-    /// Mirrors the actor's `closing` flag: once set, `client_for_session`
-    /// stops handing out this generation and creates a fresh session instead.
+    /// Mirrors the actor's `closing` flag: once set, `client_for_agent`
+    /// stops handing out this generation and spawns a fresh actor instead.
     closing: Arc<AtomicBool>,
     _task: JoinHandle<()>,
 }
@@ -1357,7 +1355,7 @@ struct SessionHandle {
 impl DataEngineManager {
     /// Create a manager from a template engine. The template's
     /// `NodeRegistry`, `RuntimeEnv`, `DagHistory`, etc. are shared across all
-    /// lazily-created sessions via `Arc` / `Clone`.
+    /// lazily-created actors via `Arc` / `Clone`.
     pub fn new(engine: DataEngine) -> Self {
         Self::with_policy(engine, MaintenancePolicy::from_env())
     }
@@ -1380,8 +1378,8 @@ impl DataEngineManager {
         Self {
             template: engine,
             node_registry,
-            sessions: std::sync::Mutex::new(HashMap::new()),
-            activity: Arc::new(SessionTracker::default()),
+            actors: std::sync::Mutex::new(HashMap::new()),
+            activity: Arc::new(AgentActivityTracker::default()),
             result_cache: Arc::new(ResultCache::new(
                 policy.result_cache_max_entries,
                 Some(policy.result_cache_ttl),
@@ -1391,9 +1389,9 @@ impl DataEngineManager {
         }
     }
 
-    /// Node kinds available to every session — a snapshot of the shared
+    /// Node kinds available to every agent — a snapshot of the shared
     /// registry. Management surfaces (the gateway's plugin/node listing)
-    /// use this; per-session introspection goes through a session client.
+    /// use this; per-agent introspection goes through an engine client.
     pub fn list_nodes(&self) -> Vec<crate::node_registry::NodeInfo> {
         self.node_registry.list_nodes()
     }
@@ -1408,58 +1406,58 @@ impl DataEngineManager {
         self.node_registry.remove_plugin(plugin_name);
     }
 
-    /// Get (or lazily create) a [`DataEngineClient`] for `session_id`.
+    /// Get (or lazily create) a [`DataEngineClient`] for `agent_id`.
     ///
-    /// The first call for a given session spawns a dedicated tokio task.
+    /// The first call for a given agent spawns a dedicated tokio task.
     /// Subsequent calls return a cheap clone of the same channel sender.
     ///
-    /// This method is synchronous because the internal sessions map uses a
+    /// This method is synchronous because the internal actors map uses a
     /// `std::sync::Mutex` — it is never held across an `.await` point, so
     /// there is no risk of blocking the executor.
-    pub fn client_for_session(&self, session_id: &str) -> DataEngineClient {
-        self.client_for_session_with_ref(session_id, session_id)
+    pub fn client_for_agent(&self, agent_id: &str) -> DataEngineClient {
+        self.client_for_agent_with_ref(agent_id, agent_id)
     }
 
-    /// Like [`client_for_session`](Self::client_for_session) but lets the
-    /// caller choose the default DAG history ref for the new session.
+    /// Like [`client_for_agent`](Self::client_for_agent) but lets the
+    /// caller choose the default DAG history ref for the new agent.
     ///
-    /// When the session already exists, `history_ref` is ignored (the
-    /// existing session's ref is kept).  When creating a new session, the
+    /// When the actor already exists, `history_ref` is ignored (the
+    /// existing actor's ref is kept).  When creating a new actor, the
     /// engine's `history_ref` is set to `history_ref` instead of the
     /// default `"main"` — this is what gives each agent its own isolated
     /// snapshot lineage in the shared history database.
-    pub fn client_for_session_with_ref(
+    pub fn client_for_agent_with_ref(
         &self,
-        session_id: &str,
+        agent_id: &str,
         history_ref: &str,
     ) -> DataEngineClient {
-        let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
+        let mut actors = self.actors.lock().expect("actors mutex poisoned");
 
-        // Fast path: session already exists and is not being evicted. A
+        // Fast path: actor already exists and is not being evicted. A
         // closing generation is treated as absent so callers transparently
-        // get a fresh session (new generation) with the same id.
-        if let Some(handle) = sessions.get(session_id)
+        // get a fresh actor (new generation) with the same id.
+        if let Some(handle) = actors.get(agent_id)
             && !handle.closing.load(Ordering::SeqCst)
         {
-            self.activity.touch(session_id);
+            self.activity.touch(agent_id);
             return DataEngineClient {
                 tx: handle.tx.clone(),
                 node_registry: Arc::clone(&self.node_registry),
-                session_id: session_id.to_string(),
+                agent_id: agent_id.to_string(),
                 activity: Arc::clone(&self.activity),
             };
         }
 
-        // Slow path: create new session.
+        // Slow path: create new actor.
         // Use the caller-provided history_ref so each agent gets its own
         // snapshot lineage instead of all committing to "main".
-        let new_engine = self.template.new_session().with_history_ref(history_ref);
+        let new_engine = self.template.new_isolated_engine().with_history_ref(history_ref);
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let running = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
         let closing = Arc::new(AtomicBool::new(false));
-        let server = SessionServer {
-            session_id: session_id.to_string(),
+        let server = AgentEngineActor {
+            agent_id: agent_id.to_string(),
             engine: Arc::new(tokio::sync::Mutex::new(new_engine)),
             running: Arc::clone(&running),
             shutdown: Arc::clone(&shutdown),
@@ -1470,9 +1468,9 @@ impl DataEngineManager {
         };
         let task = tokio::task::spawn(server.run());
 
-        tracing::info!(session_id, history_ref, "created new DAG session");
-        sessions.insert(
-            session_id.to_string(),
+        tracing::info!(agent_id, history_ref, "created new DAG engine actor");
+        actors.insert(
+            agent_id.to_string(),
             SessionHandle {
                 tx: tx.clone(),
                 running,
@@ -1480,25 +1478,25 @@ impl DataEngineManager {
                 _task: task,
             },
         );
-        drop(sessions);
+        drop(actors);
 
         DataEngineClient {
             tx,
             node_registry: Arc::clone(&self.node_registry),
-            session_id: session_id.to_string(),
+            agent_id: agent_id.to_string(),
             activity: Arc::clone(&self.activity),
         }
     }
 
-    pub fn session_count(&self) -> usize {
-        self.sessions.lock().expect("sessions mutex poisoned").len()
+    pub fn agent_count(&self) -> usize {
+        self.actors.lock().expect("actors mutex poisoned").len()
     }
 
-    /// Release retained outputs for idle sessions without stopping them.
+    /// Release retained outputs for idle actors without stopping them.
     pub async fn release_idle_outputs(&self) -> usize {
         let targets = {
-            let sessions = self.sessions.lock().expect("sessions mutex poisoned");
-            sessions
+            let actors = self.actors.lock().expect("actors mutex poisoned");
+            actors
                 .iter()
                 .filter(|(id, handle)| {
                     !handle.running.load(Ordering::SeqCst)
@@ -1508,11 +1506,10 @@ impl DataEngineManager {
                 .collect::<Vec<_>>()
         };
         let mut released = 0;
-        for (session_id, tx) in targets {
+        for (agent_id, tx) in targets {
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             if tx
                 .send(EngineMsg {
-                    session_id: session_id.clone(),
                     cmd: DataEngineCmd::ReleaseOutputs { reply: reply_tx },
                 })
                 .is_err()
@@ -1520,26 +1517,26 @@ impl DataEngineManager {
                 continue;
             }
             if matches!(reply_rx.await, Ok(Ok(true))) {
-                tracing::info!(session_id, "released idle DAG output cache");
+                tracing::info!(agent_id, "released idle DAG output cache");
                 released += 1;
             }
         }
         released
     }
 
-    /// Stop idle session actors. Active runs are never evicted.
+    /// Stop idle engine actors. Active runs are never evicted.
     ///
     /// Only the current generation is evicted: targets are marked `closing`
-    /// under the sessions lock, so any client asking for the same session id
-    /// afterwards receives a freshly created session whose storage references
+    /// under the actors lock, so any client asking for the same agent id
+    /// afterwards receives a freshly created actor whose storage references
     /// are never released by the old actor's shutdown.
-    pub async fn evict_idle_sessions(&self) -> usize {
+    pub async fn evict_idle_actors(&self) -> usize {
         let targets = {
-            let mut sessions = self.sessions.lock().expect("sessions mutex poisoned");
+            let mut actors = self.actors.lock().expect("actors mutex poisoned");
             let mut targets = Vec::new();
-            for (id, handle) in sessions.iter_mut() {
+            for (id, handle) in actors.iter_mut() {
                 if !handle.running.load(Ordering::SeqCst)
-                    && self.activity.is_idle(id, self.policy.session_idle)
+                    && self.activity.is_idle(id, self.policy.agent_idle)
                 {
                     // Mark closing inside the lock: a client racing this
                     // eviction will create a new generation instead of
@@ -1549,16 +1546,15 @@ impl DataEngineManager {
                 }
             }
             for (id, _) in &targets {
-                sessions.remove(id);
+                actors.remove(id);
             }
             targets
         };
         let mut evicted = 0;
-        for (session_id, tx) in targets {
+        for (agent_id, tx) in targets {
             let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
             if tx
                 .send(EngineMsg {
-                    session_id: session_id.clone(),
                     cmd: DataEngineCmd::Shutdown { reply: reply_tx },
                 })
                 .is_err()
@@ -1567,18 +1563,18 @@ impl DataEngineManager {
             }
             if matches!(reply_rx.await, Ok(Ok(true))) {
                 evicted += 1;
-                tracing::info!(session_id, "evicted idle DAG session");
+                tracing::info!(agent_id, "evicted idle DAG engine actor");
             }
-            // A client may have recreated the session while the old actor was
+            // A client may have recreated the actor while the old one was
             // acknowledging shutdown. Only clear shared refs if it did not.
             let recreated = self
-                .sessions
+                .actors
                 .lock()
-                .expect("sessions mutex poisoned")
-                .contains_key(&session_id);
+                .expect("actors mutex poisoned")
+                .contains_key(&agent_id);
             if !recreated {
-                self.activity.forget(&session_id);
-                self.storage.release_session(&session_id);
+                self.activity.forget(&agent_id);
+                self.storage.release_agent(&agent_id);
             }
         }
         evicted
@@ -1586,7 +1582,7 @@ impl DataEngineManager {
 
     /// Run one lifecycle pass and enforce the central local-storage budget.
     ///
-    /// Order is fixed: release idle output caches → evict idle sessions →
+    /// Order is fixed: release idle output caches → evict idle actors →
     /// prune the result cache (dropping its storage references) → enforce the
     /// local budget with run-aware cleanup. VFS artifacts are only ever
     /// reported by that cleanup, never deleted.
@@ -1594,7 +1590,7 @@ impl DataEngineManager {
         &self,
     ) -> std::result::Result<(usize, usize, Option<RunAwareCleanReport>), String> {
         let released = self.release_idle_outputs().await;
-        let evicted = self.evict_idle_sessions().await;
+        let evicted = self.evict_idle_actors().await;
         let retired = self.result_cache.prune_retired();
         if !retired.is_empty() {
             self.storage.release_cache_owner(&retired);
@@ -1619,11 +1615,11 @@ impl DataEngineManager {
         Ok((released, evicted, clean))
     }
 
-    /// Point-in-time storage view: sessions, result cache, local managed
+    /// Point-in-time storage view: actors, result cache, local managed
     /// bytes, tracked VFS artifacts and the reference index snapshot.
     pub fn storage_status(&self) -> StorageStatus {
         StorageStatus {
-            session_count: self.session_count(),
+            agent_count: self.agent_count(),
             result_cache_entries: self.result_cache.len(),
             local_bytes: self.storage.managed_bytes(),
             artifact_count: self.storage.artifact_count(),
@@ -1664,7 +1660,7 @@ impl DataEngineManager {
                     Ok((released, evicted, clean)) => {
                         tracing::info!(
                             output_caches_released = released,
-                            sessions_evicted = evicted,
+                            actors_evicted = evicted,
                             storage_clean = ?clean,
                             "DAG lifecycle maintenance"
                         );
@@ -1683,15 +1679,15 @@ impl DataEngineManager {
 // Legacy spawn helper (backward compatibility for tests)
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Spawn a single-session DataEngine actor and return a client for the
-/// `"default"` session.
+/// Spawn a single-agent DataEngine actor and return a client for the
+/// `"default"` agent.
 ///
 /// This is a convenience wrapper around [`DataEngineManager`] for code that
 /// does not need multi-session support (e.g. tests). New code should use
-/// `DataEngineManager::new` + `client_for_session` directly.
+/// `DataEngineManager::new` + `client_for_agent` directly.
 pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()>) {
     let manager = Box::leak(Box::new(DataEngineManager::new(engine)));
-    let client = manager.client_for_session("default");
+    let client = manager.client_for_agent("default");
 
     // Provide a dummy JoinHandle for API compatibility — the session task is
     // already spawned inside the manager.
@@ -1739,19 +1735,19 @@ mod tests {
     #[test]
     fn auto_restore_env_defaults_on_and_parses_off_values() {
         use std::ffi::OsStr;
-        assert!(session_auto_restore_from(None));
-        assert!(session_auto_restore_from(Some(OsStr::new("1"))));
-        assert!(session_auto_restore_from(Some(OsStr::new(" on "))));
+        assert!(agent_workspace_auto_restore_from(None));
+        assert!(agent_workspace_auto_restore_from(Some(OsStr::new("1"))));
+        assert!(agent_workspace_auto_restore_from(Some(OsStr::new(" on "))));
         for off in ["0", "false", "OFF", "disabled", " off "] {
             assert!(
-                !session_auto_restore_from(Some(OsStr::new(off))),
+                !agent_workspace_auto_restore_from(Some(OsStr::new(off))),
                 "`{off}` must disable auto-restore"
             );
         }
     }
 
     /// A brand-new session must already see the ref's head snapshot in its
-    /// first command: `SessionServer` restores the workspace before entering
+    /// first command: `AgentEngineActor` restores the workspace before entering
     /// its recv loop, so nothing can race ahead of it.
     #[tokio::test]
     async fn session_start_restores_history_ref_head() {
@@ -1778,7 +1774,7 @@ mod tests {
         assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
 
         let manager = DataEngineManager::new(engine);
-        let client = manager.client_for_session_with_ref("agent-restore", "main");
+        let client = manager.client_for_agent_with_ref("agent-restore", "main");
 
         let dot = client.view_dag().await.unwrap();
         assert!(
@@ -1922,7 +1918,7 @@ mod tests {
     }
     fn zero_idle_policy() -> MaintenancePolicy {
         MaintenancePolicy {
-            session_idle: std::time::Duration::ZERO,
+            agent_idle: std::time::Duration::ZERO,
             output_cache_idle: std::time::Duration::ZERO,
             result_cache_ttl: std::time::Duration::from_secs(60),
             result_cache_max_entries: 16,
@@ -1988,7 +1984,7 @@ mod tests {
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
-        let client = manager.client_for_session("idle");
+        let client = manager.client_for_agent("idle");
         install_file_pipeline(&client, &output).await;
         let report = client.run_dag(None).await.unwrap();
         assert!(report.ok, "{report:?}");
@@ -2004,7 +2000,7 @@ mod tests {
         assert_eq!(released, 1, "idle output cache must be released once");
         assert_eq!(evicted, 1);
         assert!(clean.is_none(), "budget disabled by default");
-        assert_eq!(manager.session_count(), 0);
+        assert_eq!(manager.agent_count(), 0);
         assert!(client.get_output("src".to_string()).await.is_err());
     }
 
@@ -2023,13 +2019,13 @@ mod tests {
             directory.path().join("receipts"),
         );
 
-        let first = manager.client_for_session("first");
+        let first = manager.client_for_agent("first");
         install_file_pipeline(&first, &output).await;
         let first_report = first.run_dag(None).await.unwrap();
         assert!(first_report.ok, "{first_report:?}");
         assert!(!node_report(&first_report, "sink").reused);
 
-        let second = manager.client_for_session("second");
+        let second = manager.client_for_agent("second");
         install_file_pipeline(&second, &output).await;
         let second_report = second
             .run_dag_with_options(
@@ -2065,18 +2061,18 @@ mod tests {
             directory.path().join("receipts"),
         );
 
-        let first = manager.client_for_session("dup");
+        let first = manager.client_for_agent("dup");
         install_file_pipeline(&first, &output).await;
         assert!(first.run_dag(None).await.unwrap().ok);
 
         let (_, evicted, _) = manager.maintain_once().await.unwrap();
         assert_eq!(evicted, 1);
-        assert_eq!(manager.session_count(), 0);
+        assert_eq!(manager.agent_count(), 0);
 
         // Recreate under the same id: a brand-new generation whose storage
         // references must survive the old actor's shutdown bookkeeping.
-        let second = manager.client_for_session("dup");
-        assert_eq!(manager.session_count(), 1);
+        let second = manager.client_for_agent("dup");
+        assert_eq!(manager.agent_count(), 1);
         install_file_pipeline(&second, &output).await;
         assert!(second.run_dag(None).await.unwrap().ok);
 
@@ -2085,7 +2081,7 @@ mod tests {
             status
                 .references
                 .iter()
-                .any(|entry| entry.sessions == 1 && entry.path == output.parent().unwrap()),
+                .any(|entry| entry.agents == 1 && entry.path == output.parent().unwrap()),
             "the recreated generation must own its storage references: {:?}",
             status.references
         );
@@ -2100,34 +2096,34 @@ mod tests {
         let manager = DataEngineManager::with_policy_and_roots(
             engine,
             MaintenancePolicy {
-                session_idle: std::time::Duration::from_secs(3600),
+                agent_idle: std::time::Duration::from_secs(3600),
                 output_cache_idle: std::time::Duration::from_secs(3600),
                 ..zero_idle_policy()
             },
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
-        let client = manager.client_for_session("closing");
+        let client = manager.client_for_agent("closing");
         install_file_pipeline(&client, &directory.path().join("out.csv")).await;
 
         // Simulate the eviction pass marking this generation closing.
         {
-            let sessions = manager.sessions.lock().expect("sessions mutex poisoned");
-            sessions
+            let actors = manager.actors.lock().expect("actors mutex poisoned");
+            actors
                 .get("closing")
-                .expect("session must exist")
+                .expect("actor must exist")
                 .closing
                 .store(true, Ordering::SeqCst);
         }
 
         let error = client.run_dag(None).await.unwrap_err();
         assert!(
-            error.to_string().contains("session is shutting down"),
+            error.to_string().contains("engine actor is shutting down"),
             "unexpected error: {error}"
         );
 
         // The next client for the same id transparently gets a new generation.
-        let fresh = manager.client_for_session("closing");
+        let fresh = manager.client_for_agent("closing");
         assert!(fresh.run_dag(None).await.unwrap().ok);
     }
 
@@ -2140,7 +2136,7 @@ mod tests {
         let manager = DataEngineManager::with_policy_and_roots(
             engine,
             MaintenancePolicy {
-                session_idle: std::time::Duration::from_secs(3600),
+                agent_idle: std::time::Duration::from_secs(3600),
                 output_cache_idle: std::time::Duration::from_secs(3600),
                 result_cache_ttl: std::time::Duration::ZERO,
                 ..zero_idle_policy()
@@ -2148,7 +2144,7 @@ mod tests {
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
-        let client = manager.client_for_session("ttl");
+        let client = manager.client_for_agent("ttl");
         install_file_pipeline(&client, &directory.path().join("out.csv")).await;
         assert!(client.run_dag(None).await.unwrap().ok);
         // TTL=0 expires entries the moment they are recorded, and the same
@@ -2181,7 +2177,7 @@ mod tests {
         let manager = DataEngineManager::with_policy_and_roots(
             engine,
             MaintenancePolicy {
-                session_idle: std::time::Duration::from_secs(3600),
+                agent_idle: std::time::Duration::from_secs(3600),
                 output_cache_idle: std::time::Duration::from_secs(3600),
                 ..zero_idle_policy()
             },
@@ -2189,7 +2185,7 @@ mod tests {
             directory.path().join("receipts"),
         );
 
-        let first = manager.client_for_session("origin");
+        let first = manager.client_for_agent("origin");
         install_file_pipeline(&first, &output).await;
         assert!(first.run_dag(None).await.unwrap().ok);
         assert_eq!(manager.result_cache.len(), 1);
@@ -2197,7 +2193,7 @@ mod tests {
         // Missing file: restore must skip, the node re-executes (and
         // recreates the file).
         std::fs::remove_file(&output).unwrap();
-        let second = manager.client_for_session("missing");
+        let second = manager.client_for_agent("missing");
         install_file_pipeline(&second, &output).await;
         let report = second
             .run_dag_with_options(
@@ -2212,12 +2208,12 @@ mod tests {
         assert!(report.ok, "{report:?}");
         assert!(
             !node_report(&report, "sink").reused,
-            "a deleted output file must not be reused across sessions"
+            "a deleted output file must not be reused across agents"
         );
 
         // Changed file: a different on-disk fingerprint is also skipped.
         std::fs::write(&output, "tampered with much longer content").unwrap();
-        let third = manager.client_for_session("changed");
+        let third = manager.client_for_agent("changed");
         install_file_pipeline(&third, &output).await;
         let report = third
             .run_dag_with_options(
@@ -2232,7 +2228,7 @@ mod tests {
         assert!(report.ok, "{report:?}");
         assert!(
             !node_report(&report, "sink").reused,
-            "a fingerprint-mismatched output file must not be reused across sessions"
+            "a fingerprint-mismatched output file must not be reused across agents"
         );
     }
 }

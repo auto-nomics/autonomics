@@ -1,9 +1,9 @@
-//! Central lifecycle services for the per-session DataEngine actors.
+//! Central lifecycle services for the per-agent DataEngine actors.
 //!
 //! [`DataEngineManager`](super::DataEngineManager) owns one instance of each
-//! service. They provide the process-wide policies that individual session
+//! service. They provide the process-wide policies that individual actors
 //! engines cannot safely decide alone: idle eviction, output-cache expiry,
-//! cross-session file-result reuse, active references, run-aware local
+//! cross-agent file-result reuse, active references, run-aware local
 //! cleanup, and a managed-root byte budget.
 //!
 //! # Storage governance semantics (conservative)
@@ -12,7 +12,7 @@
 //!
 //! - **Local managed roots** (`AUTONOMICS_DAG_WORK_ROOT`,
 //!   `AUTONOMICS_DAG_RECEIPTS_ROOT`): workdirs and receipt roots, counted per
-//!   run / live session / result-cache owner. These are the only things the
+//!   run / live actor / result-cache owner. These are the only things the
 //!   run-aware budget cleaner may delete.
 //! - **VFS artifacts** (`vfs://` URIs): counted the same way and reported
 //!   through [`StorageCoordinator::artifact_snapshot`] and
@@ -47,10 +47,10 @@ struct CachedResult {
     last_access: Instant,
 }
 
-/// Fingerprint-addressed file-result cache shared by all sessions.
+/// Fingerprint-addressed file-result cache shared by all agents.
 ///
 /// Only file outputs participate. DataFrame and Channel values remain
-/// session-local because they are not durable values and cannot be restored
+/// actor-local because they are not durable values and cannot be restored
 /// safely from a report.
 #[derive(Debug, Default)]
 pub struct ResultCache {
@@ -71,10 +71,10 @@ impl ResultCache {
     /// Record successful file outputs from a completed run.
     ///
     /// A fingerprint includes node kind/spec, input identities, engine version
-    /// and plugin identity, so an equal fingerprint is the cross-session reuse
+    /// and plugin identity, so an equal fingerprint is the cross-agent reuse
     /// key. Missing local files are rejected; immutable VFS files are accepted.
-    pub fn record_report(&self, session_id: &str, report: &RunReport) -> usize {
-        self.record_report_collected(session_id, report).0.len()
+    pub fn record_report(&self, agent_id: &str, report: &RunReport) -> usize {
+        self.record_report_collected(agent_id, report).0.len()
     }
 
     /// [`Self::record_report`] returning the outputs it cached and the
@@ -82,7 +82,7 @@ impl ResultCache {
     /// references in lockstep.
     pub fn record_report_collected(
         &self,
-        _session_id: &str,
+        _agent_id: &str,
         report: &RunReport,
     ) -> (Vec<CachedFileOutput>, Vec<CachedFileOutput>) {
         let mut cached = Vec::new();
@@ -223,23 +223,23 @@ fn output_available(file: &FileRef) -> bool {
 
 /// One active reference to a managed local directory.
 ///
-/// `sessions` counts live session owners, `cache` counts result-cache owners;
+/// `agents` counts live actor owners, `cache` counts result-cache owners;
 /// either protects the path from run-aware cleanup. `runs` records which
 /// historical runs mention the path (informational, for status reporting).
 #[derive(Debug, Clone, Default)]
 struct StorageReferences {
     runs: HashSet<String>,
-    sessions: HashSet<String>,
+    agents: HashSet<String>,
     cache: usize,
 }
 
 impl StorageReferences {
     fn protected(&self) -> bool {
-        !self.sessions.is_empty() || self.cache > 0
+        !self.agents.is_empty() || self.cache > 0
     }
 
     fn empty(&self) -> bool {
-        self.runs.is_empty() && self.sessions.is_empty() && self.cache == 0
+        self.runs.is_empty() && self.agents.is_empty() && self.cache == 0
     }
 }
 
@@ -247,7 +247,7 @@ impl StorageReferences {
 #[derive(Debug, Clone, Default)]
 struct ArtifactUsage {
     runs: HashSet<String>,
-    sessions: HashSet<String>,
+    agents: HashSet<String>,
     bytes: u64,
 }
 
@@ -256,7 +256,7 @@ struct ArtifactUsage {
 pub struct ArtifactEntry {
     pub uri: String,
     pub runs: usize,
-    pub sessions: usize,
+    pub agents: usize,
     pub logical_bytes: u64,
 }
 
@@ -265,7 +265,7 @@ pub struct ArtifactEntry {
 pub struct ReferenceEntry {
     pub path: PathBuf,
     pub runs: usize,
-    pub sessions: usize,
+    pub agents: usize,
     pub cache_owners: usize,
 }
 
@@ -273,7 +273,7 @@ pub struct ReferenceEntry {
 /// [`DataEngineManager::storage_status`](super::DataEngineManager::storage_status).
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct StorageStatus {
-    pub session_count: usize,
+    pub agent_count: usize,
     pub result_cache_entries: usize,
     /// Bytes under the local managed roots (workdirs + receipts).
     pub local_bytes: u64,
@@ -286,7 +286,7 @@ pub struct StorageStatus {
 }
 
 /// Tracks local workdirs/receipts and VFS artifacts currently retained by
-/// live sessions, the result cache, and recorded history.
+/// live actors, the result cache, and recorded history.
 #[derive(Debug, Default)]
 pub struct StorageCoordinator {
     work_root: PathBuf,
@@ -314,14 +314,14 @@ impl StorageCoordinator {
     }
 
     /// Retain every managed local path and VFS artifact mentioned by a run
-    /// report for its producing session. This is the live-session half of
+    /// report for its producing agent. This is the live-actor half of
     /// reference counting; history-based retention is recomputed by run-aware
     /// cleanup.
-    pub fn retain_report(&self, session_id: &str, report: &RunReport) -> usize {
+    pub fn retain_report(&self, agent_id: &str, report: &RunReport) -> usize {
         let run_id = report
             .run_id
             .clone()
-            .unwrap_or_else(|| format!("session:{session_id}"));
+            .unwrap_or_else(|| format!("session:{agent_id}"));
         let mut retained = 0;
         let value = match serde_json::to_value(report) {
             Ok(value) => value,
@@ -332,7 +332,7 @@ impl StorageCoordinator {
             for path in report_local_roots_from_value(&value, &self.work_root, &self.receipt_root) {
                 let entry = refs.entry(path).or_default();
                 entry.runs.insert(run_id.clone());
-                entry.sessions.insert(session_id.to_string());
+                entry.agents.insert(agent_id.to_string());
                 retained += 1;
             }
         }
@@ -341,7 +341,7 @@ impl StorageCoordinator {
             for (uri, bytes) in vfs_artifacts_from_value(&value) {
                 let entry = artifacts.entry(uri).or_default();
                 entry.runs.insert(run_id.clone());
-                entry.sessions.insert(session_id.to_string());
+                entry.agents.insert(agent_id.to_string());
                 if entry.bytes == 0 {
                     entry.bytes = bytes;
                 }
@@ -353,7 +353,7 @@ impl StorageCoordinator {
 
     /// Add a result-cache owner reference for every managed local path behind
     /// `outputs`, so run-aware cleanup cannot delete a file that a future
-    /// cross-session restore may still consume.
+    /// cross-agent restore may still consume.
     pub fn retain_cache_owner(&self, outputs: &[CachedFileOutput]) -> usize {
         let mut refs = self.references.lock();
         let mut retained = 0;
@@ -392,12 +392,12 @@ impl StorageCoordinator {
         released
     }
 
-    pub fn release_session(&self, session_id: &str) -> usize {
+    pub fn release_agent(&self, agent_id: &str) -> usize {
         let mut released = 0;
         {
             let mut refs = self.references.lock();
             for entry in refs.values_mut() {
-                if entry.sessions.remove(session_id) {
+                if entry.agents.remove(agent_id) {
                     released += 1;
                 }
             }
@@ -405,20 +405,20 @@ impl StorageCoordinator {
         }
         let mut artifacts = self.artifacts.lock();
         for entry in artifacts.values_mut() {
-            if entry.sessions.remove(session_id) {
+            if entry.agents.remove(agent_id) {
                 released += 1;
             }
         }
-        artifacts.retain(|_, entry| !entry.runs.is_empty() || !entry.sessions.is_empty());
+        artifacts.retain(|_, entry| !entry.runs.is_empty() || !entry.agents.is_empty());
         released
     }
 
-    /// Count managed local paths protected by at least one live session.
+    /// Count managed local paths protected by at least one live actor.
     pub fn active_reference_count(&self) -> usize {
         self.references
             .lock()
             .iter()
-            .filter(|(_, entry)| !entry.sessions.is_empty())
+            .filter(|(_, entry)| !entry.agents.is_empty())
             .count()
     }
 
@@ -453,7 +453,7 @@ impl StorageCoordinator {
             .map(|(path, entry)| ReferenceEntry {
                 path: path.clone(),
                 runs: entry.runs.len(),
-                sessions: entry.sessions.len(),
+                agents: entry.agents.len(),
                 cache_owners: entry.cache,
             })
             .collect()
@@ -466,7 +466,7 @@ impl StorageCoordinator {
             .map(|(uri, entry)| ArtifactEntry {
                 uri: uri.clone(),
                 runs: entry.runs.len(),
-                sessions: entry.sessions.len(),
+                agents: entry.agents.len(),
                 logical_bytes: entry.bytes,
             })
             .collect()
@@ -474,7 +474,7 @@ impl StorageCoordinator {
 
     /// Rebuild historical run references (local roots + VFS artifacts) from
     /// `DagHistory` into the index, so [`StorageStatus`] reflects every
-    /// recorded run rather than only live sessions. Run-aware cleanup
+    /// recorded run rather than only live actors. Run-aware cleanup
     /// performs the same sync as part of [`Self::classify_candidates`].
     pub async fn sync_history_references(&self, history: &DagHistory) -> Result<(), String> {
         let runs = history
@@ -508,7 +508,7 @@ impl StorageCoordinator {
     /// Classify managed local directories for run-aware cleanup: rebuild the
     /// historical reference index from `history`, then collect directories
     /// that belong only to runs outside the newest `keep_runs` and are not
-    /// protected by a live session or the result cache.
+    /// protected by a live actor or the result cache.
     async fn classify_candidates(
         &self,
         history: &DagHistory,
@@ -633,7 +633,7 @@ impl StorageCoordinator {
     /// Enforce the local byte budget: delete managed local directories of old
     /// runs (oldest first) until usage drops to 75% of `max_bytes`.
     ///
-    /// Live-session and result-cache references are never deleted. Immutable
+    /// Live-actor and result-cache references are never deleted. Immutable
     /// VFS artifacts are indexed and reported, but never touched.
     pub async fn run_aware_clean(
         &self,
@@ -696,7 +696,7 @@ pub struct RunAwareCleanReport {
     pub keep_runs: usize,
     pub scanned_runs: usize,
     pub candidate_directories: usize,
-    /// Old-run directories kept because a live session or the result cache
+    /// Old-run directories kept because a live actor or the result cache
     /// still references them.
     pub protected_directories: usize,
     pub removed: usize,
@@ -714,7 +714,7 @@ pub struct RunAwareCleanReport {
 /// Runtime lifecycle policy, resolved from the environment.
 #[derive(Debug, Clone, Copy)]
 pub struct MaintenancePolicy {
-    pub session_idle: Duration,
+    pub agent_idle: Duration,
     pub output_cache_idle: Duration,
     pub result_cache_ttl: Duration,
     pub result_cache_max_entries: usize,
@@ -739,7 +739,7 @@ impl MaintenancePolicy {
                 .unwrap_or(default)
         };
         Self {
-            session_idle: Duration::from_secs(secs("AUTONOMICS_DAG_SESSION_IDLE_SECS", 24 * 3600)),
+            agent_idle: Duration::from_secs(secs("AUTONOMICS_DAG_SESSION_IDLE_SECS", 24 * 3600)),
             output_cache_idle: Duration::from_secs(secs(
                 "AUTONOMICS_DAG_OUTPUT_CACHE_IDLE_SECS",
                 3600,
@@ -768,27 +768,27 @@ impl MaintenancePolicy {
     }
 }
 
-/// Tracks the most recent actor command per session.
+/// Tracks the most recent actor command per agent.
 #[derive(Debug, Default)]
-pub struct SessionTracker {
+pub struct AgentActivityTracker {
     last_activity: Mutex<HashMap<String, Instant>>,
 }
 
-impl SessionTracker {
-    pub fn touch(&self, session_id: &str) {
+impl AgentActivityTracker {
+    pub fn touch(&self, agent_id: &str) {
         self.last_activity
             .lock()
-            .insert(session_id.to_string(), Instant::now());
+            .insert(agent_id.to_string(), Instant::now());
     }
 
-    pub fn forget(&self, session_id: &str) {
-        self.last_activity.lock().remove(session_id);
+    pub fn forget(&self, agent_id: &str) {
+        self.last_activity.lock().remove(agent_id);
     }
 
-    pub fn is_idle(&self, session_id: &str, idle: Duration) -> bool {
+    pub fn is_idle(&self, agent_id: &str, idle: Duration) -> bool {
         self.last_activity
             .lock()
-            .get(session_id)
+            .get(agent_id)
             .is_some_and(|last| last.elapsed() >= idle)
     }
 }

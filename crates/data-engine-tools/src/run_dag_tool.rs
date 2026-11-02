@@ -348,7 +348,7 @@ impl ToolFunction for RunDagTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         // Non-streaming path (used when called directly, not via the toolset).
-        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let trigger = Some(format!("agent:{}", self.client.agent_id()));
         let options = run_options(&input)?;
         let report = self
             .client
@@ -370,7 +370,7 @@ impl ToolFunction for RunDagTool {
     ) -> Result<ToolResult, ToolError> {
         let parsed = serde_json::from_value::<Self::Input>(input)?;
 
-        let trigger = Some(format!("agent:{}", self.client.session_id()));
+        let trigger = Some(format!("agent:{}", self.client.agent_id()));
         let options = run_options(&parsed)?;
         let (mut event_rx, reply_rx) =
             self.client

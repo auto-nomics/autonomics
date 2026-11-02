@@ -476,7 +476,7 @@ impl SharedInfra {
         // as the session key. Two agents must never share a DAG graph, or
         // add_node / add_edge / run_dag calls from one agent would mutate the
         // other agent's DAG.
-        let engine_client = self.engine_manager.client_for_session(agent_path.as_str());
+        let engine_client = self.engine_manager.client_for_agent(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = Vec::new();
 
