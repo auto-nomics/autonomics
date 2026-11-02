@@ -116,7 +116,7 @@ pub struct NodeCtx {
     /// tokio worker thread and starve agent message processing.
     ///
     /// Sized to `num_cpus.saturating_sub(2).max(1)` — leaving ≥ 2 worker
-    /// threads for `SessionServer` actors and tool execution. `None` in
+    /// threads for `AgentEngineActor`s and tool execution. `None` in
     /// tests and legacy code paths (unlimited).
     pub global_sem: Option<Arc<tokio::sync::Semaphore>>,
 }

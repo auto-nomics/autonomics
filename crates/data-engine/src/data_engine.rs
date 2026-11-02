@@ -174,7 +174,7 @@ impl DataEngine {
     ) -> Self {
         let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
         // Global concurrency limiter shared across all agents.
-        // Sized to leave ≥ 2 worker threads for SessionServer actors +
+        // Sized to leave ≥ 2 worker threads for AgentEngineActors +
         // tool execution, preventing CPU-bound node work from starving
         // inter-agent communication on the shared tokio runtime.
         let global_permits = std::thread::available_parallelism()
