@@ -1,16 +1,15 @@
-//! Session — a single conversation within an Agent.
+//! Context — the agent's single persistent working context.
 //!
-//! An [`Agent`](crate::Agent) owns one or more `Session`s. Each Session has
-//! independent conversation memory, lifecycle, tool execution state, and
-//! cancellation token, but shares the model, tool registry, storage, and
-//! system-prompt configuration with its siblings.
-//!
-//! Currently only one session is *active* at a time (single-active model).
-//! Switching sessions pauses the current one and activates the target.
+//! An [`Agent`](crate::Agent) owns exactly one `Context` (created on its
+//! first message, restored from the bound `agent_contexts` record on
+//! restart). Independent work creates another agent. The context owns the
+//! conversation memory, lifecycle, tool execution state, and cancellation
+//! token; the model, tool registry, storage, and system-prompt
+//! configuration are shared agent-level resources on [`AgentCore`].
 //!
 //! ## Merged Memory Model
 //!
-//! Session directly holds its conversation data (`messages`, `summary`,
+//! Context directly holds its conversation data (`messages`, `summary`,
 //! `ancestor_summaries`). Compaction operates in-place for model context: the
 //! head messages are summarized into `ancestor_summaries`, and only the recent
 //! tail is retained in `messages`. The pre-compaction transcript is archived
@@ -18,22 +17,25 @@
 //!
 //! ## Module layout
 //!
-//! The session implementation is split across submodules by concern:
+//! The context implementation is split across submodules by concern:
 //!
-//! - `error` — session-state errors (compaction failures, orphaned
+//! - `error` — context-state errors (compaction failures, orphaned
 //!   tool_results).
-//! - `shared` — `AgentCore`: stable resources shared by all sessions of one
-//!   agent (model, storage, tool registry, event channel).
+//! - `core` — `AgentCore`: stable agent-level resources (model, storage,
+//!   tool registry, event channel).
 //! - `messages` — conversation storage: `remember` / `add_message` with
 //!   tool_result adjacency repair, `render_context`, `sanitize_and_persist`.
 //! - `compaction` — context compaction: head/tail selection, summarization
 //!   prompt, token estimation, old-tool-output pruning.
 //! - `tool_images` — re-attaching tool-returned images for vision models.
-//! - `workflow` — the agent loop: `run_session`, `agent_workflow`, the
+//! - `workflow` — the agent loop: `run_context`, `agent_workflow`, the
 //!   streaming `request`, retries, and background wait watchers.
 //!
-//! This module keeps the `Session` / `SessionState` types themselves, the
-//! constructors, lifecycle accessors, and persistence glue.
+//! This module keeps the `Context` / `ContextState` types themselves, the
+//! constructors, lifecycle accessors, and persistence glue. Durable
+//! history records keep the storage-layer `session` naming (sessions
+//! table, `PersistOp::StartSession`, ...) — those name the archived
+//! record, not this live object.
 
 pub mod error;
 
@@ -52,6 +54,7 @@ use std::time::Instant;
 
 use agentik_sdk::types::AgentEvent;
 use agentik_sdk::types::messages::{ContentBlock, Message, Role};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
@@ -62,9 +65,9 @@ use crate::error::Result;
 use crate::lifecycle::AgentLifecycle;
 use crate::storage::{AgentSnapshot, AgentStorage, PersistOp};
 use crate::tools::Toolset;
-use agentik_types::{SessionInfo, SessionTelemetry, TurnTelemetry};
+use agentik_types::{ContextInfo, ContextTelemetry, TurnTelemetry};
 
-// ─────────────────────────── SessionState ───────────────────────────
+// ─────────────────────────── ContextState ───────────────────────────
 
 /// Serializable conversation state — the snapshot payload.
 ///
@@ -72,7 +75,7 @@ use agentik_types::{SessionInfo, SessionTelemetry, TurnTelemetry};
 /// reconstruct a session's conversation: the live messages, any compaction
 /// summary for this session, and ancestor summaries from prior compactions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SessionState {
+pub struct ContextState {
     pub messages: Vec<Message>,
     pub summary: Option<String>,
     /// Summaries from compaction ancestors, oldest first.
@@ -80,7 +83,7 @@ pub struct SessionState {
     #[serde(default)]
     pub ancestor_summaries: Vec<String>,
     #[serde(default)]
-    pub telemetry: SessionTelemetry,
+    pub telemetry: ContextTelemetry,
 }
 
 /// One conversation turn — the span from a resting lifecycle state
@@ -88,7 +91,7 @@ pub struct SessionState {
 /// however many LLM round-trips that takes. A tool call, its results, and
 /// the follow-up request are all *within* one turn.
 ///
-/// Owned by [`Session`] as `Option<Turn>`: `None` means no turn is open.
+/// Owned by [`Context`] as `Option<Turn>`: `None` means no turn is open.
 /// A turn stays open across a `Waiting` pause (background `wait_task`), so
 /// a watcher resuming the session reuses it rather than starting a new one.
 ///
@@ -100,14 +103,14 @@ struct Turn {
     id: Uuid,
     /// Parent agent, when this turn was opened by a delegation.
     delegation_id: Option<Uuid>,
-    /// Session telemetry as of turn start; the turn's reported usage is the
+    /// Context telemetry as of turn start; the turn's reported usage is the
     /// delta against this.
-    baseline: SessionTelemetry,
+    baseline: ContextTelemetry,
     timing: TurnTiming,
 }
 
 impl Turn {
-    fn new(delegation_id: Option<Uuid>, baseline: SessionTelemetry) -> Self {
+    fn new(delegation_id: Option<Uuid>, baseline: ContextTelemetry) -> Self {
         Self {
             id: Uuid::new_v4(),
             delegation_id,
@@ -123,8 +126,8 @@ impl Turn {
     /// second settle would not return zero — it would re-report the full
     /// totals against the now-empty baseline. Callers therefore take the
     /// turn out of the session before settling it (see
-    /// [`Session::finish_turn`]), which also makes a double close a no-op.
-    fn settle(&mut self, current: &SessionTelemetry) -> (TurnTelemetry, u64) {
+    /// [`Context::finish_turn`]), which also makes a double close a no-op.
+    fn settle(&mut self, current: &ContextTelemetry) -> (TurnTelemetry, u64) {
         let elapsed_ms = self.timing.pause();
         let baseline = std::mem::take(&mut self.baseline);
         (
@@ -159,11 +162,11 @@ impl TurnTiming {
     }
 }
 
-// ─────────────────────────── Session ───────────────────────────
+// ─────────────────────────── Context ───────────────────────────
 
 /// One conversation within an agent. Owns the conversation data (formerly
 /// Memory), lifecycle, toolset, and cancellation token.
-pub struct Session {
+pub struct Context {
     pub id: Uuid,
     pub title: Option<String>,
     pub created_at: i64,
@@ -174,7 +177,7 @@ pub struct Session {
     pub summary: Option<String>,
     /// Summaries from compaction ancestors, oldest first.
     pub ancestor_summaries: Vec<String>,
-    pub telemetry: SessionTelemetry,
+    pub telemetry: ContextTelemetry,
     pub parent_session_id: Option<Uuid>,
     pub fork_point_message_id: Option<String>,
 
@@ -209,8 +212,8 @@ pub struct Session {
     pub(crate) shared: Arc<AgentCore>,
 }
 
-impl Session {
-    /// Build a Session wired to a freshly-constructed `AgentCore`. Used
+impl Context {
+    /// Build a Context wired to a freshly-constructed `AgentCore`. Used
     /// only by unit tests that exercise `remember` / `add_message` without a
     /// full agent bootstrap.
     #[cfg(test)]
@@ -228,7 +231,7 @@ impl Session {
             shared.tasks.clone(),
             shared.event_tx(),
         );
-        // The same Arc must back both the Toolset context and the Session
+        // The same Arc must back both the Toolset context and the Context
         // field, or `update_plan` writes and `set_plan` restores would
         // diverge from what `inject_state_notices` reads.
         toolset.set_session_plan(id, Arc::clone(&plan));
@@ -242,7 +245,7 @@ impl Session {
             messages: Vec::new(),
             summary: None,
             ancestor_summaries: Vec::new(),
-            telemetry: SessionTelemetry::default(),
+            telemetry: ContextTelemetry::default(),
             parent_session_id: None,
             fork_point_message_id: None,
             persist_tx,
@@ -262,7 +265,7 @@ impl Session {
     pub(crate) fn new_with_state(
         id: Uuid,
         shared: Arc<AgentCore>,
-        state: SessionState,
+        state: ContextState,
         cancel_token: CancellationToken,
     ) -> Self {
         let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
@@ -375,7 +378,7 @@ impl Session {
                 .as_millis() as i64,
             agent_id: self.shared.id,
             agent_status: *self.lifecycle.status(),
-            state: SessionState {
+            state: ContextState {
                 messages: self.messages.clone(),
                 summary: self.summary.clone(),
                 ancestor_summaries: self.ancestor_summaries.clone(),
@@ -421,10 +424,10 @@ impl Session {
     }
 }
 
-// ─────────────────────────── SessionInfo ───────────────────────────
+// ─────────────────────────── ContextInfo ───────────────────────────
 
-impl From<&Session> for SessionInfo {
-    fn from(s: &Session) -> Self {
+impl From<&Context> for ContextInfo {
+    fn from(s: &Context) -> Self {
         Self {
             id: s.id,
             title: s.title.clone(),
@@ -439,12 +442,12 @@ impl From<&Session> for SessionInfo {
 
 // ── Test support ────────────────────────────────────────────────────
 
-/// Construct a Session with no model / no storage / no events wired.
+/// Construct a Context with no model / no storage / no events wired.
 /// Sufficient for testing `remember` / `add_message` paths in isolation.
 #[cfg(test)]
-pub(crate) fn make_test_session() -> Session {
+pub(crate) fn make_test_context() -> Context {
     let shared = AgentCore::new_for_tests();
-    Session::new_for_tests(shared, agentik_types::AgentPath::root())
+    Context::new_for_tests(shared, agentik_types::AgentPath::root())
 }
 
 #[cfg(test)]
@@ -454,10 +457,10 @@ mod tests {
 
     /// Two sessions over one shared must never observe each other's plans.
     #[test]
-    fn independent_sessions_have_independent_plans() {
+    fn independent_contexts_have_independent_plans() {
         let shared = AgentCore::new_for_tests();
-        let mut a = Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
-        let b = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut a = Context::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        let b = Context::new_for_tests(shared, agentik_types::AgentPath::root());
 
         a.set_plan(agentik_types::AgentPlan {
             revision: 1,
@@ -476,7 +479,7 @@ mod tests {
     /// when it opened — not the session's lifetime totals.
     #[test]
     fn turn_settles_usage_as_a_delta_from_its_baseline() {
-        let mut baseline = SessionTelemetry::default();
+        let mut baseline = ContextTelemetry::default();
         baseline.record_usage(&agentik_types::Usage {
             input_tokens: 1_000,
             output_tokens: 100,
@@ -506,7 +509,7 @@ mod tests {
     fn a_taken_turn_cannot_be_settled_twice() {
         let shared = AgentCore::new_for_tests();
         let mut session =
-            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+            Context::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
 
         session.begin_turn(None);
         let taken = session.turn.take().expect("begin_turn opens one");
@@ -515,7 +518,7 @@ mod tests {
             "a taken turn is gone, so the second close is a no-op"
         );
 
-        let mut current = SessionTelemetry::default();
+        let mut current = ContextTelemetry::default();
         current.record_usage(&agentik_types::Usage {
             input_tokens: 900,
             output_tokens: 90,
@@ -554,4 +557,20 @@ mod tests {
             "total elapsed spans both active stretches"
         );
     }
+}
+
+// ── Dynamic context injection ─────────────────────────
+// (merged from the former top-level `context.rs` module)
+
+/// Optional callback for dynamic context injection.
+///
+/// If provided, the agent calls `poll()` at each loop boundary (before
+/// each LLM request). When it returns `Some(text)`, the text is injected
+/// as a user message into memory. Return `None` to skip.
+///
+/// This replaces the previous `AgentContext` reactive store with a much
+/// simpler callback interface.
+#[async_trait]
+pub trait ContextProvider: Send + Sync {
+    async fn poll(&self) -> Option<String>;
 }

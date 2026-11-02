@@ -175,7 +175,7 @@ impl ToolFunction for UpdatePlanTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::SessionToolCtx;
+    use crate::tools::ContextToolCtx;
     use agentik_types::StepStatus;
     use arc_swap::ArcSwap;
 
@@ -187,7 +187,7 @@ mod tests {
     fn test_ctx() -> (std::sync::Arc<ArcSwap<AgentPlan>>, ToolContext) {
         let plan = Arc::new(ArcSwap::new(Arc::new(AgentPlan::new())));
         let ctx = ToolContext {
-            session: Some(SessionToolCtx {
+            session: Some(ContextToolCtx {
                 session_id: uuid::Uuid::new_v4(),
                 plan: Arc::clone(&plan),
             }),
@@ -297,7 +297,7 @@ mod tests {
         let session_id = uuid::Uuid::new_v4();
         let plan = Arc::new(ArcSwap::new(Arc::new(AgentPlan::new())));
         let ctx = ToolContext {
-            session: Some(SessionToolCtx { session_id, plan }),
+            session: Some(ContextToolCtx { session_id, plan }),
             ..Default::default()
         };
 

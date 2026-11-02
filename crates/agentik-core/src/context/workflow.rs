@@ -25,11 +25,11 @@ use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use agentik_sdk::AgentMessageExt;
 use agentik_types::{AgentPlan, TurnExecutionStatus};
 
-use super::Session;
+use super::Context;
 
 const MAX_RETRY_BACKOFF_SECS: u64 = 30;
 
-/// What the session loop should do after one [`Session::run_turn`].
+/// What the session loop should do after one [`Context::run_turn`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TurnOutcome {
     /// Tool calls were executed; the agent needs another API round-trip.
@@ -38,13 +38,13 @@ enum TurnOutcome {
     Finished,
     /// The agent parked on a background `wait_task`. The session loop
     /// exits without emitting `Done`; a watcher injects a message later
-    /// that re-enters [`Session::run_session`].
+    /// that re-enters [`Context::run_context`].
     Paused,
     /// Cancellation was observed during the turn.
     Cancelled,
 }
 
-impl Session {
+impl Context {
     // ── Turn lifecycle ─────────────────────────────────────
 
     /// Open a turn, reusing an open turn after a background-task wait.
@@ -91,16 +91,16 @@ impl Session {
         });
     }
 
-    // ── Session loop ──────────────────────────────────────
+    // ── Context loop ──────────────────────────────────────
 
-    /// Run one "session": a sequence of [`Session::run_turn`] iterations
+    /// Run one "session": a sequence of [`Context::run_turn`] iterations
     /// until the agent goes idle, hits an error, or is cancelled.
     ///
     /// This is the **session** level of the `agent -> session -> turn`
     /// hierarchy. It owns one-time setup (toolset cancel wiring, opening
     /// the WAL session) and the loop itself; the per-iteration work lives
-    /// in [`Session::run_turn`], which owns the turn lifecycle.
-    pub(crate) async fn run_session(
+    /// in [`Context::run_turn`], which owns the turn lifecycle.
+    pub(crate) async fn run_context(
         &mut self,
         internal_event_tx: &UnboundedSender<InternalEvent>,
         rx: &mut UnboundedReceiver<InternalEvent>,
@@ -162,15 +162,15 @@ impl Session {
     }
 
     /// Drive one iteration of the agent loop — drain queued events, run a
-    /// single [`Session::agent_workflow`] step, then drain control events —
+    /// single [`Context::agent_workflow`] step, then drain control events —
     /// and report what the session loop should do next.
     ///
     /// A **turn** is the whole span from a resting lifecycle state
     /// (`Idle` / `Error` / `Cancelled` / `Waiting`) back to a resting one,
     /// however many iterations that takes: tool call → results → follow-up
     /// request are all *within* one turn. The turn lifecycle
-    /// ([`Session::begin_turn`] / [`Session::finish_turn`]) therefore
-    /// brackets the whole loop in [`Session::run_session`], not each
+    /// ([`Context::begin_turn`] / [`Context::finish_turn`]) therefore
+    /// brackets the whole loop in [`Context::run_context`], not each
     /// iteration. Closing a turn per iteration would make every tool round
     /// look like a completed turn to observers such as the headless
     /// runner, which terminates the whole run on the first
@@ -263,15 +263,15 @@ impl Session {
 
         // Drain control/notification events that arrived during this turn.
         let mut terminal = false;
-        let mut session_mgmt_pending = false;
+        let mut control_pending = false;
         while let Ok(event) = rx.try_recv() {
             if matches!(
                 event,
-                InternalEvent::ListSessions | InternalEvent::Shutdown
+                InternalEvent::ListContexts | InternalEvent::Shutdown
             ) {
                 // Re-queue for the outer Agent::run() loop.
                 let _ = internal_event_tx.send(event);
-                session_mgmt_pending = true;
+                control_pending = true;
                 break;
             }
             if !self.apply_internal_event(event).await {
@@ -279,7 +279,7 @@ impl Session {
                 break;
             }
         }
-        if session_mgmt_pending {
+        if control_pending {
             self.pause_telemetry();
             self.stop();
             self.finish_turn(TurnExecutionStatus::Completed);
@@ -384,9 +384,9 @@ impl Session {
                 self.toolset.set_cancel_token(token);
                 true
             }
-            // Session management events are handled by Agent, never reach
-            // a Session. Return true (no-op) defensively.
-            InternalEvent::ListSessions => true,
+            // Context management events are handled by Agent, never reach
+            // a Context. Return true (no-op) defensively.
+            InternalEvent::ListContexts => true,
         }
     }
 
@@ -482,7 +482,7 @@ impl Session {
         // detect those results, spawn background watchers, and keep the
         // lifecycle as `Waiting` so the session loop exits — just like going
         // `Idle`. When a watcher fires, it injects a message that re-enters
-        // `run_session`.
+        // `run_context`.
         let mut registered_waits = false;
         for tr in &tool_results {
             // Match the result back to its toolcall to see if it was wait_task.
@@ -547,7 +547,7 @@ impl Session {
         if registered_waits {
             self.pause_telemetry();
             // Keep lifecycle as `Waiting` — the session loop will exit.
-            // The watcher(s) will inject messages to re-enter run_session.
+            // The watcher(s) will inject messages to re-enter run_context.
             // Emit tool results so the UI shows the "waiting" status.
             for tr in &tool_results {
                 self.shared.send_event(AgentEvent::ToolResult {
@@ -855,7 +855,7 @@ impl Session {
     /// it injects a [`InternalEvent::MessageInject`] to wake the agent.
     ///
     /// The agent's session loop has already exited (lifecycle = `Waiting`),
-    /// so the injected message re-enters `run_session` and the LLM receives
+    /// so the injected message re-enters `run_context` and the LLM receives
     /// the result as a new user message.
     async fn wait_watcher(
         tasks: Arc<tokio::sync::RwLock<TaskStore>>,
@@ -1195,7 +1195,7 @@ mod tests {
         let model = Model::with_client(dummy_model_info("sys-hash"), mock);
 
         // 与 AgentBuilder 相同的方式注册 update_plan。plan 状态是
-        // per-session 的:Session::new_for_tests 内部创建并接线到
+        // per-session 的:Context::new_for_tests 内部创建并接线到
         // Toolset 的 session ctx,这里只需要注册工具本身。
         let mut registry = crate::tools::ToolRegistry::new();
         registry
@@ -1223,7 +1223,7 @@ mod tests {
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
 
         session.remember(Message::user("hello")).unwrap();
         session.agent_workflow(&internal_tx, None).await.unwrap();
@@ -1297,11 +1297,11 @@ mod tests {
 
     /// 迁移核心行为:plan 是 per-session 状态。同一个 AgentCore(即同
     /// 一个 ToolRegistry / 同一个注册的 update_plan 工具)上跑两个
-    /// Session,A 里模型调用 update_plan 只改 A 的 plan;B 保持为空。
+    /// Context,A 里模型调用 update_plan 只改 A 的 plan;B 保持为空。
     /// 这条链路端到端覆盖 ToolContext 的 session 管道(Toolset 注入 →
     /// 工具解析)。
     #[tokio::test]
-    async fn update_plan_through_workflow_only_touches_its_own_session() {
+    async fn update_plan_through_workflow_only_touches_its_own_context() {
         use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
@@ -1313,7 +1313,7 @@ mod tests {
                 "update_plan",
                 serde_json::json!({
                     "plan": [
-                        {"step": "Session A step", "status": "in_progress"}
+                        {"step": "Context A step", "status": "in_progress"}
                     ]
                 }),
             ),
@@ -1357,8 +1357,8 @@ mod tests {
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut session_a =
-            Session::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
-        let mut session_b = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+            Context::new_for_tests(Arc::clone(&shared), agentik_types::AgentPath::root());
+        let mut session_b = Context::new_for_tests(shared, agentik_types::AgentPath::root());
 
         session_a.remember(Message::user("make a plan")).unwrap();
         session_a.agent_workflow(&internal_tx, None).await.unwrap();
@@ -1454,7 +1454,7 @@ mod tests {
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
         session.remember(Message::user("hello")).unwrap();
         session.agent_workflow(&internal_tx, None).await.unwrap();
 
@@ -1523,7 +1523,7 @@ mod tests {
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
         session.remember(Message::user("hello")).unwrap();
         session.agent_workflow(&internal_tx, None).await.unwrap();
 
@@ -1591,7 +1591,7 @@ mod tests {
         });
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
         let mut expected: Vec<String> = session
             .toolset
             .tools()
@@ -1711,12 +1711,12 @@ mod tests {
             .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
             .unwrap();
         let shared = turn_test_shared_with(model, tx, registry, Some(tasks));
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
         session.remember(Message::user("go")).unwrap();
 
         let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
         session
-            .run_session(&internal_tx, &mut internal_rx, None)
+            .run_context(&internal_tx, &mut internal_rx, None)
             .await;
 
         let calls = turn_events(&mut rx);
@@ -1760,7 +1760,7 @@ mod tests {
             .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
             .unwrap();
         let shared = turn_test_shared_with(model, tx, registry, Some(Arc::clone(&tasks)));
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
 
         // A genuinely-running task #1, so wait_task returns the "waiting"
         // sentinel rather than an immediate result.
@@ -1779,7 +1779,7 @@ mod tests {
         // Drive a full session so the turn lifecycle is exercised end to end.
         let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
         session
-            .run_session(&internal_tx, &mut internal_rx, None)
+            .run_context(&internal_tx, &mut internal_rx, None)
             .await;
 
         // Waiting is a resting state, so the turn is closed exactly once —

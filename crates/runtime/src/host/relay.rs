@@ -22,7 +22,7 @@ pub(super) enum AgentCommand {
     },
     Shutdown,
     Cancel,
-    ListSessions,
+    ListContexts,
     SetModel(Model),
     Compact,
 }
@@ -318,8 +318,8 @@ async fn relay_loop(
                 Some(AgentCommand::Cancel) => {
                     handle.cancel();
                 }
-                Some(AgentCommand::ListSessions) => {
-                    handle.list_sessions();
+                Some(AgentCommand::ListContexts) => {
+                    handle.list_contexts();
                 }
                 Some(AgentCommand::SetModel(model)) => {
                     handle.set_model(model);

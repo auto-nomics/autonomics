@@ -2,13 +2,16 @@ use agentik_sdk::types::Message;
 
 use agentik_sdk::AgentMessageExt;
 
+/// Builder for a prompt request: optional system prompt plus conversation
+/// messages. (Renamed from `prompt::Context` to free the `Context` name for
+/// the agent's working context type.)
 #[derive(Debug, Default)]
-pub struct Context {
+pub struct PromptContext {
     system_prompt: Option<String>,
     conversations: Vec<Message>,
 }
 
-impl Context {
+impl PromptContext {
     pub fn new() -> Self {
         Self::default()
     }

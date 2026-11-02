@@ -241,7 +241,7 @@ fn parse_string_scalar(text: &str, type_name: &str) -> Option<serde_json::Value>
     }
 }
 
-/// Session-level tool runtime: shares an immutable [`ToolRegistry`] (tool
+/// Context-level tool runtime: shares an immutable [`ToolRegistry`] (tool
 /// definitions + implementations) across sessions while maintaining
 /// independent per-session state (background task list, event channel).
 ///
@@ -251,13 +251,13 @@ pub struct Toolset {
     registry: Arc<ToolRegistry>,
     tasks: Arc<RwLock<TaskStore>>,
     agent_event_tx: Option<UnboundedSender<AgentEvent>>,
-    /// Session-level cancel token. When set (via [`set_cancel_token`]),
+    /// Context-level cancel token. When set (via [`set_cancel_token`]),
     /// each spawned tool task gets a child token so that cancelling the
     /// session immediately interrupts running tools.
     session_cancel: Option<CancellationToken>,
-    /// Session-scoped state (session id + plan handle) surfaced to tools
+    /// Context-scoped state (session id + plan handle) surfaced to tools
     /// through each invocation's [`ToolContext`](super::ToolContext).
-    session: Option<super::SessionToolCtx>,
+    session: Option<super::ContextToolCtx>,
 }
 
 impl Toolset {
@@ -326,7 +326,7 @@ impl Toolset {
         session_id: uuid::Uuid,
         plan: std::sync::Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
     ) {
-        self.session = Some(super::SessionToolCtx { session_id, plan });
+        self.session = Some(super::ContextToolCtx { session_id, plan });
     }
 
     /// Access the shared tool registry.

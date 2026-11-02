@@ -1,5 +1,5 @@
 // Agent runtime store: gateway connection, login, the per-agent event
-// reducer and every agent/session action. The shell (app-view) consumes this
+// reducer and every agent/context action. The shell (app-view) consumes this
 // hook and renders; no JSX lives here.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -16,7 +16,7 @@ import type {
   ChatItem,
   GatewayFrame,
   ModelRow,
-  SessionInfo,
+  ContextInfo,
   StateSnapshot,
   StoredAgent,
 } from "@/types";
@@ -34,9 +34,9 @@ function makeItem(role: ChatItem["role"], text: string, kind?: ChatItem["kind"])
   return { id: itemSequence, role, text, kind, time: Date.now() };
 }
 
-function latestSession(sessions: SessionInfo[], activeId?: string | null) {
-  if (activeId && sessions.some((session) => session.id === activeId)) return activeId;
-  return [...sessions].sort((left, right) => right.last_active - left.last_active)[0]?.id ?? null;
+function latestContext(contexts: ContextInfo[], activeId?: string | null) {
+  if (activeId && contexts.some((context) => context.id === activeId)) return activeId;
+  return [...contexts].sort((left, right) => right.last_active - left.last_active)[0]?.id ?? null;
 }
 
 function convertMessage(message: any): ChatItem[] {
@@ -90,8 +90,8 @@ export function useAgentRuntime() {
   // Persisted identities (GET /storage/agents) for the merged agent
   // picker: resume targets whether or not the instance is live.
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
-  const [sessions, setSessions] = useState<Record<string, SessionInfo[]>>({});
-  const [activeSessions, setActiveSessions] = useState<Record<string, string | null>>({});
+  const [contexts, setContexts] = useState<Record<string, ContextInfo[]>>({});
+  const [activeContexts, setActiveContexts] = useState<Record<string, string | null>>({});
   const [activeAgent, setActiveAgent] = useState("");
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
@@ -112,8 +112,8 @@ export function useAgentRuntime() {
   const [modelCatalog, setModelCatalog] = useState<ModelRow[]>([]);
   const modelCatalogLoaded = useRef(false);
 
-  const stateRef = useRef({ agents, sessions, activeAgent, activeSessions });
-  stateRef.current = { agents, sessions, activeAgent, activeSessions };
+  const stateRef = useRef({ agents, contexts, activeAgent, activeContexts });
+  stateRef.current = { agents, contexts, activeAgent, activeContexts };
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
 
@@ -121,13 +121,13 @@ export function useAgentRuntime() {
     setMessages((current) => ({ ...current, [agent]: [...(current[agent] ?? []), item] }));
   }, []);
 
-  const loadHistory = useCallback(async (agentPath: string, explicitSessionId?: string) => {
+  const loadHistory = useCallback(async (agentPath: string, explicitContextId?: string) => {
     const info = stateRef.current.agents.find((agent) => agent.path === agentPath);
-    const sessionId = explicitSessionId ?? stateRef.current.activeSessions[agentPath]
-      ?? latestSession(stateRef.current.sessions[agentPath] ?? []);
-    if (!info?.agent_id || !sessionId) return;
+    const contextId = explicitContextId ?? stateRef.current.activeContexts[agentPath]
+      ?? latestContext(stateRef.current.contexts[agentPath] ?? []);
+    if (!info?.agent_id || !contextId) return;
     // Only the latest in-flight load per agent may clear the flag, so a
-    // superseded fetch (fast session double-switch) cannot hide the
+    // superseded fetch (fast context double-switch) cannot hide the
     // skeleton while its successor is still running.
     const seq = (historyLoadSeq.current[agentPath] ?? 0) + 1;
     historyLoadSeq.current[agentPath] = seq;
@@ -135,7 +135,7 @@ export function useAgentRuntime() {
     try {
       const response = await gatewayRequest(
         "GET",
-        `/agents/${info.agent_id}/sessions/${sessionId}/history`,
+        `/agents/${info.agent_id}/sessions/${contextId}/history`,
       );
       const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
         .flatMap(convertMessage);
@@ -143,7 +143,7 @@ export function useAgentRuntime() {
       setMessages((current) => ({ ...current, [agentPath]: history }));
       setRawMessages((current) => ({
         ...current,
-        [`${agentPath}:${sessionId}`]: Array.isArray(response) ? response : response.messages ?? [],
+        [`${agentPath}:${contextId}`]: Array.isArray(response) ? response : response.messages ?? [],
       }));
     } catch (cause) {
       appendMessage(agentPath, makeItem("error", `加载历史失败: ${String(cause)}`));
@@ -211,12 +211,12 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("error", `第 ${retry.attempt}/${retry.max_retries} 次重试: ${retry.message}`));
       } else if (event.Error !== undefined) {
         appendMessage(agent, makeItem("error", event.Error));
-      } else if (event.SessionList !== undefined) {
-        const nextSessions: SessionInfo[] = event.SessionList.sessions;
-        setSessions((current) => ({ ...current, [agent]: nextSessions }));
-        setActiveSessions((current) => ({ ...current, [agent]: latestSession(nextSessions, current[agent]) }));
-      } else if (event.SessionActivated !== undefined) {
-        setActiveSessions((current) => ({ ...current, [agent]: event.SessionActivated.id }));
+      } else if (event.ContextList !== undefined) {
+        const nextContexts: ContextInfo[] = event.ContextList.contexts;
+        setContexts((current) => ({ ...current, [agent]: nextContexts }));
+        setActiveContexts((current) => ({ ...current, [agent]: latestContext(nextContexts, current[agent]) }));
+      } else if (event.ContextActivated !== undefined) {
+        setActiveContexts((current) => ({ ...current, [agent]: event.ContextActivated.id }));
         setMessages((current) => ({ ...current, [agent]: [] }));
         streamingRef.current[agent] = null;
         setStreaming((current) => ({ ...current, [agent]: null }));
@@ -304,9 +304,9 @@ export function useAgentRuntime() {
       const probe = await probeGateway();
       if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
       const snapshot: StateSnapshot = await gatewayRequest("GET", "/state");
-      const nextActiveSessions: Record<string, string | null> = {};
-      for (const [agent, agentSessions] of Object.entries(snapshot.sessions)) {
-        nextActiveSessions[agent] = latestSession(agentSessions);
+      const nextActiveContexts: Record<string, string | null> = {};
+      for (const [agent, agentContexts] of Object.entries(snapshot.contexts)) {
+        nextActiveContexts[agent] = latestContext(agentContexts);
       }
       const nextAgents = snapshot.agents;
       // Reconnects re-run hydrate; keep the agent the user selected if it
@@ -317,13 +317,13 @@ export function useAgentRuntime() {
         : nextAgents[0]?.path ?? "";
       stateRef.current = {
         agents: nextAgents,
-        sessions: snapshot.sessions,
+        contexts: snapshot.contexts,
         activeAgent: nextAgent,
-        activeSessions: nextActiveSessions,
+        activeContexts: nextActiveContexts,
       };
       setAgents(nextAgents);
-      setSessions(snapshot.sessions);
-      setActiveSessions(nextActiveSessions);
+      setContexts(snapshot.contexts);
+      setActiveContexts(nextActiveContexts);
       setDisplay(snapshot.display_settings);
       setActiveAgent(nextAgent);
       setStatuses(Object.fromEntries(nextAgents.map((agent) => [agent.path, statusLabel(agent.status)])));
@@ -546,7 +546,7 @@ export function useAgentRuntime() {
     }
   };
 
-  const activeSessionId = activeSessions[activeAgent] ?? latestSession(sessions[activeAgent] ?? []);
+  const activeContextId = activeContexts[activeAgent] ?? latestContext(contexts[activeAgent] ?? []);
 
   return {
     // connection & login
@@ -571,10 +571,10 @@ export function useAgentRuntime() {
     storedAgents,
     refreshStoredAgents,
     forgetAgent,
-    // sessions (the agent's sole working context)
-    sessions,
-    activeSessions,
-    activeSessionId,
+    // contexts (the agent's sole working context)
+    contexts,
+    activeContexts,
+    activeContextId,
     // transcript
     messages,
     historyLoading,

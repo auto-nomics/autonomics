@@ -149,14 +149,14 @@ pub type ProgressBuffer = Arc<Mutex<ProgressLog>>;
 /// Mutable, per-task metadata shared by the executing tool and observers.
 pub type TaskMetadata = Arc<Mutex<Value>>;
 
-/// Session-scoped state handed to tools via [`ToolContext::session`].
+/// Context-scoped state handed to tools via [`ToolContext::session`].
 ///
 /// Wired by the session's `Toolset`; carries the backend session id and the
 /// session's plan handle. The `Arc<ArcSwap>` identity is stable for the
-/// session's lifetime — `Session::set_plan` stores in place — so a handle
+/// session's lifetime — `Context::set_plan` stores in place — so a handle
 /// captured here always observes the session's current plan.
 #[derive(Clone)]
-pub struct SessionToolCtx {
+pub struct ContextToolCtx {
     pub session_id: uuid::Uuid,
     pub plan: std::sync::Arc<arc_swap::ArcSwap<agentik_types::AgentPlan>>,
 }
@@ -178,9 +178,9 @@ pub struct ToolContext {
     /// tests); the tool must treat it as optional.
     pub output: Option<ProgressBuffer>,
     pub metadata: TaskMetadata,
-    /// Session-scoped state. `None` when the invocation is not bound to a
+    /// Context-scoped state. `None` when the invocation is not bound to a
     /// session (e.g. direct test calls); the tool must treat it as optional.
-    pub session: Option<SessionToolCtx>,
+    pub session: Option<ContextToolCtx>,
 }
 
 impl Default for ToolContext {

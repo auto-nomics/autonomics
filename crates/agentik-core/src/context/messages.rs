@@ -1,4 +1,4 @@
-//! Conversation storage on the Session: message insertion with tool_result
+//! Conversation storage on the Context: message insertion with tool_result
 //! adjacency repair, context rendering, and durable sanitization.
 
 use agentik_sdk::model::sanitize::sanitize_messages;
@@ -10,8 +10,8 @@ use crate::error::Result;
 use crate::storage::PersistOp;
 use agentik_sdk::AgentMessageExt;
 
-use super::Session;
-use super::SessionState;
+use super::Context;
+use super::ContextState;
 use super::compaction::format_checkpoint_message;
 use super::error;
 
@@ -34,7 +34,7 @@ fn insert_tool_result_before_text(content: &mut Vec<ContentBlock>, block: Conten
     content.insert(insert_at, block);
 }
 
-impl Session {
+impl Context {
     pub fn inject_message(
         &mut self,
         user_content: Vec<ContentBlock>,
@@ -291,7 +291,7 @@ impl Session {
         );
 
         if let Some(tx) = &self.persist_tx {
-            let state = SessionState {
+            let state = ContextState {
                 messages: self.messages.clone(),
                 summary: self.summary.clone(),
                 ancestor_summaries: self.ancestor_summaries.clone(),
@@ -309,7 +309,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::make_test_session;
+    use crate::context::make_test_context;
     use agentik_sdk::AgentMessageExt;
     use agentik_types::messages::ContentBlock;
 
@@ -320,7 +320,7 @@ mod tests {
     /// with `each tool_use must have a single result`.
     #[test]
     fn add_message_drops_duplicate_tool_result_on_remember() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session
             .remember(Message::user("hello"))
             .expect("first remember ok");
@@ -376,7 +376,7 @@ mod tests {
     /// per-id, not "drop everything past the first".
     #[test]
     fn add_message_keeps_distinct_tool_results() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("hi")).unwrap();
         session
             .remember(Message {
@@ -419,13 +419,13 @@ mod tests {
     /// that result onward.
     #[test]
     fn render_context_keeps_tool_output_stable_as_history_grows() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session
             .remember(Message::user("run bioinformatics tools"))
             .unwrap();
         let old_output = "old".repeat(40_000); // 30k estimated tokens
 
-        let tool_turn = |session: &mut crate::session::Session, id: &str, output: String| {
+        let tool_turn = |session: &mut crate::context::Context, id: &str, output: String| {
             session
                 .remember(Message::assistant_tool_use(
                     id,
@@ -485,7 +485,7 @@ mod tests {
     /// and its tool_result.
     #[test]
     fn add_message_inserts_tool_result_before_existing_text() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("hi")).unwrap();
         session
             .remember(Message::assistant_tool_use(
@@ -563,7 +563,7 @@ mod tests {
     /// 400 from the API.
     #[test]
     fn add_message_inserts_user_slot_when_next_is_non_user() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("hi")).unwrap();
         session
             .remember(Message {
@@ -636,7 +636,7 @@ mod tests {
     /// would resurrect the broken shape.
     #[test]
     fn sanitize_and_persist_repairs_misadjacent_tool_result() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         // Build: [user, assistant{tool_use}, user{retry text},
         //        user{tool_result}] — the tool_result is one user
         // message too late.
@@ -717,7 +717,7 @@ mod tests {
     /// `sanitize_messages`).
     #[test]
     fn sanitize_and_persist_is_noop_on_clean_conversation() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("hi")).unwrap();
         session.remember(Message::assistant_text("hello")).unwrap();
         session.remember(Message::user("how are you?")).unwrap();
@@ -737,7 +737,7 @@ mod tests {
     /// loop — without this guard each copy is persisted and wastes context.
     #[test]
     fn add_message_drops_consecutive_duplicate_user_text() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         let msg_text = "Background task 'download' (#50) did not complete \
                          within 120 seconds. It is still running.";
         session.remember(Message::user(msg_text)).unwrap();
@@ -764,7 +764,7 @@ mod tests {
     /// duplicates are collapsed.
     #[test]
     fn add_message_keeps_distinct_consecutive_user_text() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("first message")).unwrap();
         session.remember(Message::user("second message")).unwrap();
         assert_eq!(
@@ -778,7 +778,7 @@ mod tests {
     /// same text can appear again — the dedup is strictly consecutive.
     #[test]
     fn add_message_allows_same_text_after_interleaving() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("hello")).unwrap();
         session
             .remember(Message::assistant_text("hi there"))

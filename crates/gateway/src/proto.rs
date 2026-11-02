@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_types::AgentLifecycleStatus;
-use agentik_types::SessionInfo;
+use agentik_types::ContextInfo;
 use runtime::control::AgentInfo;
 use runtime::model_actor::{DisplaySettings as DisplaySettingsData, ModelCatalogData};
 use runtime::model_bootstrap::{ModelRow, ProviderRow};
@@ -154,11 +154,11 @@ pub struct StateSnapshot {
     /// Live registered agents (from `HostControl::get_status`).
     #[schema(schema_with = opaque_object)]
     pub agents: Vec<AgentInfo>,
-    /// Known per-agent session lists, folded by the driver from
-    /// `AgentEvent::SessionList`. Absent until an agent has been asked
-    /// (`POST /agents/{name}/sessions/list`) or emitted a list.
+    /// Known per-agent context lists, folded by the driver from
+    /// `AgentEvent::ContextList`. Absent until an agent has been asked
+    /// (`GET /agents/{name}/context`) or emitted a list.
     #[schema(schema_with = opaque_object)]
-    pub sessions: HashMap<String, Vec<SessionInfo>>,
+    pub contexts: HashMap<String, Vec<ContextInfo>>,
     pub display_settings: DisplaySettings,
     /// Daemon-wide defaults resolved from the runtime configuration.
     #[schema(schema_with = opaque_object)]
@@ -307,7 +307,7 @@ pub struct StoredSession {
     pub last_active: i64,
     pub active: bool,
     #[serde(default)]
-    pub telemetry: agentik_types::SessionTelemetry,
+    pub telemetry: agentik_types::ContextTelemetry,
     #[serde(default)]
     pub parent_session_id: Option<Uuid>,
     #[serde(default)]

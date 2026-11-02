@@ -22,7 +22,7 @@ pub(crate) async fn gateway_status(State(state): State<GatewayState>) -> Json<Ga
         version: state.version.to_string(),
         uptime_secs: state.started.elapsed().as_secs(),
         last_seq: state.hub.last_seq(),
-        agent_count: state.sessions.snapshot().len(),
+        agent_count: state.contexts.snapshot().len(),
     })
 }
 

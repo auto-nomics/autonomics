@@ -9,7 +9,7 @@ use crate::Usage;
 /// no agent work is running.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
-pub struct SessionTelemetry {
+pub struct ContextTelemetry {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_input_tokens: u64,
@@ -40,7 +40,7 @@ pub struct TurnTelemetry {
     pub time_consume_ms: u64,
 }
 
-impl SessionTelemetry {
+impl ContextTelemetry {
     pub fn record_usage(&mut self, usage: &Usage) {
         self.input_tokens += usage.input_tokens;
         self.output_tokens += usage.output_tokens;
@@ -93,8 +93,8 @@ impl SessionTelemetry {
 impl TurnTelemetry {
     #[must_use]
     pub fn from_session_delta(
-        current: &SessionTelemetry,
-        baseline: &SessionTelemetry,
+        current: &ContextTelemetry,
+        baseline: &ContextTelemetry,
         elapsed_ms: u64,
     ) -> Self {
         let mut telemetry = current.delta_since(baseline);
@@ -116,7 +116,7 @@ mod tests {
             cache_creation_input_tokens: Some(2),
             ..Default::default()
         };
-        let mut telemetry = SessionTelemetry::default();
+        let mut telemetry = ContextTelemetry::default();
         telemetry.record_usage(&usage);
 
         assert_eq!(telemetry.total_tokens, 22);
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn turn_telemetry_is_the_delta_from_turn_baseline() {
-        let baseline = SessionTelemetry {
+        let baseline = ContextTelemetry {
             input_tokens: 10,
             output_tokens: 5,
             total_tokens: 15,

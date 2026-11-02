@@ -304,8 +304,8 @@ mod agent_persistence_tests {
             "delegation must return the child's response"
         );
 
-        // host1 sanity: the live incarnation answers list_sessions.
-        control.list_sessions(path.as_str());
+        // host1 sanity: the live incarnation answers list_contexts.
+        control.list_contexts(path.as_str());
         host.recv_and_process_command().await;
         timeout(Duration::from_secs(3), async {
             loop {
@@ -313,14 +313,14 @@ mod agent_persistence_tests {
                     panic!("host1 event channel closed");
                 };
                 if event_path == path.as_str()
-                    && matches!(event, AgentEvent::SessionList { .. })
+                    && matches!(event, AgentEvent::ContextList { .. })
                 {
                     break;
                 }
             }
         })
         .await
-        .expect("host1 must answer list_sessions");
+        .expect("host1 must answer list_contexts");
 
         // The WAL write is asynchronous and is not tied to event delivery.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -394,7 +394,7 @@ mod agent_persistence_tests {
 
         // Wait for the turn to finish before asking for the session list:
         // run_session owns the internal-event channel mid-turn, and a
-        // ListSessions arriving then is swallowed by its loop (pre-existing
+        // ListContexts arriving then is swallowed by its loop (pre-existing
         // behavior — the daemon driver also fires only after TurnCompleted).
         timeout(Duration::from_secs(10), async {
             loop {
@@ -416,8 +416,8 @@ mod agent_persistence_tests {
         // The activated agent re-bound its sole context: the persisted
         // session is still the only one, with the same ID.
         let control = host.control();
-        control.list_sessions(path.as_str());
-        host.recv_and_process_command().await; // pump the ListSessions command
+        control.list_contexts(path.as_str());
+        host.recv_and_process_command().await; // pump the ListContexts command
         let outcome = timeout(Duration::from_secs(10), async {
             let mut seen: Vec<String> = Vec::new();
             loop {
@@ -425,13 +425,13 @@ mod agent_persistence_tests {
                     panic!("host agent event channel closed");
                 };
                 if event_path == path.as_str()
-                    && let AgentEvent::SessionList { sessions } = event
+                    && let AgentEvent::ContextList { contexts } = event
                 {
-                    return sessions;
+                    return contexts;
                 }
                 seen.push(format!("{event_path}::{event:?}"));
                 if seen.len() > 40 {
-                    panic!("no SessionList; events seen: {seen:?}; live={} ", host.contains_agent(path.as_str()));
+                    panic!("no ContextList; events seen: {seen:?}; live={} ", host.contains_agent(path.as_str()));
                 }
             }
         })
@@ -460,7 +460,7 @@ mod agent_persistence_tests {
                 Ok(Ok(records)) => format!("list_session_records ok: {} rows", records.len()),
             };
             panic!(
-                "no SessionList; {probe_result}; live={} agents={:?}; status={status:?}; buffered after timeout: {buffered:#?}",
+                "no ContextList; {probe_result}; live={} agents={:?}; status={status:?}; buffered after timeout: {buffered:#?}",
                 host.contains_agent(path.as_str()),
                 host.agent_names()
             );

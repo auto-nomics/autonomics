@@ -14,7 +14,7 @@ mod observations;
 pub(crate) mod plugin_environments;
 mod plugins;
 mod router;
-mod sessions;
+mod context;
 mod settings;
 mod skills;
 mod state;

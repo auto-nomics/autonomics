@@ -625,7 +625,7 @@ impl TursoAgentStorage {
 
         for session_id in session_ids {
             let messages = self.get_transcript_messages(session_id).await?;
-            let mut telemetry = agentik_types::SessionTelemetry::default();
+            let mut telemetry = agentik_types::ContextTelemetry::default();
             for message in &messages {
                 if message.role == Role::Assistant
                     && let Some(usage) = &message.usage
@@ -1190,7 +1190,7 @@ impl AgentStorage for TursoAgentStorage {
     async fn update_session_telemetry(
         &self,
         session_id: Uuid,
-        telemetry: &agentik_types::SessionTelemetry,
+        telemetry: &agentik_types::ContextTelemetry,
     ) -> Result<(), StorageError> {
         let telemetry_json = serde_json::to_string(telemetry)?;
         let now = chrono::Utc::now().timestamp_millis();
@@ -1252,7 +1252,7 @@ impl AgentStorage for TursoAgentStorage {
         &self,
         agent_id: Uuid,
         session_id: Uuid,
-        state: &crate::storage::SessionState,
+        state: &crate::storage::ContextState,
     ) -> Result<(), StorageError> {
         let sid = session_id.to_string();
 
@@ -1495,7 +1495,7 @@ impl AgentStorage for TursoAgentStorage {
                     };
                     let telemetry = match row.get_value(5)? {
                         Value::Text(json) => serde_json::from_str(&json)?,
-                        _ => agentik_types::SessionTelemetry::default(),
+                        _ => agentik_types::ContextTelemetry::default(),
                     };
                     let parent_session_id = match row.get_value(6)? {
                         Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
@@ -1860,7 +1860,7 @@ mod tests {
     use super::*;
     use crate::lifecycle::AgentLifecycleStatus;
     use crate::profile::{AgentKind, AgentProfileConfig};
-    use crate::session::SessionState;
+    use crate::context::ContextState;
     use crate::storage::AgentRuntimeOverrides;
     use agentik_sdk::AgentMessageExt;
 
@@ -2013,7 +2013,7 @@ mod tests {
             ts,
             agent_id,
             agent_status: AgentLifecycleStatus::Idle,
-            state: SessionState::default(),
+            state: ContextState::default(),
             session_id: None,
         }
     }
@@ -2188,7 +2188,7 @@ mod tests {
         let store = TursoAgentStorage::open_in_memory().await.unwrap();
         let agent_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
-        let telemetry = agentik_types::SessionTelemetry {
+        let telemetry = agentik_types::ContextTelemetry {
             input_tokens: 11,
             output_tokens: 6,
             cache_read_input_tokens: 3,
@@ -2549,7 +2549,7 @@ mod tests {
         // Snapshot with an initial session state
         let mut snap = sample_snapshot(agent_id, 1000);
         snap.session_id = Some(session_id);
-        snap.state = SessionState {
+        snap.state = ContextState {
             messages: vec![Message::user("snapshotted")],
             ..Default::default()
         };
@@ -2593,7 +2593,7 @@ mod tests {
         }
 
         // Model compaction retains only the final message.
-        let compacted_state = SessionState {
+        let compacted_state = ContextState {
             messages: vec![original[2].clone()],
             summary: Some("checkpoint".into()),
             ancestor_summaries: vec!["checkpoint".into()],

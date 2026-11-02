@@ -22,7 +22,7 @@ use runtime::{RuntimeConfig, RuntimeHost};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::{self, SessionCache};
+use crate::driver::{self, ContextCache};
 use crate::hub::EventHub;
 use crate::hub::spawn_model_event_bridge;
 use crate::server::DockerHubClient;
@@ -144,7 +144,7 @@ pub async fn run_daemon(
     let _ = models.ensure_fresh();
 
     // ── Gateway state + server ───────────────────────────────────────
-    let sessions = SessionCache::new();
+    let contexts = ContextCache::new();
     // The bound address is only known after `start()` — bind resolves
     // after the router is built — so handlers read it through this cell,
     // installed once the server owns its socket (before the token file
@@ -152,7 +152,7 @@ pub async fn run_daemon(
     let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());
     let state = GatewayState {
         hub: hub.clone(),
-        sessions: sessions.clone(),
+        contexts: contexts.clone(),
         control: host.control(),
         infra: host.infra(),
         dockerhub: Arc::new(DockerHubClient::default()),
@@ -218,7 +218,7 @@ pub async fn run_daemon(
     });
 
     // ── Driver loop (sole consumer of the host) ──────────────────────
-    let mut host = driver::run(host, hub, sessions, shutdown.clone()).await;
+    let mut host = driver::run(host, hub, contexts, shutdown.clone()).await;
 
     // ── Graceful shutdown ────────────────────────────────────────────
     if let Err(error) = server.shutdown().await {

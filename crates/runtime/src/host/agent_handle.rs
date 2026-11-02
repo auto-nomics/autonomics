@@ -147,9 +147,9 @@ impl AgentHandle {
     // ── Context metadata ──────────────────────────────────
 
     /// Request a list of all sessions. The reply arrives as
-    /// `AgentEvent::SessionList` on the event channel — with one context
+    /// `AgentEvent::ContextList` on the event channel — with one context
     /// per agent it carries at most one entry (the agent's sole context).
-    pub fn list_sessions(&self) {
-        let _ = self.internal_tx.send(InternalEvent::ListSessions);
+    pub fn list_contexts(&self) {
+        let _ = self.internal_tx.send(InternalEvent::ListContexts);
     }
 }

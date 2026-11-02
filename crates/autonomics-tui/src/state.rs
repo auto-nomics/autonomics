@@ -708,12 +708,9 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
         | AgentEvent::ContentBlockStop { .. }
         | AgentEvent::StreamDelta { .. } => {}
         AgentEvent::Compact { event } => state.apply_compact_event(event),
-        // Session lifecycle events — handled at the AppState level (these
+        // Context lifecycle events — handled at the AppState level (these
         // need access to the full AgentSession, not just the chat view).
-        AgentEvent::SessionActivated { .. }
-        | AgentEvent::SessionPaused { .. }
-        | AgentEvent::SessionClosed { .. }
-        | AgentEvent::SessionList { .. } => {}
+        AgentEvent::ContextActivated { .. } | AgentEvent::ContextList { .. } => {}
         AgentEvent::PlanUpdate {
             session_id: _,
             revision,
@@ -732,25 +729,25 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
     }
 }
 
-/// Apply session lifecycle events to the full AppState (mutates the sole
+/// Apply context lifecycle events to the full AppState (mutates the sole
 /// context of the agent identified by `agent_idx`).
 ///
 /// `agent_idx` is the leaf index that the event was routed to by agent
 /// name. When it differs from `active_agent_idx` (e.g. a delegation
 /// announces its context on a background agent), only the target agent's
 /// context is touched — the foreground agent's view is untouched.
-pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: usize) {
+pub fn apply_context_event(state: &mut AppState, event: AgentEvent, agent_idx: usize) {
     let session = match state.sessions.get_mut(agent_idx) {
         Some(s) => s,
         None => return,
     };
     match event {
-        AgentEvent::SessionList { sessions } => {
+        AgentEvent::ContextList { contexts } => {
             // At most one entry: the agent's sole context. Preserve the
             // existing tab_state when the id matches so hydration never
             // wipes a loaded transcript.
             let old = session.context.take();
-            session.context = match sessions.into_iter().next() {
+            session.context = match contexts.into_iter().next() {
                 Some(info) => match old {
                     Some(old) if old.id == info.id => Some(AgentContext::from_info(info, old)),
                     _ => Some(AgentContext::new(info)),
@@ -758,12 +755,12 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                 None => old,
             };
         }
-        AgentEvent::SessionActivated { id, title } => {
+        AgentEvent::ContextActivated { id, title } => {
             // The backend activated (usually: just auto-created) the sole
             // context. Adopt it, migrating any pending messages sent before
             // the announcement.
             if session.context.as_ref().is_none_or(|c| c.id != id) {
-                let mut context = AgentContext::new(agentik_types::SessionInfo {
+                let mut context = AgentContext::new(agentik_types::ContextInfo {
                     id,
                     title: title.clone(),
                     created_at: chrono::Utc::now().timestamp_millis(),
@@ -784,14 +781,6 @@ pub fn apply_session_event(state: &mut AppState, event: AgentEvent, agent_idx: u
                 session.context.as_mut().expect("checked above").title = title;
             }
         }
-        AgentEvent::SessionPaused { id } => {
-            tracing::debug!(session_id = %id, "session paused");
-        }
-        AgentEvent::SessionClosed { id } => {
-            // Contexts are never closed by the backend (the command is
-            // refused); a stale frame from an older build just logs.
-            tracing::debug!(session_id = %id, "ignoring session-closed event");
-        }
         _ => {}
     }
 }
@@ -804,7 +793,7 @@ pub struct AgentSession {
     pub agent_id: uuid::Uuid,
     /// The agent's sole working context (see the backend's
     /// one-context-per-agent contract). `None` until the backend announces
-    /// it via `SessionList` / `SessionActivated`.
+    /// it via `ContextList` / `ContextActivated`.
     pub context: Option<AgentContext>,
     /// Per-agent buffer holding messages sent before the backend announces
     /// the context. When the context appears, the pending state migrates
@@ -826,16 +815,16 @@ pub struct AgentContext {
     pub last_active: i64,
     /// Epoch-millis when this context was created.
     pub created_at: i64,
-    pub telemetry: agentik_types::SessionTelemetry,
+    pub telemetry: agentik_types::ContextTelemetry,
     /// Conversation-level state — chat history, token counts, scroll, etc.
     pub tab_state: AgentTabState,
     /// Set once a plan fetch has been spawned for this context, so
-    /// repeated `SessionList` hydrations don't re-fetch.
+    /// repeated `ContextList` hydrations don't re-fetch.
     pub plan_requested: bool,
 }
 
 impl AgentContext {
-    pub fn new(info: agentik_types::SessionInfo) -> Self {
+    pub fn new(info: agentik_types::ContextInfo) -> Self {
         Self {
             id: info.id,
             title: info.title,
@@ -847,9 +836,9 @@ impl AgentContext {
         }
     }
 
-    /// Refresh metadata from a `SessionInfo`, keeping the loaded
+    /// Refresh metadata from a `ContextInfo`, keeping the loaded
     /// `tab_state` (transcript, scroll, caches) intact.
-    pub fn from_info(info: agentik_types::SessionInfo, old: Self) -> Self {
+    pub fn from_info(info: agentik_types::ContextInfo, old: Self) -> Self {
         Self {
             id: info.id,
             title: info.title,
@@ -998,7 +987,7 @@ pub struct AppState {
 impl AppState {
     /// Returns a mutable reference to the active agent's context tab state.
     /// If the active agent exists but its context is not announced yet
-    /// (before the first `SessionActivated` / `SessionList`), returns that
+    /// (before the first `ContextActivated` / `ContextList`), returns that
     /// agent's `pending_tab_state` so messages are buffered per-agent
     /// without cross-contamination. If no agent exists at all, returns the
     /// legacy `agent_tab_state` (never displayed — the workspace renders an

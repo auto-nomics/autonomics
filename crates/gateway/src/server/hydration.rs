@@ -35,7 +35,7 @@ pub(crate) async fn get_state(
         active_model_spec: catalog.active_model.clone(),
         profiles: agentik_core::AgentKind::ALL.to_vec(),
         agents: live_agents,
-        sessions: state.sessions.snapshot(),
+        contexts: state.contexts.snapshot(),
         display_settings,
         runtime_defaults: state.infra.memory.runtime_config(),
         model_catalog: catalog,

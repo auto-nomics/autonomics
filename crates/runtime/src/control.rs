@@ -240,8 +240,8 @@ impl HostControl {
         .flatten()
     }
 
-    pub fn list_sessions(&self, name: &str) {
-        self.fire(HostCommand::ListSessions { name: name.into() });
+    pub fn list_contexts(&self, name: &str) {
+        self.fire(HostCommand::ListContexts { name: name.into() });
     }
 
     // ── Model management ──
@@ -503,7 +503,7 @@ pub enum HostCommand {
 
     /// Request session list from a named agent. With one context per
     /// agent the reply carries at most one entry.
-    ListSessions { name: String },
+    ListContexts { name: String },
 
     // ── Model management ──
     /// Hot-swap the model of a named agent.

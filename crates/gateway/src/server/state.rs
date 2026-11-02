@@ -8,7 +8,7 @@ use runtime::SharedInfra;
 use runtime::control::HostControl;
 use tokio_util::sync::CancellationToken;
 
-use crate::driver::SessionCache;
+use crate::driver::ContextCache;
 use crate::hub::EventHub;
 use crate::server::plugin_environments::DockerHubClient;
 use runtime::model_actor::ModelHandle;
@@ -18,7 +18,7 @@ use runtime::model_actor::ModelHandle;
 #[derive(Clone)]
 pub struct GatewayState {
     pub hub: EventHub,
-    pub sessions: SessionCache,
+    pub contexts: ContextCache,
     pub control: HostControl,
     pub infra: SharedInfra,
     /// Read-only Docker Hub lookup client used by the user approval flow.

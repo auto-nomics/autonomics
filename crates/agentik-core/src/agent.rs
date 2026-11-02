@@ -2,10 +2,10 @@
 //!
 //! An `Agent` owns stable resources (model, tool registry, storage, prompt
 //! configuration) and exactly one working context: a
-//! [`Session`](crate::Session) that lives as long as the agent does.
+//! [`Context`](crate::Context) that lives as long as the agent does.
 //! Independent work uses another agent; continuation restores that agent's
 //! context automatically. Conversation creation, switching, forking and
-//! closing within an agent are refused — `Session` and `session_id` remain
+//! closing within an agent are refused — `Context` and `session_id` remain
 //! internal persistence and wire-format names for compatibility.
 //!
 //! On boot the agent restores its bound context from the `agent_contexts`
@@ -19,7 +19,7 @@
 //! [`InternalEvent`]s from its channel, applies session management events
 //! (legacy commands are recognized and refused), and delegates conversation
 //! events (`MessageInject`, `BgTaskComplete`) to the context's
-//! [`Session::run_session`].
+//! [`Context::run_context`].
 
 use std::sync::Arc;
 
@@ -32,10 +32,10 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::{AgentError, Result};
-use crate::session::{AgentCore, Session};
+use crate::context::{AgentCore, Context};
 use crate::storage::{AgentRecord, AgentStorage, PersistOp, StorageError};
 use crate::tools::ToolRegistration;
-use agentik_types::SessionInfo;
+use agentik_types::ContextInfo;
 
 #[derive(Clone)]
 pub struct AgentConfig {
@@ -82,7 +82,7 @@ pub enum InternalEvent {
     ResetCancelToken(CancellationToken),
     /// Request a list of all sessions (reply via event channel). With one
     /// context per agent the reply carries at most one entry.
-    ListSessions,
+    ListContexts,
     /// Manually trigger compaction on the active session.
     Compact,
 }
@@ -91,7 +91,7 @@ pub struct Agent {
     pub(crate) shared: Arc<AgentCore>,
     /// The agent's sole working context. `None` only before the first
     /// message (auto-created then) or while persistence recovery is pending.
-    pub(crate) context: Option<Session>,
+    pub(crate) context: Option<Context>,
     /// Set when durable history exists but cannot be safely resumed (bound
     /// context missing). Metadata only — conversation is refused with the
     /// stored notice until the operator recovers the agent.
@@ -199,22 +199,22 @@ impl Agent {
     // ── Context accessors ─────────────────────────────────
 
     /// The agent's sole working context (see the module docs).
-    pub fn active_session(&self) -> Option<&Session> {
+    pub fn active_context(&self) -> Option<&Context> {
         self.context.as_ref()
     }
 
-    pub fn active_session_mut(&mut self) -> Option<&mut Session> {
+    pub fn active_context_mut(&mut self) -> Option<&mut Context> {
         self.context.as_mut()
     }
 
     pub fn lifecycle_status(&self) -> agentik_types::AgentLifecycleStatus {
-        self.active_session()
+        self.active_context()
             .map(|s| *s.lifecycle.status())
             .unwrap_or(agentik_types::AgentLifecycleStatus::Idle)
     }
 
     pub fn is_running(&self) -> bool {
-        self.active_session()
+        self.active_context()
             .map(|s| s.lifecycle.is_running())
             .unwrap_or(false)
     }
@@ -224,24 +224,24 @@ impl Agent {
         user_content: Vec<ContentBlock>,
         from_user: bool,
     ) -> Result<()> {
-        self.active_session_mut()
+        self.active_context_mut()
             .map(|s| s.inject_message(user_content, from_user))
             .transpose()
             .map(|_| ())
     }
 
     pub fn set_cancel_token(&mut self, token: CancellationToken) {
-        if let Some(s) = self.active_session_mut() {
+        if let Some(s) = self.active_context_mut() {
             s.set_cancel_token(token);
         }
     }
 
-    /// Session metadata for `ListSessions` replies: the sole context, or an
+    /// Context metadata for `ListContexts` replies: the sole context, or an
     /// empty list while recovery is pending.
-    pub fn session_infos(&self) -> Vec<SessionInfo> {
+    pub fn context_infos(&self) -> Vec<ContextInfo> {
         self.context
             .as_ref()
-            .map(SessionInfo::from)
+            .map(ContextInfo::from)
             .into_iter()
             .collect()
     }
@@ -249,7 +249,7 @@ impl Agent {
     // ── Snapshot ──────────────────────────────────────────
 
     pub async fn snapshot(&self) -> Option<crate::storage::AgentSnapshot> {
-        self.active_session().map(|s| s.snapshot())
+        self.active_context().map(|s| s.snapshot())
     }
 
     // ── Main run loop ─────────────────────────────────────
@@ -316,7 +316,7 @@ impl Agent {
                 Ok(Some(rec)) => {
                     // Rebuild the context from storage using the unified
                     // restore_session_state helper (snapshot + WAL).
-                    let mut s = Session::new(rec.session_id, self.shared.clone());
+                    let mut s = Context::new(rec.session_id, self.shared.clone());
                     s.cancel_token = self.cancel_token.clone();
                     s.title = rec.title;
                     s.created_at = rec.started_at;
@@ -394,13 +394,13 @@ impl Agent {
         if self.context.is_none() && self.recovery_notice.is_none() {
             if let Some(messages) = self.initial_messages.take() {
                 let id = Uuid::new_v4();
-                let state = crate::session::SessionState {
+                let state = crate::context::ContextState {
                     messages,
                     summary: None,
                     ancestor_summaries: Vec::new(),
-                    telemetry: agentik_types::SessionTelemetry::default(),
+                    telemetry: agentik_types::ContextTelemetry::default(),
                 };
-                let mut s = Session::new_with_state(
+                let mut s = Context::new_with_state(
                     id,
                     self.shared.clone(),
                     state,
@@ -431,26 +431,26 @@ impl Agent {
             {
                 let id = Uuid::new_v4();
                 let title = self.shared.name().to_string();
-                let mut s = Session::new(id, self.shared.clone());
+                let mut s = Context::new(id, self.shared.clone());
                 s.title = Some(title.clone());
                 s.cancel_token = self.cancel_token.clone();
                 s.resume().await;
                 self.persist_session_title(id, &title).await;
                 self.bind_context(id).await;
                 self.context = Some(s);
-                self.shared.send_event(AgentEvent::SessionActivated {
+                self.shared.send_event(AgentEvent::ContextActivated {
                     id,
                     title: Some(title),
                 });
                 tracing::info!("auto-created session on first message");
             }
 
-            // Session management events are handled inline before delegation.
+            // Context management events are handled inline before delegation.
             let should_run = match &event {
-                InternalEvent::ListSessions => {
-                    let infos: Vec<SessionInfo> = self.session_infos();
+                InternalEvent::ListContexts => {
+                    let infos: Vec<ContextInfo> = self.context_infos();
                     self.shared
-                        .send_event(AgentEvent::SessionList { sessions: infos });
+                        .send_event(AgentEvent::ContextList { contexts: infos });
                     false
                 }
                 InternalEvent::MessageInject { .. } | InternalEvent::BgTaskComplete { .. } => true,
@@ -463,7 +463,7 @@ impl Agent {
             };
 
             // Non-session-management events go through apply_event.
-            if !matches!(event, InternalEvent::ListSessions) {
+            if !matches!(event, InternalEvent::ListContexts) {
                 let keep_going = self.apply_event(event).await;
                 if !keep_going {
                     break;
@@ -473,8 +473,8 @@ impl Agent {
             if should_run {
                 let tx = self.internal_event_tx.clone();
                 if let Some(session) = self.context.as_mut() {
-                    session.run_session(&tx, &mut rx, delegation_id).await;
-                    // A cancel can replace the token while run_session owns
+                    session.run_context(&tx, &mut rx, delegation_id).await;
+                    // A cancel can replace the token while run_context owns
                     // the receiver. Keep Agent-owned context creation in
                     // sync with that fresh token.
                     self.cancel_token = session.cancel_token.clone();
@@ -553,20 +553,20 @@ impl Agent {
     async fn apply_event(&mut self, event: InternalEvent) -> bool {
         match event {
             InternalEvent::Shutdown => {
-                if let Some(s) = self.active_session_mut() {
+                if let Some(s) = self.active_context_mut() {
                     s.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
                 }
                 false
             }
             InternalEvent::Done => {
-                if let Some(s) = self.active_session_mut() {
+                if let Some(s) = self.active_context_mut() {
                     s.stop();
                 }
                 false
             }
             InternalEvent::ResetCancelToken(ref token) => {
                 self.cancel_token = token.clone();
-                match self.active_session_mut() {
+                match self.active_context_mut() {
                     Some(session) => session.apply_internal_event(event).await,
                     None => true,
                 }
@@ -579,7 +579,7 @@ impl Agent {
                     self.shared.send_event(AgentEvent::Error(notice.clone()));
                     return true;
                 }
-                if let Some(session) = self.active_session_mut() {
+                if let Some(session) = self.active_context_mut() {
                     session.apply_internal_event(event).await
                 } else {
                     true
@@ -647,7 +647,7 @@ impl TokenBudget {
 
     /// Accumulate estimated tokens for a message added since last API response.
     pub fn add_pending_message(&mut self, msg: &agentik_sdk::types::Message) {
-        self.pending_tokens += crate::session::estimate_message_tokens(msg);
+        self.pending_tokens += crate::context::estimate_message_tokens(msg);
     }
 
     /// Current best estimate of total context tokens.
@@ -679,7 +679,7 @@ impl TokenBudget {
     pub fn estimate_messages_tokens(&self, messages: &[agentik_sdk::types::Message]) -> u64 {
         messages
             .iter()
-            .map(crate::session::estimate_message_tokens)
+            .map(crate::context::estimate_message_tokens)
             .sum()
     }
 
@@ -833,7 +833,7 @@ mod tests {
         let activated_title = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx.recv().await {
-                    Some(AgentEvent::SessionActivated { title, .. }) => break title,
+                    Some(AgentEvent::ContextActivated { title, .. }) => break title,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -892,7 +892,7 @@ mod tests {
         let activated_id = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx.recv().await {
-                    Some(AgentEvent::SessionActivated { id, .. }) => break id,
+                    Some(AgentEvent::ContextActivated { id, .. }) => break id,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -914,7 +914,7 @@ mod tests {
         );
 
         // A second run of the same agent restores the bound context and
-        // reports it via ListSessions.
+        // reports it via ListContexts.
         let (event_tx2, mut event_rx2) = tokio::sync::mpsc::unbounded_channel();
         let mut agent2 = Agent::builder()
             .with_id(agent_id)
@@ -928,11 +928,11 @@ mod tests {
         let task2 = tokio::spawn(async move {
             agent2.run().await;
         });
-        internal_tx2.send(InternalEvent::ListSessions).unwrap();
+        internal_tx2.send(InternalEvent::ListContexts).unwrap();
         let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx2.recv().await {
-                    Some(AgentEvent::SessionList { sessions }) => break sessions,
+                    Some(AgentEvent::ContextList { contexts }) => break contexts,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -982,11 +982,11 @@ mod tests {
         let task = tokio::spawn(async move {
             agent.run().await;
         });
-        internal_tx.send(InternalEvent::ListSessions).unwrap();
+        internal_tx.send(InternalEvent::ListContexts).unwrap();
         let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx.recv().await {
-                    Some(AgentEvent::SessionList { sessions }) => break sessions,
+                    Some(AgentEvent::ContextList { contexts }) => break contexts,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -1026,10 +1026,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_compaction_noop_does_not_loop() {
-        use crate::session::SessionState;
+        use crate::context::ContextState;
 
         let messages = vec![Message::user("x".repeat(500_000))];
-        let state = SessionState {
+        let state = ContextState {
             messages: messages.clone(),
             summary: None,
             ancestor_summaries: Vec::new(),

@@ -268,8 +268,8 @@ export function App() {
 
   return (
     <ContextBasketProvider
-      scope={runtime.activeAgent && runtime.activeSessionId ? JSON.stringify([runtime.activeAgent, runtime.activeSessionId]) : null}
-      sessionLabel={runtime.activeAgent.split("/").pop() || "未选择 Agent"}
+      scope={runtime.activeAgent && runtime.activeContextId ? JSON.stringify([runtime.activeAgent, runtime.activeContextId]) : null}
+      contextLabel={runtime.activeAgent.split("/").pop() || "未选择 Agent"}
       onAdd={() => { if (placement === "hidden") setPlacement("docked"); }}
     >
     <main data-workbench="" data-sidebar-collapsed={sidebarCollapsed || undefined} className={cn("relative grid h-full min-h-0 grid-rows-[minmax(0,1fr)] bg-background", mobile ? "grid-cols-[minmax(0,1fr)]" : railCollapsed ? "grid-cols-[56px_minmax(0,1fr)]" : "grid-cols-[136px_minmax(0,1fr)] sm:grid-cols-[160px_minmax(0,1fr)] xl:grid-cols-[208px_minmax(0,1fr)]")}>

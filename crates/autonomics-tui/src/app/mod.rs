@@ -5,7 +5,7 @@ use uuid::Uuid;
 use agentik_core::AgentKind;
 use agentik_sdk::types::AgentEvent;
 use agentik_sdk::types::messages::Message;
-use agentik_types::SessionInfo;
+use agentik_types::ContextInfo;
 
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
@@ -189,11 +189,11 @@ impl App {
             dirty: true,
         };
 
-        // Fold known session lists into the UI and load transcripts for
+        // Fold known context lists into the UI and load transcripts for
         // empty tabs (agents already running in the daemon).
-        let known_sessions = snapshot.sessions.clone();
-        for (agent_path, sessions) in known_sessions {
-            app.apply_session_list(&agent_path, sessions);
+        let known_contexts = snapshot.contexts.clone();
+        for (agent_path, contexts) in known_contexts {
+            app.apply_context_list(&agent_path, contexts);
         }
         app.spawn_all_history_loads();
         Ok(app)

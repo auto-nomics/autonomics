@@ -4,7 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    ContentBlockDelta, Message, MessageStreamEvent, SessionTelemetry, StopReason, TurnTelemetry,
+    ContentBlockDelta, Message, MessageStreamEvent, ContextTelemetry, StopReason, TurnTelemetry,
 };
 
 /// Unified event emitted by the agent for external observation (TUI, logging, etc.).
@@ -113,7 +113,7 @@ pub enum AgentEvent {
     /// A session's persistent task plan was updated via `update_plan`.
     /// Carries the full new plan snapshot and the revision number.
     PlanUpdate {
-        /// Session the plan belongs to. `None` only in payloads emitted by
+        /// Context the plan belongs to. `None` only in payloads emitted by
         /// older builds (serde default); current emitters always set it.
         #[serde(default)]
         session_id: Option<Uuid>,
@@ -154,27 +154,24 @@ pub enum AgentEvent {
     /// transcript after a safe response/tool boundary.
     UserMessageAcknowledged(String),
 
-    // ── Session lifecycle ──
-    /// A session was activated (became the active session).
-    SessionActivated { id: Uuid, title: Option<String> },
-    /// A session was paused (no longer the active session).
-    SessionPaused { id: Uuid },
-    /// A session was closed and removed.
-    SessionClosed { id: Uuid },
-    /// Response to `ListSessions` — all known sessions.
-    SessionList { sessions: Vec<SessionInfo> },
+    // ── Context lifecycle ──
+    /// The agent's sole context was activated (created or restored).
+    ContextActivated { id: Uuid, title: Option<String> },
+    /// Response to `ListContexts` — the agent's sole context.
+    ContextList { contexts: Vec<ContextInfo> },
 }
 
-/// Lightweight info about a session, for listing / display.
+/// Lightweight info about the working context, for listing / display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
+pub struct ContextInfo {
     pub id: Uuid,
     pub title: Option<String>,
     pub created_at: i64,
     pub last_active: i64,
     #[serde(default)]
-    pub telemetry: SessionTelemetry,
-    /// Parent session when this conversation was forked from another one.
+    pub telemetry: ContextTelemetry,
+    /// Parent session when this conversation was forked from another one
+    /// (history-record lineage).
     #[serde(default)]
     pub parent_session_id: Option<Uuid>,
     /// ID of the parent transcript message through which this session was

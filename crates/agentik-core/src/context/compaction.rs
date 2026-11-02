@@ -9,7 +9,7 @@
 //! 3. Pre-request, when the estimated context exceeds the auto-compact
 //!    threshold of the model's context window.
 //!
-//! All three share [`Session::compact`], which owns the progress-event
+//! All three share [`Context::compact`], which owns the progress-event
 //! choreography: `CompactStart` (carrying a `CompactPlan`) →
 //! `CompactPhase(Summarizing)` → throttled `CompactSummaryDelta` stream →
 //! `CompactPhase(Rebuilding)` → `CompactFinish` (carrying `CompactStats`).
@@ -32,7 +32,7 @@ use crate::prompt::compact;
 use crate::storage::PersistOp;
 use agentik_sdk::AgentMessageExt;
 
-use super::{Session, SessionState};
+use super::{Context, ContextState};
 
 // ── Compaction constants ───────────────────────────────────────────
 
@@ -76,7 +76,7 @@ const COMPACT_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 /// Upper bound on waiting for the summary stream's final message.
 const COMPACT_FINAL_MESSAGE_TIMEOUT: Duration = Duration::from_secs(5);
 
-impl Session {
+impl Context {
     /// Compact conversation history in-place.
     ///
     /// Ported from Codex's compaction pipeline:
@@ -244,7 +244,7 @@ impl Session {
             let _ = tx.send(PersistOp::ReplaceSessionState {
                 agent_id: self.shared.id,
                 session_id: self.id,
-                state: SessionState {
+                state: ContextState {
                     messages: self.messages.clone(),
                     summary: self.summary.clone(),
                     ancestor_summaries: self.ancestor_summaries.clone(),
@@ -281,7 +281,7 @@ impl Session {
         tracing::debug!(
             messages = self.messages.len(),
             ancestors = self.ancestor_summaries.len(),
-            "session compacted in-place"
+            "context compacted in-place"
         );
 
         Ok(true)
@@ -915,7 +915,7 @@ mod tests {
         let model = streaming_summary_model("## Progress\n- did the thing");
         let (tx, mut rx) = unbounded_channel();
         let shared = shared_with_model_and_events(model.clone(), tx);
-        let mut session = super::Session::new_for_tests(shared, AgentPath::root());
+        let mut session = super::Context::new_for_tests(shared, AgentPath::root());
         for msg in long_conversation(40) {
             session.remember(msg).unwrap();
         }
@@ -1000,7 +1000,7 @@ mod tests {
         let model = Model::with_client(dummy_model_info("compact-skip"), MockApiClient::new());
         let (tx, mut rx) = unbounded_channel();
         let shared = shared_with_model_and_events(model.clone(), tx);
-        let mut session = super::Session::new_for_tests(shared, AgentPath::root());
+        let mut session = super::Context::new_for_tests(shared, AgentPath::root());
         session.remember(Message::user("hi")).unwrap();
 
         let compacted = session
@@ -1055,7 +1055,7 @@ mod tests {
 
         let (tx, mut rx) = unbounded_channel();
         let shared = shared_with_model_and_events(model.clone(), tx);
-        let mut session = super::Session::new_for_tests(shared, AgentPath::root());
+        let mut session = super::Context::new_for_tests(shared, AgentPath::root());
         for msg in long_conversation(40) {
             session.remember(msg).unwrap();
         }

@@ -11,7 +11,7 @@ use crate::error::AgentError;
 use crate::memory::{
     MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
 };
-use crate::session::AgentCore;
+use crate::context::AgentCore;
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
 use agentik_sdk::types::messages::Message;

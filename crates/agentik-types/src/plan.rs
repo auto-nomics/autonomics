@@ -1,6 +1,6 @@
 //! Per-session task plan types.
 //!
-//! The plan is a first-class citizen of a conversation (`Session`) — it lives
+//! The plan is a first-class citizen of a conversation (`Context`) — it lives
 //! as long as that session does, is persisted per `(agent_id, session_id)` in
 //! the `session_plans` table, is copied into forks, and is surfaced to the
 //! model via the `update_plan` tool.
@@ -74,7 +74,7 @@ impl PlanUpdate {
     }
 }
 
-/// The persistent session plan stored on each `Session` and in the storage layer.
+/// The persistent session plan stored on each `Context` and in the storage layer.
 ///
 /// This wraps a [`PlanUpdate`] with a revision counter so observers can detect
 /// changes efficiently. An empty `plan` vector means no plan is active.

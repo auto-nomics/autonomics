@@ -144,14 +144,11 @@ pub(super) fn derive_agent_status(
         // conversation memory; it does not change the active status.
         AgentEvent::UserMessageAcknowledged(_) => (None, None),
 
-        // ── Session lifecycle events ──
-        // Skipped by `observe_status` (see `is_session_bookkeeping`); this
+        // ── Context lifecycle events ──
+        // Skipped by `observe_status` (see `is_context_bookkeeping`); this
         // arm is defense in depth for the delegation-progress path, which
         // derives without the filter.
-        AgentEvent::SessionActivated { .. }
-        | AgentEvent::SessionPaused { .. }
-        | AgentEvent::SessionClosed { .. }
-        | AgentEvent::SessionList { .. } => (None, None),
+        AgentEvent::ContextActivated { .. } | AgentEvent::ContextList { .. } => (None, None),
     }
 }
 
@@ -173,7 +170,7 @@ pub(super) fn truncate_preview(s: &str, max: usize) -> String {
 }
 
 /// Session lifecycle events are informational handshakes, not status
-/// transitions: the driver fires a `list_sessions` request after *every*
+/// transitions: the driver fires a `list_contexts` request after *every*
 /// `TurnCompleted` (`Failed` included), so letting them through would
 /// clobber the status the turn just landed on within milliseconds of it
 /// appearing. They must never reach the status bookkeeping.
@@ -191,13 +188,10 @@ fn is_passivation_idle_status(status: AgentLifecycleStatus) -> bool {
     )
 }
 
-fn is_session_bookkeeping(event: &AgentEvent) -> bool {
+fn is_context_bookkeeping(event: &AgentEvent) -> bool {
     matches!(
         event,
-        AgentEvent::SessionActivated { .. }
-            | AgentEvent::SessionPaused { .. }
-            | AgentEvent::SessionClosed { .. }
-            | AgentEvent::SessionList { .. }
+        AgentEvent::ContextActivated { .. } | AgentEvent::ContextList { .. }
     )
 }
 
@@ -216,7 +210,7 @@ impl RuntimeHost {
     /// shutdown is a separate command path that races with event
     /// delivery).
     pub(super) fn observe_status(&mut self, name: &str, event: &AgentEvent) {
-        if is_session_bookkeeping(event) {
+        if is_context_bookkeeping(event) {
             return;
         }
         let (new_status, new_last_event) = derive_agent_status(event);
@@ -581,27 +575,25 @@ mod status_derivation_tests {
 mod status_tests {
     use super::*;
 
-    // ── Session bookkeeping ──
+    // ── Context bookkeeping ──
 
-    /// The post-turn `list_sessions` handshake (and its siblings) must be
+    /// The post-turn `list_contexts` handshake (and its siblings) must be
     /// classified as bookkeeping, so `observe_status` skips them instead
     /// of clobbering the status the turn just landed on.
     #[test]
-    fn session_events_are_status_bookkeeping() {
+    fn context_events_are_status_bookkeeping() {
         let id = uuid::Uuid::new_v4();
-        assert!(is_session_bookkeeping(&AgentEvent::SessionList {
-            sessions: vec![],
+        assert!(is_context_bookkeeping(&AgentEvent::ContextList {
+            contexts: vec![],
         }));
-        assert!(is_session_bookkeeping(&AgentEvent::SessionActivated {
+        assert!(is_context_bookkeeping(&AgentEvent::ContextActivated {
             id,
             title: None,
         }));
-        assert!(is_session_bookkeeping(&AgentEvent::SessionPaused { id }));
-        assert!(is_session_bookkeeping(&AgentEvent::SessionClosed { id }));
         // Status-bearing events must never be mistaken for bookkeeping.
-        assert!(!is_session_bookkeeping(&AgentEvent::Error("boom".into())));
-        assert!(!is_session_bookkeeping(&AgentEvent::Done));
-        assert!(!is_session_bookkeeping(&AgentEvent::LifecycleChanged(
+        assert!(!is_context_bookkeeping(&AgentEvent::Error("boom".into())));
+        assert!(!is_context_bookkeeping(&AgentEvent::Done));
+        assert!(!is_context_bookkeeping(&AgentEvent::LifecycleChanged(
             AgentLifecycleStatus::Error
         )));
     }

@@ -362,14 +362,14 @@ impl GatewayClient {
             .await
     }
 
-    // ── sessions ──
+    // ── context ──
 
-    /// Request a fresh session list (arrives as `SessionList` agent frames
+    /// Request a fresh session list (arrives as `ContextList` agent frames
     /// on the event stream — same async contract as the runtime today).
-    pub async fn list_sessions(&self, agent: &str) -> Result<()> {
+    pub async fn list_contexts(&self, agent: &str) -> Result<()> {
         self.fire(
             reqwest::Method::GET,
-            &format!("/agents/{}/sessions", encode_segment(agent)),
+            &format!("/agents/{}/context", encode_segment(agent)),
             None::<&serde_json::Value>,
         )
         .await

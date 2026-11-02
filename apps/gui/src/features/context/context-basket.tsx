@@ -9,7 +9,7 @@ type Basket = {
   resources: ContextResource[];
   available: boolean;
   revealVersion: number;
-  sessionLabel: string;
+  contextLabel: string;
   add: (resource: ContextResource) => void;
   remove: (resource: ContextResource) => void;
   clear: () => void;
@@ -17,10 +17,10 @@ type Basket = {
 const BasketContext = createContext<Basket | null>(null);
 export const useContextBasket = () => useContext(BasketContext);
 
-/** Kept above the module views, scoped to the agent AND session. Browsing
+/** Kept above the module views, scoped to the agent AND context. Browsing
  * never implicitly adds resources. Snapshots stay stable until re-added. */
-export function ContextBasketProvider({ scope, sessionLabel, onAdd, children }: {
-  scope: string | null; sessionLabel: string; onAdd: () => void; children: ReactNode;
+export function ContextBasketProvider({ scope, contextLabel, onAdd, children }: {
+  scope: string | null; contextLabel: string; onAdd: () => void; children: ReactNode;
 }) {
   const [revealVersion, setRevealVersion] = useState(0);
   const [baskets, setBaskets] = useState<Record<string, ContextResource[]>>({});
@@ -29,7 +29,7 @@ export function ContextBasketProvider({ scope, sessionLabel, onAdd, children }: 
     if (scope) setBaskets(current => ({ ...current, [scope]: transform(current[scope] ?? []) }));
   };
   return <BasketContext.Provider value={{
-    resources, available: Boolean(scope), sessionLabel, revealVersion,
+    resources, available: Boolean(scope), contextLabel, revealVersion,
     add: resource => {
       update(current => [...current.filter(item => resourceKey(item) !== resourceKey(resource)), resource]);
       setRevealVersion(version => version + 1);
@@ -45,7 +45,7 @@ export function AddToContext({ resource }: { resource: ContextResource }) {
   if (!basket) return null;
   const added = basket.resources.some(item => resourceKey(item) === resourceKey(resource));
   return <Button size="xs" variant="outline" disabled={!basket.available}
-    title={basket.available ? `${resource.scope} · 加入 ${basket.sessionLabel}` : "请先选择 Agent 会话"}
+    title={basket.available ? `${resource.scope} · 加入 ${basket.contextLabel}` : "请先选择 Agent 上下文"}
     onClick={() => basket.add(resource)}>
     {added ? <Check data-icon="inline-start" /> : <Plus data-icon="inline-start" />}
     {added ? "更新会话引用" : "加入当前会话"}
@@ -60,7 +60,7 @@ export function ContextBasket() {
     <div className="flex min-w-0 items-center gap-2 text-xs">
       <Paperclip className="size-3.5 shrink-0" />
       <span>会话引用</span><Badge variant="secondary" aria-live="polite">{basket.resources.length}</Badge>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={basket.sessionLabel}>{basket.sessionLabel}</span>
+      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={basket.contextLabel}>{basket.contextLabel}</span>
       {basket.resources.length > 0 && <Button size="xs" variant="ghost" onClick={basket.clear}>清空引用</Button>}
     </div>
     {basket.resources.length > 0 && <ul className="flex max-h-32 flex-col gap-1 overflow-y-auto">

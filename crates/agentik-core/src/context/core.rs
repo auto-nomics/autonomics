@@ -18,7 +18,7 @@ use crate::tools::task_runtime::TaskStore;
 ///
 /// "Shared" refers to the mechanism, not the scope — one `AgentCore` per
 /// agent, held in an `Arc` and cloned into the agent's run loop, its sole
-/// [`Session`](super::Session) (the bound context), and its toolset /
+/// [`Context`](super::Context) (the bound context), and its toolset /
 /// task tools. Built once by
 /// [`AgentBuilder`](crate::agent_builder::AgentBuilder); fields that need
 /// runtime mutation use interior mutability (`ArcSwap`, `OnceLock`).
@@ -80,7 +80,7 @@ impl AgentCore {
         }
     }
 
-    /// Build a minimal `AgentCore` suitable for unit-testing Session /
+    /// Build a minimal `AgentCore` suitable for unit-testing Context /
     /// add_message logic. No model, storage, persistence, or context provider
     /// is wired up.
     #[cfg(test)]

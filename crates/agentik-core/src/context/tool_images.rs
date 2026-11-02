@@ -16,7 +16,7 @@ use agentik_sdk::types::tools::{
 use crate::error::Result;
 use agentik_sdk::AgentMessageExt;
 
-use super::Session;
+use super::Context;
 
 /// Maximum images carried into one companion message per tool result.
 const TOOL_IMAGE_MAX_COUNT: usize = 4;
@@ -132,7 +132,7 @@ fn tool_result_image_companion(tr: &ToolResult, tool_name: &str) -> Option<Messa
     Some(Message::user_blocks(content))
 }
 
-impl Session {
+impl Context {
     /// Core agent workflow: build context → request API → execute tools → remember.
     /// Re-attach images returned by tools as companion user messages.
     ///
@@ -176,7 +176,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::agent::AgentConfig;
-    use crate::session::{AgentCore, make_test_session};
+    use crate::context::{AgentCore, make_test_context};
     use crate::testing::dummy_model_info;
     use crate::tools::error::ToolError;
     use crate::tools::function::{ToolContext, ToolFunction};
@@ -301,7 +301,7 @@ mod tests {
     /// image itself.
     #[test]
     fn companion_survives_sanitize_as_canonical_layout() {
-        let mut session = make_test_session();
+        let mut session = make_test_context();
         session.remember(Message::user("read figure 1")).unwrap();
         session
             .remember(Message::assistant_tool_use(
@@ -462,9 +462,9 @@ mod tests {
         let shared = make_shared_with(model);
 
         let (internal_tx, _internal_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut session = Session::new_for_tests(shared, agentik_types::AgentPath::root());
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
         session.remember(Message::user("read the figure")).unwrap();
-        // Two iterations = the outer run_session loop: first produces
+        // Two iterations = the outer run_context loop: first produces
         // the tool call, second requests again with the results (this
         // is where the companion must be present or absent).
         session.agent_workflow(&internal_tx, None).await.unwrap();

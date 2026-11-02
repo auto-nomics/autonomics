@@ -14,22 +14,22 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use agentik_types::{AgentEvent, SessionInfo};
+use agentik_types::{AgentEvent, ContextInfo};
 use runtime::{NextEvent, RuntimeHost};
 use tokio_util::sync::CancellationToken;
 
 use crate::hub::{EventHub, EventKind};
 use crate::proto::HostEventView;
 
-/// Driver-maintained cache of per-agent session lists, folded from
-/// `AgentEvent::SessionList` so `GET /state` can answer synchronously
-/// (the runtime's `list_sessions` is fire-and-forget with an event reply).
+/// Driver-maintained cache of per-agent context lists, folded from
+/// `AgentEvent::ContextList` so `GET /state` can answer synchronously
+/// (the runtime's `list_contexts` is fire-and-forget with an event reply).
 #[derive(Default, Clone)]
-pub struct SessionCache {
-    sessions: Arc<Mutex<HashMap<String, Vec<SessionInfo>>>>,
+pub struct ContextCache {
+    contexts: Arc<Mutex<HashMap<String, Vec<ContextInfo>>>>,
 }
 
-impl SessionCache {
+impl ContextCache {
     pub fn new() -> Self {
         Self::default()
     }
@@ -37,15 +37,10 @@ impl SessionCache {
     /// Fold one tagged agent event into the cache. Pure state transition,
     /// testable without a host.
     pub fn observe(&self, agent: &str, event: &AgentEvent) {
-        let mut map = self.sessions.lock().expect("session cache mutex poisoned");
+        let mut map = self.contexts.lock().expect("context cache mutex poisoned");
         match event {
-            AgentEvent::SessionList { sessions } => {
-                map.insert(agent.to_string(), sessions.clone());
-            }
-            AgentEvent::SessionClosed { id } => {
-                if let Some(list) = map.get_mut(agent) {
-                    list.retain(|s| s.id != *id);
-                }
+            AgentEvent::ContextList { contexts } => {
+                map.insert(agent.to_string(), contexts.clone());
             }
             _ => {}
         }
@@ -53,26 +48,26 @@ impl SessionCache {
 
     /// Drop an agent's cache entry (agent unregistered).
     pub fn remove_agent(&self, agent: &str) {
-        self.sessions
+        self.contexts
             .lock()
-            .expect("session cache mutex poisoned")
+            .expect("context cache mutex poisoned")
             .remove(agent);
     }
 
-    /// Whether the agent's cached list already contains this session.
-    pub fn contains_session(&self, agent: &str, session_id: uuid::Uuid) -> bool {
-        self.sessions
+    /// Whether the agent's cached list already contains this context.
+    pub fn contains_context(&self, agent: &str, context_id: uuid::Uuid) -> bool {
+        self.contexts
             .lock()
-            .expect("session cache mutex poisoned")
+            .expect("context cache mutex poisoned")
             .get(agent)
-            .is_some_and(|list| list.iter().any(|s| s.id == session_id))
+            .is_some_and(|list| list.iter().any(|s| s.id == context_id))
     }
 
     /// Snapshot for `GET /state`.
-    pub fn snapshot(&self) -> HashMap<String, Vec<SessionInfo>> {
-        self.sessions
+    pub fn snapshot(&self) -> HashMap<String, Vec<ContextInfo>> {
+        self.contexts
             .lock()
-            .expect("session cache mutex poisoned")
+            .expect("context cache mutex poisoned")
             .clone()
     }
 }
@@ -86,7 +81,7 @@ impl SessionCache {
 pub async fn run(
     mut host: RuntimeHost,
     hub: EventHub,
-    sessions: SessionCache,
+    contexts: ContextCache,
     shutdown: CancellationToken,
 ) -> RuntimeHost {
     loop {
@@ -97,17 +92,17 @@ pub async fn run(
             }
             next = host.recv_next() => match next {
                 NextEvent::Agent((name, event)) => {
-                    // Keep the session cache warm for late-joining
+                    // Keep the context cache warm for late-joining
                     // frontends: refresh after a turn completes on a
-                    // session the cache hasn't seen. The request must NOT
-                    // be sent mid-turn — the session loop swallows
-                    // session-management internal events while a turn is
+                    // context the cache hasn't seen. The request must NOT
+                    // be sent mid-turn — the context loop swallows
+                    // context-management internal events while a turn is
                     // in flight (a pre-existing runtime quirk), so
                     // TurnStarted-triggered requests would be lost.
                     if let AgentEvent::TurnCompleted { .. } = &event {
-                        host.control().list_sessions(&name);
+                        host.control().list_contexts(&name);
                     }
-                    sessions.observe(&name, &event);
+                    contexts.observe(&name, &event);
                     hub.publish(EventKind::Agent {
                         agent: name,
                         event,
@@ -121,10 +116,10 @@ pub async fn run(
                             // answer for frontends that connect later —
                             // the TUI used to do this on registration;
                             // now the daemon does it once for everyone.
-                            host.control().list_sessions(path.as_str());
+                            host.control().list_contexts(path.as_str());
                         }
                         runtime::HostEvent::AgentUnregistered { path } => {
-                            sessions.remove_agent(path.as_str());
+                            contexts.remove_agent(path.as_str());
                         }
                         runtime::HostEvent::AgentStatusChanged { .. } => {}
                         runtime::HostEvent::AgentModelChanged { .. } => {}
@@ -142,8 +137,8 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    fn session(id: Uuid, title: &str) -> SessionInfo {
-        SessionInfo {
+    fn context(id: Uuid, title: &str) -> ContextInfo {
+        ContextInfo {
             id,
             title: Some(title.into()),
             created_at: 0,
@@ -155,21 +150,18 @@ mod tests {
     }
 
     #[test]
-    fn cache_folds_session_list_and_closed() {
-        let cache = SessionCache::new();
+    fn cache_folds_context_list() {
+        let cache = ContextCache::new();
         let id1 = Uuid::new_v4();
         let id2 = Uuid::new_v4();
         cache.observe(
             "/root/a",
-            &AgentEvent::SessionList {
-                sessions: vec![session(id1, "one"), session(id2, "two")],
+            &AgentEvent::ContextList {
+                contexts: vec![context(id1, "one"), context(id2, "two")],
             },
         );
         assert_eq!(cache.snapshot().get("/root/a").map(Vec::len), Some(2));
-        cache.observe("/root/a", &AgentEvent::SessionClosed { id: id1 });
-        let list = cache.snapshot().get("/root/a").cloned().unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].id, id2);
+        assert!(cache.contains_context("/root/a", id2));
         cache.remove_agent("/root/a");
         assert!(!cache.snapshot().contains_key("/root/a"));
     }

@@ -112,7 +112,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
             let snapshot = client.state().await.unwrap();
             if snapshot.agents.iter().any(|a| a.path == path)
                 && snapshot
-                    .sessions
+                    .contexts
                     .get(&path)
                     .is_some_and(|list| !list.is_empty())
             {
@@ -122,8 +122,8 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
         }
     })
     .await
-    .expect("agent + sessions visible in /state");
-    assert!(!refreshed.sessions[&path].is_empty());
+    .expect("agent + contexts visible in /state");
+    assert!(!refreshed.contexts[&path].is_empty());
     let state_agent = refreshed
         .agents
         .iter()
@@ -367,7 +367,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/agents/{name}/model",
         "/api/v1/agents/{name}/config",
         "/api/v1/agents/{name}/dag",
-        "/api/v1/agents/{name}/sessions",
+        "/api/v1/agents/{name}/context",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/plan",
         "/api/v1/storage/agents",

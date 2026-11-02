@@ -1,7 +1,7 @@
 /// Unified agent lifecycle status — the single source of truth across all
 /// layers (core, runtime host, TUI, GUI).
 ///
-/// The lifecycle is driven by the [`Session`](agentik_core::Session) and
+/// The lifecycle is driven by the [`Context`](agentik_core::Context) and
 /// propagated to observers via [`AgentEvent::LifecycleChanged`]. The
 /// runtime host tracks this enum directly (no separate coarse projection):
 /// `AgentInfo.status` and `HostEvent::AgentStatusChanged` carry it, with

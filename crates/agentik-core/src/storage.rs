@@ -12,10 +12,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use agentik_sdk::types::messages::Message;
-use agentik_types::{AgentPlan, SessionTelemetry, TurnTelemetry};
+use agentik_types::{AgentPlan, ContextTelemetry, TurnTelemetry};
 
 use crate::lifecycle::AgentLifecycleStatus;
-use crate::session::SessionState;
+use crate::context::ContextState;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
@@ -29,7 +29,7 @@ pub struct AgentSnapshot {
     pub agent_id: Uuid,
     pub agent_status: AgentLifecycleStatus,
     /// Serialized session conversation state (messages + summaries).
-    pub state: SessionState,
+    pub state: ContextState,
     /// Which session this snapshot belongs to.
     #[serde(default)]
     pub session_id: Option<Uuid>,
@@ -112,12 +112,12 @@ pub enum PersistOp {
     ReplaceSessionState {
         agent_id: Uuid,
         session_id: Uuid,
-        state: SessionState,
+        state: ContextState,
     },
     /// Replace a session's cumulative telemetry counters.
     UpdateSessionTelemetry {
         session_id: Uuid,
-        telemetry: SessionTelemetry,
+        telemetry: ContextTelemetry,
     },
     /// Preserve the full user-facing transcript before compaction replaces the
     /// active model context.
@@ -257,7 +257,7 @@ pub trait AgentStorage: Send + Sync {
         &self,
         agent_id: Uuid,
         session_id: Uuid,
-        state: &SessionState,
+        state: &ContextState,
     ) -> Result<(), StorageError>;
     /// Append messages to a session's immutable user-facing transcript.
     ///
@@ -320,7 +320,7 @@ pub trait AgentStorage: Send + Sync {
     async fn update_session_telemetry(
         &self,
         session_id: Uuid,
-        telemetry: &SessionTelemetry,
+        telemetry: &ContextTelemetry,
     ) -> Result<(), StorageError>;
 
     /// Insert or reopen an explicit agent turn.
@@ -372,7 +372,7 @@ pub struct SessionRecord {
     pub ended_at: Option<i64>,
     /// Last time telemetry observed activity in this session.
     pub last_active: i64,
-    pub telemetry: SessionTelemetry,
+    pub telemetry: ContextTelemetry,
     pub parent_session_id: Option<Uuid>,
     pub fork_point_message_id: Option<String>,
 }
@@ -410,7 +410,7 @@ pub struct AgentDelegationRecord {
 // Restore helper
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Reconstruct a session's [`SessionState`] from storage.
+/// Reconstruct a session's [`ContextState`] from storage.
 ///
 /// Loads the latest snapshot as a base, then replays all messages persisted
 /// after the snapshot's timestamp. The snapshot's `ts` acts as a watermark:
@@ -420,7 +420,7 @@ pub async fn restore_session_state(
     storage: &dyn AgentStorage,
     agent_id: Uuid,
     session_id: Uuid,
-) -> Result<SessionState, StorageError> {
+) -> Result<ContextState, StorageError> {
     let snapshot = storage
         .get_latest_snapshot_for_session(agent_id, session_id)
         .await?;

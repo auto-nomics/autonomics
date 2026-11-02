@@ -10,13 +10,13 @@ pub enum AgentLifecycleError {
     OtherLifecycleError(String),
 }
 
-/// In-memory lifecycle tracker for a [`Session`](crate::Session).
+/// In-memory lifecycle tracker for a [`Context`](crate::Context).
 ///
 /// The status is the single source of truth for the agent's current phase.
 /// Every transition should go through [`set_status`](Self::set_status),
 /// which records the new status. The caller is responsible for emitting
 /// `AgentEvent::LifecycleChanged` alongside the transition (typically via
-/// `Session::set_lifecycle`).
+/// `Context::set_lifecycle`).
 pub struct AgentLifecycle {
     status: AgentLifecycleStatus,
 }

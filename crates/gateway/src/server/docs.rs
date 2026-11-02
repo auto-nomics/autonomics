@@ -5,7 +5,7 @@ use utoipa::{Modify, OpenApi};
 
 use super::{
     agents, events, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
-    sessions, settings, skills, storage,
+    context, settings, skills, storage,
 };
 use crate::proto::*;
 
@@ -33,7 +33,7 @@ use crate::proto::*;
         agents::get_agent_config,
         agents::set_agent_config,
         agents::get_agent_dag,
-        sessions::request_session_list,
+        context::request_context_list,
         storage::list_storage_agents,
         storage::rename_storage_agent,
         storage::delete_storage_agent,
@@ -110,7 +110,7 @@ use crate::proto::*;
         (name = "gateway", description = "Daemon lifecycle and health"),
         (name = "hydration", description = "Frontend state bootstrap and SSE"),
         (name = "agents", description = "Live agent control"),
-        (name = "sessions", description = "Agent session control"),
+        (name = "context", description = "Agent working-context control"),
         (name = "storage", description = "Persisted agents, sessions, and history"),
         (name = "model-config", description = "Model providers, active model, and embedding"),
         (name = "settings", description = "Display settings"),

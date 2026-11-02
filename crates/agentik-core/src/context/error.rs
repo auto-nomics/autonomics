@@ -1,4 +1,4 @@
-//! Session-state errors.
+//! Context-state errors.
 
 use agentik_sdk::AnthropicError;
 use thiserror::Error;

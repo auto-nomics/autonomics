@@ -36,7 +36,7 @@ export type AgentInfo = {
   context_length?: number | null;
 };
 
-export type SessionInfo = {
+export type ContextInfo = {
   id: string;
   title?: string | null;
   created_at: number;
@@ -124,7 +124,7 @@ export type StateSnapshot = {
   active_model_spec: string | null;
   profiles: any[];
   agents: AgentInfo[];
-  sessions: Record<string, any[]>;
+  contexts: Record<string, ContextInfo[]>;
   display_settings: {
     collapse_thinking: boolean;
     collapse_tool_calls: boolean;

@@ -555,8 +555,8 @@ impl RuntimeHost {
             HostCommand::CompactAgent { name } => {
                 self.send_agent_command(&name, AgentCommand::Compact);
             }
-            HostCommand::ListSessions { name } => {
-                self.send_agent_command(&name, AgentCommand::ListSessions);
+            HostCommand::ListContexts { name } => {
+                self.send_agent_command(&name, AgentCommand::ListContexts);
             }
 
             // ── Model management ──

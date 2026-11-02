@@ -102,21 +102,18 @@ impl App {
             self.state.active_agent_idx
         };
 
-        let is_session_list = matches!(event, AgentEvent::SessionList { .. });
+        let is_context_list = matches!(event, AgentEvent::ContextList { .. });
         if matches!(
             event,
-            AgentEvent::SessionActivated { .. }
-                | AgentEvent::SessionPaused { .. }
-                | AgentEvent::SessionClosed { .. }
-                | AgentEvent::SessionList { .. }
+            AgentEvent::ContextActivated { .. } | AgentEvent::ContextList { .. }
         ) {
             // The backend restore emits no PlanUpdate for the activated
             // session's plan, so fetch it here (guarded by plan_requested).
             let activated = match &event {
-                AgentEvent::SessionActivated { id, .. } => Some(*id),
+                AgentEvent::ContextActivated { id, .. } => Some(*id),
                 _ => None,
             };
-            state::apply_session_event(&mut self.state, event, target_idx);
+            state::apply_context_event(&mut self.state, event, target_idx);
             if let Some(session_id) = activated {
                 self.spawn_plan_load_for(target_idx, session_id);
             }
@@ -138,9 +135,9 @@ impl App {
             }
         }
 
-        // After SessionList arrives, spawn background history loads when
+        // After ContextList arrives, spawn background history loads when
         // the context's tab_state is still empty.
-        if is_session_list {
+        if is_context_list {
             self.spawn_history_loads_for(target_idx);
         }
     }
@@ -603,8 +600,8 @@ impl App {
                     self.refresh_agent_model_info(&info.path);
                 }
             }
-            crate::app_event::AppEvent::SessionListKnown { agent, sessions } => {
-                self.apply_session_list(&agent, sessions);
+            crate::app_event::AppEvent::ContextListKnown { agent, contexts } => {
+                self.apply_context_list(&agent, contexts);
                 if let Some(idx) = self.state.sessions.iter().position(|s| s.name == agent) {
                     self.spawn_history_loads_for(idx);
                 }
@@ -660,12 +657,12 @@ impl App {
                 }
 
                 // Ask the daemon for the agent's session list. The response
-                // arrives as `AgentEvent::SessionList` through the event
+                // arrives as `AgentEvent::ContextList` through the event
                 // stream and is routed to this session's tab.
                 let client = self.client.clone();
                 let agent = name.clone();
-                self.spawn_client_task("list_sessions", move || async move {
-                    let _ = client.list_sessions(&agent).await;
+                self.spawn_client_task("list_contexts", move || async move {
+                    let _ = client.list_contexts(&agent).await;
                 });
 
                 // Prefetch the new agent's model info for the render cache.
@@ -754,9 +751,9 @@ impl App {
         tracing::info!(%session_id, count = context.tab_state.messages.len(), "history replayed");
     }
 
-    /// Fold a session list (from hydration or a `SessionList` event that
+    /// Fold a session list (from hydration or a `ContextList` event that
     /// arrived before the agent's sub-sessions existed) into the UI.
-    pub(super) fn apply_session_list(&mut self, agent_path: &str, sessions: Vec<SessionInfo>) {
+    pub(super) fn apply_context_list(&mut self, agent_path: &str, contexts: Vec<ContextInfo>) {
         let Some(agent) = self
             .state
             .sessions
@@ -769,7 +766,7 @@ impl App {
         // At most one context per agent; keep a loaded transcript when the
         // id matches.
         let old = agent.context.take();
-        agent.context = match sessions.into_iter().next() {
+        agent.context = match contexts.into_iter().next() {
             Some(info) => match old {
                 Some(old) if old.id == info.id => Some(state::AgentContext::from_info(info, old)),
                 _ => Some(state::AgentContext::new(info)),
@@ -833,7 +830,7 @@ impl App {
     /// The backend session restore loads the plan from storage but does NOT
     /// emit an `AgentEvent::PlanUpdate`, so the tab's `PlanState` would stay
     /// empty. The sub-session is marked `plan_requested` up front so repeat
-    /// hydrations (every `SessionList`) don't re-fetch.
+    /// hydrations (every `ContextList`) don't re-fetch.
     pub(super) fn spawn_plan_load_for(&mut self, agent_idx: usize, session_id: uuid::Uuid) {
         let Some(agent_session) = self.state.sessions.get(agent_idx) else {
             return;
@@ -898,10 +895,10 @@ impl App {
                     for info in &snapshot.agents {
                         tx.send(crate::app_event::AppEvent::AgentUpserted(info.clone()));
                     }
-                    for (agent_path, sessions) in snapshot.sessions {
-                        tx.send(crate::app_event::AppEvent::SessionListKnown {
+                    for (agent_path, contexts) in snapshot.contexts {
+                        tx.send(crate::app_event::AppEvent::ContextListKnown {
                             agent: agent_path,
-                            sessions,
+                            contexts,
                         });
                     }
                 }

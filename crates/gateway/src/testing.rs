@@ -20,7 +20,7 @@ use agentik_types::streaming::{
 use arc_swap::ArcSwapOption;
 
 use crate::client::GatewayClient;
-use crate::driver::{self, SessionCache};
+use crate::driver::{self, ContextCache};
 use crate::hub::EventHub;
 use crate::server::DockerHubClient;
 use crate::server::{GatewayState, router_with_bib};
@@ -252,7 +252,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     host.set_model(model_slot.clone());
 
     let hub = EventHub::new();
-    let sessions = SessionCache::new();
+    let contexts = ContextCache::new();
     let shutdown = CancellationToken::new();
 
     let storage =
@@ -269,7 +269,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());
     let state = GatewayState {
         hub: hub.clone(),
-        sessions: sessions.clone(),
+        contexts: contexts.clone(),
         control: host.control(),
         infra: host.infra(),
         dockerhub: Arc::new(DockerHubClient::default()),
@@ -292,7 +292,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let addr = server.addr();
 
     let infra = host.infra();
-    tokio::spawn(driver::run(host, hub, sessions, shutdown.clone()));
+    tokio::spawn(driver::run(host, hub, contexts, shutdown.clone()));
 
     TestGateway {
         addr,
