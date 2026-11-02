@@ -1819,7 +1819,7 @@ mod tests {
         for _ in 0..20 {
             outcome = Some(
                 client
-                    .run_dag_shell("let observed = graph_summary();".into(), false, Some(100))
+                    .run_dag_shell("graph_summary()".into(), false, Some(100))
                     .await
                     .unwrap(),
             );

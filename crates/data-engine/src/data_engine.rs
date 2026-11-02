@@ -17,8 +17,8 @@ use crate::dag::{
     RunReport, RuntimeStatus, SchedulerConfig,
 };
 use crate::dag_shell::{
-    DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, dynamic_to_json, execute_script,
-    graph_summary, normalize_timeout, operation_traces,
+    DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, execute_script, graph_summary,
+    normalize_timeout, operation_traces,
 };
 use crate::error::{Error, Result};
 use crate::node_registry::registry::NodeRegistry;
@@ -728,9 +728,7 @@ impl DataEngine {
         };
         let operations = execution.operations;
         let traces = operation_traces(&operations);
-        let result = dynamic_to_json(&execution.result, 0)
-            .and_then(|value| serde_json::to_string(&value).ok())
-            .unwrap_or_else(|| execution.result.to_string());
+        let result = execution.result;
 
         if !execution.committed {
             return DagShellOutcome {
