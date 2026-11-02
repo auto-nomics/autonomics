@@ -267,12 +267,7 @@ impl Session {
         while let Ok(event) = rx.try_recv() {
             if matches!(
                 event,
-                InternalEvent::CreateSession { .. }
-                    | InternalEvent::SwitchSession { .. }
-                    | InternalEvent::CloseSession { .. }
-                    | InternalEvent::ListSessions
-                    | InternalEvent::RenameSession { .. }
-                    | InternalEvent::Shutdown
+                InternalEvent::ListSessions | InternalEvent::Shutdown
             ) {
                 // Re-queue for the outer Agent::run() loop.
                 let _ = internal_event_tx.send(event);
@@ -391,11 +386,7 @@ impl Session {
             }
             // Session management events are handled by Agent, never reach
             // a Session. Return true (no-op) defensively.
-            InternalEvent::CreateSession { .. }
-            | InternalEvent::SwitchSession { .. }
-            | InternalEvent::CloseSession { .. }
-            | InternalEvent::ListSessions
-            | InternalEvent::RenameSession { .. } => true,
+            InternalEvent::ListSessions => true,
         }
     }
 

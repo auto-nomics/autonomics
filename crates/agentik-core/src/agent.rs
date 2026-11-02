@@ -80,33 +80,9 @@ pub enum InternalEvent {
     Shutdown,
     /// Replace the active session's cancellation token with a fresh one.
     ResetCancelToken(CancellationToken),
-    /// Legacy initialization command. Only an empty agent can initialize
-    /// its sole context; replacement and fork arguments are explicitly
-    /// refused.
-    CreateSession {
-        id: Uuid,
-        fork_from: Option<Uuid>,
-        fork_message_id: Option<String>,
-        title: Option<String>,
-    },
-    /// Legacy selection command: foreign context IDs are refused.
-    SwitchSession {
-        id: Uuid,
-    },
-    /// Legacy close command: refused; the context lives as long as its
-    /// agent.
-    CloseSession {
-        id: Uuid,
-    },
     /// Request a list of all sessions (reply via event channel). With one
     /// context per agent the reply carries at most one entry.
     ListSessions,
-    /// Rename the sole context (same-id renames only; foreign IDs are
-    /// refused).
-    RenameSession {
-        id: Uuid,
-        title: String,
-    },
     /// Manually trigger compaction on the active session.
     Compact,
 }
@@ -471,37 +447,10 @@ impl Agent {
 
             // Session management events are handled inline before delegation.
             let should_run = match &event {
-                InternalEvent::CreateSession {
-                    id,
-                    fork_from,
-                    fork_message_id,
-                    title,
-                } => {
-                    self.handle_create_session(
-                        *id,
-                        *fork_from,
-                        fork_message_id.as_deref(),
-                        title.clone(),
-                    )
-                    .await;
-                    false
-                }
-                InternalEvent::SwitchSession { id } => {
-                    self.handle_switch_session(*id).await;
-                    false
-                }
-                InternalEvent::CloseSession { id } => {
-                    self.handle_close_session(*id).await;
-                    false
-                }
                 InternalEvent::ListSessions => {
                     let infos: Vec<SessionInfo> = self.session_infos();
                     self.shared
                         .send_event(AgentEvent::SessionList { sessions: infos });
-                    false
-                }
-                InternalEvent::RenameSession { id, title } => {
-                    self.handle_rename_session(*id, title.clone()).await;
                     false
                 }
                 InternalEvent::MessageInject { .. } | InternalEvent::BgTaskComplete { .. } => true,
@@ -514,14 +463,7 @@ impl Agent {
             };
 
             // Non-session-management events go through apply_event.
-            if !matches!(
-                event,
-                InternalEvent::CreateSession { .. }
-                    | InternalEvent::SwitchSession { .. }
-                    | InternalEvent::CloseSession { .. }
-                    | InternalEvent::ListSessions
-                    | InternalEvent::RenameSession { .. }
-            ) {
+            if !matches!(event, InternalEvent::ListSessions) {
                 let keep_going = self.apply_event(event).await;
                 if !keep_going {
                     break;
@@ -605,85 +547,6 @@ impl Agent {
                 tracing::warn!(session_id = %id, error = %error, "failed to bind agent context");
             }
         }
-    }
-
-    // ── Session management handlers ───────────────────────
-
-    /// Uniform refusal for obsolete context-management commands.
-    fn refuse_context_change(&self) {
-        self.shared.send_event(AgentEvent::Error(
-            "SINGLE_CONTEXT_AGENT: each agent has one persistent context; create another agent for independent work".into(),
-        ));
-    }
-
-    /// Recognize the obsolete creation command so older senders get an
-    /// explicit refusal. Only an empty agent may initialize its sole
-    /// context this way; replacement and fork arguments are refused.
-    async fn handle_create_session(
-        &mut self,
-        id: Uuid,
-        fork_from: Option<Uuid>,
-        fork_message_id: Option<&str>,
-        title: Option<String>,
-    ) {
-        if self.context.is_some()
-            || self.recovery_notice.is_some()
-            || fork_from.is_some()
-            || fork_message_id.is_some()
-        {
-            self.refuse_context_change();
-            return;
-        }
-        // Compatibility for internal initialization of an empty agent only.
-        let mut context = Session::new(id, self.shared.clone());
-        context.title = title;
-        context.cancel_token = self.cancel_token.clone();
-        context.resume().await;
-        self.bind_context(id).await;
-        if let Some(ref t) = context.title {
-            self.persist_session_title(id, t).await;
-        }
-        self.shared.send_event(AgentEvent::SessionActivated {
-            id,
-            title: context.title.clone(),
-        });
-        self.context = Some(context);
-        self.shared.send_event(AgentEvent::SessionList {
-            sessions: self.session_infos(),
-        });
-    }
-
-    /// Legacy selection command: only the already-bound context id is
-    /// accepted (as a no-op); foreign ids are refused.
-    async fn handle_switch_session(&mut self, id: Uuid) {
-        if self.context.as_ref().is_none_or(|context| context.id != id) {
-            self.refuse_context_change();
-        }
-    }
-
-    /// Rename the sole context (same-id renames only).
-    async fn handle_rename_session(&mut self, id: Uuid, title: String) {
-        if self.context.as_ref().is_none_or(|context| context.id != id) {
-            self.refuse_context_change();
-            return;
-        }
-        if let Some(s) = self.context.as_mut() {
-            s.title = Some(title.clone());
-            tracing::info!(session_id = %id, title = %title, "context renamed");
-        }
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.update_session_title(id, &title).await;
-        }
-        self.shared.send_event(AgentEvent::SessionActivated {
-            id,
-            title: Some(title),
-        });
-    }
-
-    /// Legacy close command: refused; the context lives as long as its
-    /// agent and its history stays readable through storage APIs.
-    async fn handle_close_session(&mut self, _id: Uuid) {
-        self.refuse_context_change();
     }
 
     /// Dispatch a conversation event to the active session.
