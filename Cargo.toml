@@ -44,6 +44,7 @@ members = [
   "crates/opentargets",
   "crates/runtime",
   "crates/vfs",
+  "crates/hpc-tools",
   "crates/biofusion",
   "crates/alphafold",
   "crates/interpro",

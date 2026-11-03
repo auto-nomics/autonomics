@@ -6358,6 +6358,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hpc-tools"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "libc",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "vfs",
+]
+
+[[package]]
 name = "htan"
 version = "0.1.0"
 dependencies = [
@@ -15604,6 +15625,7 @@ dependencies = [
  "datafusion",
  "futures",
  "glob",
+ "libc",
  "opendal",
  "regex",
  "schemars 1.2.2",

@@ -449,7 +449,13 @@ impl ToolDefinition {
         value: &Value,
         schema: &Value,
     ) -> Result<(), ToolValidationError> {
-        if let Some(expected_type) = schema.get("type").and_then(|t| t.as_str()) {
+        if let Some(expected_types) = schema.get("type").and_then(|types| match types {
+            Value::String(name) => Some(vec![name.as_str()]),
+            Value::Array(names) if !names.is_empty() => {
+                names.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
+            }
+            _ => None,
+        }) {
             let actual_type = match value {
                 Value::Null => "null",
                 Value::Bool(_) => "boolean",
@@ -459,10 +465,14 @@ impl ToolDefinition {
                 Value::Object(_) => "object",
             };
 
-            if expected_type != actual_type {
+            if !expected_types.iter().any(|expected| {
+                *expected == actual_type
+                    || (*expected == "integer"
+                        && (value.as_i64().is_some() || value.as_u64().is_some()))
+            }) {
                 return Err(ToolValidationError::InvalidFieldType {
                     field: field_name.to_string(),
-                    expected: expected_type.to_string(),
+                    expected: expected_types.join(" | "),
                     actual: actual_type.to_string(),
                     tool: self.name.clone(),
                 });
