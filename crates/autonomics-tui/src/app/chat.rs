@@ -213,12 +213,19 @@ impl App {
         if let Some(text) = send_text {
             let name = self.state.sessions.get(active_idx).map(|s| s.name.clone());
             if let Some(name) = name {
-                let client = self.client.clone();
-                self.spawn_client_task("deliver_message", move || async move {
-                    if let Err(e) = client.deliver_message(&name, text).await {
-                        tracing::error!(agent = %name, error = %e, "message delivery failed");
-                    }
-                });
+                if self.state.is_agent_live(&name) {
+                    let client = self.client.clone();
+                    self.spawn_client_task("deliver_message", move || async move {
+                        if let Err(e) = client.deliver_message(&name, text).await {
+                            tracing::error!(agent = %name, error = %e, "message delivery failed");
+                        }
+                    });
+                } else {
+                    // The leaf's identity was passivated (virtual-actor
+                    // idle TTL). Re-activate it from storage and deliver
+                    // the moment registration lands.
+                    self.reactivate_agent(&name, text);
+                }
             }
         }
     }

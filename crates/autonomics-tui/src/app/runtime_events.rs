@@ -148,52 +148,41 @@ impl App {
             crate::app_event::AppEvent::AgentRecordsLoaded { query, records } => {
                 // Stale-guard: a newer keystroke may have moved the query
                 // while this page was in flight.
-                if self.state.agent_profile_picker.query != query {
-                    tracing::debug!(%query, current = %self.state.agent_profile_picker.query, "dropping stale agent records page");
+                if self.state.agents_popup.query() != query {
+                    tracing::debug!(%query, current = %self.state.agents_popup.query(), "dropping stale agent records page");
                     return;
                 }
-                let already_open = self.state.agent_profile_picker.visible;
-                self.state.agent_profile_picker.set_records(&records);
-                // Only the initial open resets the picker — a search
-                // refresh must keep the query and cursor in place.
-                if !already_open {
-                    self.state.agent_profile_picker.open();
-                }
-                tracing::info!(count = records.len(), "agent records page applied");
+                self.state.stored_records = records;
+                self.refresh_agents_popup();
+                tracing::info!(count = self.state.stored_records.len(), "agent records page applied");
             }
             crate::app_event::AppEvent::SearchStoredAgents(query) => {
                 // Only the newest query matters.
-                if self.state.agent_profile_picker.query != query {
+                if self.state.agents_popup.query() != query {
                     return;
                 }
-                let client = self.client.clone();
-                let tx = self.app_event_tx.clone();
-                self.spawn_client_task("search_stored_agents", move || async move {
-                    match client.search_storage_agents(&query, 100).await {
-                        Ok(records) => {
-                            tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
-                                query,
-                                records,
-                            });
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, "stored agent search failed");
-                        }
-                    }
-                });
+                self.fetch_stored_agents(&query);
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
-                self.state.agent_profile_picker.remove_by_id(agent_id);
-                // If this agent's leaf is currently open, close it too — all
-                // stored data has been erased so there's nothing to resume.
+                self.state.stored_records.retain(|record| record.id != agent_id);
+                // If this identity's leaf is currently open, close it too —
+                // all stored data has been erased so there's nothing to
+                // resume.
                 self.close_agent_leaf_by_id(agent_id);
-                tracing::info!(%agent_id, "agent removed from picker after deletion");
+                self.refresh_agents_popup();
+                tracing::info!(%agent_id, "identity removed after deletion");
             }
             crate::app_event::AppEvent::AgentRenamed { agent_id, new_path } => {
-                self.state
-                    .agent_profile_picker
-                    .apply_rename(agent_id, new_path.clone());
-                tracing::info!(%agent_id, new_path = %new_path, "agent renamed in picker");
+                if let Some(record) = self
+                    .state
+                    .stored_records
+                    .iter_mut()
+                    .find(|record| record.id == agent_id)
+                {
+                    record.name = new_path.as_str().to_string();
+                }
+                self.refresh_agents_popup();
+                tracing::info!(%agent_id, new_path = %new_path, "identity renamed in storage");
             }
             crate::app_event::AppEvent::HistoryLoaded {
                 agent_id,
@@ -261,6 +250,9 @@ impl App {
                     // Clear the focus flag so a stale request doesn't
                     // mis-attach to a later, unrelated registration.
                     self.state.pending_focus_agent_name = None;
+                    // A queued re-activation message can never deliver
+                    // now — surface it instead of leaving it dangling.
+                    self.state.pending_outbound = None;
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                     self.state.toasts.error("Agent creation failed", Some(e));
                 }
@@ -499,15 +491,34 @@ impl App {
                 }
             }
             crate::app_event::AppEvent::AgentUpserted(info) => {
-                if !self.state.sessions.iter().any(|s| s.name == info.path) {
-                    self.state.sessions.push(state::AgentSession {
-                        name: info.path.clone(),
-                        agent_id: info.agent_id.unwrap_or_default(),
-                        context: None,
-                        pending_tab_state: Default::default(),
-                    });
-                    self.refresh_agent_model_info(&info.path);
+                let agent_id = info.agent_id.unwrap_or_default();
+                self.state
+                    .upsert_live_agent(&info.path, agent_id, info.status);
+                // The reconcile snapshot never opens leaves on its own —
+                // except the very first startup view (see
+                // `apply_host_event`).
+                if self.state.sessions.is_empty() && !self.state.opened_leaf {
+                    let path = info.path.clone();
+                    self.open_leaf_for(&path, agent_id);
                 }
+            }
+            crate::app_event::AppEvent::ReactivateAgent { record, text } => {
+                let Ok(path) = agentik_types::AgentPath::try_from(record.name.as_str()) else {
+                    self.state.toasts.error(
+                        "Message not delivered",
+                        Some(format!("invalid stored path: {}", record.name)),
+                    );
+                    return;
+                };
+                // Tolerant parse covers both the current per-agent config
+                // shape and legacy full-profile rows.
+                let config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
+                self.state.pending_outbound = Some((path.as_str().to_string(), text));
+                tracing::info!(agent = %path, "re-activating passivated identity for delivery");
+                self.spawn_agent_at_path(config, path);
+            }
+            crate::app_event::AppEvent::ShowError { title, detail } => {
+                self.state.toasts.error(title, detail);
             }
             crate::app_event::AppEvent::ContextListKnown { agent, context } => {
                 self.apply_context_list(&agent, context);
@@ -519,17 +530,40 @@ impl App {
     }
 
     /// Apply a [`gateway::proto::HostEventView`] (agent registered /
-    /// unregistered / status changed) by keeping the TUI's session list in
-    /// sync with the daemon's agent registry. This is the key bridge that
-    /// makes tool-spawned agents visible in the TUI.
+    /// unregistered / status changed) by keeping the TUI's live-registry
+    /// mirror in sync with the daemon's agent registry. Open leaves are
+    /// view windows over identities: they never open on registration
+    /// (except the user's own spawn/resume or the initial view) and never
+    /// close on unregistration — a passivated agent's leaf simply goes
+    /// dormant until a message re-activates it.
     pub(super) fn apply_host_event(&mut self, event: gateway::proto::HostEventView) {
         match event {
             gateway::proto::HostEventView::AgentRegistered { path, info } => {
                 let name = path.clone();
-                // Check if the TUI already knows about this agent.
-                if self.state.sessions.iter().any(|s| s.name == name) {
-                    return;
+                let agent_id =
+                    registered_agent_id(&gateway::proto::HostEventView::AgentRegistered {
+                        path: path.clone(),
+                        info: info.clone(),
+                    })
+                    .unwrap_or_else(uuid::Uuid::new_v4);
+                self.state
+                    .upsert_live_agent(&name, agent_id, info.status);
+
+                // Deliver a message queued while this identity was
+                // passivated — registration is the earliest moment the
+                // daemon can accept a delivery.
+                if self.state.pending_outbound.as_ref().is_some_and(|(pending, _)| pending == &name)
+                {
+                    let (_, text) = self.state.pending_outbound.take().expect("checked above");
+                    let client = self.client.clone();
+                    let agent = name.clone();
+                    self.spawn_client_task("deliver_pending_message", move || async move {
+                        if let Err(e) = client.deliver_message(&agent, text).await {
+                            tracing::error!(agent = %agent, error = %e, "pending message delivery failed");
+                        }
+                    });
                 }
+
                 // Did the user explicitly ask to land on this leaf?
                 // Matches by short name (`info.name`) since the spawn
                 // was requested with the picker-visible short name.
@@ -538,64 +572,62 @@ impl App {
                     .pending_focus_agent_name
                     .as_deref()
                     .is_some_and(|wanted| wanted == info.name);
-                // Add a new session tab for the tool-spawned agent.
-                // Do NOT steal focus — the user may be interacting with
-                // another agent. The new tab appears but focus stays
-                // where the user left it.
-                let agent_id =
-                    registered_agent_id(&gateway::proto::HostEventView::AgentRegistered {
-                        path: path.clone(),
-                        info: info.clone(),
-                    })
-                    .unwrap_or_else(uuid::Uuid::new_v4);
-                self.state.sessions.push(state::AgentSession {
-                    name: name.clone(),
-                    agent_id,
-                    context: None,
-                    pending_tab_state: Default::default(),
-                });
                 if steal_focus {
-                    let new_idx = self.state.sessions.len() - 1;
-                    self.state.active_agent_idx = new_idx;
                     self.state.pending_focus_agent_name = None;
-                    tracing::info!(
-                        agent = %name,
-                        leaf_idx = new_idx,
-                        "stole focus to user-restored leaf"
-                    );
                 }
 
-                // Ask the daemon for the agent's session list. The response
-                // arrives as `AgentEvent::ContextList` through the event
-                // stream and is routed to this session's tab.
-                let client = self.client.clone();
-                let agent = name.clone();
-                self.spawn_client_task("list_contexts", move || async move {
-                    let _ = client.list_contexts(&agent).await;
-                });
-
-                // Prefetch the new agent's model info for the render cache.
-                self.refresh_agent_model_info(&name);
-                tracing::info!(agent = %name, "daemon agent registered to TUI (no focus steal)");
+                if let Some(session) =
+                    self.state.sessions.iter_mut().find(|s| s.name == name)
+                {
+                    // An open leaf already covers this identity (e.g. a
+                    // dormant view re-activated): refresh its identity
+                    // binding and hydrate the context.
+                    session.agent_id = agent_id;
+                    self.hydrate_leaf(&name);
+                    if steal_focus {
+                        let idx = self
+                            .state
+                            .sessions
+                            .iter()
+                            .position(|s| s.name == name)
+                            .expect("leaf exists");
+                        self.state.active_agent_idx = idx;
+                        tracing::info!(agent = %name, leaf_idx = idx, "stole focus to user-restored leaf");
+                    }
+                } else if steal_focus {
+                    // User-initiated spawn/resume: open a leaf and focus it.
+                    let idx = self.open_leaf_for(&name, agent_id);
+                    tracing::info!(agent = %name, leaf_idx = idx, "opened leaf for user spawn");
+                } else if self.state.sessions.is_empty() && !self.state.opened_leaf {
+                    // Initial view: the very first live agent seen at
+                    // startup becomes the starting leaf so the workspace
+                    // is never blank; everything after this is silent.
+                    self.open_leaf_for(&name, agent_id);
+                } else {
+                    // Tool-spawned child or unrelated registration:
+                    // registry-only, completely silent.
+                    tracing::info!(agent = %name, "daemon agent registered (registry-only)");
+                }
             }
             gateway::proto::HostEventView::AgentUnregistered { path } => {
-                self.state.sessions.retain(|s| s.name != path);
+                // Passivation or shutdown of the live instance. The leaf
+                // stays: it is a view over the identity, which survives
+                // in storage and re-activates on the next message.
+                self.state.remove_live_agent(&path);
                 self.agent_model_cache.remove(&path);
-                if self.state.active_agent_idx >= self.state.sessions.len() {
-                    self.state.active_agent_idx = self.state.sessions.len().saturating_sub(1);
-                }
-                tracing::info!(agent = %path, "daemon agent unregistered from TUI");
+                tracing::info!(agent = %path, "daemon agent passivated — leaf kept, view dormant");
             }
-            // Cross-agent runtime status update. The per-session
-            // `AgentTabState.status` is driven by the agent's own
-            // `LifecycleChanged` event stream (via the session tab), so
-            // this arm is a log-only bridge — it does NOT overwrite the
-            // tab's status, which has finer-grained variants.
+            // Cross-agent runtime status update. Refreshes the
+            // live-registry mirror (the unified picker reads it); the
+            // per-session `AgentTabState.status` keeps being driven by
+            // the agent's own `LifecycleChanged` event stream (via the
+            // session tab), which has finer-grained variants.
             gateway::proto::HostEventView::AgentStatusChanged {
                 path,
                 status,
                 last_event,
             } => {
+                self.state.set_live_status(&path, status);
                 tracing::debug!(
                     agent = %path,
                     status = %status.tag(),
@@ -615,6 +647,9 @@ impl App {
                 tracing::debug!(                    agent = %path,                    model = %spec,                    context = context_length,                    "daemon observed agent model change"                );
             }
         }
+        // Any registry movement (registration, passivation, status) is
+        // visible in an open unified popup — rebuild its rows in place.
+        self.refresh_agents_popup();
     }
 
     /// Replay conversation history loaded from the daemon into the TUI's

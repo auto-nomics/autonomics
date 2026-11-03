@@ -295,17 +295,6 @@ impl App {
             Overlay::DeleteConfirm => {
                 self.render_delete_confirm_popup(frame.area(), frame.buffer_mut());
             }
-            Overlay::AgentProfilePicker => {
-                use ratatui::widgets::StatefulWidget as _;
-                crate::widgets::agent_profile_picker::AgentProfilePicker::new()
-                    .popup_width((frame.area().width * 8 / 10).max(70))
-                    .list_width(28)
-                    .render(
-                        frame.area(),
-                        frame.buffer_mut(),
-                        &mut self.state.agent_profile_picker,
-                    );
-            }
             Overlay::AgentsPopup => {
                 crate::widgets::agents_popup::render_agents_popup(
                     frame.area(),

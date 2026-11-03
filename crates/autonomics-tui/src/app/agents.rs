@@ -105,38 +105,150 @@ impl App {
         tracing::info!(kind = kind.name(), agent = %target_path, "spawning agent...");
     }
 
-    /// Snapshot all running agents for the sidebar's docked switch-agent
-    /// panel, in the panel's display order (shallow paths first).
-    pub(super) fn running_agents_snapshot(
-        &self,
-    ) -> Vec<crate::widgets::agents_popup::RunningAgent> {
+    /// Build the unified popup's identity rows: every live agent (from
+    /// the registry mirror) plus every dormant identity on the loaded
+    /// stored page, deduped by path and identity id. Shallow-path-first
+    /// order; new-agent entries are the popup's own concern.
+    pub(super) fn unified_agent_rows(&self) -> Vec<crate::widgets::agents_popup::AgentRow> {
         let active_name = self
             .state
             .sessions
             .get(self.state.active_agent_idx)
             .map(|s| s.name.clone());
-        let mut agents: Vec<crate::widgets::agents_popup::RunningAgent> = self
+        let record_for = |name: &str, id: uuid::Uuid| {
+            self.state
+                .stored_records
+                .iter()
+                .find(|record| record.name == name || record.id == id)
+        };
+        let mut rows: Vec<crate::widgets::agents_popup::AgentRow> = self
             .state
-            .sessions
+            .live_agents
             .iter()
-            .map(|s| {
-                let model_display = self.agent_model_cache.get(&s.name);
-                crate::widgets::agents_popup::RunningAgent {
-                    name: s.name.clone(),
-                    agent_id: s.agent_id,
-                    status: s
-                        .context
-                        .as_ref()
-                        .map(|context| context.tab_state.status)
-                        .unwrap_or_else(|| s.pending_tab_state.status),
-                    is_active: active_name.as_deref() == Some(s.name.as_str()),
+            .map(|live| {
+                let model_display = self.agent_model_cache.get(&live.name);
+                crate::widgets::agents_popup::AgentRow {
+                    name: live.name.clone(),
+                    agent_id: live.agent_id,
+                    status: live.status,
+                    live: true,
+                    is_active: active_name.as_deref() == Some(live.name.as_str()),
+                    is_open: self.state.sessions.iter().any(|s| s.name == live.name),
                     model: model_display.map(|display| display.spec.clone()),
                     effort: model_display.and_then(|display| display.reasoning_effort.clone()),
+                    config_json: record_for(&live.name, live.agent_id)
+                        .map(|record| record.config_json.clone())
+                        .unwrap_or_default(),
                 }
             })
             .collect();
-        crate::widgets::agents_popup::sort_running_agents(&mut agents);
-        agents
+        // Dormant identities: stored rows with no live instance (by path
+        // or identity id).
+        for record in &self.state.stored_records {
+            let live_by_name = self.state.live_agents.iter().any(|e| e.name == record.name);
+            let live_by_id = self
+                .state
+                .live_agents
+                .iter()
+                .any(|e| e.agent_id == record.id);
+            if live_by_name || live_by_id {
+                continue;
+            }
+            if let Ok(path) = agentik_types::AgentPath::try_from(record.name.as_str()) {
+                let preferred = record
+                    .config_json
+                    .get("preferred_model")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                rows.push(crate::widgets::agents_popup::AgentRow {
+                    name: path.as_str().to_string(),
+                    agent_id: record.id,
+                    status: agentik_types::AgentLifecycleStatus::Idle,
+                    live: false,
+                    is_active: active_name.as_deref() == Some(path.as_str()),
+                    is_open: self.state.sessions.iter().any(|s| s.name == path.as_str()),
+                    model: preferred,
+                    effort: None,
+                    config_json: record.config_json.clone(),
+                });
+            }
+        }
+        crate::widgets::agents_popup::sort_agent_rows(&mut rows);
+        rows
+    }
+
+    /// Open a leaf (view window) for a live agent: pushes a session if
+    /// none covers the path yet, requests the context list, and
+    /// prefetches the model render cache. Returns the leaf index. Never
+    /// steals focus by itself — the caller decides.
+    pub(super) fn open_leaf_for(&mut self, name: &str, agent_id: uuid::Uuid) -> usize {
+        if let Some(idx) = self.state.sessions.iter().position(|s| s.name == name) {
+            return idx;
+        }
+        self.state.sessions.push(state::AgentSession {
+            name: name.to_string(),
+            agent_id,
+            context: None,
+            pending_tab_state: Default::default(),
+        });
+        self.state.opened_leaf = true;
+        let idx = self.state.sessions.len() - 1;
+        self.hydrate_leaf(name);
+        idx
+    }
+
+    /// Hydrate a leaf's data: ask the daemon for the agent's context list
+    /// (the reply arrives as `AgentEvent::ContextList` through the event
+    /// stream) and prefetch the model info for the render cache. Used
+    /// when a leaf opens and when a dormant leaf's identity re-activates.
+    pub(super) fn hydrate_leaf(&mut self, name: &str) {
+        let client = self.client.clone();
+        let agent = name.to_string();
+        self.spawn_client_task("list_contexts", move || async move {
+            let _ = client.list_contexts(&agent).await;
+        });
+        self.refresh_agent_model_info(name);
+    }
+
+    /// Re-activate a passivated identity so a queued message can be
+    /// delivered. Looks up the stored record by exact path, then hands it
+    /// to the main loop as [`AppEvent::ReactivateAgent`], which re-spawns
+    /// the agent at its persisted path; the message rides in
+    /// `pending_outbound` until the `AgentRegistered` frame lands.
+    pub(super) fn reactivate_agent(&mut self, name: &str, text: String) {
+        if self.state.active_model_spec.is_none() {
+            self.state.toasts.error(
+                "Message not delivered",
+                Some("Configure a model before waking agents".into()),
+            );
+            return;
+        }
+        tracing::info!(agent = %name, "agent passivated — re-activating for delivery");
+        let client = self.client.clone();
+        let tx = self.app_event_tx.clone();
+        let query = name.to_string();
+        self.spawn_client_task("reactivate_agent", move || async move {
+            match client.search_storage_agents(&query, 100).await {
+                Ok(records) => {
+                    if let Some(record) = records.into_iter().find(|r| r.name == query) {
+                        tx.send(crate::app_event::AppEvent::ReactivateAgent { record, text });
+                    } else {
+                        tracing::error!(agent = %query, "no stored record — cannot re-activate");
+                        tx.send(crate::app_event::AppEvent::ShowError {
+                            title: "Message not delivered".into(),
+                            detail: Some(format!("no stored record for `{query}`")),
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(agent = %query, error = %e, "stored record lookup failed");
+                    tx.send(crate::app_event::AppEvent::ShowError {
+                        title: "Message not delivered".into(),
+                        detail: Some(e.to_string()),
+                    });
+                }
+            }
+        });
     }
 
     /// Switch the active leaf to the agent with this identity. Returns
@@ -155,20 +267,19 @@ impl App {
         true
     }
 
-    /// Query stored agents and open the resume picker. The initial page
-    /// is the newest identities (server-bounded); typing searches
-    /// server-side via [`Self::schedule_stored_agent_search`].
-    pub(super) fn open_agent_profile_picker(&mut self) {
-        tracing::info!("open_agent_profile_picker called");
+    /// Fetch one bounded page of stored identities for the unified
+    /// agents popup. The initial page is the newest identities;
+    /// typing searches server-side via [`Self::schedule_stored_agent_search`].
+    pub(super) fn fetch_stored_agents(&mut self, query: &str) {
         let client = self.client.clone();
         let tx = self.app_event_tx.clone();
-        self.spawn_client_task("list_agents", move || async move {
-            tracing::debug!("querying stored agents from the daemon's storage");
-            match client.search_storage_agents("", 100).await {
+        let query = query.to_string();
+        self.spawn_client_task("search_stored_agents", move || async move {
+            match client.search_storage_agents(&query, 100).await {
                 Ok(records) => {
                     tracing::info!(count = records.len(), "stored agents page loaded");
                     tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
-                        query: String::new(),
+                        query,
                         records,
                     });
                 }
@@ -179,141 +290,16 @@ impl App {
         });
     }
 
-    /// Debounced server-side search: 250ms after the last keystroke,
-    /// fetch one bounded page for the picker's current query. The apply
-    /// side drops pages whose query has already moved on.
+    /// Debounced server-side identity search: 250ms after the last
+    /// keystroke, fetch one bounded page for the popup's current query.
+    /// The apply side drops pages whose query has already moved on.
     pub(super) fn schedule_stored_agent_search(&mut self) {
-        let query = self.state.agent_profile_picker.query.clone();
+        let query = self.state.agents_popup.query().to_string();
         let tx = self.app_event_tx.clone();
         self.spawn_client_task("search_stored_agents_debounce", move || async move {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             tx.send(crate::app_event::AppEvent::SearchStoredAgents(query));
         });
-    }
-
-    /// Key handling while the agent resume picker popup is open.
-    pub(super) fn handle_agent_profile_picker_key(&mut self, key: &KeyEvent) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        // If rename mode is active, route keys to the rename input.
-        if self.state.agent_profile_picker.rename_id.is_some() {
-            match key.code {
-                KeyCode::Esc => self.state.agent_profile_picker.cancel_rename(),
-                KeyCode::Backspace => {
-                    self.state.agent_profile_picker.rename_input.pop();
-                }
-                KeyCode::Char(c) if !ctrl => {
-                    self.state.agent_profile_picker.rename_input.push(c);
-                }
-                KeyCode::Enter => {
-                    if let Some((agent_id, new_path)) =
-                        self.state.agent_profile_picker.check_rename()
-                    {
-                        self.rename_agent_record(agent_id, new_path);
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        // If delete confirmation is active, route keys differently.
-        if self.state.agent_profile_picker.delete_confirm_id.is_some() {
-            match key.code {
-                KeyCode::Esc => self.state.agent_profile_picker.cancel_delete(),
-                KeyCode::Backspace => {
-                    self.state.agent_profile_picker.delete_confirm_input.pop();
-                }
-                KeyCode::Char(c) if !ctrl => {
-                    self.state.agent_profile_picker.delete_confirm_input.push(c);
-                }
-                KeyCode::Enter => {
-                    // Only commit when the typed confirmation matches
-                    // "yes" (case-insensitive). Partial / empty / typo
-                    // input is silently ignored so the user can keep
-                    // typing without losing context. Esc cancels.
-                    if let Some(agent_id) = self.state.agent_profile_picker.check_delete_confirm() {
-                        self.delete_agent_record(agent_id);
-                    }
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        // Normal mode.
-        match key.code {
-            KeyCode::Esc => {
-                self.state.agent_profile_picker.close();
-            }
-            KeyCode::Up => self.state.agent_profile_picker.move_up(),
-            KeyCode::Down => self.state.agent_profile_picker.move_down(),
-            KeyCode::Left | KeyCode::Tab => self.state.agent_profile_picker.toggle_expand(),
-            KeyCode::Right => self.state.agent_profile_picker.toggle_expand(),
-            KeyCode::Backspace => {
-                self.state.agent_profile_picker.pop_char();
-                self.schedule_stored_agent_search();
-            }
-            KeyCode::Char('d') if ctrl => {
-                self.state.agent_profile_picker.start_delete_confirm();
-            }
-            KeyCode::Char('r') if ctrl => {
-                self.state.agent_profile_picker.start_rename();
-            }
-            KeyCode::Char(c) if !ctrl => self.state.agent_profile_picker.push_char(c),
-            KeyCode::Enter => {
-                // If cursor is on a folder, toggle expand/collapse.
-                let on_leaf = self.state.agent_profile_picker.selected_item().is_some();
-                if !on_leaf {
-                    self.state.agent_profile_picker.toggle_expand();
-                    return;
-                }
-                match self.state.agent_profile_picker.selected() {
-                    Some(crate::widgets::agent_profile_picker::PickerSelection::NewAgent(kind)) => {
-                        // Merged picker: same naming flow the old profile
-                        // picker drove — stash the kind, open the name input.
-                        self.state.agent_profile_picker.close();
-                        self.state.pending_profile = Some(kind);
-                        self.state
-                            .name_input
-                            .open(format!(" New Agent ({kind}) "), kind.name());
-                    }
-                    Some(crate::widgets::agent_profile_picker::PickerSelection::Stored(item)) => {
-                        // If this agent is already open in a leaf, just switch focus
-                        // instead of spawning a duplicate.
-                        if let Some(idx) = self
-                            .state
-                            .sessions
-                            .iter()
-                            .position(|s| s.agent_id == item.id)
-                        {
-                            tracing::info!(
-                                agent_id = %item.id,
-                                leaf_idx = idx,
-                                "agent already open — switching focus instead of restoring"
-                            );
-                            self.state.active_agent_idx = idx;
-                            self.state.agent_profile_picker.close();
-                            return;
-                        }
-
-                        let config_json = item.config_json.clone();
-                        // `item.path` is the full persisted AgentPath. Preserve its
-                        // hierarchy so child agents restore their original runtime ID.
-                        self.state.agent_profile_picker.close();
-                        // Tolerant parse covers both the current per-agent config
-                        // shape and legacy full-profile rows.
-                        let config = agentik_core::AgentProfileConfig::from_json(&config_json);
-                        self.spawn_agent_at_path(config, item.path);
-                    }
-                    None => {
-                        // Folder row — expand/collapse.
-                        self.state.agent_profile_picker.toggle_expand();
-                    }
-                }
-            }
-            _ => {}
-        }
     }
 
     /// Delete an agent record from storage and update the picker list.

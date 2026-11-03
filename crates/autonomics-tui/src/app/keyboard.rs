@@ -252,7 +252,6 @@ impl App {
         if let Some(overlay) = top_overlay {
             match overlay {
                 Overlay::CommandPalette => self.handle_command_palette_key(key),
-                Overlay::AgentProfilePicker => self.handle_agent_profile_picker_key(key),
                 Overlay::NameInput => self.handle_name_input_key(key),
                 Overlay::AgentsPopup => self.handle_agents_popup_key(key),
                 Overlay::PlanPopup => self.handle_plan_popup_key(key),

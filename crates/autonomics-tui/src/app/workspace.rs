@@ -252,12 +252,12 @@ impl App {
 }
 
 impl App {
-    /// Keys while the agents popup (Ctrl+T) is open. The popup resolves
-    /// every quick-switch action; this maps its outcomes onto App calls.
+    /// Keys while the unified agents popup (Ctrl+T) is open. The popup
+    /// resolves every quick-switch action; this maps its outcomes onto
+    /// App calls.
     pub(super) fn handle_agents_popup_key(&mut self, key: &KeyEvent) {
         use crate::widgets::agents_popup::AgentsPopupKeyOutcome;
-        // Ctrl+W inside the popup closes the selected leaf, mirroring the
-        // former picker's close behavior.
+        // Ctrl+W inside the popup closes the selected identity's leaf.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('w') {
             if let Some(agent) = self.state.agents_popup.selected_agent() {
                 let id = agent.agent_id;
@@ -266,12 +266,49 @@ impl App {
             }
             return;
         }
-        match self.state.agents_popup.handle_key(*key) {
+        let query_before = self.state.agents_popup.query().to_string();
+        let outcome = self.state.agents_popup.handle_key(*key);
+        // A settled search keystroke refreshes the server-side identity
+        // page (dormant rows) — the local filter already applied.
+        if self.state.agents_popup.is_visible()
+            && query_before != self.state.agents_popup.query()
+        {
+            self.schedule_stored_agent_search();
+        }
+        match outcome {
             AgentsPopupKeyOutcome::Consumed => {}
             AgentsPopupKeyOutcome::Close => self.state.agents_popup.close(),
-            AgentsPopupKeyOutcome::Switch(agent_id) => {
+            AgentsPopupKeyOutcome::OpenOrSwitch { name, agent_id } => {
                 self.state.agents_popup.close();
-                self.switch_active_agent(agent_id);
+                // Switch the covering leaf, or open a view window for
+                // this identity and focus it.
+                if !self.switch_active_agent(agent_id) {
+                    let idx = self.open_leaf_for(&name, agent_id);
+                    self.state.active_agent_idx = idx;
+                    self.dirty = true;
+                }
+            }
+            AgentsPopupKeyOutcome::Resume { path, config_json } => {
+                self.state.agents_popup.close();
+                // Tolerant parse covers both the current per-agent config
+                // shape and legacy full-profile rows. The spawn sets the
+                // pending-focus flag, so the registration lands on a new
+                // leaf.
+                let config = agentik_core::AgentProfileConfig::from_json(&config_json);
+                self.spawn_agent_at_path(config, path);
+            }
+            AgentsPopupKeyOutcome::NewAgent(kind) => {
+                self.state.agents_popup.close();
+                self.state.pending_profile = Some(kind);
+                self.state
+                    .name_input
+                    .open(format!(" New Agent ({kind}) "), kind.name());
+            }
+            AgentsPopupKeyOutcome::Rename { agent_id, new_path } => {
+                self.rename_agent_record(agent_id, new_path);
+            }
+            AgentsPopupKeyOutcome::Delete(agent_id) => {
+                self.delete_agent_record(agent_id);
             }
             AgentsPopupKeyOutcome::OpenModelPicker { agent } => {
                 self.open_agent_model_picker_single(&agent);
@@ -288,16 +325,38 @@ impl App {
         }
     }
 
-    /// Toggle the agents popup (Ctrl+T): opening snapshots the running
-    /// agents into the picker.
+    /// Toggle the unified agents popup (Ctrl+T): opening assembles live
+    /// registry rows + the stored identity page, kicks a page refresh,
+    /// and prefetches model info for live agents missing from the render
+    /// cache.
     pub(super) fn toggle_agents_popup(&mut self) {
         if self.state.agents_popup.is_visible() {
             self.state.agents_popup.close();
             return;
         }
-        let mut agents = self.running_agents_snapshot();
-        crate::widgets::agents_popup::sort_running_agents(&mut agents);
-        self.state.agents_popup.open_with(agents);
+        let rows = self.unified_agent_rows();
+        self.state.agents_popup.open_with(rows);
+        // Refresh the dormant-identity page; the reply rebuilds the popup
+        // in place (query and tab survive).
+        let query = self.state.agents_popup.query().to_string();
+        self.fetch_stored_agents(&query);
+        // Model column: fill the cache for live agents the popup covers.
+        for live in self.state.live_agents.clone() {
+            if self.agent_model_cache.get(&live.name).is_none() {
+                self.refresh_agent_model_info(&live.name);
+            }
+        }
+    }
+
+    /// Rebuild the unified popup's rows from the registry + stored page
+    /// (a records page landed or the registry changed). No-op while the
+    /// popup is closed.
+    pub(super) fn refresh_agents_popup(&mut self) {
+        if !self.state.agents_popup.is_visible() {
+            return;
+        }
+        let rows = self.unified_agent_rows();
+        self.state.agents_popup.refresh_with(rows);
     }
 }
 

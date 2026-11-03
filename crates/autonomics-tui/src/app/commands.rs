@@ -106,9 +106,10 @@ impl App {
                 self.spawn_catalog_reload();
             }
             CommandAction::NewAgent | CommandAction::ResumeAgent => {
-                // One merged picker: "New agent" section on top, stored
-                // identities below (rename/delete/preview included).
-                self.open_agent_profile_picker();
+                // The unified agents popup covers both: "new <kind>"
+                // entries on top, live + dormant identities below
+                // (rename/delete included).
+                self.toggle_agents_popup();
             }
             CommandAction::CloseAgent => {
                 if !self.state.sessions.is_empty() {
@@ -165,9 +166,8 @@ impl App {
                 self.persist_display_setting("chat_only", self.state.display_settings.chat_only);
             }
             CommandAction::FocusAgentsPanel => {
-                if !self.state.sessions.is_empty() {
-                    self.toggle_agents_popup();
-                }
+                // No leaf needed — the popup browses all identities.
+                self.toggle_agents_popup();
             }
             CommandAction::CopyMessage => {
                 self.open_message_picker();

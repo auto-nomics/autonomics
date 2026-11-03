@@ -896,13 +896,38 @@ pub struct ModelDisplay {
     pub reasoning_effort: Option<String>,
 }
 
+/// One live agent instance in the daemon's registry — the TUI's mirror of
+/// the host's agent table, maintained from host events. Deliberately
+/// independent of [`AgentSession`]: a live agent needs no open leaf, and
+/// an open leaf survives its agent's idle-TTL passivation (virtual-actor
+/// mode) — the leaf goes dormant until a message re-activates it.
+#[derive(Debug, Clone)]
+pub struct LiveAgent {
+    pub name: String,
+    pub agent_id: uuid::Uuid,
+    pub status: AgentStatus,
+}
+
 /// State container for the TUI.
 #[derive(Default)]
 pub struct AppState {
-    /// All active agent sessions. `sessions[active_agent_idx]` is the one
-    /// displayed in the workspace and receives user input.
+    /// All open agent leaves (view windows). `sessions[active_agent_idx]`
+    /// is the one displayed in the workspace and receives user input.
+    /// Leaves open only by user action or the initial view — tool-spawned
+    /// children never open one.
     pub sessions: Vec<AgentSession>,
     pub active_agent_idx: usize,
+    /// Mirror of the daemon's live agent registry (from host events).
+    /// Under virtual-actor mode this waxes and wanes with idle-TTL
+    /// passivation while `sessions` stays untouched.
+    pub live_agents: Vec<LiveAgent>,
+    /// A message submitted from a leaf whose agent was passivated. Held
+    /// here while the identity re-activates; delivered the moment the
+    /// `AgentRegistered` frame for the pending path lands.
+    pub pending_outbound: Option<(String, String)>,
+    /// Set once any leaf has been opened (initial view or user action).
+    /// After that, reconcile/hydrate never auto-opens leaves again.
+    pub opened_leaf: bool,
     /// Available agent kinds (from the daemon snapshot).
     pub profiles: Vec<agentik_core::AgentKind>,
     /// Legacy single-agent tab state — kept for backward-compat with
@@ -912,7 +937,11 @@ pub struct AppState {
     pub model_config_state: crate::widgets::model_config_widget::ModelConfigState,
     pub embedding_config_state: crate::widgets::embedding_config_widget::EmbeddingConfigState,
     pub command_palette: crate::widgets::command_palette::CommandPaletteState,
-    pub agent_profile_picker: crate::widgets::agent_profile_picker::AgentProfilePickerState,
+    /// Bounded page of stored identities (GET /storage/agents) backing
+    /// the unified agents popup's resume section. Refreshed on popup
+    /// open and on search; identities outside the page are still live
+    /// in the daemon's registry mirror.
+    pub stored_records: Vec<agentik_core::storage::AgentRecord>,
     /// Terminal area of the last rendered frame. Used by mouse handlers for
     /// hit-testing (e.g. the tab-bar collapse stub). Refreshed every render.
     pub last_frame_area: ratatui::layout::Rect,
@@ -1013,6 +1042,39 @@ impl AppState {
     /// Returns the status of the active session (or Idle if none).
     pub fn active_status(&self) -> AgentStatus {
         self.active_tab_state().status
+    }
+
+    // ── Live-registry mirror ──────────────────────────────────────────
+
+    /// Insert or refresh a live agent entry (idempotent by full path).
+    pub fn upsert_live_agent(&mut self, name: &str, agent_id: uuid::Uuid, status: AgentStatus) {
+        if let Some(entry) = self.live_agents.iter_mut().find(|e| e.name == name) {
+            entry.agent_id = agent_id;
+            entry.status = status;
+        } else {
+            self.live_agents.push(LiveAgent {
+                name: name.to_string(),
+                agent_id,
+                status,
+            });
+        }
+    }
+
+    /// Drop a live agent entry (passivation or real unregistration).
+    pub fn remove_live_agent(&mut self, name: &str) {
+        self.live_agents.retain(|e| e.name != name);
+    }
+
+    /// Refresh a live agent's status (host `AgentStatusChanged` frames).
+    pub fn set_live_status(&mut self, name: &str, status: AgentStatus) {
+        if let Some(entry) = self.live_agents.iter_mut().find(|e| e.name == name) {
+            entry.status = status;
+        }
+    }
+
+    /// Whether the daemon currently holds a live instance for this path.
+    pub fn is_agent_live(&self, name: &str) -> bool {
+        self.live_agents.iter().any(|e| e.name == name)
     }
 }
 
