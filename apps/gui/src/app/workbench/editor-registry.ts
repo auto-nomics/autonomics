@@ -28,6 +28,10 @@ export type EditorKind = {
    *  ephemeral: body mounts only while the tab is the group's active tab;
    *  a placeholder shows otherwise (readers persist their own state). */
   mount: "keep-alive" | "ephemeral";
+  /** How inactive keep-alive bodies hide. "display" (default) unmounts
+   *  layout via the hidden attribute; "visibility" keeps layout alive so
+   *  scroll positions / canvas state survive tab switches (readers). */
+  hideMode?: "display" | "visibility";
   /** Return true to veto closing (e.g. unsaved wiki edits). */
   confirmLeave?(editor: EditorRef): boolean;
   /** Per-editor commands contributed to the palette while active. */

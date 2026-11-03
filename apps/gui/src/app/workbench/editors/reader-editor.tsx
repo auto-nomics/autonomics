@@ -1,15 +1,15 @@
 /**
- * Reader editor body: hosts the imperative PDF/TXT reader inside an
- * ephemeral workbench editor tab.
+ * Reader editor body: hosts the imperative PDF/TXT reader inside a
+ * keep-alive workbench editor tab.
  *
- * Lifecycle — readers keep ONE global session (reader-target), so the kind
- * mounts "ephemeral": the body exists only while its tab is the group's
- * active tab; deactivation destroys the reader (state persists via
- * saveReadingLocation) and reactivation reopens it at the stored position.
- * The reader's own close button destroys as well; `onClosed` then closes
- * the whole tab. A reader superseded by another one (split view) is
- * treated the same way — its tab closes, reopening goes through the
- * bibliography.
+ * Lifecycle — readers coexist (per-tab sessions in reader-target), and the
+ * kind mounts keep-alive with "visibility" occlusion: switching tabs keeps
+ * the reader instance, its scroll position, zoom and rendered pages fully
+ * alive (only invisible + inert). The body mounts once per tab; only the
+ * reader's own close button (onClosed → close the tab) or a param change
+ * (e.g. an evidence jump into the same attachment) tears it down. Group
+ * moves (split) still remount the body — the reader then reopens from the
+ * persisted reading position.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -43,7 +43,6 @@ function ReaderEditorBody({ editor }: EditorContext) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const disposedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
-  const [superseded, setSuperseded] = useState(false);
   const [reopenTick, setReopenTick] = useState(0);
 
   useEffect(() => {
@@ -64,6 +63,8 @@ function ReaderEditorBody({ editor }: EditorContext) {
         }
         if (disposedRef.current) return;
         handle = await openPdfReader({
+          // Tabs coexist: never supersede other live readers.
+          supersede: false,
           articleId: params.articleId,
           title: params.title,
           article,
@@ -83,22 +84,18 @@ function ReaderEditorBody({ editor }: EditorContext) {
               content: selection.text,
             });
           },
-          // The reader destroyed while we are still mounted (its own close
-          // button, or superseded by another reader) → close the tab. The
-          // wrapper's own cleanup sets disposedRef first and swallows it.
+          // The reader destroyed while we are still mounted (its own
+          // close button) → close the tab. The wrapper's own cleanup sets
+          // disposedRef first and swallows the event.
           onClosed: () => {
             if (!disposedRef.current) closeEditor(editor.id);
           },
         });
         if (disposedRef.current) handle.close();
       } catch (cause) {
-        if (cause instanceof DOMException && cause.name === "AbortError") {
-          // Superseded during load — another reader won the session while
-          // this body is still mounted (split view): offer a reopen.
-          setSuperseded(true);
-          return;
-        }
-        setError(String(cause));
+        // AbortError = this tab was closed while the reader was still
+        // loading — the unmount already happened, nothing to report.
+        if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(String(cause));
       }
     })();
     return () => {
@@ -106,26 +103,17 @@ function ReaderEditorBody({ editor }: EditorContext) {
       handle?.close();
       handle = null;
     };
-    // search is part of the editor identity; params object identity is stable.
+    // The search target re-applies on change (evidence jumps into an
+    // already-open attachment re-target the same tab).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.articleId, params.attachmentKey, params.title, params.expectedHash, reopenTick]);
+  }, [params.articleId, params.attachmentKey, params.title, params.expectedHash, JSON.stringify(params.search ?? null), reopenTick]);
 
   if (error) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
         <p className="text-sm text-destructive">阅读器打开失败:{error}</p>
-        <Button variant="outline" size="sm" onClick={() => { setError(null); setSuperseded(false); setReopenTick((tick) => tick + 1); }}>
+        <Button variant="outline" size="sm" onClick={() => { setError(null); setReopenTick((tick) => tick + 1); }}>
           <RotateCw className="size-3.5" />重试
-        </Button>
-      </div>
-    );
-  }
-  if (superseded) {
-    return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <p className="text-sm text-muted-foreground">该阅读器已被另一篇文献的阅读器接管。</p>
-        <Button variant="outline" size="sm" onClick={() => { setSuperseded(false); setReopenTick((tick) => tick + 1); }}>
-          <RotateCw className="size-3.5" />重新打开
         </Button>
       </div>
     );
@@ -157,9 +145,10 @@ export function registerReaderEditorKind(): void {
     },
     icon: () => FileText,
     body: ReaderEditorBody,
-    // One global reader session — the body only exists while the tab is
-    // active; reactivation reopens from the persisted reading position.
-    mount: "ephemeral",
+    // Keep-alive with visibility occlusion: tab switches keep the reader
+    // instance (scroll/zoom/pages) fully alive.
+    mount: "keep-alive",
+    hideMode: "visibility",
   });
 
   // Reader opener bridge: bibliography asks for a reader, we open a tab.

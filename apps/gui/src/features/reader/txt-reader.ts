@@ -113,11 +113,13 @@ export async function openTxtReader(options: {
   expectedHash?: string | null;
   search?: ReaderSearchTarget;
   sessionToken?: number;
+  /** Legacy single-window mode: close every live reader before opening. */
+  supersede?: boolean;
   host?: HTMLElement;
   onReference?: ReaderWorkspaceOptions["onReference"];
   onClosed?: () => void;
 }): Promise<TxtReaderHandle> {
-  const token = options.sessionToken ?? beginReaderSession();
+  const token = options.sessionToken ?? beginReaderSession({ supersede: options.supersede });
   const bytes = options.bytes ?? await fetchBibFulltextRaw(options.articleId, options.attachmentKey, options.expectedHash);
   if (!isReaderSession(token)) throw new DOMException("Reader opening superseded", "AbortError");
   const reader = await ZoteroStyleTxtReader.open(
@@ -294,6 +296,7 @@ class ZoteroStyleTxtReader {
     `;
     if (this.workspace.host) this.root.dataset.hosted = "true";
     (this.workspace.host ?? document.body).append(this.root);
+    this.setupToolbarAutoHide();
     this.alertDialog = new ReaderAlertDialog(this.root);
     this.noteComposer = new NoteComposer(this.root);
 
@@ -1145,12 +1148,53 @@ class ZoteroStyleTxtReader {
     } catch { /* Invalid saved positions are ignored. */ }
   }
 
+
+  private toolbarHideTimer: number | null = null;
+
+  /** Auto-hide the header toolbar on fine-pointer devices: it fades unless
+   *  the pointer approaches the top strip, hovers the toolbar itself, or
+   *  focus sits inside (keyboard users). Opacity-only — no translate — so
+   *  hit targets never move; hover:none devices keep it always visible. */
+  private setupToolbarAutoHide() {
+    if (!window.matchMedia("(hover: hover)").matches) return;
+    const toolbar = this.root.querySelector(".reader-toolbar");
+    if (!toolbar) return;
+    toolbar.classList.add("reader-toolbar-autohide");
+    toolbar.addEventListener("pointerenter", () => this.revealToolbar());
+    this.root.addEventListener("pointermove", (event) => {
+      if (!(event instanceof PointerEvent)) return;
+      const rect = toolbar.getBoundingClientRect();
+      const near = event.clientY <= rect.bottom + 28 && event.clientY >= rect.top - 12
+        && event.clientX >= rect.left - 12 && event.clientX <= rect.right + 12;
+      if (near) this.revealToolbar();
+      else this.scheduleToolbarHide();
+    });
+    this.root.addEventListener("pointerleave", () => this.scheduleToolbarHide());
+  }
+
+  private revealToolbar() {
+    if (this.toolbarHideTimer !== null) { window.clearTimeout(this.toolbarHideTimer); this.toolbarHideTimer = null; }
+    this.root.querySelector(".reader-toolbar")?.classList.remove("reader-toolbar-autohide");
+  }
+
+  private scheduleToolbarHide() {
+    if (this.toolbarHideTimer !== null) return;
+    this.toolbarHideTimer = window.setTimeout(() => {
+      this.toolbarHideTimer = null;
+      const toolbar = this.root.querySelector(".reader-toolbar");
+      if (toolbar && !toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
+        toolbar.classList.add("reader-toolbar-autohide");
+      }
+    }, 260);
+  }
+
   destroy() {
     if (this.destroyed) return;
     this.saveReadingLocation();
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
     this.workspace.onClosed?.();
+    if (this.toolbarHideTimer !== null) window.clearTimeout(this.toolbarHideTimer);
     this.events.abort();
     this.alertDialog.destroy();
     this.noteComposer.destroy();

@@ -16,11 +16,24 @@ export function structurePath(articleId: string, attachmentKey?: string | null) 
 export function readerLocationId(articleId: string, attachmentKey?: string | null) { return attachmentKey ? `${articleId}.${attachmentKey}` : articleId; }
 
 let generation = 0;
-let activeClose: (() => void) | null = null;
-export function beginReaderSession() { const close = activeClose; activeClose = null; const token = ++generation; close?.(); return token; }
-export function isReaderSession(token: number) { return token === generation; }
-export function registerReaderSession(token: number, close: () => void) { if (!isReaderSession(token)) return false; activeClose = close; return true; }
-export function releaseReaderSession(token: number) { if (isReaderSession(token)) { activeClose = null; generation++; } }
+/** Live reader sessions: token → destroy handle. By default opening a
+ *  reader supersedes (closes) the live ones — the legacy single-window
+ *  behavior tests and modal hosts rely on. The workbench reader editor
+ *  opts out (supersede: false) so its tabs coexist and keep their state. */
+const liveSessions = new Map<number, () => void>();
+export function beginReaderSession(options: { supersede?: boolean } = {}) {
+  if (options.supersede ?? true) {
+    for (const close of [...liveSessions.values()]) close();
+  }
+  const token = ++generation;
+  // Seed the map immediately — the session is live from birth; the real
+  // destroy handle lands via registerReaderSession.
+  liveSessions.set(token, () => {});
+  return token;
+}
+export function isReaderSession(token: number) { return liveSessions.has(token); }
+export function registerReaderSession(token: number, close: () => void) { if (!liveSessions.has(token)) return false; liveSessions.set(token, close); return true; }
+export function releaseReaderSession(token: number) { liveSessions.delete(token); }
 
 /** Search with original UTF-16 offsets despite expanding lowercase characters
  * and whitespace folding. Evidence uses lexical boundaries; ordinary Ctrl+F

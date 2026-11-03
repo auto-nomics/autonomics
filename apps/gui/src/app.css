@@ -429,3 +429,11 @@ body {
   font-size: 0.85em;
   line-height: 1.65;
 }
+
+/* Workbench keep-alive editor bodies in "visibility" occlusion mode: laid
+   out but invisible and inert, so scroll positions / canvas state survive
+   editor tab switches (used by the reader editors). */
+.editor-body-occluded {
+  visibility: hidden;
+  pointer-events: none;
+}

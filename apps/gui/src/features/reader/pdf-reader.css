@@ -1014,3 +1014,10 @@
   --reader-sidebar-width: clamp(230px, 25%, 320px);
 }
 .zotero-pdf-reader[data-hosted] .reader-toolbar { overflow-x: auto; }
+
+/* Auto-hide header toolbar: fades unless the pointer is near/on it or focus
+   sits inside. Opacity-only (no translate) so hit targets never move;
+   hover:none devices never get the autohide class (always visible). */
+.reader-toolbar { transition: opacity 0.18s ease; }
+.reader-toolbar.reader-toolbar-autohide:not(:hover):not(:focus-within) { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .reader-toolbar { transition: none; } }

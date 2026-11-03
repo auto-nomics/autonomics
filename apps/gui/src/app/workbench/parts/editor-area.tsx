@@ -30,14 +30,23 @@ function EditorBody(props: { editor: EditorRef; active: boolean }) {
   const kind = editorKind(props.editor.kind);
   if (!kind) return null;
   const Body = kind.body;
+  const keepAlive = kind.mount === "keep-alive";
   const active = props.active;
+  // Keep-alive bodies stay mounted; occlusion mode decides how they hide.
+  // "display" (hidden attribute) unmounts layout; "visibility" keeps the
+  // subtree laid out so scroll positions / canvas state survive switches.
+  const occluded = keepAlive && kind.hideMode === "visibility" && !active;
+  const displayHidden = keepAlive && kind.hideMode !== "visibility" ? !active : undefined;
   return (
     <div
-      // Keep-alive bodies stay mounted and merely hide; ephemeral bodies
-      // only exist while active (their kind guarantees that).
-      hidden={kind.mount === "keep-alive" ? !active : undefined}
-      aria-hidden={kind.mount === "keep-alive" ? !active || undefined : undefined}
-      className={cn("absolute inset-0 flex min-h-0 min-w-0 flex-col", kind.mount === "keep-alive" && !active && "pointer-events-none")}
+      hidden={displayHidden}
+      aria-hidden={keepAlive && !active ? true : undefined}
+      inert={occluded || undefined}
+      className={cn(
+        "absolute inset-0 flex min-h-0 min-w-0 flex-col",
+        occluded && "editor-body-occluded",
+        keepAlive && !active && kind.hideMode !== "visibility" && "pointer-events-none",
+      )}
     >
       <Body editor={props.editor} />
     </div>

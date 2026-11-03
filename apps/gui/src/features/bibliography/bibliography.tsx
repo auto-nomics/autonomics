@@ -738,7 +738,7 @@ function LibraryView() {
     readerRef.current?.close();
     readerRef.current = null;
     const openReader = format === "txt" ? openTxtReader : openPdfReader;
-    void openReader({ articleId: article.id, title: article.title, article, attachmentKey, search, expectedHash,
+    void openReader({ articleId: article.id, title: article.title, article, attachmentKey, search, expectedHash, supersede: true,
       host: contextBasket ? libraryContainer.current ?? undefined : undefined,
       onReference: contextBasket ? selection => {
         const basket = contextBasketRef.current;
