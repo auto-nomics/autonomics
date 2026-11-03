@@ -30,7 +30,7 @@ try {
     return route.fulfill({ json: responses[path] });
   });
   await page.goto(origin);
-  const composer = page.getByPlaceholder('输入消息…'), basket = page.getByRole('region', { name: '上下文篮子' });
+  const composer = page.locator('[data-agent-workspace="/root/alpha"]').getByPlaceholder('输入消息…'), basket = page.getByRole('region', { name: '上下文篮子' });
   const go = name => page.getByRole('button', { name, exact: true }).click();
   // Agent switching targets the unified editor tab (title = full path);
   // workspace picker items share accessible names and would trip strict mode.
@@ -109,7 +109,7 @@ try {
   // stays in main — both visible, the VSCode split gesture.
   await agentTabOf('alpha').click();
   await page.getByRole('button', { name: '拆分编辑器' }).click();
-  const splitComposer = await page.locator('[data-editor-group="secondary"] [data-editor-zone]').getByPlaceholder('输入消息…').isVisible();
+  const splitComposer = await page.locator('[data-editor-group="secondary"] [data-agent-workspace="/root/alpha"]').getByPlaceholder('输入消息…').isVisible();
   assert.ok(splitComposer, 'chat renders in the split group');
   await page.waitForTimeout(250);
   await page.screenshot({ path: '/tmp/autonomics-workbench-desktop.png' });

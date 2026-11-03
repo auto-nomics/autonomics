@@ -223,6 +223,8 @@ export function useAgentRuntime() {
   openTabsRef.current = openTabs;
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
+  const loadedHistory = useRef<Record<string, string>>({});
+  const historyInFlight = useRef(new Map<string, Promise<void>>());
   // Events received while a transcript is being fetched must be applied
   // after the snapshot, otherwise the response replaces the live updates.
   const historyEventBuffers = useRef<Record<string, { contextId: string; events: GatewayFrame[] }>>({});
@@ -253,6 +255,7 @@ export function useAgentRuntime() {
       const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
         .flatMap(convertMessage);
       if (historyLoadSeq.current[agentPath] !== seq) return;
+      loadedHistory.current[agentPath] = `${info.agent_id}:${contextId}`;
       setMessages((current) => ({ ...current, [agentPath]: history }));
       setRawMessages((current) => ({
         ...current,
@@ -272,6 +275,20 @@ export function useAgentRuntime() {
     }
   }, [appendMessage]);
 
+  /** Reuse the current transcript when a tab is revisited. Explicit refresh
+   *  still calls loadHistory directly and bypasses this cache. */
+  const ensureAgentHistory = useCallback((agentPath: string, contextId: string) => {
+    const agentId = stateRef.current.agents.find(agent => agent.path === agentPath)?.agent_id;
+    if (!agentId || !contextId) return;
+    const version = `${agentId}:${contextId}`;
+    if (loadedHistory.current[agentPath] === version) return;
+    const key = JSON.stringify([agentPath, version]);
+    if (historyInFlight.current.has(key)) return;
+    const pending = loadHistory(agentPath, contextId).finally(() => historyInFlight.current.delete(key));
+    historyInFlight.current.set(key, pending);
+    return pending;
+  }, [loadHistory]);
+
   // A resumed agent and its context are announced asynchronously. Selecting
   // the tab can happen before either ID is available, so load once both are
   // present, and again when the user selects a different agent or context.
@@ -279,9 +296,9 @@ export function useAgentRuntime() {
   const selectedContextId = activeContexts[activeAgent] ?? contexts[activeAgent]?.id;
   useEffect(() => {
     if (activeAgent && selectedAgentId && selectedContextId) {
-      void loadHistory(activeAgent, selectedContextId);
+      void ensureAgentHistory(activeAgent, selectedContextId);
     }
-  }, [activeAgent, selectedAgentId, selectedContextId, loadHistory]);
+  }, [activeAgent, selectedAgentId, selectedContextId, ensureAgentHistory]);
 
   /** Records a live frame into the bottom-panel feeds. Called only on
    *  arrival — buffered events replay straight into handleFrame so the
@@ -381,6 +398,7 @@ export function useAgentRuntime() {
         });
         setActiveContexts((current) => ({ ...current, [agent]: next?.id ?? null }));
       } else if (event.ContextActivated !== undefined) {
+        delete loadedHistory.current[agent];
         setActiveContexts((current) => ({ ...current, [agent]: event.ContextActivated.id }));
         setMessages((current) => ({ ...current, [agent]: [] }));
         streamingRef.current[agent] = null;
@@ -536,7 +554,8 @@ export function useAgentRuntime() {
           if (status === "reconnected") void hydrateRef.current?.();
         },
       });
-      if (nextAgent) void loadHistory(nextAgent);
+      const nextContext = nextActiveContexts[nextAgent];
+      if (nextAgent && nextContext) void ensureAgentHistory(nextAgent, nextContext);
     } catch (cause) {
       setConnected(false);
       const unauthorized = cause instanceof GatewayHttpError && cause.status === 401;
@@ -544,7 +563,7 @@ export function useAgentRuntime() {
       setConnectionError(unauthorized ? "需要 Gateway 令牌" : String(cause));
       setBooting(false);
     }
-  }, [loadHistory, refreshStoredAgents]);
+  }, [ensureAgentHistory, refreshStoredAgents]);
 
   const hydrateRef = useRef(hydrate);
   hydrateRef.current = hydrate;
@@ -662,7 +681,8 @@ export function useAgentRuntime() {
     if (activeAgent === path) {
       const fallback = next[Math.max(0, index - 1)] ?? "";
       setActiveAgent(fallback);
-      if (fallback) void loadHistory(fallback);
+      const contextId = activeContexts[fallback] ?? contexts[fallback]?.id;
+      if (fallback && contextId) void ensureAgentHistory(fallback, contextId);
     }
   };
 
@@ -826,7 +846,7 @@ export function useAgentRuntime() {
     display,
     toggleDisplay,
     refreshHistory: () => void loadHistory(activeAgent),
-    loadAgentHistory: loadHistory,
+    ensureAgentHistory,
     // composer
     draft,
     setDraft,

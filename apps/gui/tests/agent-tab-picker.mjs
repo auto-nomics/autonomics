@@ -112,8 +112,8 @@ try {
   const secondary = page.locator('[data-editor-group="secondary"]');
   await secondary.getByText('gamma answer').waitFor();
   await main.getByText('beta answer').waitFor();
-  const betaComposer = main.getByPlaceholder('输入消息…');
-  const gammaComposer = secondary.getByPlaceholder('输入消息…');
+  const betaComposer = main.locator('[data-agent-workspace="/root/beta"]').getByPlaceholder('输入消息…');
+  const gammaComposer = secondary.locator('[data-agent-workspace="/root/gamma"]').getByPlaceholder('输入消息…');
   await betaComposer.fill('beta draft');
   await gammaComposer.fill('gamma draft');
   assert.equal(await betaComposer.inputValue(), 'beta draft');

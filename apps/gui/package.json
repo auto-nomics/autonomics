@@ -37,7 +37,8 @@
     "test:bib-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-bibliography.mjs",
     "test:bib-subscriptions": "node tests/subscription-model.mjs && node tests/subscriptions.mjs",
     "test:bib-p5-native": "node tests/native-p5.mjs",
-    "test:workbench": "node tests/workbench-context.mjs"
+    "test:workbench": "node tests/workbench-context.mjs",
+    "test:agent-tab-cache": "node tests/agent-tab-cache.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

@@ -88,7 +88,19 @@ function EditorEmptyState() {
 
 /** One group pane: tab strip + the zone hosting every keep-alive body of
  *  the group (hidden unless active) plus the active ephemeral body. */
-type HostRegistry = { zones: Map<GroupId, HTMLDivElement>; hosts: Map<string, HTMLDivElement> };
+type ScrollPosition = { element: HTMLElement; top: number; left: number };
+type HostRegistry = { zones: Map<GroupId, HTMLDivElement>; hosts: Map<string, HTMLDivElement>; scrollPositions: Map<string, ScrollPosition[]> };
+function captureScroll(host: HTMLDivElement): ScrollPosition[] {
+  return Array.from(host.querySelectorAll<HTMLElement>('[data-slot="scroll-area-viewport"]'), element => ({ element, top: element.scrollTop, left: element.scrollLeft }));
+}
+/** Reparenting an element can reset descendant scroll offsets in browsers. */
+function placeHost(zone: HTMLDivElement, host: HTMLDivElement, id: string, registry: HostRegistry) {
+  if (host.parentElement === zone) return;
+  const positions = registry.scrollPositions.get(id) ?? captureScroll(host);
+  registry.scrollPositions.delete(id);
+  zone.appendChild(host);
+  for (const { element, top, left } of positions) { element.scrollTop = top; element.scrollLeft = left; }
+}
 function EditorGroupPane(props: { groupId: GroupId; group: EditorGroup; registry: HostRegistry }) {
   const dragging = useEditorDrag();
   const [dropZone, setDropZone] = useState<"center" | DropDirection | null>(null);
@@ -100,8 +112,16 @@ function EditorGroupPane(props: { groupId: GroupId; group: EditorGroup; registry
     const group = getGroup(getWorkbenchState().groups, props.groupId);
     for (const editor of group?.editors ?? []) {
       const host = props.registry.hosts.get(editor.id);
-      if (host) node.appendChild(host);
+      if (host) placeHost(node, host, editor.id, props.registry);
     }
+  }, [props.groupId, props.registry]);
+  useLayoutEffect(() => {
+    const zone = props.registry.zones.get(props.groupId);
+    return () => {
+      for (const [id, host] of props.registry.hosts) {
+        if (host.parentElement === zone) props.registry.scrollPositions.set(id, captureScroll(host));
+      }
+    };
   }, [props.groupId, props.registry]);
   const activeId = props.group.activeId;
   const activeEditor = props.group.editors.find((editor) => editor.id === activeId) ?? null;
@@ -176,9 +196,10 @@ function EditorHost({ editor, groupId, active, registry }: { editor: EditorRef; 
   });
   useLayoutEffect(() => {
     registry.hosts.set(editor.id, host);
-    registry.zones.get(groupId)?.appendChild(host);
+    const zone = registry.zones.get(groupId);
+    if (zone) placeHost(zone, host, editor.id, registry);
     host.style.pointerEvents = active ? "" : "none";
-  }, [groupId, host, registry, active]);
+  }, [groupId, host, registry, active, editor.id]);
   useLayoutEffect(() => {
     const focusGroup = () => {
       if (getWorkbenchState().groups.active === groupId) return;
@@ -191,14 +212,14 @@ function EditorHost({ editor, groupId, active, registry }: { editor: EditorRef; 
     host.addEventListener("focusin", focusGroup, true);
     return () => { host.removeEventListener("pointerdown", focusGroup, true); host.removeEventListener("focusin", focusGroup, true); };
   }, [groupId, host, runtime]);
-  useLayoutEffect(() => () => { host.remove(); registry.hosts.delete(editor.id); }, [host, editor.id, registry]);
+  useLayoutEffect(() => () => { host.remove(); registry.hosts.delete(editor.id); registry.scrollPositions.delete(editor.id); }, [host, editor.id, registry]);
   const kind = editorKind(editor.kind);
   if (!kind || (kind.mount === "ephemeral" && !active)) return null;
   return createPortal(<EditorBody editor={editor} active={active} />, host);
 }
 export function EditorArea() {
   const state = useWorkbenchState();
-  const registry = useRef<HostRegistry>({ zones: new Map(), hosts: new Map() }).current;
+  const registry = useRef<HostRegistry>({ zones: new Map(), hosts: new Map(), scrollPositions: new Map() }).current;
   const editors = allGroups(state.groups).flatMap(([groupId, group]) => group.editors.map(editor => ({ editor, groupId, active: editor.id === group.activeId })));
   return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
     <LayoutNode node={state.editorLayout} path="" registry={registry} />

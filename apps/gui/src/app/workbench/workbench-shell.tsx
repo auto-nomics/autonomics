@@ -80,17 +80,10 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
   const slot = useAgentSlot(path);
   const agentId = runtime.agents.find(agent => agent.path === path)?.agent_id;
   const contextId = runtime.activeContexts[path] ?? runtime.contexts[path]?.id ?? null;
-  const loadedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!visible || !agentId || !contextId) return;
-    const key = `${agentId}:${contextId}`;
-    if (loadedRef.current === key) return;
-    loadedRef.current = key;
-    // The runtime already loads the selected agent; visible background
-    // groups need their own transcript fetch.
-    if (path !== runtime.activeAgent) void runtime.loadAgentHistory(path, contextId);
-  }, [agentId, contextId, path, visible, runtime.activeAgent, runtime.loadAgentHistory]);
-  const refreshEffort = useCallback(() => { void runtime.refreshAgentEffort(path); }, [runtime.refreshAgentEffort, path]);
+    if (visible && agentId && contextId) void runtime.ensureAgentHistory(path, contextId);
+  }, [agentId, contextId, path, visible, runtime.ensureAgentHistory]);
+  const refreshEffort = useCallback(() => { if (visible) void runtime.refreshAgentEffort(path); }, [runtime.refreshAgentEffort, path, visible]);
   const select = (target: string) => { runtime.selectAgent(target); openAgentEditor(target); };
   const scope = path && contextId ? JSON.stringify([path, contextId]) : null;
   return <ContextBasketScope scope={scope} label={leafName(path)}>
@@ -312,7 +305,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           <SideBar mobile collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} onSpawn={() => setSpawnOpen(true)} />
         )}
 
-        {agentEditors.filter(({ path, visible }) => visible || path === activeAgent).map(({ path, visible }) => <AgentWorkspaceHost key={path} path={path} visible={visible} runtime={runtime} onSpawn={() => setSpawnOpen(true)} />)}
+        {agentEditors.map(({ path, visible }) => <AgentWorkspaceHost key={path} path={path} visible={visible} runtime={runtime} onSpawn={() => setSpawnOpen(true)} />)}
 
         <AgentDialogs
           activeAgent={activeAgent}

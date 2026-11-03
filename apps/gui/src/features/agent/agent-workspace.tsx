@@ -392,6 +392,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => props.onSearchStoredAgents(query), 250);
   };
+  useEffect(() => () => { if (searchTimer.current) clearTimeout(searchTimer.current); }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [windowStart, setWindowStart] = useState(0);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -489,7 +490,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
       const button = event.target instanceof HTMLElement ? event.target.closest("[data-copy-code]") : null;
-      if (!(button instanceof HTMLElement)) return;
+      if (!(button instanceof HTMLElement) || !target.contains(button)) return;
       const code = button.closest(".md-code")?.querySelector("pre");
       if (!code) return;
       void navigator.clipboard.writeText(code.textContent ?? "");
@@ -500,7 +501,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     };
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
-  }, []);
+  }, [target]);
 
   // Picker groups over the three visibility classes: open tabs (views),
   // live-but-unopened instances, and dormant stored identities. The
@@ -535,7 +536,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   );
 
   const content = (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-agent-workspace={activeAgent}>
       <div className="flex h-8 shrink-0 items-center gap-2 border-b px-1.5 text-xs text-muted-foreground">
         {searchToggle}
         <span className="truncate">{activeAgent || "No agent open"}</span>

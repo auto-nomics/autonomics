@@ -232,6 +232,7 @@ export function registerWorkbenchEditorKinds(): void {
     icon: () => Bot,
     body: AgentEditorBody,
     mount: "keep-alive",
+    hideMode: "visibility",
   });
   registerEditorKind({
     kind: "wiki-entry",
