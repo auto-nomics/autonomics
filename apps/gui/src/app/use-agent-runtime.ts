@@ -308,6 +308,11 @@ export function useAgentRuntime() {
     const entry: FrameLogEntry = { seq: frame.seq, kind: frame.kind, summary: frameSummary(frame), time: Date.now() };
     setFrameLog((current) => [...current.slice(-(FRAME_LOG_LIMIT - 1)), entry]);
     if (frame.kind === "notice") {
+      const noticeKind = (frame.data as { kind?: string } | null)?.kind;
+      if (noticeKind === "compute_changed") {
+        // 计算目录变更 → HPC 计算目标编辑器即时刷新。
+        window.dispatchEvent(new CustomEvent("autonomics:compute-changed"));
+      }
       setNotices((current) => [...current.slice(-(NOTICE_LIMIT - 1)), { seq: frame.seq, data: frame.data, time: Date.now() }]);
     }
   }, []);

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, GitFork, Library, Network, NotebookText, Rss, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -22,6 +22,7 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { ConfigView, DagView } from "@/features/system";
+import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
 import { registerEditorKind, type EditorContext } from "./editor-registry";
 import { registerReaderEditorKind } from "./editors/reader-editor";
@@ -278,6 +279,26 @@ export function registerWorkbenchEditorKinds(): void {
     name: () => "Settings",
     icon: () => Settings,
     body: ConfigEditorBody,
+    mount: "keep-alive",
+  });
+  registerEditorKind({
+    kind: "hpc-compute",
+    title: () => "计算目标",
+    name: () => "Compute targets",
+    icon: () => Server,
+    body: () => (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <ComputeEditorView />
+      </div>
+    ),
+    mount: "keep-alive",
+  });
+  registerEditorKind({
+    kind: "hpc-jobs",
+    title: () => "HPC 任务",
+    name: () => "HPC jobs",
+    icon: () => ListChecks,
+    body: () => <HpcJobsEditorView />,
     mount: "keep-alive",
   });
   // Reader editor kind lives in editors/reader-editor.tsx (registers its
