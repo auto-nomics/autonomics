@@ -670,7 +670,9 @@ class ZoteroStylePdfReader {
 
   private captureReadingSelection(range: Range) {
     const selected = this.readingView?.selection(range);
+    console.log('[captureReadingSelection] selected?', Boolean(selected), 'text?', Boolean(selected?.text));
     if (!selected || !selected.text) { this.hideSelectionPopup(); return; }
+    try {
     const targets = [{ page: selected.position.pageIndex, rects: selected.position.rects }];
     if (selected.position.nextPageRects?.length) targets.push({ page: selected.position.pageIndex + 1, rects: selected.position.nextPageRects });
     const pages = targets.map(target => {
@@ -683,6 +685,11 @@ class ZoteroStylePdfReader {
       })) };
     });
     this.anchor = { ...pages[0], extraPages: pages.slice(1), text: selected.text, x: selected.rect.left, y: selected.rect.bottom + 8 };
+    } catch (error) {
+      (window as any).__captureLog = [...((window as any).__captureLog ?? []), { threw: String(error) }];
+      this.hideSelectionPopup();
+      return;
+    }
     this.selectionPopup.style.left = `${Math.max(8, Math.min(this.anchor.x, window.innerWidth - 280))}px`;
     this.selectionPopup.style.top = `${Math.max(8, Math.min(this.anchor.y, window.innerHeight - 60))}px`;
     this.selectionPopup.hidden = false;
@@ -2045,43 +2052,50 @@ class ZoteroStylePdfReader {
   }
 
 
-  private toolbarHideTimer: number | null = null;
+  private toolbarRevealCleanup: (() => void) | null = null;
 
-  /** Auto-hide the header toolbar on fine-pointer devices: it fades unless
-   *  the pointer approaches the top strip, hovers the toolbar itself, or
-   *  focus sits inside (keyboard users). Opacity-only — no translate — so
-   *  hit targets never move; hover:none devices keep it always visible. */
+  /** Auto-hide the header toolbar on fine-pointer devices. The toolbar
+   *  overlays the content top without reserving layout space and stays
+   *  revealed while the pointer is active anywhere over the reader; it
+   *  fades only after the pointer goes idle (or leaves) — moving it again
+   *  pops the toolbar back. The box never moves (opacity-only) and stays
+   *  interactive while faded, so hit targets are stable for automation.
+   *  hover:none devices keep it permanently visible. */
   private setupToolbarAutoHide() {
     if (!window.matchMedia("(hover: hover)").matches) return;
     const toolbar = this.root.querySelector(".reader-toolbar");
     if (!toolbar) return;
-    toolbar.classList.add("reader-toolbar-autohide");
-    toolbar.addEventListener("pointerenter", () => this.revealToolbar());
-    this.root.addEventListener("pointermove", (event) => {
-      if (!(event instanceof PointerEvent)) return;
-      const rect = toolbar.getBoundingClientRect();
-      const near = event.clientY <= rect.bottom + 28 && event.clientY >= rect.top - 12
-        && event.clientX >= rect.left - 12 && event.clientX <= rect.right + 12;
-      if (near) this.revealToolbar();
-      else this.scheduleToolbarHide();
-    });
-    this.root.addEventListener("pointerleave", () => this.scheduleToolbarHide());
-  }
-
-  private revealToolbar() {
-    if (this.toolbarHideTimer !== null) { window.clearTimeout(this.toolbarHideTimer); this.toolbarHideTimer = null; }
-    this.root.querySelector(".reader-toolbar")?.classList.remove("reader-toolbar-autohide");
-  }
-
-  private scheduleToolbarHide() {
-    if (this.toolbarHideTimer !== null) return;
-    this.toolbarHideTimer = window.setTimeout(() => {
-      this.toolbarHideTimer = null;
-      const toolbar = this.root.querySelector(".reader-toolbar");
-      if (toolbar && !toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
-        toolbar.classList.add("reader-toolbar-autohide");
-      }
-    }, 260);
+    let idleTimer: number | null = null;
+    const reveal = () => {
+      if (idleTimer !== null) { window.clearTimeout(idleTimer); idleTimer = null; }
+      toolbar.classList.add("reader-toolbar-revealed");
+    };
+    const scheduleHide = (delay: number) => {
+      if (idleTimer !== null) window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => {
+        idleTimer = null;
+        if (!toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
+          toolbar.classList.remove("reader-toolbar-revealed");
+        }
+      }, delay);
+    };
+    const onMove = () => {
+      reveal();
+      scheduleHide(600);
+    };
+    this.root.addEventListener("pointermove", onMove, { passive: true });
+    this.root.addEventListener("pointerdown", onMove, { passive: true });
+    const onLeave = () => scheduleHide(260);
+    this.root.addEventListener("pointerleave", onLeave);
+    reveal();
+    scheduleHide(600);
+    this.toolbarRevealCleanup = () => {
+      if (idleTimer !== null) window.clearTimeout(idleTimer);
+      toolbar.classList.remove("reader-toolbar-revealed");
+      this.root.removeEventListener("pointermove", onMove);
+      this.root.removeEventListener("pointerdown", onMove);
+      this.root.removeEventListener("pointerleave", onLeave);
+    };
   }
 
   destroy() {
@@ -2090,7 +2104,7 @@ class ZoteroStylePdfReader {
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
     this.workspace.onClosed?.();
-    if (this.toolbarHideTimer !== null) window.clearTimeout(this.toolbarHideTimer);
+    this.toolbarRevealCleanup?.();
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.readingSaveTimer !== null) clearTimeout(this.readingSaveTimer);

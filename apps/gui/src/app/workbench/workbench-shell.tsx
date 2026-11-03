@@ -38,13 +38,13 @@ import {
   openWikiEntryEditor,
   setPanelHeight,
   setSidebarCollapsed,
+  setSidebarWidth,
   togglePanel,
   toggleSidebar,
   useWorkbenchState,
 } from "./workbench-store";
 import { openBibliographyEditor } from "./static-commands";
 import { WorkbenchRuntimeContext, type AgentRuntime } from "./runtime-context";
-import { TitleBar } from "./parts/title-bar";
 import { ActivityBar } from "./parts/activity-bar";
 import { SideBar } from "./parts/side-bar";
 import { EditorArea } from "./parts/editor-area";
@@ -205,17 +205,8 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
       <main
         data-workbench=""
         data-sidebar-collapsed={state.sidebar.collapsed || undefined}
-        className="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-background text-foreground"
+        className="relative grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] bg-background text-foreground"
       >
-        <TitleBar
-          mobile={mobile}
-          sidebarCollapsed={state.sidebar.collapsed}
-          onToggleSidebar={toggleSidebar}
-          panelVisible={state.panel.visible}
-          onTogglePanel={togglePanel}
-          onLogout={logout}
-        />
-
         <div className="flex min-h-0 min-w-0">
           <ActivityBar
             mobile={mobile}
@@ -224,7 +215,39 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
             onLogout={logout}
           />
           {!mobile && !state.sidebar.collapsed && (
-            <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
+            <div className="relative min-h-0 shrink-0" style={{ width: state.sidebar.width, maxWidth: "calc(100% - 300px)" }}>
+              <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
+              <div
+                role="separator"
+                aria-label="调整侧栏宽度"
+                aria-orientation="vertical"
+                aria-valuemin={160}
+                aria-valuemax={600}
+                aria-valuenow={state.sidebar.width}
+                tabIndex={0}
+                className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize touch-none focus-visible:outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:bg-transparent hover:after:bg-primary focus-visible:after:bg-primary"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerMove={(event) => {
+                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  const sidebar = event.currentTarget.parentElement;
+                  const parent = sidebar?.parentElement;
+                  if (!sidebar || !parent) return;
+                  const max = Math.max(160, parent.getBoundingClientRect().right - sidebar.getBoundingClientRect().left - 300);
+                  setSidebarWidth(Math.min(max, event.clientX - sidebar.getBoundingClientRect().left));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                  event.preventDefault();
+                  const sidebar = event.currentTarget.parentElement;
+                  const max = sidebar?.parentElement ? Math.max(160, sidebar.parentElement.getBoundingClientRect().right - sidebar.getBoundingClientRect().left - 300) : 600;
+                  setSidebarWidth(Math.min(max, state.sidebar.width + (event.key === "ArrowRight" ? 10 : -10)));
+                }}
+              />
+            </div>
           )}
           <ResizablePanelGroup orientation="vertical" onLayoutChanged={handleCenterLayout} className="min-h-0 min-w-0 flex-1">
             <ResizablePanel id="workbench-editors" minSize="30%" className="flex min-w-0">

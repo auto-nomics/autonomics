@@ -1149,43 +1149,50 @@ class ZoteroStyleTxtReader {
   }
 
 
-  private toolbarHideTimer: number | null = null;
+  private toolbarRevealCleanup: (() => void) | null = null;
 
-  /** Auto-hide the header toolbar on fine-pointer devices: it fades unless
-   *  the pointer approaches the top strip, hovers the toolbar itself, or
-   *  focus sits inside (keyboard users). Opacity-only — no translate — so
-   *  hit targets never move; hover:none devices keep it always visible. */
+  /** Auto-hide the header toolbar on fine-pointer devices. The toolbar
+   *  overlays the content top without reserving layout space and stays
+   *  revealed while the pointer is active anywhere over the reader; it
+   *  fades only after the pointer goes idle (or leaves) — moving it again
+   *  pops the toolbar back. The box never moves (opacity-only) and stays
+   *  interactive while faded, so hit targets are stable for automation.
+   *  hover:none devices keep it permanently visible. */
   private setupToolbarAutoHide() {
     if (!window.matchMedia("(hover: hover)").matches) return;
     const toolbar = this.root.querySelector(".reader-toolbar");
     if (!toolbar) return;
-    toolbar.classList.add("reader-toolbar-autohide");
-    toolbar.addEventListener("pointerenter", () => this.revealToolbar());
-    this.root.addEventListener("pointermove", (event) => {
-      if (!(event instanceof PointerEvent)) return;
-      const rect = toolbar.getBoundingClientRect();
-      const near = event.clientY <= rect.bottom + 28 && event.clientY >= rect.top - 12
-        && event.clientX >= rect.left - 12 && event.clientX <= rect.right + 12;
-      if (near) this.revealToolbar();
-      else this.scheduleToolbarHide();
-    });
-    this.root.addEventListener("pointerleave", () => this.scheduleToolbarHide());
-  }
-
-  private revealToolbar() {
-    if (this.toolbarHideTimer !== null) { window.clearTimeout(this.toolbarHideTimer); this.toolbarHideTimer = null; }
-    this.root.querySelector(".reader-toolbar")?.classList.remove("reader-toolbar-autohide");
-  }
-
-  private scheduleToolbarHide() {
-    if (this.toolbarHideTimer !== null) return;
-    this.toolbarHideTimer = window.setTimeout(() => {
-      this.toolbarHideTimer = null;
-      const toolbar = this.root.querySelector(".reader-toolbar");
-      if (toolbar && !toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
-        toolbar.classList.add("reader-toolbar-autohide");
-      }
-    }, 260);
+    let idleTimer: number | null = null;
+    const reveal = () => {
+      if (idleTimer !== null) { window.clearTimeout(idleTimer); idleTimer = null; }
+      toolbar.classList.add("reader-toolbar-revealed");
+    };
+    const scheduleHide = (delay: number) => {
+      if (idleTimer !== null) window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => {
+        idleTimer = null;
+        if (!toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
+          toolbar.classList.remove("reader-toolbar-revealed");
+        }
+      }, delay);
+    };
+    const onMove = () => {
+      reveal();
+      scheduleHide(600);
+    };
+    this.root.addEventListener("pointermove", onMove, { passive: true });
+    this.root.addEventListener("pointerdown", onMove, { passive: true });
+    const onLeave = () => scheduleHide(260);
+    this.root.addEventListener("pointerleave", onLeave);
+    reveal();
+    scheduleHide(600);
+    this.toolbarRevealCleanup = () => {
+      if (idleTimer !== null) window.clearTimeout(idleTimer);
+      toolbar.classList.remove("reader-toolbar-revealed");
+      this.root.removeEventListener("pointermove", onMove);
+      this.root.removeEventListener("pointerdown", onMove);
+      this.root.removeEventListener("pointerleave", onLeave);
+    };
   }
 
   destroy() {
@@ -1194,7 +1201,7 @@ class ZoteroStyleTxtReader {
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
     this.workspace.onClosed?.();
-    if (this.toolbarHideTimer !== null) window.clearTimeout(this.toolbarHideTimer);
+    this.toolbarRevealCleanup?.();
     this.events.abort();
     this.alertDialog.destroy();
     this.noteComposer.destroy();

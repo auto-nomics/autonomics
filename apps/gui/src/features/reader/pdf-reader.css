@@ -1015,9 +1015,31 @@
 }
 .zotero-pdf-reader[data-hosted] .reader-toolbar { overflow-x: auto; }
 
-/* Auto-hide header toolbar: fades unless the pointer is near/on it or focus
-   sits inside. Opacity-only (no translate) so hit targets never move;
-   hover:none devices never get the autohide class (always visible). */
-.reader-toolbar { transition: opacity 0.18s ease; }
-.reader-toolbar.reader-toolbar-autohide:not(:hover):not(:focus-within) { opacity: 0; }
-@media (prefers-reduced-motion: reduce) { .reader-toolbar { transition: none; } }
+/* Auto-hide header toolbar: overlays the content top (no reserved space —
+   the content fills the full height) and fades in while the pointer
+   approaches the reader's top edge, hovers the toolbar, or focus sits
+   inside (keyboard users). The box never moves (opacity-only) and stays
+   interactive while faded, so hover-clicks stay reliable; moving the
+   pointer onto the faded strip reveals it instantly. hover:none devices
+   keep it permanently visible. */
+.reader-main { position: relative; }
+.reader-toolbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  box-shadow: 0 6px 18px #0004;
+}
+.reader-toolbar.reader-toolbar-revealed,
+.reader-toolbar:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .reader-toolbar { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reader-toolbar { transition: none; }
+}

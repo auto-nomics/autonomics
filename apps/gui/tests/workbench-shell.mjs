@@ -24,7 +24,15 @@ try {
     if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }], contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 } }, display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false } } });
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     // Loose bib/wiki/system fixtures: the shell test cares about chrome, not content.
-    if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], total: 0 } });
+    if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], snapshots: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
+    if (path === '/wiki/graph') {
+      const offset = Number(new URL(route.request().url()).searchParams.get('offset') ?? 0);
+      const entry = (id, title) => ({ id, title, tags: [], alias: [], ctime: 1, mtime: 1 });
+      return route.fulfill({ json: offset === 0
+        ? { nodes: [entry('w1', '词条甲'), entry('w2', '词条乙')], edges: [{ source: 'w1', target: 'w2' }, { source: 'w1', target: 'missing' }], next_offset: 2 }
+        : { nodes: [entry('w3', '孤立词条')], edges: [], next_offset: null } });
+    }
+    if (path === '/wiki/search') return route.fulfill({ json: { results: [{ entry_id: 'w1', score: 1 }] } });
     if (path === '/wiki/entries' || path.startsWith('/wiki/entries?')) return route.fulfill({ json: { entries: [{ id: 'w1', title: '词条甲', alias: [], tags: [], ctime: 1, mtime: 1 }] } });
     if (path === '/wiki/entries/w1') return route.fulfill({ json: { id: 'w1', title: '词条甲', alias: [], tags: [], content: '# 词条甲\n\n正文。', ctime: 1, mtime: 1 } });
     if (path === '/model-config') return route.fulfill({ json: { models: [], providers: [] } });
@@ -47,7 +55,33 @@ try {
   await rail.getByRole('button', { name: 'Wiki' }).waitFor();
   await rail.getByRole('button', { name: 'Agent', exact: true }).waitFor();
   await rail.getByRole('button', { name: 'CONFIG' }).waitFor();
+  assert.equal(await page.locator('main[data-workbench] > header').count(), 0);
+  await rail.getByRole('button', { name: '搜索或输入命令' }).click();
+  await page.getByRole('dialog').getByText('Command palette').waitFor();
+  await page.keyboard.press('Escape');
+  await rail.getByRole('button', { name: '折叠侧栏' }).click();
+  await page.getByRole('button', { name: '展开侧栏' }).waitFor();
+  await rail.getByRole('button', { name: '展开侧栏' }).click();
+  await rail.getByRole('button', { name: /色彩主题/ }).waitFor();
+  await rail.getByRole('button', { name: '退出登录' }).waitFor();
   await page.locator('aside[data-slot=workbench-sidebar]').waitFor();
+  // The desktop sidebar can be resized and restores its width.
+  const sidebar = page.locator('aside[data-slot=workbench-sidebar]');
+  const resizeSidebar = page.getByRole('separator', { name: '调整侧栏宽度' });
+  const beforeWidth = (await sidebar.boundingBox()).width;
+  const handleBox = await resizeSidebar.boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2 + 80, handleBox.y + handleBox.height / 2, { steps: 5 });
+  await page.mouse.up();
+  assert.ok((await sidebar.boundingBox()).width > beforeWidth + 60, 'sidebar should resize by dragging');
+  await page.reload();
+  await resizeSidebar.waitFor();
+  assert.ok((await sidebar.boundingBox()).width > beforeWidth + 60, 'sidebar width should persist');
+  await resizeSidebar.focus();
+  await page.keyboard.press('ArrowLeft');
+  assert.equal((await sidebar.boundingBox()).width, beforeWidth + 70, 'keyboard should resize sidebar');
+
   // The hydrate-seeded agent opens as a workbench editor tab; the chat
   // portals into it (no auxiliary bar anymore).
   const agentTab = page.locator('[data-editor-group] [role="tab"][title="/root/alpha"]');
@@ -60,12 +94,76 @@ try {
   const bibTab = page.getByRole('tab', { name: '文献与证据' });
   await bibTab.waitFor();
   await page.locator('section[aria-label="文献工作区"]').waitFor();
-  await page.getByRole('button', { name: 'Bibliography library' }).waitFor();
+  const librarySidebar = page.locator('aside[data-slot=workbench-sidebar]');
+  await librarySidebar.getByRole('tree', { name: 'Collections' }).waitFor();
+  await librarySidebar.getByRole('button', { name: 'Unfiled' }).click();
+  await page.getByRole('button', { name: /Unfiled/ }).first().waitFor();
+  assert.equal(await page.locator('section[aria-label="文献工作区"]').getByRole('tree', { name: 'Collections' }).count(), 0);
+  await librarySidebar.getByRole('button', { name: /All Articles/ }).click();
 
   await rail.getByRole('button', { name: 'CONFIG' }).click();
   const configTab = page.getByRole('tab', { name: '设置' });
   await configTab.waitFor();
   await assert.doesNotReject(() => bibTab.getAttribute('aria-selected').then(v => assert.equal(v, 'false', 'bibliography tab must deactivate when config activates')));
+
+  // Move tabs within and between groups, then verify persistence.
+  const mainTabs = page.getByRole('tablist', { name: '编辑器标签', exact: true });
+  await configTab.dragTo(bibTab, { targetPosition: { x: 2, y: 10 } });
+  assert.deepEqual(await mainTabs.getByRole('tab').allTextContents(), ['alpha', '设置', '文献与证据']);
+  const zone = page.locator('[data-editor-zone="main"]');
+  const zoneBox = await zone.boundingBox();
+  await configTab.dragTo(zone, { targetPosition: { x: zoneBox.width - 10, y: zoneBox.height / 2 } });
+  const secondaryTabs = page.getByRole('tablist', { name: '分屏编辑器标签' });
+  await secondaryTabs.getByRole('tab', { name: '设置' }).waitFor();
+  await secondaryTabs.getByRole('tab', { name: '设置' }).dragTo(bibTab, { targetPosition: { x: 2, y: 10 } });
+  await secondaryTabs.waitFor({ state: 'detached' });
+  assert.deepEqual(await mainTabs.getByRole('tab').allTextContents(), ['alpha', '设置', '文献与证据']);
+  await page.reload();
+  await page.getByRole('tab', { name: '设置' }).waitFor();
+  assert.deepEqual(await mainTabs.getByRole('tab').allTextContents(), ['alpha', '设置', '文献与证据']);
+
+  // Research tools open as independent tabs from the activity bar.
+  const bibSidebar = page.locator('aside[data-slot=workbench-sidebar]');
+  for (const [name, title] of [['Discover', '发现'], ['Snapshots', '快照'], ['Subscriptions', '订阅']]) {
+    assert.equal(await bibSidebar.getByRole('button', { name, exact: true }).count(), 0);
+    await rail.getByRole('button', { name, exact: true }).click();
+    await page.getByRole('tab', { name: title, exact: true }).waitFor();
+  }
+  await rail.getByRole('button', { name: 'Discover', exact: true }).click();
+  assert.equal(await page.getByRole('tab', { name: '发现', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.reload();
+  for (const title of ['发现', '快照', '订阅']) {
+    const tab = page.getByRole('tab', { name: title, exact: true });
+    await tab.waitFor();
+    await tab.getByRole('button', { name: `关闭 ${title}` }).click();
+  }
+
+  // Overflow stays inside the tab strip; menu and wheel reveal hidden tabs.
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    for (let i = 0; i < 16; i++) store.openEditor({ kind: 'config', params: { overflowTest: i } });
+  });
+  const tabScroll = mainTabs.locator('[data-editor-tabs-scroll]');
+  await mainTabs.getByLabel('显示所有编辑器标签').waitFor();
+  assert.ok(await tabScroll.evaluate(el => el.scrollWidth > el.clientWidth), 'tabs should overflow their own scroll area');
+  assert.ok(await tabScroll.evaluate(el => el.scrollLeft > 0), 'newly active tab should be revealed');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'tabs should not widen the window');
+  await mainTabs.getByLabel('显示所有编辑器标签').click();
+  await mainTabs.getByRole('menuitem', { name: 'alpha' }).click();
+  assert.equal(await agentTab.getAttribute('aria-selected'), 'true');
+  assert.ok(await tabScroll.evaluate(el => el.scrollLeft < 5), 'selecting a hidden tab should reveal it');
+  await tabScroll.hover();
+  await page.mouse.wheel(0, 500);
+  await page.waitForFunction(el => el.scrollLeft > 0, await tabScroll.elementHandle());
+  await page.getByRole('button', { name: '拆分编辑器' }).click();
+  await page.getByRole('tablist', { name: '分屏编辑器标签' }).waitFor();
+  assert.ok(await tabScroll.evaluate(el => el.scrollWidth > el.clientWidth), 'split group should keep overflow contained');
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'split tabs should not widen the window');
+  await page.getByRole('button', { name: '关闭分屏' }).click();
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    for (const editor of [...store.getWorkbenchState().groups.main.editors]) if (editor.params.overflowTest !== undefined) store.closeEditor(editor.id);
+  });
 
   // ── Command palette (Ctrl+P) ─────────────────────────────────────────
   await page.keyboard.press('Control+p');
@@ -82,6 +180,15 @@ try {
   await page.keyboard.press('Escape');
   await searchDialog.waitFor({ state: 'detached' });
 
+  const wikiSidebar = page.locator('aside[data-slot=workbench-sidebar]');
+  const wikiSearch = wikiSidebar.getByRole('textbox', { name: '搜索知识库' });
+  await wikiSearch.fill('词条');
+  await wikiSidebar.getByRole('list', { name: '检索结果' }).getByRole('button', { name: '词条甲' }).waitFor();
+  await wikiSidebar.getByRole('button', { name: '清除搜索' }).click();
+  await wikiSidebar.getByRole('list', { name: '词条列表' }).waitFor();
+  await wikiSidebar.getByRole('button', { name: '浏览词条' }).click();
+  assert.equal(await wikiSearch.count(), 0);
+
   // ── Wiki entries are editor tabs ──────────────────────────────────────
   await page.getByRole('button', { name: /词条甲/ }).first().click();
   const wikiEntryTab = page.getByRole('tab', { name: '词条甲' });
@@ -90,6 +197,26 @@ try {
   await wikiSection.getByRole('heading', { name: '词条甲' }).first().waitFor();
   await wikiEntryTab.getByRole('button', { name: '关闭 词条甲' }).click();
   await wikiEntryTab.waitFor({ state: 'detached' });
+
+  // Knowledge graph loads every page, renders links and opens nodes.
+  await wikiSidebar.getByRole('button', { name: '打开知识图谱' }).click();
+  const graph = page.getByRole('region', { name: '知识关系图谱' });
+  await graph.getByText('3 个词条 · 1 条链接').waitFor();
+  assert.equal(await graph.locator('.wiki-graph-node').count(), 3);
+  assert.equal(await graph.locator('.wiki-graph-links line').count(), 1);
+  await graph.getByRole('checkbox', { name: '显示孤立词条' }).uncheck();
+  assert.equal(await graph.locator('.wiki-graph-node').count(), 2);
+  await graph.getByRole('textbox', { name: '搜索图谱词条' }).fill('词条甲');
+  assert.equal(await graph.locator('[data-node-id="w2"]').getAttribute('opacity'), '0.15');
+  await graph.getByRole('button', { name: '放大图谱' }).click();
+  await graph.locator('[data-node-id="w1"]').focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('tab', { name: '词条甲' }).waitFor();
+  await page.getByRole('tab', { name: '知识图谱' }).click();
+  await graph.getByRole('button', { name: '刷新图谱' }).click();
+  await graph.getByText('2 个词条 · 1 条链接').waitFor();
+  await page.getByRole('tab', { name: '知识图谱' }).getByRole('button', { name: '关闭 知识图谱' }).click();
+  await page.getByRole('tab', { name: '词条甲' }).getByRole('button', { name: '关闭 词条甲' }).click();
 
   // ── Split editor ─────────────────────────────────────────────────────
   await bibTab.click(); // bibliography active again

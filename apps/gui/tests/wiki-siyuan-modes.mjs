@@ -355,7 +355,10 @@ try {
   await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
 
   // ── 底部 dock:链接按词条名显示,不再显示裸 id ──
-  await wiki.getByRole('button', { name: '链接与历史' }).click();
+  await wiki.getByRole('heading', { name: '关联提及' }).waitFor();
+  await wiki.getByRole('button', { name: '展开 反向引用 的关联提及' }).click();
+  await wiki.getByRole('button', { name: '参见 [[番茄栽培]]。' }).waitFor();
+  assert.equal(await wiki.locator('mark', { hasText: '[[番茄栽培]]' }).count(), 1);
   await wiki.getByText('反向引用').first().waitFor({ timeout: 10_000 });
   assert.ok((await wiki.getByText('提及者').count()) >= 1, 'mention row shows the title');
   assert.equal(await wiki.getByText('entry-3').count(), 0, 'raw entry ids must not be displayed');

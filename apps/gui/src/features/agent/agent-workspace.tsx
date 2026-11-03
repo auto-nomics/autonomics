@@ -535,15 +535,28 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   );
 
   const content = (
-    <div
-      className={cn(
-        "flex min-h-0 flex-1 flex-col",
-        // Entrance for (re)docking into an agent editor tab.
-        "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none",
-      )}
-    >
-      <div className="shrink-0 border-b bg-muted/40">
-        {agentPickerOpen ? (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-2 border-b px-1.5 text-xs text-muted-foreground">
+        {searchToggle}
+        <span className="truncate">{activeAgent || "No agent open"}</span>
+        {activeAgent && (
+          <>
+            <span>·</span>
+            <span className="shrink-0">{activeInfo?.model ?? "no model"}</span>
+            <span>·</span>
+            <AgentStatusIcon status={statuses[activeAgent]} />
+            <span className="shrink-0">{running}</span>
+            {usage && (
+              <span className="ml-auto hidden shrink-0 sm:inline">
+                {usage.input} in / {usage.output} out{usage.cache ? ` / ${usage.cache} cache` : ""}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+
+      {agentPickerOpen && (
+        <div className="shrink-0 border-b bg-muted/40">
           <Command
             className="rounded-none! bg-transparent p-0"
             loop
@@ -554,7 +567,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             }}
           >
             <div className="flex h-10 items-center gap-1 px-1.5">
-              {searchToggle}
               <div className="min-w-0 flex-1 [&>div]:p-0">
                 <CommandInput
                   autoFocus
@@ -638,35 +650,8 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               </CommandGroup>
             </CommandList>
           </Command>
-        ) : (
-          <div className="flex h-10 items-center gap-1 px-1.5">
-            {searchToggle}
-            <Button size="icon-sm" variant="ghost" aria-label="New agent" className="shrink-0" onClick={props.onSpawn}>
-              <Plus />
-            </Button>
-            {/* Agent tabs live in the workbench editor strip now; the
-                header keeps only the picker and the new-agent action. */}
-          </div>
-        )}
-      </div>
-
-      <div className="flex h-8 shrink-0 items-center gap-2 border-b px-3 text-xs text-muted-foreground">
-        <span className="truncate">{activeAgent || "No agent open"}</span>
-        {activeAgent && (
-          <>
-            <span>·</span>
-            <span className="shrink-0">{activeInfo?.model ?? "no model"}</span>
-            <span>·</span>
-            <AgentStatusIcon status={statuses[activeAgent]} />
-            <span className="shrink-0">{running}</span>
-            {usage && (
-              <span className="ml-auto hidden shrink-0 sm:inline">
-                {usage.input} in / {usage.output} out{usage.cache ? ` / ${usage.cache} cache` : ""}
-              </span>
-            )}
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
       {activeAgent ? (
         <>

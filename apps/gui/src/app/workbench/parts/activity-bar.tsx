@@ -5,12 +5,17 @@
  * behavior); clicking it again reveals it.
  */
 
-import { BookOpen, Bot, Library, PanelBottom, Settings } from "lucide-react";
+import { BookOpen, Bot, Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { setContainer, setSidebarCollapsed, openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
+import { openPalette } from "../command-registry";
+import { useTheme } from "@/hooks/use-theme";
+import { cycleThemeMode } from "@/lib/theme";
+import { isTauri } from "@/lib/is-tauri";
+import { WindowControls } from "./window-controls";
 
 function RailButton(props: {
   label: string;
@@ -49,6 +54,8 @@ export function ActivityBar(props: {
   onLogout: () => void;
 }) {
   const state = useWorkbenchState();
+  const { mode } = useTheme();
+  const theme = mode === "light" ? { icon: Sun, label: "浅色主题" } : mode === "dark" ? { icon: Moon, label: "深色主题" } : { icon: Monitor, label: "跟随系统" };
   const collapsed = state.sidebar.collapsed;
 
   const containerClick = (container: ContainerId) => {
@@ -60,7 +67,10 @@ export function ActivityBar(props: {
     if (container === "bibliography") openBibliographyEditor();
   };
 
-  const bibActive = !collapsed && state.sidebar.container === "bibliography";
+  const group = state.groups.active === "secondary" ? state.groups.secondary : state.groups.main;
+  const activeEditor = group?.editors.find((editor) => editor.id === group.activeId);
+  const activeWorkspace = activeEditor?.kind === "bibliography" ? (activeEditor.params.workspace ?? "library") : null;
+  const bibActive = !collapsed && state.sidebar.container === "bibliography" && (activeWorkspace === "library" || activeWorkspace === null);
   const wikiActive = !collapsed && state.sidebar.container === "wiki";
   const agentsActive = !collapsed && state.sidebar.container === "agents";
   const pendingNotices = state.panel.unreadNotices > 0 && (!state.panel.visible || state.panel.tab !== "notices");
@@ -68,7 +78,7 @@ export function ActivityBar(props: {
   return (
     <nav
       aria-label="工作台活动栏"
-      className={cn("flex w-12 shrink-0 flex-col items-center border-r bg-sidebar py-1 text-sidebar-foreground", props.mobile && "hidden")}
+      className={cn("flex w-12 min-h-0 shrink-0 flex-col items-center overflow-y-auto border-r bg-sidebar py-1 text-sidebar-foreground", props.mobile && "hidden")}
     >
       <div className="flex flex-col items-center gap-0.5">
         <RailButton
@@ -78,6 +88,9 @@ export function ActivityBar(props: {
           active={bibActive}
           onClick={() => containerClick("bibliography")}
         />
+        <RailButton label="Discover" title="发现" icon={Compass} active={activeWorkspace === "discover"} onClick={() => openBibliographyEditor("discover")} />
+        <RailButton label="Snapshots" title="快照" icon={Camera} active={activeWorkspace === "snapshots"} onClick={() => openBibliographyEditor("snapshots")} />
+        <RailButton label="Subscriptions" title="订阅" icon={Rss} active={activeWorkspace === "subscriptions"} onClick={() => openBibliographyEditor("subscriptions")} />
         <RailButton
           label="Wiki"
           title="知识库(条目即编辑器标签,Ctrl+K 检索)"
@@ -93,7 +106,10 @@ export function ActivityBar(props: {
           onClick={() => containerClick("agents")}
         />
       </div>
-      <div className="mt-auto flex flex-col items-center gap-0.5">
+      <div data-tauri-drag-region="" className="min-h-2 w-full flex-1" />
+      <div className="flex shrink-0 flex-col items-center gap-0.5">
+        <RailButton label="搜索或输入命令" title="搜索或输入命令 (Ctrl+P)" icon={Search} onClick={() => openPalette("all")} />
+        <RailButton label={collapsed ? "展开侧栏" : "折叠侧栏"} title={collapsed ? "展开侧栏 (Ctrl+B)" : "折叠侧栏 (Ctrl+B)"} icon={PanelLeft} onClick={props.onToggleSidebar} />
         <RailButton
           label="切换底部面板"
           title="底部面板(Ctrl+J)"
@@ -104,10 +120,9 @@ export function ActivityBar(props: {
           onClick={props.onTogglePanel}
         />
         <RailButton label="CONFIG" title="设置" icon={Settings} onClick={() => openEditor({ kind: "config" })} />
-        {/*
-          Theme toggle and logout live in the title bar (and the mobile
-          drawer footer); the rail keeps the activity-bar set minimal.
-        */}
+        <RailButton label={`色彩主题:${theme.label},点击切换`} title={`色彩主题:${theme.label}(点击切换)`} icon={theme.icon} onClick={cycleThemeMode} />
+        <RailButton label="退出登录" title="退出登录" icon={LogOut} onClick={props.onLogout} />
+        {isTauri && <WindowControls vertical />}
       </div>
     </nav>
   );

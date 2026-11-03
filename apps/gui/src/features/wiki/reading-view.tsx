@@ -5,7 +5,7 @@
  * SiYuan exposes per document.
  */
 import { BookOpen, SquarePen, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -54,12 +54,16 @@ export function ModeSwitch({
 
 export function ReadingView({
   entry,
+  navigation,
+  footer,
   onModeChange,
   onDelete,
   onOpenEntry,
   onMissingLink,
 }: {
   entry: WikiEntry;
+  navigation?: ReactNode;
+  footer?: ReactNode;
   onModeChange: (mode: WikiMode) => void;
   onDelete: () => void;
   /** newTab: Ctrl/Cmd+点击或中键 → 在新标签页打开(浏览器习惯)。 */
@@ -157,7 +161,7 @@ export function ReadingView({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="shrink-0 border-b px-2 py-1.5">
         <div className="flex items-start justify-between gap-2">
-          <h1 className="min-w-0 break-words text-[15px] leading-6 font-semibold">{entry.title}</h1>
+          <div className="flex min-w-0 items-start gap-1">{navigation}<h1 className="min-w-0 break-words text-[15px] leading-6 font-semibold">{entry.title}</h1></div>
           <span className="flex shrink-0 items-center gap-1">
             <ModeSwitch mode="read" onChange={onModeChange} />
             <Button size="icon-sm" variant="ghost" title="移入回收站" onClick={() => void onDelete()}>
@@ -185,6 +189,7 @@ export function ReadingView({
           className="md wiki-md mx-auto max-w-3xl break-words text-sm"
           dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content) }}
         />
+        {footer}
       </ScrollArea>
     </div>
   );

@@ -11,10 +11,13 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, FileText, GitFork, Library, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, GitFork, Library, Network, NotebookText, Rss, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
+import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { WikiEntrySurface } from "@/features/wiki/wiki-editor";
+import { WikiGraph } from "@/features/wiki/wiki-graph";
 import {
   registerWikiOpener,
   resolveTitleCached,
@@ -25,9 +28,13 @@ import { registerEditorKind, type EditorContext } from "./editor-registry";
 import { registerReaderEditorKind } from "./editors/reader-editor";
 import { setAgentSlot } from "./agent-slot-registry";
 import {
+  activateEditorById,
+  setContainer,
+  setSidebarCollapsed,
   closeEditor,
   openWikiEntryEditor,
   patchEditorState,
+  useWorkbenchState,
   type WikiEntryEditorState,
 } from "./workbench-store";
 import { useWorkbenchRuntime } from "./runtime-context";
@@ -38,9 +45,13 @@ import { useWorkbenchRuntime } from "./runtime-context";
 
 function BibliographyEditorBody({ editor }: EditorContext) {
   const workspace = (editor.params.workspace as BibliographyWorkspace | undefined) ?? "library";
+  const groups = useWorkbenchState().groups;
+  const sidebarSlot = useBibliographySidebarSlot();
+  const desktop = useMediaQuery("(min-width: 768px)");
+  const active = groups.main.activeId === editor.id || groups.secondary?.activeId === editor.id;
   return (
     <section aria-label="文献工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <BibliographyView workspace={workspace} />
+      <BibliographyView workspace={workspace} active={active} sidebarSlot={desktop ? sidebarSlot : undefined} externalSidebar={desktop} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
 }
@@ -141,9 +152,8 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
 
   return (
     <section aria-label="知识库工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {/* Per-tab history toolbar: back/forward + delete; new tabs open via
-          the workbench strip, search via Ctrl+K, browse via the sidebar. */}
-      <div className="flex h-8 shrink-0 items-center gap-0.5 border-b px-1.5">
+      <WikiEntrySurface
+        navigation={<span className="flex shrink-0 items-center gap-0.5">
         <button
           type="button"
           aria-label="后退"
@@ -164,13 +174,7 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
         >
           <ArrowRight className="size-3.5" />
         </button>
-        <span className="ml-1 min-w-0 truncate text-xs text-muted-foreground">
-          {current.title || current.entryId}
-        </span>
-        {/* Deletion lives in the reading view's actions (with its
-            confirmation); this toolbar only carries history. */}
-      </div>
-      <WikiEntrySurface
+        </span>}
         key={current.entryId}
         entryId={current.entryId}
         mode={state.mode}
@@ -225,7 +229,7 @@ export function registerWorkbenchEditorKinds(): void {
       return current?.title || state?.title || "未命名词条";
     },
     name: (editor) => String(editor.params.entryId ?? ""),
-    icon: () => FileText,
+    icon: () => NotebookText,
     body: WikiEntryEditorBody,
     // Keep-alive: unsaved block-editor drafts survive tab switches; the
     // confirmLeave veto guards closing while editing.
@@ -240,10 +244,18 @@ export function registerWorkbenchEditorKinds(): void {
     ],
   });
   registerEditorKind({
+    kind: "wiki-graph",
+    title: () => "知识图谱",
+    name: () => "知识关系图谱",
+    icon: () => Network,
+    body: WikiGraph,
+    mount: "keep-alive",
+  });
+  registerEditorKind({
     kind: "bibliography",
-    title: () => "文献与证据",
-    name: () => "Bibliography",
-    icon: () => Library,
+    title: (editor) => ({ discover: "发现", snapshots: "快照", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
+    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
+    icon: (editor) => ({ discover: Compass, snapshots: Camera, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
   });

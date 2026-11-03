@@ -1,6 +1,7 @@
 import { AddToContext, useContextBasket } from "@/features/context/context-basket";
 import { articleContext } from "@/features/context/context-model";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   BookOpen,
   ChevronDown,
@@ -349,20 +350,20 @@ export type BibliographyWorkspace = "library" | "discover" | "snapshots" | "subs
 // the selected workspace and only keeps the lazy-mount bookkeeping: a panel
 // is created on first visit, then stays mounted (hidden) so its state
 // survives navigation.
-export function BibliographyView({ workspace = "library" }: { workspace?: BibliographyWorkspace } = {}) {
+export function BibliographyView({ workspace = "library", active = true, sidebarSlot, externalSidebar = false, onOpenSidebar }: { workspace?: BibliographyWorkspace; active?: boolean; sidebarSlot?: HTMLElement | null; externalSidebar?: boolean; onOpenSidebar?: () => void } = {}) {
   const [mounted, setMounted] = useState<Set<BibliographyWorkspace>>(() => new Set([workspace]));
   useEffect(() => {
     setMounted(current => (current.has(workspace) ? current : new Set([...current, workspace])));
   }, [workspace]);
   return <div className="flex min-h-0 flex-1 flex-col">
-    <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView /></div>
+    {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={sidebarSlot} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
-    {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={workspace === "snapshots"} /></div>}
-    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={workspace === "subscriptions"} /></div>}
+    {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={active && workspace === "snapshots"} /></div>}
+    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={active && workspace === "subscriptions"} /></div>}
   </div>;
 }
 
-function LibraryView() {
+function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarSlot?: HTMLElement | null; externalSidebar: boolean; onOpenSidebar?: () => void }) {
   const contextBasket = useContextBasket();
   const contextBasketRef = useRef(contextBasket);
   contextBasketRef.current = contextBasket;
@@ -628,6 +629,7 @@ function LibraryView() {
   }, []);
 
   const selectCollection = (collectionId: string | null) => {
+    if (externalSidebar) onOpenSidebar?.();
     if (collectionId === selectedCollection) return;
     requestSequence.current++;
     detailSequence.current++;
@@ -841,9 +843,9 @@ function LibraryView() {
   };
 
   return (
-    <div ref={libraryContainer} className={cn("relative isolate grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden", roomy && "grid-cols-[216px_minmax(0,1fr)_336px] grid-rows-1")}>
+    <div ref={libraryContainer} className={cn("relative isolate grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden", roomy && (externalSidebar ? "grid-cols-[minmax(0,1fr)_336px] grid-rows-1" : "grid-cols-[216px_minmax(0,1fr)_336px] grid-rows-1"))}>
       {advancedOpen && <AdvancedSearchBuilder query={queryDraft} expression={queryDraft === query ? expression : null} onClose={() => setAdvancedOpen(false)} onApply={(expr,text) => {setExpression(expr);setQuery(text);setQueryDraft(text);setAdvancedOpen(false);}} />}
-      {(libraryOpen || detailsOpen) && (
+      {((!externalSidebar && libraryOpen) || detailsOpen) && (
         <button
           type="button"
           aria-label="Close panel"
@@ -854,7 +856,15 @@ function LibraryView() {
           className={cn("absolute inset-0 z-30 bg-[var(--scrim)] outline-none", roomy && "hidden")}
         />
       )}
-      <aside
+      {externalSidebar && sidebarSlot && createPortal(
+        <ScrollArea className="min-h-0 flex-1" contentClassName="p-1.5">
+          <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
+          <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={(search) => { onOpenSidebar?.(); applySavedSearch(search); }} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
+          <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
+          <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
+        </ScrollArea>, sidebarSlot,
+      )}
+      {!externalSidebar && <aside
         className={cn(
           "relative flex min-h-0 flex-col overflow-hidden border-r bg-card",
           !roomy && "absolute top-0 bottom-0 left-0 z-[35] w-[min(88%,300px)] shadow-2xl transition-transform",
@@ -882,7 +892,7 @@ function LibraryView() {
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
           <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
         </ScrollArea>
-      </aside>
+      </aside>}
 
       <section className="flex min-h-0 flex-col overflow-hidden bg-card">
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
@@ -890,8 +900,8 @@ function LibraryView() {
             size="icon-sm"
             variant="ghost"
             aria-label="Open library"
-            className={cn(roomy && "hidden")}
-            onClick={() => setLibraryOpen(true)}
+            className={cn(!externalSidebar && roomy && "hidden")}
+            onClick={() => externalSidebar ? onOpenSidebar?.() : setLibraryOpen(true)}
           >
             <PanelLeft />
           </Button>

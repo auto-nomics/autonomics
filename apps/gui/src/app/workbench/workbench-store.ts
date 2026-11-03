@@ -32,7 +32,7 @@ export type EditorGroup = { editors: EditorRef[]; activeId: EditorId | null };
 export type WorkbenchState = {
   /** Bumped on every mutation so the snapshot identity always changes. */
   revision: number;
-  sidebar: { collapsed: boolean; container: ContainerId | null };
+  sidebar: { collapsed: boolean; container: ContainerId | null; width: number };
   containerViews: Record<ContainerId, string>;
   panel: { visible: boolean; heightPercent: number; tab: PanelTab; unreadNotices: number };
   groups: { active: GroupId; main: EditorGroup; secondary: EditorGroup | null };
@@ -82,7 +82,7 @@ export function editorKey(params: Record<string, unknown>): string {
 function defaultState(): WorkbenchState {
   return {
     revision: 0,
-    sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography" },
+    sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography", width: 220 },
     containerViews: { bibliography: "library", wiki: "browse", agents: "overview" },
     panel: { visible: false, heightPercent: PANEL_HEIGHT_DEFAULT, tab: "events", unreadNotices: 0 },
     groups: { active: "main", main: { editors: [], activeId: null }, secondary: null },
@@ -174,6 +174,7 @@ function reviveState(raw: unknown): WorkbenchState | null {
     ...base,
     sidebar: {
       collapsed: base.sidebar.collapsed,
+      width: clampPercent(source.sidebar?.width ?? NaN, 160, 600, 220),
       container: isContainerId(source.sidebar?.container) ? source.sidebar.container : base.sidebar.container,
     },
     containerViews: { ...base.containerViews, ...(source.containerViews ?? {}) },
@@ -232,7 +233,7 @@ function persist() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       version: 2,
-      sidebar: { container: state.sidebar.container },
+      sidebar: { container: state.sidebar.container, width: state.sidebar.width },
       containerViews: state.containerViews,
       panel: {
         visible: state.panel.visible,
@@ -474,6 +475,24 @@ export function patchEditorState(id: EditorId, editorState: unknown): void {
   }
 }
 
+/** Move an editor to an insertion position, preserving its complete state. */
+export function moveEditor(from: GroupId, id: EditorId, to: GroupId, index: number): void {
+  const source = state.groups[from];
+  const target = state.groups[to];
+  if (!source || (!target && to !== "secondary")) return;
+  const sourceIndex = source.editors.findIndex((editor) => editor.id === id);
+  if (sourceIndex < 0) return;
+  const editor = source.editors[sourceIndex];
+  const remaining = source.editors.filter((item) => item.id !== id);
+  const destination = from === to ? remaining : (target?.editors ?? []);
+  const insertion = Math.max(0, Math.min(destination.length, index - (from === to && sourceIndex < index ? 1 : 0)));
+  const editors = [...destination.slice(0, insertion), editor, ...destination.slice(insertion)];
+  const sourceActive = source.activeId === id ? remaining[Math.min(sourceIndex, remaining.length - 1)]?.id ?? null : source.activeId;
+  const groups = { ...state.groups, [from]: { editors: remaining, activeId: sourceActive }, [to]: { editors, activeId: id }, active: to };
+  if (from === "secondary" && to === "main" && !remaining.length) groups.secondary = null;
+  commit({ ...state, groups });
+}
+
 /** Splits the editor area: the active editor of the active group moves to a
  *  fresh secondary group on the right (VSCode "split editor" with one tab). */
 export function splitEditor(): void {
@@ -536,6 +555,12 @@ export function setContainer(container: ContainerId): void {
 export function setContainerView(container: ContainerId, view: string): void {
   if (state.containerViews[container] === view) return;
   commit({ ...state, containerViews: { ...state.containerViews, [container]: view } });
+}
+
+export function setSidebarWidth(width: number): void {
+  const next = Math.round(Math.max(160, Math.min(600, width)));
+  if (!Number.isFinite(next) || state.sidebar.width === next) return;
+  commit({ ...state, sidebar: { ...state.sidebar, width: next } });
 }
 
 export function setSidebarCollapsed(collapsed: boolean): void {

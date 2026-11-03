@@ -7,7 +7,8 @@
  */
 
 import { useEffect, useRef } from "react";
-import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelLeft, Rss, Sun } from "lucide-react";
+import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
+import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { AgentInspector, openAgentDialog } from "@/features/agent";
@@ -19,6 +20,10 @@ import { Button } from "@/components/ui/button";
 import { openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
 import { useWorkbenchRuntime } from "../runtime-context";
+import { openPalette } from "../command-registry";
+import { togglePanel } from "../workbench-store";
+import { isTauri } from "@/lib/is-tauri";
+import { WindowControls } from "./window-controls";
 
 
 
@@ -35,14 +40,15 @@ const CONTAINER_TITLES: Record<ContainerId, string> = {
   agents: "Agent",
 };
 
-function ContainerBody({ container }: { container: ContainerId }) {
+function ContainerBody({ container, mobile }: { container: ContainerId; mobile: boolean }) {
   const state = useWorkbenchState();
   const runtime = useWorkbenchRuntime();
   if (container === "bibliography") {
     const active = state.containerViews.bibliography ?? "library";
+    if (!mobile) return <div ref={setBibliographySidebarSlot} className="flex min-h-0 flex-1 flex-col" />;
     return (
       <div role="group" aria-label="文献工作区" className="flex flex-col gap-0.5 p-2">
-        {BIB_VIEWS.map((view) => (
+        {BIB_VIEWS.filter((view) => mobile || view.id === "library").map((view) => (
           <Button
             key={view.id}
             size="sm"
@@ -63,7 +69,7 @@ function ContainerBody({ container }: { container: ContainerId }) {
   if (container === "wiki") {
     return (
       <div role="group" aria-label="知识库工作区" className="flex min-h-0 flex-1 flex-col">
-        <WikiSidebarView />
+        <WikiSidebarView onOpenGraph={() => openEditor({ kind: "wiki-graph" })} />
       </div>
     );
   }
@@ -194,14 +200,14 @@ export function SideBar(props: {
             drawerOpen ? "visible translate-x-0" : "invisible -translate-x-full pointer-events-none",
           )}
         >
-          <div className="flex min-h-12 w-full shrink-0 items-center gap-2 border-b px-2">
+          <div data-tauri-drag-region="" className="flex min-h-12 w-full shrink-0 items-center gap-2 border-b px-2">
             <Button size="icon-sm" variant="ghost" className="shrink-0" aria-label="折叠侧栏" title="折叠侧栏" onClick={props.onToggleCollapsed}><PanelLeft /></Button>
             <div className="grid min-w-0 flex-1 leading-tight">
               <span className="truncate text-sm font-semibold">Autonomics</span>
               <span className="truncate text-xs text-muted-foreground">Research workspace</span>
             </div>
           </div>
-          <SideBarContent container={container} />
+          <SideBarContent container={container} mobile={props.mobile} />
           <MobileDrawerFooter onLogout={props.onLogout} />
         </aside>
       </>
@@ -212,27 +218,27 @@ export function SideBar(props: {
     <aside
       aria-label="工作台侧栏"
       data-slot="workbench-sidebar"
-      className="flex w-[220px] shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground"
+      className="flex h-full min-w-0 w-full flex-col border-r bg-sidebar text-sidebar-foreground"
     >
-      <SideBarContent container={container} />
+      <SideBarContent container={container} mobile={props.mobile} />
     </aside>
   );
 }
 
-function SideBarContent({ container }: { container: ContainerId }) {
+function SideBarContent({ container, mobile }: { container: ContainerId; mobile: boolean }) {
   const state = useWorkbenchState();
   return (
     <>
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {container !== "wiki" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CONTAINER_TITLES[container]}
         </span>
         <span className="ml-auto text-[10px] text-muted-foreground/70" aria-hidden>
           {state.containerViews[container]}
         </span>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <ContainerBody container={container} />
+      </div>}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <ContainerBody container={container} mobile={mobile} />
       </div>
     </>
   );
@@ -251,6 +257,9 @@ function MobileDrawerFooter({ onLogout }: { onLogout: () => void }) {
   const meta = THEME_META[mode];
   return (
     <div className="flex w-full shrink-0 flex-col gap-1 border-t p-2">
+      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label="搜索或输入命令" onClick={() => openPalette("all")}><Search /><span>搜索或输入命令</span></Button>
+      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label="切换底部面板" onClick={togglePanel}><PanelBottom /><span>切换底部面板</span></Button>
+      {isTauri && <WindowControls />}
       <Button
         size="sm"
         variant="ghost"

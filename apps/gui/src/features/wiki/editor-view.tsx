@@ -4,7 +4,7 @@
  * block editor — plus a dirty-guarded exit back to 阅读模式.
  */
 import { ChevronDown, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +16,12 @@ import { putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
 
 export function EditorView({
   entry,
+  navigation,
   onModeChange,
   onSaved,
 }: {
   entry: WikiEntry;
+  navigation?: ReactNode;
   onModeChange: (mode: WikiMode) => void;
   onSaved: (entry: WikiEntry) => void;
 }) {
@@ -97,6 +99,7 @@ export function EditorView({
         {/* min-w-0: 行是网格/flex 布局的子项,长标题 input 的固有宽度
             会把保存按钮挤出视口(移动端实测)。 */}
         <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {navigation}
           <input
             id="wiki-title"
             value={title}

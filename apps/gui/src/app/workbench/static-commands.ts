@@ -39,6 +39,7 @@ registerCommands("shell", [
     setContainer("wiki");
     setContainerView("wiki", "browse");
   } },
+  { id: "workbench.open-wiki-graph", title: "Open knowledge graph", category: "go", keywords: "wiki graph 知识图谱 关系", run: () => openEditor({ kind: "wiki-graph" }) },
   { id: "workbench.open-agents", title: "Show agent overview", category: "go", keywords: "agents overview chat", run: () => {
     setContainer("agents");
     setContainerView("agents", "overview");
@@ -49,11 +50,12 @@ registerCommands("shell", [
 
 /** Reveals the bibliography container and opens (or refocuses) its editor
  *  on the given workspace view. Used by the sidebar views and commands. */
-export function openBibliographyEditor(workspace?: string): void {
-  const view = workspace ?? getWorkbenchState().containerViews.bibliography ?? "library";
-  setContainer("bibliography");
-  setContainerView("bibliography", view);
-  openEditor({ kind: "bibliography", params: { workspace: view } });
+export function openBibliographyEditor(workspace = "library"): void {
+  if (workspace === "library") {
+    setContainer("bibliography");
+    setContainerView("bibliography", "library");
+  }
+  openEditor({ kind: "bibliography", params: { workspace } });
 }
 
 /** Opens (or focuses) the agent's editor tab — the unified chat window. */

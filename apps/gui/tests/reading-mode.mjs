@@ -272,6 +272,14 @@ try {
   assert.equal(annotations.length, beforeTools + 2);
   assert.equal(annotations.at(-1).kind, 'comment');
   assert.equal(annotations.at(-1).rects[0].space, 'pdf');
+  await page.locator('[data-action=tool-note]').click();
+  // A click without a caret range should show guidance and leave the tool usable.
+  await page.evaluate(() => { window.savedCaretRangeFromPoint = document.caretRangeFromPoint; document.caretRangeFromPoint = () => null; });
+  await page.mouse.click(notePoint.x, notePoint.y);
+  assert.deepEqual(errors, [], 'a missing caret range should not throw');
+  assert.equal(await page.locator('[data-action=tool-note]').getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('.reader-note-composer:not([hidden])').count(), 0);
+  await page.evaluate(() => { document.caretRangeFromPoint = window.savedCaretRangeFromPoint; delete window.savedCaretRangeFromPoint; });
   // Real four-page figure/table fixture: crops use original PDF rendering,
   // not an empty image placeholder or flattened mathematical text.
   await page.evaluate(() => window.reader.close());
