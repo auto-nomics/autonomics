@@ -82,16 +82,26 @@ impl App {
         match mouse.kind {
             MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
                 // Tab strip (top row): click switches the visible leaf —
-                // a pure view switch, never a lifecycle operation.
+                // a pure view switch, never a lifecycle operation. The
+                // `+N` overflow stubs (clipped edges) open the
+                // switch-agent picker instead.
                 if mouse.row == 0
-                    && let Some(idx) = crate::widgets::tab_bar::hit_test(
+                    && let Some(action) = crate::widgets::tab_bar::click(
                         &self.state.sessions,
                         self.state.last_frame_area.width,
+                        self.state.active_agent_idx,
                         mouse.column,
                     )
                 {
-                    self.state.active_agent_idx = idx;
-                    self.dirty = true;
+                    match action {
+                        crate::widgets::tab_bar::TabClick::Switch(idx) => {
+                            self.state.active_agent_idx = idx;
+                            self.dirty = true;
+                        }
+                        crate::widgets::tab_bar::TabClick::Overflow => {
+                            self.toggle_agents_popup();
+                        }
+                    }
                 }
                 0
             }

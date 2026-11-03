@@ -95,11 +95,14 @@ impl AppState {
             (Bibliography, self.bibliography_visible),
             (DagView, self.dag_view_visible),
             (MessagePicker, self.message_picker.is_visible()),
-            (AgentEffortPicker, self.agent_effort_picker.visible),
-            (AgentModelPicker, self.agent_model_picker.is_visible()),
             (TasksPopup, self.tasks_popup.visible),
             (PlanPopup, self.plan_popup.visible),
             (AgentsPopup, self.agents_popup.is_visible()),
+            // The agents popup's own quick-pickers (m/M/e/E) spawn on top
+            // of it and must paint above it — and capture keys — or they
+            // open invisibly beneath it and the popup swallows every key.
+            (AgentEffortPicker, self.agent_effort_picker.visible),
+            (AgentModelPicker, self.agent_model_picker.is_visible()),
             (NameInput, self.name_input.visible),
             (AgentProfilePicker, self.agent_profile_picker.visible),
             (CommandPalette, self.command_palette.is_visible()),
@@ -207,6 +210,22 @@ mod tests {
             stack.iter().position(|&x| x == Overlay::DeleteConfirm)
                 > stack.iter().position(|&x| x == Overlay::AgentsPopup)
         );
+    }
+
+    #[test]
+    fn quick_pickers_paint_above_the_agents_popup_that_spawns_them() {
+        // Regression: m/M/e/E inside the agents popup open the model /
+        // effort pickers. They must sit above the popup in the z-order —
+        // below it they opened invisibly and the popup kept every key,
+        // so the shortcuts appeared dead.
+        let mut state = AppState::default();
+        state.agents_popup.picker.visible = true;
+        state.agent_model_picker.picker.visible = true;
+        state.agent_effort_picker.visible = true;
+        let stack = state.overlay_stack();
+        let pos = |o: Overlay| stack.iter().position(|&x| x == o).unwrap();
+        assert!(pos(Overlay::AgentModelPicker) > pos(Overlay::AgentsPopup));
+        assert!(pos(Overlay::AgentEffortPicker) > pos(Overlay::AgentsPopup));
     }
 
     #[test]

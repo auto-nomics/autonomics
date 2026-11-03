@@ -111,6 +111,9 @@ export function useAgentRuntime() {
   stateRef.current = { agents, contexts, activeAgent, activeContexts };
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
+  // Events received while a transcript is being fetched must be applied
+  // after the snapshot, otherwise the response replaces the live updates.
+  const historyEventBuffers = useRef<Record<string, { contextId: string; events: GatewayFrame[] }>>({});
 
   const appendMessage = useCallback((agent: string, item: ChatItem) => {
     setMessages((current) => ({ ...current, [agent]: [...(current[agent] ?? []), item] }));
@@ -126,6 +129,9 @@ export function useAgentRuntime() {
     // skeleton while its successor is still running.
     const seq = (historyLoadSeq.current[agentPath] ?? 0) + 1;
     historyLoadSeq.current[agentPath] = seq;
+    if (historyEventBuffers.current[agentPath]?.contextId !== contextId) {
+      historyEventBuffers.current[agentPath] = { contextId, events: [] };
+    }
     setHistoryLoading((current) => ({ ...current, [agentPath]: true }));
     try {
       const response = await gatewayRequest(
@@ -141,13 +147,29 @@ export function useAgentRuntime() {
         [`${agentPath}:${contextId}`]: Array.isArray(response) ? response : response.messages ?? [],
       }));
     } catch (cause) {
-      appendMessage(agentPath, makeItem("error", `加载历史失败: ${String(cause)}`));
+      if (historyLoadSeq.current[agentPath] === seq) {
+        appendMessage(agentPath, makeItem("error", `加载历史失败: ${String(cause)}`));
+      }
     } finally {
       if (historyLoadSeq.current[agentPath] === seq) {
+        const buffered = historyEventBuffers.current[agentPath]?.events ?? [];
+        delete historyEventBuffers.current[agentPath];
+        for (const frame of buffered) handleFrameRef.current(frame);
         setHistoryLoading((current) => ({ ...current, [agentPath]: false }));
       }
     }
   }, [appendMessage]);
+
+  // A resumed agent and its context are announced asynchronously. Selecting
+  // the tab can happen before either ID is available, so load once both are
+  // present, and again when the user selects a different agent or context.
+  const selectedAgentId = agents.find((agent) => agent.path === activeAgent)?.agent_id;
+  const selectedContextId = activeContexts[activeAgent] ?? contexts[activeAgent]?.id;
+  useEffect(() => {
+    if (activeAgent && selectedAgentId && selectedContextId) {
+      void loadHistory(activeAgent, selectedContextId);
+    }
+  }, [activeAgent, selectedAgentId, selectedContextId, loadHistory]);
 
   const handleFrame = useCallback((frame: GatewayFrame) => {
     if (frame.kind === "lag") {
@@ -157,6 +179,20 @@ export function useAgentRuntime() {
     if (frame.kind === "agent") {
       const agent = frame.data.agent;
       const event = frame.data.event;
+      const buffer = historyEventBuffers.current[agent];
+      const announcedContext = event.ContextActivated?.id ?? event.ContextList?.context?.id;
+      if (buffer && announcedContext && announcedContext !== buffer.contextId) {
+        historyLoadSeq.current[agent] += 1;
+        delete historyEventBuffers.current[agent];
+        setHistoryLoading((current) => ({ ...current, [agent]: false }));
+      }
+      // Context announcements must continue to flow: they establish the
+      // identity needed for loading. Other events retain their original
+      // ordering and are replayed after the snapshot (also on failure).
+      if (historyEventBuffers.current[agent] && event.ContextList === undefined && event.ContextActivated === undefined) {
+        historyEventBuffers.current[agent].events.push(frame);
+        return;
+      }
       const appendStreamDelta = (
         role: "assistant" | "thinking",
         delta: string,
@@ -405,7 +441,6 @@ export function useAgentRuntime() {
 
   const selectAgent = (path: string) => {
     setActiveAgent(path);
-    void loadHistory(path);
   };
 
   const forgetAgent = (path: string) => {

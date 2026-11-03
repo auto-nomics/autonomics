@@ -116,27 +116,20 @@ pub(crate) async fn list_stored_sessions(
 /// Merged session history exactly as the TUI built it in-process: the
 /// immutable transcript first, then legacy compacted summaries (only when
 /// the transcript is empty), then any live rows not yet archived.
-#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/sessions/{session_id}/history", tag = "storage", responses((status = 200, body = Object)))]
+#[utoipa::path(get, path = "/api/v1/agents/{agent_id}/sessions/{session_id}/history", tag = "storage", responses((status = 200, body = Object), (status = 500, description = "History storage query failed")))]
 pub(crate) async fn get_history(
     State(state): State<GatewayState>,
     Path((agent_id, session_id)): Path<(Uuid, Uuid)>,
-) -> Json<Vec<Message>> {
+) -> GatewayResult<Json<Vec<Message>>> {
     let storage = state.infra.storage.clone();
-    let state =
-        match agentik_core::storage::restore_session_state(storage.as_ref(), agent_id, session_id)
-            .await
-        {
-            Ok(state) => state,
-            Err(e) => {
-                tracing::warn!(%session_id, error = %e, "failed to load session state");
-                return Json(Vec::new());
-            }
-        };
+    let state = agentik_core::storage::restore_session_state(storage.as_ref(), agent_id, session_id)
+        .await
+        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut transcript = storage
         .get_transcript_messages(session_id)
         .await
-        .unwrap_or_default();
+        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if transcript.is_empty() {
         for summary in &state.ancestor_summaries {
             let formatted = format!(
@@ -157,7 +150,7 @@ pub(crate) async fn get_history(
             transcript.push(message.clone());
         }
     }
-    Json(transcript)
+    Ok(Json(transcript))
 }
 
 #[utoipa::path(get, path = "/api/v1/agents/{agent_id}/sessions/{session_id}/plan", tag = "storage", responses((status = 200, body = Object)))]
