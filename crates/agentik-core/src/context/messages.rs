@@ -38,7 +38,7 @@ impl Context {
     pub fn inject_message(
         &mut self,
         user_content: Vec<ContentBlock>,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
     ) -> Result<()> {
         // Emit before `remember` so the UI can distinguish an external display
         // event from the acknowledgement of a runtime-bound TUI prompt.
@@ -51,17 +51,22 @@ impl Context {
             .collect::<Vec<_>>()
             .join("\n");
         if !preview.is_empty() {
-            self.core.send_event(if from_user {
-                AgentEvent::UserMessageAcknowledged(preview)
+            if origin == agentik_types::MessageOrigin::User {
+                self.core
+                    .send_event(AgentEvent::UserMessageAcknowledged(preview));
             } else {
-                AgentEvent::MessageInjected(preview)
-            });
+                self.core.send_event(AgentEvent::MessageInjected {
+                    text: preview,
+                    origin,
+                });
+            }
         }
 
         let message = Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin,
             content: user_content,
             model: None,
             stop_reason: None,
@@ -245,10 +250,12 @@ impl Context {
     pub fn render_context(&self) -> Result<Vec<Message>> {
         let mut result = Vec::new();
 
-        // 1. Inject summaries from all compaction ancestors
+        // 1. Inject summaries from all compaction ancestors. Harness-authored
+        //    checkpoints carry the System origin so replays render them as
+        //    notices, not user prompts.
         for summary in &self.ancestor_summaries {
             let formatted = format_checkpoint_message(summary);
-            result.push(Message::user(formatted));
+            result.push(Message::injected(formatted));
         }
 
         // 2. Append the current messages
@@ -383,6 +390,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: agentik_types::MessageOrigin::default(),
                 content: vec![
                     ContentBlock::ToolUse {
                         id: "call_a".into(),
@@ -570,6 +578,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: agentik_types::MessageOrigin::default(),
                 content: vec![ContentBlock::ToolUse {
                     id: "call_X".into(),
                     name: "t".into(),
@@ -587,6 +596,7 @@ mod tests {
             id: "u_intermediate".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: agentik_types::MessageOrigin::default(),
             content: vec![ContentBlock::Text {
                 text: "checkpoint summary".into(),
             }],
@@ -646,6 +656,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: agentik_types::MessageOrigin::default(),
                 content: vec![ContentBlock::ToolUse {
                     id: "call_X".into(),
                     name: "t".into(),
@@ -663,6 +674,7 @@ mod tests {
                 id: "u_retry".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: agentik_types::MessageOrigin::default(),
                 content: vec![ContentBlock::Text {
                     text: "retry please".into(),
                 }],

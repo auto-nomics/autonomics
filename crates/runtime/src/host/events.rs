@@ -80,6 +80,6 @@ pub(crate) enum SpawnNotice {
 pub(super) struct PendingDelivery {
     pub(super) text: String,
     pub(super) delegation_id: Option<uuid::Uuid>,
-    pub(super) from_user: bool,
+    pub(super) origin: agentik_types::MessageOrigin,
     pub(super) reply_tx: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
 }

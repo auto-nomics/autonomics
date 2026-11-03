@@ -148,9 +148,15 @@ pub enum AgentEvent {
     /// An error occurred.
     Error(String),
 
-    /// A user message was injected into the conversation by an external source
-    /// (delegate_to or background-task completion notice).
-    MessageInjected(String),
+    /// A message was injected into the conversation by a non-user source.
+    /// `origin` says which: a `delegate_to` call, a background-task notice,
+    /// or harness feedback (interruption markers, retry notices, state
+    /// notices). User-authored prompts acknowledge as
+    /// [`AgentEvent::UserMessageAcknowledged`] instead.
+    MessageInjected {
+        text: String,
+        origin: crate::MessageOrigin,
+    },
 
     /// A user-submitted message was committed to conversation memory. The UI
     /// uses this acknowledgement to promote a pending prompt into the visible

@@ -15,7 +15,7 @@
 //! that shape.
 
 use crate::types::errors::{AnthropicError, Result};
-use crate::types::messages::{Message, MessageCreateParams, Role};
+use crate::types::messages::{Message, MessageCreateParams, MessageOrigin, Role};
 use crate::types::shared::RequestId;
 use crate::types::streaming::{
     ContentBlockDelta, MessageDelta, MessageDeltaUsage, MessageStreamEvent,
@@ -295,6 +295,7 @@ impl WireProtocol for OpenAiResponsesWire {
             id,
             type_: "message".to_string(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content,
             model,
             stop_reason,
@@ -332,6 +333,7 @@ impl WireProtocol for OpenAiResponsesWire {
                         id: state.response_id.clone().unwrap_or_default(),
                         type_: "message".to_string(),
                         role: Role::Assistant,
+                        origin: MessageOrigin::default(),
                         content: Vec::new(),
                         model: state.model.clone(),
                         stop_reason: None,

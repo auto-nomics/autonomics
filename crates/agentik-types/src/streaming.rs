@@ -124,6 +124,7 @@ mod tests {
                 id: "msg_123".to_string(),
                 type_: "message".to_string(),
                 role: Role::Assistant,
+                origin: crate::MessageOrigin::default(),
                 content: vec![],
                 model: Some("claude-3-5-sonnet-latest".to_string()),
                 stop_reason: None,

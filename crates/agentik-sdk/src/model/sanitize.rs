@@ -42,7 +42,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use agentik_types::messages::{ContentBlock, Message, Role};
+use agentik_types::messages::{ContentBlock, Message, MessageOrigin, Role};
 use uuid::Uuid;
 
 /// Apply all sanitisation rules and return a clean `messages` list.
@@ -443,6 +443,7 @@ fn sanitize_inner(messages: Vec<Message>) -> Vec<Message> {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin: MessageOrigin::System,
             content: vec![ContentBlock::Text {
                 text: "[conversation resumed]".to_string(),
             }],
@@ -650,6 +651,7 @@ fn stub_user_message(tool_use_ids: Vec<String>) -> Message {
         id: Uuid::new_v4().to_string(),
         type_: "message".to_string(),
         role: Role::User,
+        origin: MessageOrigin::System,
         content: tool_use_ids
             .into_iter()
             .map(|tc_id| ContentBlock::ToolResult {
@@ -742,6 +744,7 @@ pub fn stub_tool_result_message(tool_use_ids: impl IntoIterator<Item = String>) 
         id: Uuid::new_v4().to_string(),
         type_: "message".to_string(),
         role: Role::User,
+        origin: MessageOrigin::System,
         content,
         model: None,
         stop_reason: None,
@@ -805,13 +808,14 @@ pub fn diagnose(messages: &[Message]) -> HashMap<&'static str, usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentik_types::messages::{ContentBlock, Message, Role};
+    use agentik_types::messages::{ContentBlock, Message, MessageOrigin, Role};
 
     fn text_user(s: &str) -> Message {
         Message {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![ContentBlock::Text { text: s.into() }],
             model: None,
             stop_reason: None,
@@ -826,6 +830,7 @@ mod tests {
             id: "a".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![ContentBlock::Text { text: s.into() }],
             model: None,
             stop_reason: None,
@@ -840,6 +845,7 @@ mod tests {
             id: "a".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![ContentBlock::ToolUse {
                 id: id.into(),
                 name: "t".into(),
@@ -866,6 +872,7 @@ mod tests {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: ids.iter().map(|i| tool_result(i, "ok")).collect(),
             model: None,
             stop_reason: None,
@@ -904,6 +911,7 @@ mod tests {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![],
             model: None,
             stop_reason: None,
@@ -1006,6 +1014,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: MessageOrigin::default(),
                 content: vec![ContentBlock::ToolUse {
                     id: "call_dup".into(),
                     name: "t".into(),
@@ -1021,6 +1030,7 @@ mod tests {
                 id: "u".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: MessageOrigin::default(),
                 content: vec![
                     tool_result("call_dup", "first result"),
                     tool_result("call_dup", "second result"),
@@ -1061,6 +1071,7 @@ mod tests {
                 id: "u1".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: MessageOrigin::default(),
                 content: vec![
                     ContentBlock::ToolResult {
                         tool_use_id: "call_X".into(),
@@ -1081,6 +1092,7 @@ mod tests {
                 id: "u2".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: MessageOrigin::default(),
                 content: vec![ContentBlock::ToolResult {
                     tool_use_id: "call_X".into(),
                     content: Some("second".into()),
@@ -1114,6 +1126,7 @@ mod tests {
                 id: "u".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: MessageOrigin::default(),
                 content: vec![tool_result("phantom", "where did this come from?")],
                 model: None,
                 stop_reason: None,
@@ -1139,6 +1152,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: MessageOrigin::default(),
                 content: vec![
                     ContentBlock::ToolUse {
                         id: "a".into(),
@@ -1171,6 +1185,7 @@ mod tests {
                 id: "a".into(),
                 type_: "message".into(),
                 role: Role::Assistant,
+                origin: MessageOrigin::default(),
                 content: vec![ContentBlock::ToolUse {
                     id: "call_X".into(),
                     name: "t".into(),
@@ -1186,6 +1201,7 @@ mod tests {
                 id: "u".into(),
                 type_: "message".into(),
                 role: Role::User,
+                origin: MessageOrigin::default(),
                 content: vec![
                     tool_result("call_X", "ok"),
                     tool_result("call_X", "ok again"),
@@ -1319,6 +1335,7 @@ mod tests {
             id: "a".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::ToolUse {
                     id: "a".into(),
@@ -1429,6 +1446,7 @@ mod tests {
             id: "a".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::ToolUse {
                     id: "call_A".into(),
@@ -1456,6 +1474,7 @@ mod tests {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::ToolResult {
                     tool_use_id: "call_B".into(),
@@ -1509,6 +1528,7 @@ mod tests {
             id: "a".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::ToolUse {
                     id: "call_A".into(),
@@ -1534,6 +1554,7 @@ mod tests {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: "call_B".into(),
                 content: Some("B result".into()),
@@ -1621,6 +1642,7 @@ mod tests {
             id: "u".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::Text {
                     text:

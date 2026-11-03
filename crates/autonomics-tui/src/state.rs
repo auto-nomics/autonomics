@@ -120,6 +120,12 @@ pub enum ChatLine {
     },
     /// Context-compaction outcome (persistent transcript record).
     Compact(CompactResult),
+    /// A message injected by a non-user source — delegation, background
+    /// task, or harness feedback. Rendered distinctly from typed prompts.
+    Injected {
+        origin: agentik_types::MessageOrigin,
+        text: String,
+    },
     Separator,
 }
 
@@ -691,8 +697,8 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 state.scroll_to_bottom();
             }
         }
-        AgentEvent::MessageInjected(text) => {
-            state.push_line(ChatLine::User(text));
+        AgentEvent::MessageInjected { text, origin } => {
+            state.push_line(ChatLine::Injected { origin, text });
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
@@ -1111,12 +1117,21 @@ mod tests {
     #[test]
     fn external_injected_message_still_renders() {
         let mut ts = AgentTabState::default();
-        apply_event(&mut ts, AgentEvent::MessageInjected("external".into()));
+        apply_event(
+            &mut ts,
+            AgentEvent::MessageInjected {
+                text: "external".into(),
+                origin: agentik_types::MessageOrigin::Background,
+            },
+        );
 
         assert_eq!(ts.pending_queue_len(), 0);
         assert!(matches!(
             ts.messages.last(),
-            Some(ChatLine::User(text)) if text == "external"
+            Some(ChatLine::Injected {
+                text,
+                origin: agentik_types::MessageOrigin::Background,
+            }) if text == "external"
         ));
     }
 

@@ -58,15 +58,15 @@ impl Default for AgentConfig {
 /// [`Agent::internal_event_tx`] to drive the agent without holding a
 /// reference to the `Agent` struct.
 pub enum InternalEvent {
-    /// User injected a new message.
+    /// A new message was injected into the conversation.
     ///
-    /// `from_user` distinguishes TUI-originated prompts from external
-    /// injections. A committed TUI prompt emits
-    /// `AgentEvent::UserMessageAcknowledged`; external messages emit
-    /// `AgentEvent::MessageInjected`.
+    /// `origin` records who authored it (see
+    /// [`agentik_types::MessageOrigin`]). A user-authored message emits
+    /// `AgentEvent::UserMessageAcknowledged`; every other origin emits
+    /// `AgentEvent::MessageInjected` carrying the origin.
     MessageInject {
         content: Vec<ContentBlock>,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
         delegation_id: Option<Uuid>,
     },
     /// A background tool task finished.
@@ -217,10 +217,10 @@ impl Agent {
     pub fn inject_message(
         &mut self,
         user_content: Vec<ContentBlock>,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
     ) -> Result<()> {
         self.active_context_mut()
-            .map(|s| s.inject_message(user_content, from_user))
+            .map(|s| s.inject_message(user_content, origin))
             .transpose()
             .map(|_| ())
     }
@@ -789,7 +789,7 @@ mod tests {
                 content: vec![ContentBlock::Text {
                     text: "hello".into(),
                 }],
-                from_user: true,
+                origin: agentik_types::MessageOrigin::User,
                 delegation_id: None,
             })
             .unwrap();
@@ -848,7 +848,7 @@ mod tests {
                 content: vec![ContentBlock::Text {
                     text: "hello".into(),
                 }],
-                from_user: true,
+                origin: agentik_types::MessageOrigin::User,
                 delegation_id: None,
             })
             .unwrap();
@@ -1134,7 +1134,7 @@ mod tests {
                 content: vec![ContentBlock::Text {
                     text: "hello".into(),
                 }],
-                from_user: true,
+                origin: agentik_types::MessageOrigin::User,
                 delegation_id: None,
             })
             .unwrap();

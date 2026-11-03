@@ -40,13 +40,17 @@ impl AgentHandle {
 impl AgentHandle {
     /// TUI user input; the caller has already displayed the message locally.
     pub fn send_message(&self, text: String) {
-        self.send_message_from(text, true);
+        self.send_message_with_origin(text, agentik_types::MessageOrigin::User);
     }
 
-    pub(super) fn send_message_from(&self, text: String, from_user: bool) {
+    pub(super) fn send_message_with_origin(
+        &self,
+        text: String,
+        origin: agentik_types::MessageOrigin,
+    ) {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text }],
-            from_user,
+            origin,
             delegation_id: None,
         });
     }
@@ -56,7 +60,7 @@ impl AgentHandle {
     pub fn send_delegation(&self, text: String, delegation_id: uuid::Uuid) {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text }],
-            from_user: false,
+            origin: agentik_types::MessageOrigin::Delegate,
             delegation_id: Some(delegation_id),
         });
     }

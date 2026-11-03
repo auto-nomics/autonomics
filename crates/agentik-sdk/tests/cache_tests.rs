@@ -76,6 +76,7 @@ fn user_msg(text: &str) -> Message {
         id: String::new(),
         type_: "message".to_string(),
         role: Role::User,
+        origin: agentik_types::MessageOrigin::default(),
         content: vec![ContentBlock::Text {
             text: text.to_string(),
         }],

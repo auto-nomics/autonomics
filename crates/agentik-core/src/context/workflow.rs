@@ -144,7 +144,8 @@ impl Context {
                     // No `Done` — the turn is parked, not terminal. The
                     // delegation id rides along to the wake turn so
                     // observers can attribute it.
-                    self.resume_delegation_id = self.turn.as_ref().and_then(|turn| turn.delegation_id);
+                    self.resume_delegation_id =
+                        self.turn.as_ref().and_then(|turn| turn.delegation_id);
                     self.finish_turn(TurnExecutionStatus::Pause);
                     break;
                 }
@@ -155,7 +156,7 @@ impl Context {
         if was_cancelled {
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
             self.persist_snapshot().await;
-            let _ = self.remember(Message::user(
+            let _ = self.remember(Message::injected(
                 "[interrupted] The user interrupted the previous turn on purpose. \
                  Any tool calls may have been partially executed. \
                  Background tasks may still be running.",
@@ -317,13 +318,13 @@ impl Context {
         match event {
             InternalEvent::MessageInject {
                 content,
-                from_user,
+                origin,
                 delegation_id,
             } => {
                 if let (Some(id), Some(turn)) = (delegation_id, self.turn.as_mut()) {
                     turn.delegation_id = Some(id);
                 }
-                let _ = self.inject_message(content, from_user);
+                let _ = self.inject_message(content, origin);
                 true
             }
             InternalEvent::Compact => {
@@ -364,7 +365,9 @@ impl Context {
                              Use `view_task_results` with task={seq} to view the error details."
                         )
                     };
-                    let _ = self.remember(Message::user(note));
+                    let _ = self.remember(
+                        Message::user(note).with_origin(agentik_types::MessageOrigin::Background),
+                    );
                 }
                 true
             }
@@ -421,8 +424,11 @@ impl Context {
         retry_feedback: Option<String>,
     ) -> Result<()> {
         if let Some(feedback) = retry_feedback {
-            self.inject_message(vec![ContentBlock::Text { text: feedback }], false)
-                .unwrap();
+            self.inject_message(
+                vec![ContentBlock::Text { text: feedback }],
+                agentik_types::MessageOrigin::System,
+            )
+            .unwrap();
         }
 
         self.poll_context_provider().await;
@@ -539,10 +545,7 @@ impl Context {
                 if let Some((old, retired)) = self.active_wait_watchers.remove(&task_seq) {
                     retired.store(true, Ordering::SeqCst);
                     old.cancel();
-                    tracing::debug!(
-                        task_seq,
-                        "retired previous watcher before spawning new one"
-                    );
+                    tracing::debug!(task_seq, "retired previous watcher before spawning new one");
                 }
 
                 // Spawn a background watcher that will inject a message when
@@ -930,7 +933,7 @@ impl Context {
             };
             let _ = tx.send(InternalEvent::MessageInject {
                 content: vec![ContentBlock::Text { text: message }],
-                from_user: false,
+                origin: agentik_types::MessageOrigin::Background,
                 delegation_id: None,
             });
             return;
@@ -955,7 +958,7 @@ impl Context {
                              cancelled. Any tool calls may have been partially executed."
                         ),
                     }],
-                    from_user: false,
+                    origin: agentik_types::MessageOrigin::System,
                     delegation_id: None,
                 });
                 return;
@@ -1008,7 +1011,7 @@ impl Context {
 
         let _ = tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text: message }],
-            from_user: false,
+            origin: agentik_types::MessageOrigin::Background,
             delegation_id: None,
         });
     }
@@ -1022,7 +1025,7 @@ impl Context {
     async fn poll_context_provider(&mut self) {
         if let Some(provider) = &self.core.context_provider {
             if let Some(text) = provider.poll().await {
-                let _ = self.remember(Message::user(text));
+                let _ = self.remember(Message::injected(text));
             }
         }
     }
@@ -1097,7 +1100,7 @@ impl Context {
         let plan = self.plan_snapshot();
         let plan_section = (!plan.is_empty()).then(|| render_plan_prompt_section(&plan));
         if !notice_matches(&self.messages, PLAN_NOTICE_PREFIX, plan_section.as_deref()) {
-            let _ = self.remember(Message::user(notice_text(
+            let _ = self.remember(Message::injected(notice_text(
                 PLAN_NOTICE_PREFIX,
                 plan_section.as_deref(),
             )));

@@ -147,7 +147,7 @@ pub(super) fn derive_agent_status(
 
         // ── Injected message (delegate_to, user delivery) — not a status
         //    change by itself; the agent will start processing on its own ──
-        AgentEvent::MessageInjected(_) => (None, None),
+        AgentEvent::MessageInjected { .. } => (None, None),
 
         // TUI acknowledgement happens mid-run when a steering prompt reaches
         // conversation memory; it does not change the active status.
@@ -560,7 +560,10 @@ mod status_derivation_tests {
 
     #[test]
     fn injected_message_changes_nothing() {
-        let (s, ev) = derive_agent_status(&AgentEvent::MessageInjected("hello".into()));
+        let (s, ev) = derive_agent_status(&AgentEvent::MessageInjected {
+            text: "hello".into(),
+            origin: agentik_types::MessageOrigin::System,
+        });
         assert_eq!(s, None);
         assert!(ev.is_none());
     }

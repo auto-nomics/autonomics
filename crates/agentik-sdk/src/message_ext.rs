@@ -1,6 +1,6 @@
 //! Convenience constructors and accessors for `Message`.
 
-use crate::types::messages::{ContentBlock, Message, Role, StopReason};
+use crate::types::messages::{ContentBlock, Message, MessageOrigin, Role, StopReason};
 use crate::types::shared::Usage;
 use serde_json::Value;
 use uuid::Uuid;
@@ -19,6 +19,11 @@ pub trait AgentMessageExt {
         content: impl Into<String>,
         is_error: bool,
     ) -> Self;
+    /// Tag the message's provenance (see [`MessageOrigin`]).
+    fn with_origin(self, origin: MessageOrigin) -> Self;
+    /// A `Role::User` text message authored by the harness itself
+    /// ([`MessageOrigin::System`]) — notices, markers, runtime feedback.
+    fn injected(text: impl Into<String>) -> Self;
     fn with_usage(self, usage: Usage) -> Self;
     fn with_model(self, model: impl Into<String>) -> Self;
     fn with_stop_reason(self, reason: StopReason) -> Self;
@@ -33,6 +38,7 @@ impl AgentMessageExt for Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin: MessageOrigin::System,
             content: vec![ContentBlock::Text { text: text.into() }],
             model: None,
             stop_reason: None,
@@ -47,6 +53,7 @@ impl AgentMessageExt for Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin: MessageOrigin::User,
             content: vec![ContentBlock::Text { text: text.into() }],
             model: None,
             stop_reason: None,
@@ -61,6 +68,7 @@ impl AgentMessageExt for Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin: MessageOrigin::User,
             content: blocks,
             model: None,
             stop_reason: None,
@@ -75,6 +83,7 @@ impl AgentMessageExt for Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::Assistant,
+            origin: MessageOrigin::User,
             content: vec![ContentBlock::Text { text: text.into() }],
             model: None,
             stop_reason: None,
@@ -90,6 +99,7 @@ impl AgentMessageExt for Message {
             id: id_str.clone(),
             type_: "message".to_string(),
             role: Role::Assistant,
+            origin: MessageOrigin::User,
             content: vec![ContentBlock::ToolUse {
                 id: id_str,
                 name: name.into(),
@@ -112,6 +122,7 @@ impl AgentMessageExt for Message {
             id: Uuid::new_v4().to_string(),
             type_: "message".to_string(),
             role: Role::User,
+            origin: MessageOrigin::User,
             content: vec![ContentBlock::ToolResult {
                 tool_use_id: tool_use_id.into(),
                 content: Some(content.into()),
@@ -123,6 +134,15 @@ impl AgentMessageExt for Message {
             usage: None,
             request_id: None,
         }
+    }
+
+    fn with_origin(mut self, origin: MessageOrigin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    fn injected(text: impl Into<String>) -> Self {
+        Self::user(text).with_origin(MessageOrigin::System)
     }
 
     fn with_usage(mut self, usage: Usage) -> Self {

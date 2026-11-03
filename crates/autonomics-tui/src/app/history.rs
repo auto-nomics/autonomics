@@ -78,6 +78,18 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
     for msg in messages {
         match msg.role {
             Role::User => {
+                // Non-user origins (delegation, background, harness notices)
+                // render distinctly; typed prompts stay user lines.
+                let wrap_text = |text: String| -> state::ChatLine {
+                    if msg.origin == agentik_types::MessageOrigin::User {
+                        state::ChatLine::User(text)
+                    } else {
+                        state::ChatLine::Injected {
+                            origin: msg.origin,
+                            text,
+                        }
+                    }
+                };
                 // A user message may contain multiple blocks (text +
                 // tool_result). Separate them.
                 let mut text_parts = String::new();
@@ -93,7 +105,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                             content, is_error, ..
                         } => {
                             if !text_parts.is_empty() {
-                                lines.push(state::ChatLine::User(std::mem::take(&mut text_parts)));
+                                lines.push(wrap_text(std::mem::take(&mut text_parts)));
                             }
                             lines.push(state::ChatLine::ToolResult {
                                 ok: !is_error.unwrap_or(false),
@@ -104,7 +116,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                     }
                 }
                 if !text_parts.is_empty() {
-                    lines.push(state::ChatLine::User(text_parts));
+                    lines.push(wrap_text(text_parts));
                 }
             }
             Role::Assistant => {

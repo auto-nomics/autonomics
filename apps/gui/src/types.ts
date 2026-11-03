@@ -19,12 +19,16 @@ export type GatewayFrame = {
   data: any;
 };
 
+export type MessageOrigin = "user" | "delegate" | "background" | "system";
+
 export type ChatItem = {
   id: number;
-  role: "user" | "assistant" | "thinking" | "tool" | "error" | "status";
+  role: "user" | "assistant" | "thinking" | "tool" | "error" | "status" | "system";
   text: string;
   usage?: string;
   kind?: "thinking" | "tool_call" | "tool_result";
+  /** Provenance of a system-side item — absent for user/assistant turns. */
+  origin?: Exclude<MessageOrigin, "user">;
   time: number;
 };
 
@@ -53,6 +57,7 @@ export type ContextInfo = {
 export type BackendMessage = {
   id: string;
   role: "user" | "assistant";
+  origin?: MessageOrigin;
   content?: Array<{
     type?: string;
     text?: string;

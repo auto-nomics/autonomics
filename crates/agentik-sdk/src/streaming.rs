@@ -1896,11 +1896,12 @@ data: {\"type\":\"message_stop\"}\r\n\
     }
 
     fn sample_message(id: &str, output_tokens: u64, content: Vec<ContentBlock>) -> Message {
-        use crate::types::Role;
+        use crate::types::{MessageOrigin, Role};
         Message {
             id: id.to_string(),
             type_: "message".to_string(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content,
             model: Some("claude-test".to_string()),
             stop_reason: None,

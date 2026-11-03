@@ -18,7 +18,7 @@ pub(super) enum AgentCommand {
     Message {
         text: String,
         delegation_id: Option<uuid::Uuid>,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
     },
     Shutdown,
     Cancel,
@@ -141,14 +141,14 @@ impl RuntimeHost {
     /// command loop has exited. Historically both cases failed silently,
     /// which let callers acknowledge messages that never reached anyone.
     pub fn send_to(&self, name: &str, message: String) -> std::result::Result<(), String> {
-        self.send_to_from_user(name, message, true)
+        self.send_with_origin(name, message, agentik_types::MessageOrigin::User)
     }
 
-    fn send_to_from_user(
+    fn send_with_origin(
         &self,
         name: &str,
         message: String,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
     ) -> std::result::Result<(), String> {
         if !self.agents.contains_key(name) {
             return Err(format!(
@@ -157,7 +157,7 @@ impl RuntimeHost {
                  the agent before delivering messages."
             ));
         }
-        if !self.enqueue_agent_message(name, message, None, from_user) {
+        if !self.enqueue_agent_message(name, message, None, origin) {
             return Err(format!(
                 "Agent '{name}' is not accepting commands (its loop has exited)."
             ));
@@ -170,7 +170,7 @@ impl RuntimeHost {
         name: &str,
         message: String,
         delegation_id: Option<uuid::Uuid>,
-        from_user: bool,
+        origin: agentik_types::MessageOrigin,
     ) -> bool {
         if let Some(entry) = self.agents.get(name) {
             let sent = entry
@@ -178,7 +178,7 @@ impl RuntimeHost {
                 .send(AgentCommand::Message {
                     text: message,
                     delegation_id,
-                    from_user,
+                    origin,
                 })
                 .is_ok();
             if sent {
@@ -311,10 +311,10 @@ async fn relay_loop(
                 Some(AgentCommand::Message {
                     text,
                     delegation_id,
-                    from_user,
+                    origin,
                 }) => match delegation_id {
                     Some(id) => handle.send_delegation(text, id),
-                    None => handle.send_message_from(text, from_user),
+                    None => handle.send_message_with_origin(text, origin),
                 }
                 Some(AgentCommand::Cancel) => {
                     handle.cancel();

@@ -279,7 +279,7 @@ mod agent_persistence_tests {
                 let Some((_, event)) = host.recv_any().await else {
                     panic!("agent event channel closed");
                 };
-                if matches!(event, AgentEvent::MessageInjected(_)) {
+                if matches!(event, AgentEvent::MessageInjected { .. }) {
                     return event;
                 }
             }
@@ -287,7 +287,7 @@ mod agent_persistence_tests {
         .await
         .expect("expected injected message event");
         assert!(
-            matches!(injected, AgentEvent::MessageInjected(text) if text == "persist child message")
+            matches!(injected, AgentEvent::MessageInjected { text, .. } if text == "persist child message")
         );
 
         // Keep pumping host events until the delegated turn's trailing

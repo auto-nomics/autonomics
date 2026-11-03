@@ -24,7 +24,7 @@ pub use telemetry::{ContextTelemetry, TurnTelemetry};
 
 pub use messages::{
     ContentBlock, ContentBlockParam, ImageSource, Message, MessageContent, MessageCreateBuilder,
-    MessageCreateParams, MessageParam, Role, StopReason,
+    MessageCreateParams, MessageOrigin, MessageParam, Role, StopReason,
 };
 
 pub use streaming::{

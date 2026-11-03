@@ -128,9 +128,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::Assistant { text, usage } => {
             let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
                 "Assistant",
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ))];
             lines.extend(super::md_renderer::render_markdown_to_lines(
                 text,
@@ -268,6 +266,27 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 "─".repeat(area.width as usize),
                 Style::default().fg(theme.text_faint),
             ))]
+        }
+        ChatLine::Injected { origin, text } => {
+            let label = match origin {
+                agentik_types::MessageOrigin::Delegate => "delegated task",
+                agentik_types::MessageOrigin::Background => "background",
+                agentik_types::MessageOrigin::System => "system",
+                agentik_types::MessageOrigin::User => "notice",
+            };
+            let mut lines = vec![Line::from(Span::styled(
+                format!("⌁ {label}"),
+                Style::default()
+                    .fg(theme.text_faint)
+                    .add_modifier(Modifier::BOLD),
+            ))];
+            for line in text.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("   {line}"),
+                    Style::default().fg(theme.text_faint),
+                )));
+            }
+            lines
         }
     }
 }

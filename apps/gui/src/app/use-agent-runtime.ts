@@ -15,6 +15,7 @@ import type {
   BackendMessage,
   ChatItem,
   GatewayFrame,
+  MessageOrigin,
   ModelRow,
   ContextInfo,
   StateSnapshot,
@@ -78,16 +79,26 @@ function frameSummary(frame: GatewayFrame): string {
 const OPEN_TABS_KEY = "autonomics.openTabs";
 
 let itemSequence = 0;
-function makeItem(role: ChatItem["role"], text: string, kind?: ChatItem["kind"]): ChatItem {
+function makeItem(
+  role: ChatItem["role"],
+  text: string,
+  kind?: ChatItem["kind"],
+  origin?: ChatItem["origin"],
+): ChatItem {
   itemSequence += 1;
-  return { id: itemSequence, role, text, kind, time: Date.now() };
+  return { id: itemSequence, role, text, kind, origin, time: Date.now() };
 }
 
 function convertMessage(message: any): ChatItem[] {
   const output: ChatItem[] = [];
+  // Non-user origins (delegation, background notice, harness feedback)
+  // ride in user-role messages on the wire; surface them as system items.
+  const origin: MessageOrigin | undefined = message.role === "user" ? (message.origin ?? "user") : undefined;
+  const textRole: ChatItem["role"] =
+    message.role === "user" ? (origin && origin !== "user" ? "system" : "user") : "assistant";
   let text = "";
   const pushText = () => {
-    if (text) output.push(makeItem(message.role === "user" ? "user" : "assistant", text));
+    if (text) output.push(makeItem(textRole, text, undefined, origin && origin !== "user" ? origin : undefined));
     text = "";
   };
   for (const block of message.content ?? []) {
@@ -311,6 +322,9 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
+      } else if (event.MessageInjected !== undefined) {
+        const injected = event.MessageInjected;
+        appendMessage(agent, makeItem("system", injected.text, undefined, injected.origin));
         setPromptHistories((current) => {
           const history = current[agent] ?? [];
           return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };

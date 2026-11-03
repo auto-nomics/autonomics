@@ -64,7 +64,7 @@ async fn test_agent_basic_workflow_with_mimo() {
         content: vec![ContentBlock::Text {
             text: "Say exactly: hello world".into(),
         }],
-        from_user: false,
+        origin: agentik_types::MessageOrigin::User,
         delegation_id: None,
     });
 

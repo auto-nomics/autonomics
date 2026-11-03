@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use agentik_types::messages::{
-    ContentBlockParam, ImageSource, Message, MessageContent, MessageCreateParams, MessageParam,
-    Role,
+    ContentBlockParam, ImageSource, Message, MessageContent, MessageCreateParams, MessageOrigin,
+    MessageParam, Role,
 };
 use agentik_types::reasoning::{ReasoningConfig, ReasoningEffort, ThinkingKind};
 use agentik_types::streaming::{
@@ -168,6 +168,7 @@ impl WireProtocol for OllamaChatWire {
             id,
             type_: "message".to_string(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content,
             model,
             stop_reason: Some(stop_reason),
@@ -201,6 +202,7 @@ impl WireProtocol for OllamaChatWire {
                     id: state.response_id.clone().unwrap_or_default(),
                     type_: "message".to_string(),
                     role: Role::Assistant,
+                    origin: MessageOrigin::default(),
                     content: Vec::new(),
                     model: state.model.clone(),
                     stop_reason: None,

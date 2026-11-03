@@ -215,7 +215,12 @@ impl RuntimeHost {
         message: String,
         delegation_id: uuid::Uuid,
     ) {
-        if !self.enqueue_agent_message(name, message, Some(delegation_id), false) {
+        if !self.enqueue_agent_message(
+            name,
+            message,
+            Some(delegation_id),
+            agentik_types::MessageOrigin::Delegate,
+        ) {
             tracing::warn!(
                 agent = name,
                 %delegation_id,
@@ -378,13 +383,15 @@ mod tests {
     #[test]
     fn resolve_target_is_noop_for_unknown_target() {
         let mut ledger = DelegationLedger::new();
-        assert!(ledger
-            .resolve_target(
-                &path("/root/caller/worker"),
-                TurnExecutionStatus::Completed,
-                "orphan",
-            )
-            .is_empty());
+        assert!(
+            ledger
+                .resolve_target(
+                    &path("/root/caller/worker"),
+                    TurnExecutionStatus::Completed,
+                    "orphan",
+                )
+                .is_empty()
+        );
     }
 
     #[test]
@@ -397,13 +404,15 @@ mod tests {
         ledger.open(snapshot(id, "/root/caller/worker"), Some(reply_tx), None);
         ledger.mark_running(&id, uuid::Uuid::new_v4());
 
-        assert!(ledger
-            .resolve_target(
-                &path("/root/caller/worker"),
-                TurnExecutionStatus::Pause,
-                "parked",
-            )
-            .is_empty());
+        assert!(
+            ledger
+                .resolve_target(
+                    &path("/root/caller/worker"),
+                    TurnExecutionStatus::Pause,
+                    "parked",
+                )
+                .is_empty()
+        );
         assert_eq!(ledger.get(&id).unwrap().status, DelegationStatus::Running);
     }
 

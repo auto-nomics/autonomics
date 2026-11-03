@@ -123,6 +123,7 @@ pub fn scripted_text_model_n(text: &str, times: usize) -> Model {
         id: "msg_mock".into(),
         type_: "message".into(),
         role: Role::Assistant,
+        origin: agentik_types::MessageOrigin::default(),
         content: vec![],
         model: None,
         stop_reason: None,
@@ -166,6 +167,7 @@ pub fn scripted_text_model_n(text: &str, times: usize) -> Model {
         id: "msg_mock".into(),
         type_: "message".into(),
         role: Role::Assistant,
+        origin: agentik_types::MessageOrigin::default(),
         content: vec![ContentBlock::Text {
             text: text.to_string(),
         }],

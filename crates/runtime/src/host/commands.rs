@@ -92,7 +92,7 @@ impl RuntimeHost {
                 path,
                 delivery.text,
                 delivery.delegation_id,
-                delivery.from_user,
+                delivery.origin,
             );
             let result = if sent {
                 Ok(())
@@ -295,7 +295,7 @@ impl RuntimeHost {
                         PendingDelivery {
                             text: message,
                             delegation_id: None,
-                            from_user: true,
+                            origin: agentik_types::MessageOrigin::User,
                             reply_tx,
                         },
                     );
@@ -371,7 +371,7 @@ impl RuntimeHost {
                         PendingDelivery {
                             text: message,
                             delegation_id: Some(delegation_id),
-                            from_user: false,
+                            origin: agentik_types::MessageOrigin::Delegate,
                             reply_tx: None,
                         },
                     );
@@ -1824,7 +1824,9 @@ mod communication_policy_tests {
                     agentik_sdk::types::AgentEvent::UserMessageAcknowledged(injected) => {
                         injected == text
                     }
-                    agentik_sdk::types::AgentEvent::MessageInjected(injected) => injected == text,
+                    agentik_sdk::types::AgentEvent::MessageInjected { text: injected, .. } => {
+                        injected == text
+                    }
                     _ => false,
                 };
                 if agent == path && acknowledged {

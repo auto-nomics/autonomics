@@ -9,6 +9,15 @@ pub struct Message {
     #[serde(rename = "type", default = "default_type")]
     pub type_: String,
     pub role: Role,
+    /// Who authored this message. The wire protocol only distinguishes
+    /// user/assistant, so system-injected content (delegations, task
+    /// notices, runtime feedback) rides in `Role::User` messages; `origin`
+    /// records the actual source. Never serialized onto the model wire —
+    /// requests are built from [`MessageParam`], which carries only
+    /// role + content. Defaults to [`MessageOrigin::User`] so transcripts
+    /// persisted before this field existed load unchanged.
+    #[serde(default)]
+    pub origin: MessageOrigin,
     #[serde(default)]
     pub content: Vec<ContentBlock>,
     #[serde(default)]
@@ -68,6 +77,9 @@ impl Message {
         };
         let blocks: Vec<String> = self.content.iter().map(ContentBlock::log_summary).collect();
         let mut s = format!("[{role}] {}", blocks.join(" | "));
+        if self.origin != MessageOrigin::default() {
+            s.push_str(&format!(" origin={}", self.origin.tag()));
+        }
         if let Some(stop) = &self.stop_reason {
             s.push_str(&format!(" stop={stop:?}"));
         }
@@ -87,6 +99,42 @@ fn default_type() -> String {
 pub enum Role {
     User,
     Assistant,
+}
+
+/// Provenance of a [`Message`] — who actually authored it.
+///
+/// The Anthropic-style wire only has user/assistant roles, so every
+/// non-model contribution enters the conversation as `Role::User`.
+/// `origin` keeps the distinction durable (persisted with the transcript)
+/// without leaking onto the model wire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MessageOrigin {
+    /// A human typed it (gateway `DeliverMessage`, TUI prompt).
+    #[default]
+    User,
+    /// Injected on behalf of a `delegate_to` call from another agent.
+    Delegate,
+    /// Background task notice: completion notification or `wait_task`
+    /// wake-up carrying a task result.
+    Background,
+    /// Runtime feedback authored by the harness itself: interruption
+    /// markers, retry notices, plan/state notices, compaction checkpoints.
+    System,
+}
+
+impl MessageOrigin {
+    /// Short lowercase tag for logs and UI badges.
+    #[must_use]
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Delegate => "delegate",
+            Self::Background => "background",
+            Self::System => "system",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -533,6 +581,7 @@ mod tests {
             id: "m1".into(),
             type_: "message".into(),
             role: Role::Assistant,
+            origin: MessageOrigin::default(),
             content: vec![ContentBlock::Text {
                 text: "Hello world".into(),
             }],
@@ -558,6 +607,7 @@ mod tests {
             id: "m2".into(),
             type_: "message".into(),
             role: Role::User,
+            origin: MessageOrigin::default(),
             content: vec![
                 ContentBlock::ToolUse {
                     id: "tu_1".into(),
@@ -603,5 +653,82 @@ mod tests {
             is_error: Some(true),
         };
         assert!(block.log_summary().contains("ERROR"));
+    }
+
+    /// Transcripts persisted before `origin` existed must deserialize as
+    /// plain user messages.
+    #[test]
+    fn legacy_message_without_origin_deserializes_as_user() {
+        let json = r#"{
+            "id": "m_old",
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "text", "text": "hello"}]
+        }"#;
+        let msg: Message = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.origin, MessageOrigin::User);
+        assert_eq!(msg.role, Role::User);
+    }
+
+    /// `origin` survives a JSON round trip and serializes snake_case.
+    #[test]
+    fn origin_round_trips_and_never_reaches_wire_params() {
+        for (origin, tag) in [
+            (MessageOrigin::User, "user"),
+            (MessageOrigin::Delegate, "delegate"),
+            (MessageOrigin::Background, "background"),
+            (MessageOrigin::System, "system"),
+        ] {
+            let msg = Message {
+                id: "m1".into(),
+                type_: "message".into(),
+                role: Role::User,
+                origin,
+                content: vec![ContentBlock::Text { text: "hi".into() }],
+                model: None,
+                stop_reason: None,
+                stop_sequence: None,
+                usage: None,
+                request_id: None,
+            };
+            let json = serde_json::to_value(&msg).unwrap();
+            assert_eq!(json["origin"], tag);
+            let back: Message = serde_json::from_value(json).unwrap();
+            assert_eq!(back.origin, origin);
+
+            // Wire params carry only role + content — no origin leakage.
+            let param = MessageParam {
+                role: msg.role.clone(),
+                content: MessageContent::Text("hi".into()),
+            };
+            let param_json = serde_json::to_value(&param).unwrap();
+            assert!(param_json.get("origin").is_none());
+        }
+    }
+
+    /// Non-default origins show up in log summaries.
+    #[test]
+    fn log_summary_reports_non_default_origin() {
+        let base = Message {
+            id: "m1".into(),
+            type_: "message".into(),
+            role: Role::User,
+            origin: MessageOrigin::Delegate,
+            content: vec![ContentBlock::Text {
+                text: "task".into(),
+            }],
+            model: None,
+            stop_reason: None,
+            stop_sequence: None,
+            usage: None,
+            request_id: None,
+        };
+        assert!(base.log_summary().contains("origin=delegate"));
+
+        let plain = Message {
+            origin: MessageOrigin::User,
+            ..base
+        };
+        assert!(!plain.log_summary().contains("origin="));
     }
 }
