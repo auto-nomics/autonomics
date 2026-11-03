@@ -623,9 +623,18 @@ mod tests {
         let middle = make_sized_receipt(root.path(), 4_000_001, Duration::from_secs(600), unit);
         let newest = make_sized_receipt(root.path(), 4_000_002, Duration::from_secs(300), unit);
 
-        // Ceiling of three units (target 2.25): the ~3.01 units on disk push
-        // past it, so exactly the oldest receipt goes.
-        let report = sweep_dag_tasks_watermark(root.path(), Some(unit as u64 * 3)).await;
+        // dir_size includes directory metadata.len(), whose logical size
+        // differs across filesystems (not allocated st_blocks). Derive the
+        // fixture budget from the same measured receipt bytes so directory
+        // overhead cannot turn a one-removal case into a two-removal case.
+        let oldest_bytes = dir_size(&oldest);
+        let surviving_bytes = dir_size(&middle) + dir_size(&newest);
+        let total_bytes = oldest_bytes + surviving_bytes;
+        let ceiling = total_bytes - 1;
+        let target = ceiling - ceiling / WATERMARK_HEADROOM_DIVISOR;
+        assert!(total_bytes > ceiling, "fixture must trigger the sweep");
+        assert!(surviving_bytes <= target, "one oldest receipt must suffice");
+        let report = sweep_dag_tasks_watermark(root.path(), Some(ceiling)).await;
         assert_eq!(report.scanned, 3);
         assert_eq!(
             report.removed, 1,
@@ -634,7 +643,11 @@ mod tests {
         assert!(!oldest.exists(), "the oldest receipt is reclaimed first");
         assert!(middle.exists());
         assert!(newest.exists());
+        assert_eq!(report.total_bytes_before, total_bytes);
+        assert_eq!(report.total_bytes_after, surviving_bytes);
+        assert!(report.total_bytes_after <= target);
         assert!(report.total_bytes_after < report.total_bytes_before);
+        assert!(report.errors.is_empty());
     }
 
     #[tokio::test]

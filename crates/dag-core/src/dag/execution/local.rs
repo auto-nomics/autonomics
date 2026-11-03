@@ -82,9 +82,13 @@ impl LocalTaskExecutor {
         let cpus = std::thread::available_parallelism()
             .map(|cpus| cpus.get() as u32)
             .ok();
-        let memory_bytes = crate::resource::sample_memory_usage()
-            .ok()
-            .map(|sample| sample.limit_bytes);
+        let memory_bytes = match crate::resource::memory_capacity_bytes() {
+            Ok(bytes) => Some(bytes),
+            Err(error) => {
+                warn!(%error, "memory capacity unavailable; refusing declared memory requests");
+                Some(0)
+            }
+        };
         LocalResourceBudget::new(cpus, memory_bytes)
     }
 }
@@ -99,6 +103,23 @@ impl TaskExecutor for LocalTaskExecutor {
         let task_id = execution.submission.spec.id.clone();
         let start = std::time::Instant::now();
         let mut execution = execution;
+        if execution.submission.spec.kind == "process"
+            && execution
+                .submission
+                .spec
+                .spec
+                .get("container")
+                .is_some_and(|v| !v.is_null())
+        {
+            return JobResult::Failed {
+                id: task_id,
+                error: DagError::Schedule(
+                    "Apptainer process requires Slurm; in-process fallback refused".into(),
+                ),
+                duration: start.elapsed(),
+                details: execution.reporter.take_run_details(),
+            };
+        }
         if let Err(error) = execution.submission.resources.validate() {
             return JobResult::Failed {
                 id: task_id,
@@ -123,6 +144,10 @@ impl TaskExecutor for LocalTaskExecutor {
                 }
             };
 
+        execution.reporter.phase(
+            "waiting_for_capacity",
+            "waiting for local resource admission",
+        );
         let resource_lease = tokio::select! {
             lease = self.resource_budget.acquire(&execution.submission.resources) => match lease {
                 Ok(lease) => lease,
@@ -204,9 +229,11 @@ impl TaskExecutor for LocalTaskExecutor {
         if self.stage_inputs
             && let Some(workspace) = workspace.as_mut()
             && let Err(error) = workspace
-                .stage_inputs(
+                .stage_inputs_with_remote_observed(
                     &mut execution.submission,
                     execution.engine_ctx.opendal.as_deref(),
+                    None,
+                    Some(&execution.reporter),
                 )
                 .await
         {
@@ -231,6 +258,9 @@ impl TaskExecutor for LocalTaskExecutor {
             };
         }
 
+        execution
+            .reporter
+            .phase("executing", "executing the admitted node");
         let result = tokio::select! {
             result = AssertUnwindSafe(execution.node.execute(
                     &execution.engine_ctx,

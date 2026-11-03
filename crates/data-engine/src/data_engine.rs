@@ -188,6 +188,7 @@ impl DataEngine {
             bundle_registry: bundle_registry.clone(),
             bound_data_bundles: Default::default(),
             global_sem,
+            runtime_output_projection: None,
         };
         let node_registry =
             crate::default_registry::build_default_registry_with_container_execution(

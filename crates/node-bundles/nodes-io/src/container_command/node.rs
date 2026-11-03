@@ -1158,6 +1158,7 @@ fn run_details(
         task_manifest: None,
         output_artifacts: Vec::new(),
         output_artifacts_by_port: Default::default(),
+        ..Default::default()
     }
 }
 

@@ -16,7 +16,7 @@ use tracing::{debug, info_span, warn};
 
 use super::memory::{AbortOnDropHandle, MemoryGuardState, run_memory_monitor};
 use super::streaming::StreamRuntimeState;
-use super::{DAG, EdgeLabel, Result};
+use super::{DAG, EdgeLabel, PortOutputs, Result};
 use crate::dag::NodeId;
 use crate::dag::error::DagError;
 use crate::dag::logical::LogicalExecutionStrategy;
@@ -235,6 +235,21 @@ impl DAG {
         // isolated `SessionContext` via `NodeCtx::session()` — the graph never
         // stores or shares a `SessionContext`.
         let engine_ctx = Arc::new(engine_ctx.clone());
+        let run_executor = self.task_executor.executor.bind_run().await?
+            .unwrap_or_else(|| Arc::clone(&self.task_executor.executor));
+        let mut requirements: Vec<_> = self.nodes.iter()
+            .map(|(id, node)| (id.as_str(), node.as_ref())).collect();
+        requirements.sort_by_key(|(id, _)| *id);
+        run_executor.preflight(&requirements)?;
+
+        if let Some(projection) = &engine_ctx.runtime_output_projection {
+            if cfg.incremental && cfg.checkpoint_reuse_validator.is_none() {
+                return Err(DagError::Schedule(
+                    "runtime output projection requires fresh execution; incremental reuse is disabled".into(),
+                ));
+            }
+            projection.verify_runtime_directory()?;
+        }
 
         let incremental = cfg.incremental;
         if let Some(wave_size) = cfg.wave_size
@@ -269,7 +284,7 @@ impl DAG {
             // stays Metadata (zero extra I/O) — this warning makes the
             // trade-off visible on every affected run instead of changing
             // behaviour.
-            if cfg.input_hashing != InputHashing::Content {
+            if cfg.input_hashing == InputHashing::Metadata {
                 tracing::warn!(
                     input_hashing = ?cfg.input_hashing,
                     "incremental execution without content-level input hashing: \
@@ -278,7 +293,7 @@ impl DAG {
                      InputHashing::Content for research-grade reuse)"
                 );
             }
-            self.invalidate_stale_file_outputs(engine_ctx.opendal.as_deref())
+            self.invalidate_stale_file_outputs(engine_ctx.opendal.as_deref(), event_sink.clone())
                 .await;
             tracing::info!("Incremental execution");
         }
@@ -370,12 +385,17 @@ impl DAG {
 
         // Every node starts Pending; a reused node flips back to Success at
         // its dispatch turn.
+        self.live_view.publish({
+            let mut view = self.tui_snapshot();
+            view.running = true;
+            view
+        });
         self.statuses.clear();
         for id in &all_ids {
-            self.statuses.insert(id.clone(), RuntimeStatus::Pending);
+            self.set_live_status(id.clone(), RuntimeStatus::Pending);
         }
 
-        let sem = Arc::new(Semaphore::new(cfg.max_concurrency.max(1)));
+        let sem = (cfg.max_concurrency != 0).then(|| Arc::new(Semaphore::new(cfg.max_concurrency)));
         let run_cancel = CancellationToken::new();
         if let Some(external_cancel) = &external_cancel {
             let internal_cancel = run_cancel.clone();
@@ -392,6 +412,8 @@ impl DAG {
         let mut memory_triggered: Option<MemorySample> = None;
         let (memory_tx, mut memory_rx) = mpsc::channel::<MemoryObservation>(8);
         let mut memory_monitor_active = false;
+        // Guard sampling remains unchanged; only public telemetry is throttled.
+        let mut last_resource_event = tokio::time::Instant::now();
         if let Some(config) = cfg.memory_guard {
             match sample_memory_usage() {
                 Ok(sample) => {
@@ -458,8 +480,9 @@ impl DAG {
         let mut reused_ids = BTreeSet::<NodeId>::new();
         let mut job_handles: Vec<AbortOnDropHandle> = Vec::new();
         let mut external_cancellation = false;
+        let mut fatal_validation_error = None;
 
-        loop {
+        'schedule: loop {
             if memory_triggered.is_some() {
                 break;
             }
@@ -607,6 +630,13 @@ impl DAG {
                     }
                 }
 
+                let preparation_reporter = NodeReporter::new(id.clone(), tx.clone())
+                    .with_live_view(self.live_view.clone())
+                    .with_external_sink(event_sink.clone());
+                preparation_reporter.phase(
+                    "checking_cache",
+                    "checking input identity and reusable outputs",
+                );
                 // ── Fingerprint gate ─────────────────────────────────────
                 // Compute this execution's identity from the current spec,
                 // wiring, and upstream values. In incremental mode a node
@@ -623,11 +653,21 @@ impl DAG {
                     &self.fingerprints,
                 );
                 if cfg.input_hashing == InputHashing::Content {
-                    crate::fingerprint::upgrade_identities_with_content_hashes(
+                    crate::fingerprint::upgrade_identities_with_content_hashes_observed(
                         &mut identities,
                         engine_ctx.opendal.as_deref(),
+                        Some(&preparation_reporter),
                     )
                     .await;
+                }
+                if cfg.input_hashing == InputHashing::ContentRequired {
+                    crate::fingerprint::require_content_hashes_observed(
+                        &mut identities,
+                        engine_ctx.opendal.as_deref(),
+                        Some(&preparation_reporter),
+                    )
+                    .await
+                    .map_err(DagError::Schedule)?;
                 }
                 let (kind, spec) = self.specs.get(&id).cloned().unwrap_or_else(|| {
                     (
@@ -650,12 +690,68 @@ impl DAG {
                     &identities,
                     plugin_identity.as_ref(),
                 );
-                if incremental
+                let dependency = match node_box.cache_dependency_state(&engine_ctx, &inputs).await {
+                    Ok(state) => state,
+                    Err(error) => {
+                        self.set_live_status(id.clone(), RuntimeStatus::Failed);
+                        if let Some(sink) = &event_sink {
+                            let _ = sink.try_send(NodeEvent::new(
+                                &id,
+                                NodeEventKind::Finished {
+                                    status: RuntimeStatus::Failed,
+                                    elapsed_ms: 0,
+                                },
+                            ));
+                        }
+                        self.errors.insert(id.clone(), error);
+                        self.fingerprints.remove(&id);
+                        self.outputs.remove(&id);
+                        cascade_skip(
+                            &id,
+                            &successors,
+                            &mut self.statuses,
+                            &mut ready,
+                            &mut skipped_because,
+                        );
+                        continue;
+                    }
+                };
+                let candidate =
+                    crate::fingerprint::bind_cache_dependency_state(candidate, dependency.as_ref());
+                let cache_candidate = incremental
+                    && node_box.allows_cache_reuse()
                     && self.fingerprints.get(&id) == Some(&candidate)
-                    && self.outputs.contains_key(&id)
-                {
+                    && self.outputs.contains_key(&id);
+                let reuse = if cache_candidate {
+                    match &cfg.checkpoint_reuse_validator {
+                        Some(validate) => match validate(&id, &candidate, &self.outputs[&id]) {
+                            Ok(reuse) => reuse,
+                            Err(error) => {
+                                self.set_live_status(id.clone(), RuntimeStatus::Failed);
+                                fatal_validation_error = Some(error);
+                                run_cancel.cancel();
+                                // Other ready nodes may already own live tasks.
+                                // Preserve this error until common abort/join.
+                                break 'schedule;
+                            }
+                        },
+                        None => true,
+                    }
+                } else {
+                    false
+                };
+                if reuse {
                     debug!(node = %id, "fingerprint unchanged; reusing cached output");
-                    self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                    self.set_live_status(id.clone(), RuntimeStatus::Success);
+                    if let Some(sink) = &event_sink {
+                        let _ = sink.try_send(NodeEvent::new(
+                            &id,
+                            NodeEventKind::Finished {
+                                status: RuntimeStatus::Success,
+                                elapsed_ms: 0,
+                            },
+                        ));
+                    }
                     reused_ids.insert(id.clone());
                     node_waves.entry(id.clone()).or_insert(current_wave);
                     for succ in &successors[&id] {
@@ -676,16 +772,20 @@ impl DAG {
                 executed_ids.push(id.clone());
                 node_waves.entry(id.clone()).or_insert(current_wave);
 
-                self.statuses.insert(id.clone(), RuntimeStatus::Running);
+                self.set_live_status(id.clone(), RuntimeStatus::Running);
                 in_flight += 1;
                 let submission = self.build_task_submission(&id, &kind, spec, &inputs, &incoming);
                 let task_id = submission.spec.id.clone();
-                let executor = std::sync::Arc::clone(&self.task_executor.executor);
+                let executor = Arc::clone(&run_executor);
                 let tx = tx.clone();
                 let sem = sem.clone();
                 let global_sem = engine_ctx.global_sem.clone();
                 let job_id = id.clone();
-                let reporter = NodeReporter::new(job_id.clone(), tx.clone());
+                let reporter = NodeReporter::new(job_id.clone(), tx.clone())
+                    .with_live_view(self.live_view.clone())
+                    .with_external_sink(event_sink.clone());
+                reporter.status(RuntimeStatus::Running);
+                reporter.phase("waiting_for_capacity", "waiting for execution capacity");
                 let engine_ctx = Arc::clone(&engine_ctx);
                 let task_cancel = run_cancel.clone();
                 let handle = tokio::spawn(async move {
@@ -706,13 +806,21 @@ impl DAG {
                     } else {
                         None
                     };
-                    let _permit = match tokio::select! {
-                        permit = sem.acquire() => permit.ok(),
-                        _ = task_cancel.cancelled() => None,
-                    } {
-                        Some(permit) => permit,
-                        None => return,
+                    let _permit = if let Some(sem) = &sem {
+                        match tokio::select! {
+                            permit = sem.acquire() => permit.ok(),
+                            _ = task_cancel.cancelled() => None,
+                        } {
+                            Some(permit) => Some(permit),
+                            None => return,
+                        }
+                    } else {
+                        None
                     };
+                    if task_cancel.is_cancelled() {
+                        return;
+                    }
+                    reporter.phase("executing", "executor admitted the task");
                     let execution = TaskExecution {
                         submission,
                         node: node_box,
@@ -759,6 +867,7 @@ impl DAG {
                 }
             }
 
+            self.publish_live_statuses();
             let streaming_active = stream
                 .node_counts
                 .keys()
@@ -776,7 +885,9 @@ impl DAG {
                                 .as_mut()
                                 .expect("memory guard state follows active monitor")
                                 .record(sample);
-                            if let Some(sink) = &event_sink {
+                            if (triggered.is_some() || last_resource_event.elapsed() >= Duration::from_secs(5))
+                                && let Some(sink) = &event_sink {
+                                last_resource_event = tokio::time::Instant::now();
                                 let _ = sink.try_send(NodeEvent::new(
                                     "memory",
                                     NodeEventKind::Resource {
@@ -826,7 +937,8 @@ impl DAG {
                         // the external sink (if any), then continue without touching
                         // in_flight or the ready queue. `Finished` is never produced
                         // internally — it is emitted to the sink in the `Done` arm below.
-                        lightweight @ (NodeEventKind::Status { .. }
+                        lightweight @ (NodeEventKind::Execution(_)
+                        | NodeEventKind::Status { .. }
                         | NodeEventKind::Progress { .. }
                         | NodeEventKind::Log { .. }
                         | NodeEventKind::Resource { .. }) => {
@@ -889,7 +1001,7 @@ impl DAG {
                     match res {
                         JobResult::Success {
                             id,
-                            outputs: outs,
+                            outputs: mut outs,
                             duration,
                             details,
                         } => {
@@ -900,8 +1012,8 @@ impl DAG {
                             if let Some(details) = details {
                                 self.node_run_details.insert(id.clone(), details);
                             }
-                            let output_type_error = self.nodes.get(&id).and_then(|node| {
-                                outs.iter().find_map(|(port, value)| {
+                            let validate_outputs = |outputs: &PortOutputs| self.nodes.get(&id).and_then(|node| {
+                                outputs.iter().find_map(|(port, value)| {
                                     let declared = node.ports().output_port(*port)?;
                                     if !declared.data_type.accepts(value.data_type()) {
                                         return Some(DagError::PortTypeMismatch {
@@ -930,8 +1042,19 @@ impl DAG {
                                     })
                                 })
                             });
+                            let mut output_type_error = validate_outputs(&outs);
+                            if output_type_error.is_none() {
+                                if let Some(publish) = &cfg.completion_publisher {
+                                    let fingerprint = self.fingerprints.get(&id).cloned().unwrap_or_default();
+                                    match publish(&id, &fingerprint, outs.clone(), self.node_run_details.get(&id)) {
+                                        Ok(published) => { output_type_error = validate_outputs(&published); outs = published; },
+                                        Err(error) => output_type_error = Some(error),
+                                    }
+                                }
+                            }
                             if let Some(error) = output_type_error {
-                                self.statuses.insert(id.clone(), RuntimeStatus::Failed);
+                                self.fingerprints.remove(&id);
+                                self.set_live_status(id.clone(), RuntimeStatus::Failed);
                                 self.errors.insert(id.clone(), error);
                                 durations.insert(id.clone(), duration);
                                 cascade_skip(
@@ -943,7 +1066,7 @@ impl DAG {
                                 );
                             } else {
                                 self.outputs.insert(id.clone(), outs);
-                                self.statuses.insert(id.clone(), RuntimeStatus::Success);
+                                self.set_live_status(id.clone(), RuntimeStatus::Success);
                                 self.errors.remove(&id);
                                 durations.insert(id.clone(), duration);
                                 debug!(node = %id, "node succeeded");
@@ -978,7 +1101,7 @@ impl DAG {
                             if let Some(details) = details {
                                 self.node_run_details.insert(id.clone(), details);
                             }
-                            self.statuses.insert(id.clone(), RuntimeStatus::Failed);
+                            self.set_live_status(id.clone(), RuntimeStatus::Failed);
                             // A failed execution produces no valid outputs: drop the
                             // provisional fingerprint so the node re-executes next run.
                             self.fingerprints.remove(&id);
@@ -1023,11 +1146,21 @@ impl DAG {
             join.abort();
         }
         for join in pending_joins {
-            let _ = tokio::time::timeout(ABORT_GRACE, join).await;
+            if fatal_validation_error.is_some() {
+                // Do not return the fatal error (and release the formal lease)
+                // while an aborted task is still being destroyed. Tokio cannot
+                // preempt synchronous Drop; a stuck destructor must leave this
+                // call pending until the owning worker's external stop boundary
+                // terminates it, never turn a timeout into a stopped proof.
+                let _ = join.await;
+            } else {
+                let _ = tokio::time::timeout(ABORT_GRACE, join).await;
+            }
         }
 
+        self.publish_live_statuses();
         let memory_trigger = memory_triggered;
-        if memory_trigger.is_some() || external_cancellation {
+        if memory_trigger.is_some() || external_cancellation || fatal_validation_error.is_some() {
             if let Some(sample) = &memory_trigger {
                 let threshold_ratio = cfg
                     .memory_guard
@@ -1082,6 +1215,17 @@ impl DAG {
             }
         }
 
+        let statuses = &self.statuses;
+        self.outputs
+            .retain(|id, _| statuses.get(id) == Some(&RuntimeStatus::Success));
+        self.fingerprints
+            .retain(|id, _| statuses.get(id) == Some(&RuntimeStatus::Success));
+
+        self.publish_live_statuses();
+        if let Some(error) = fatal_validation_error {
+            return Err(error);
+        }
+
         let ok = !self
             .statuses
             .values()
@@ -1118,9 +1262,11 @@ impl DAG {
         let waves = Self::build_wave_run_summaries(&node_reports);
 
         Ok(RunReport {
+            execution_binding: run_executor.execution_binding(),
             ok,
             warnings,
             snapshot_id: None,
+            runtime_output_projection: engine_ctx.runtime_output_projection.as_deref().cloned(),
             run_id: None,
             resource,
             nodes: node_reports,

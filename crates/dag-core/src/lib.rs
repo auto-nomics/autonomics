@@ -13,17 +13,24 @@ pub mod node;
 pub mod plugin;
 pub mod registry;
 pub mod resource;
+pub mod runtime_output;
 pub mod sink;
 pub mod value;
 
 pub use dag::{
-    ChannelBranch, ChannelNode, ChannelOperator, DagTaskGcPolicy, DagTaskGcReport,
-    DagTaskWatermarkReport, LocalDirectoryArtifactStore, LocalTaskExecutor, ProcessTaskOutput,
-    ProcessTaskSpec, ProcessTaskTransport, RemoteTaskExecutor, TaskArtifactStore,
-    TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskExecutor, TaskInputBinding,
-    TaskInputSource, TaskLease, TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission,
-    TaskTransport, dag_task_gc_age, dag_task_gc_interval, dag_task_gc_max_bytes, dag_tasks_root,
-    local_task_executor, sweep_dag_tasks, sweep_dag_tasks_watermark,
+    ApptainerContainer, ApptainerMode, ApptainerNetwork, ApptainerSettings, ChannelBranch,
+    ChannelNode, ChannelOperator, DagTaskGcPolicy, DagTaskGcReport, DagTaskWatermarkReport,
+    LocalDirectoryArtifactStore, LocalTaskExecutor, PlacementTaskExecutor,
+    ProcessRoutingTaskExecutor, ProcessTaskOutput, ProcessTaskSpec, ProcessTaskTransport,
+    RemoteTaskExecutor, SifImage, SlurmRecordedSubmission, SlurmSettings, SlurmSubmissionIntent,
+    SlurmSubmissionObservation, SlurmSubmissionRecorder, SlurmTaskTransport, SshArtifactStore,
+    SshDataHome, SshTarget, TaskArtifactStore, TaskAttemptReceipt, TaskDispatch, TaskExecution,
+    TaskExecutor, TaskInputBinding, TaskInputSource, TaskLease, TaskOutputBinding, TaskResources,
+    TaskSpec, TaskSubmission, TaskTransport, TypedPodmanResourceControl, TypedPodmanSettings,
+    TypedPodmanUserNamespace, TypedRemoteTaskExecutor, TypedSlurmSwapPolicy,
+    TypedWorkerEnvironment, TypedWorkerSettings, dag_task_gc_age, dag_task_gc_interval,
+    dag_task_gc_max_bytes, dag_tasks_root, local_task_executor, slurm_backed_executor,
+    sweep_dag_tasks, sweep_dag_tasks_watermark,
 };
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,
@@ -34,16 +41,15 @@ pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ct
 // pub use sink::SinkMode;
 pub use value::{ArtifactRef, ChannelValue, FileFingerprint, FileRef, NodeValue, PortType};
 
-/// The source identity this crate was built from: the git commit (short
-/// form), recorded alongside run history for reproducibility evidence and
+/// The source identity this crate was built from: the full git commit, recorded alongside run history for reproducibility evidence and
 /// folded into every node execution fingerprint — so same-version builds
 /// from different commits never silently reuse each other's incremental
 /// cache entries.
 ///
 /// Injected by `build.rs` with the precedence: the `AUTONOMICS_SOURCE_REVISION`
-/// env override (release/CI stamping) > the workspace's checked-out commit >
-/// `"unknown"` when the build tree has no usable `.git` (e.g. a release
-/// tarball).
+/// env override (release/CI stamping) > the workspace's checked-out commit.
+/// A frozen tree without `.git` requires an explicit nonempty stamp; the
+/// caller must verify that stamp against the frozen source manifest.
 pub fn source_revision() -> &'static str {
     option_env!("AUTONOMICS_SOURCE_REVISION").unwrap_or("unknown")
 }

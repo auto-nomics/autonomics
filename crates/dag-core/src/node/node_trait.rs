@@ -17,6 +17,35 @@ pub trait DagNode: Send + Sync {
     /// Return this node's static metadata (declared ports).
     fn ports(&self) -> &NodePorts;
 
+    /// Minimum executor resources implied by this loaded node's compiled
+    /// behavior. A remote adapter may fill absent task directives from this
+    /// declaration, but must reject explicit budgets below it. This is not
+    /// scientific resource admission and must not replace signed contracts.
+    fn task_resources(&self) -> Result<crate::dag::execution::TaskResources, DagError> {
+        Ok(crate::dag::execution::TaskResources::default())
+    }
+
+    /// This node only prepares a container request; its computation belongs to
+    /// the injected container backend. Placement may orchestrate it on the
+    /// coordinator when that backend is explicitly bound to remote execution.
+    /// This capability comes from the implementation, never a task spec.
+    fn delegates_to_container_runtime(&self) -> bool {
+        false
+    }
+
+    /// A process-local service that has no independent-worker protocol.
+    /// Reject before staging/submission instead of running a predictably broken
+    /// job. This declaration never authorizes a fallback to local execution.
+    fn remote_execution_blocker(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Images required by this compiled payload, never inferred from caller metadata.
+    fn required_container_images(&self) -> Vec<&str> {
+        self.plugin_identity().map(|identity| vec![identity.image_reference.as_str()])
+            .unwrap_or_default()
+    }
+
     /// Run the node's computation.
     ///
     /// The [`NodeReporter`] is the node's channel for emitting mid-run
@@ -64,6 +93,20 @@ pub trait DagNode: Send + Sync {
         false
     }
 
+    /// Complete local publication directories declared by this node's immutable
+    /// spec. The runtime may project these into fresh invocation directories;
+    /// undeclared publishers cannot silently participate in that projection.
+    fn runtime_output_directories(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    /// Whether a successful output may replace execution in an incremental
+    /// run. Read-only auditors of external state must execute every time,
+    /// even when their ordinary port/spec fingerprints are unchanged.
+    fn allows_cache_reuse(&self) -> bool {
+        true
+    }
+
     /// File paths this node reads from the filesystem by configured path
     /// instead of through an input port (`file_reference`-style path
     /// dependencies).
@@ -79,6 +122,35 @@ pub trait DagNode: Send + Sync {
         Vec::new()
     }
 
+    /// JSON pointers to file inputs in the immutable spec that need transport
+    /// when this node runs on another host. Only these exact fields may be
+    /// rebound to verified worker snapshots.
+    /// Omit fallback spec inputs when a connected port takes precedence.
+    fn file_input_spec_pointers(&self, _inputs: &[NodeInput]) -> Vec<&'static str> {
+        Vec::new()
+    }
+
+    /// Output directory spec pointers and their FileSet ports. Remote workers
+    /// write these into attempt-owned directories; the coordinator publishes
+    /// verified members to the original destination using its VFS principal.
+    /// Other spec fields must never be rebound as publication directories.
+    fn file_output_directory_spec_pointers(&self) -> Vec<(&'static str, u8)> {
+        Vec::new()
+    }
+
+    /// Read-only identity of dependencies not represented by ports or spec,
+    /// such as the relevant rows of an external library. Called before the
+    /// incremental reuse decision. Returning an error blocks this node;
+    /// `None` preserves the existing identity of stateless nodes. Do not
+    /// return credentials or fetch/update external resources here.
+    async fn cache_dependency_state(
+        &self,
+        _ctx: &crate::registry::NodeCtx,
+        _inputs: &[NodeInput],
+    ) -> Result<Option<serde_json::Value>, DagError> {
+        Ok(None)
+    }
+
     /// The identity of the plugin implementation this node executes, when
     /// the node's behavior is defined by a loaded plugin family (e.g.
     /// container-plugin manifests) rather than purely by its kind + spec.
@@ -88,7 +160,8 @@ pub trait DagNode: Send + Sync {
     /// incremental outputs. The identity is captured from the *loaded*
     /// plugin definition — not re-read from disk at dispatch — so it always
     /// matches what the engine would actually execute. `None` (the default)
-    /// for built-in nodes whose whole behavior is kind + spec.
+    /// for built-in nodes; their inputs and optional external dependency
+    /// state are fingerprinted separately.
     fn plugin_identity(&self) -> Option<&crate::fingerprint::PluginIdentity> {
         None
     }

@@ -1,11 +1,11 @@
 //! Linux-first memory sampling for DAG execution.
 //!
-//! The sampler prefers the current process's cgroup charge because it includes
-//! child workloads such as OCI containers. `inactive_file` is subtracted to
-//! approximate the cgroup working set; page cache in that bucket is readily
-//! reclaimable and otherwise causes false positives on data-intensive DAGs.
+//! The sampler compares each visible finite cgroup ancestor's own charge and
+//! limit, including shared descendant workloads, and selects the highest
+//! working-set ratio. Subtracting `inactive_file` is a reclaimability
+//! approximation, not a guarantee that the kernel can satisfy an allocation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Configuration for the run-level memory guard.
@@ -65,102 +65,230 @@ pub fn sample_memory_usage() -> Result<MemorySample, String> {
 }
 
 fn sample_cgroup_v2() -> Result<Option<MemorySample>, String> {
-    let root = PathBuf::from("/sys/fs/cgroup");
-    let current_dir = current_cgroup_dir(&root).unwrap_or_else(|| root.clone());
+    let contents = read_cgroup_membership()?;
+    sample_cgroup_v2_at(Path::new("/sys/fs/cgroup"), &contents)
+}
 
-    for dir in [current_dir, root] {
-        let current_path = dir.join("memory.current");
-        if !current_path.is_file() {
+/// Minimum finite capacity across visible cgroup ancestors, independent of pressure.
+pub fn effective_memory_limit_bytes() -> Result<Option<u64>, String> {
+    let contents = read_cgroup_membership()?;
+    effective_memory_limit_bytes_at(Path::new("/sys/fs/cgroup"), &contents)
+}
+
+/// Visible cgroup capacity, or checked system capacity when no finite limit exists.
+pub fn memory_capacity_bytes() -> Result<u64, String> {
+    let contents = read_cgroup_membership()?;
+    if let Some(limit) = effective_memory_limit_bytes_at(Path::new("/sys/fs/cgroup"), &contents)? {
+        return Ok(limit);
+    }
+    let meminfo = std::fs::read_to_string("/proc/meminfo")
+        .map_err(|error| format!("read /proc/meminfo: {error}"))?;
+    system_memory_capacity(&meminfo)
+}
+
+#[cfg(test)]
+fn memory_capacity_bytes_at(root: &Path, contents: &str, meminfo: &str) -> Result<u64, String> {
+    effective_memory_limit_bytes_at(root, contents)?
+        .map_or_else(|| system_memory_capacity(meminfo), Ok)
+}
+
+fn system_memory_capacity(contents: &str) -> Result<u64, String> {
+    let mut matches = contents.lines().filter_map(|line| {
+        let mut parts = line.split_whitespace();
+        (parts.next() == Some("MemTotal:")).then(|| parts.collect::<Vec<_>>())
+    });
+    let fields = matches.next().ok_or("MemTotal not found")?;
+    if fields.len() != 2 || fields[1] != "kB" || matches.next().is_some() {
+        return Err("one MemTotal value in kB required".into());
+    }
+    let total = fields[0]
+        .parse::<u64>()
+        .map_err(|error| format!("parse MemTotal: {error}"))?
+        .checked_mul(1024)
+        .filter(|total| *total > 0)
+        .ok_or("positive representable memory capacity required")?;
+    Ok(total)
+}
+
+fn read_cgroup_membership() -> Result<String, String> {
+    std::fs::read_to_string("/proc/self/cgroup")
+        .map_err(|error| format!("read /proc/self/cgroup: {error}"))
+}
+
+fn cgroup_directories(root: &Path, contents: &str) -> Result<Option<Vec<PathBuf>>, String> {
+    let mut unified = None;
+    if contents.lines().next().is_none() {
+        return Err("empty cgroup membership".into());
+    }
+    for line in contents.lines() {
+        let mut parts = line.splitn(3, ':');
+        let hierarchy = parts.next().ok_or("missing cgroup hierarchy")?;
+        let controllers = parts.next().ok_or("missing cgroup controllers")?;
+        let membership = parts.next().ok_or("missing cgroup path")?;
+        let hierarchy_id = hierarchy
+            .parse::<u64>()
+            .map_err(|error| format!("parse cgroup hierarchy: {error}"))?;
+        if hierarchy_id == 0 {
+            if hierarchy != "0" {
+                return Err("canonical unified hierarchy identifier required".into());
+            }
+            if !controllers.is_empty() || unified.is_some() {
+                return Err("one unified cgroup membership required".into());
+            }
+            unified = Some(membership);
+        }
+    }
+    let Some(membership) = unified else {
+        return Ok(None);
+    };
+    if !membership.starts_with('/')
+        || membership.contains('\0')
+        || (membership != "/"
+            && membership[1..]
+                .split('/')
+                .any(|part| matches!(part, "" | "." | "..")))
+    {
+        return Err("canonical absolute unified cgroup path required".into());
+    }
+    if !root.is_absolute() {
+        return Err("absolute visible cgroup root required".into());
+    }
+    let current = root.join(membership.trim_start_matches('/'));
+    let metadata = std::fs::metadata(&current)
+        .map_err(|error| format!("read cgroup directory {}: {error}", current.display()))?;
+    if !metadata.is_dir() {
+        return Err("current cgroup must be a directory".into());
+    }
+    let mut directories = Vec::new();
+    let mut cursor = current.as_path();
+    loop {
+        directories.push(cursor.to_path_buf());
+        if cursor == root {
+            break;
+        }
+        cursor = cursor.parent().ok_or("cgroup path escaped visible root")?;
+        if !cursor.starts_with(root) {
+            return Err("cgroup path escaped visible root".into());
+        }
+    }
+    Ok(Some(directories))
+}
+
+fn sample_cgroup_v2_at(root: &Path, contents: &str) -> Result<Option<MemorySample>, String> {
+    let Some(directories) = cgroup_directories(root, contents)? else {
+        return Ok(None);
+    };
+    let mut selected: Option<MemorySample> = None;
+    for directory in directories {
+        let current = read_optional_u64(&directory.join("memory.current"))?;
+        let limit_contents = read_optional_text(&directory.join("memory.max"))?;
+        let limit = limit_contents
+            .as_deref()
+            .map(parse_optional_limit)
+            .transpose()
+            .map_err(|error| format!("parse {}/memory.max: {error}", directory.display()))?
+            .flatten();
+        if current.is_some() != limit_contents.is_some() {
+            if directory == root && current.is_some() && limit_contents.is_none() {
+                continue;
+            }
+            return Err(format!(
+                "incomplete memory controller at {}",
+                directory.display()
+            ));
+        }
+        let Some(charged_bytes) = current else {
             continue;
-        }
-        let charged_bytes = read_u64(&current_path)
-            .map_err(|error| format!("read {}: {error}", current_path.display()))?;
-        let Some(limit_bytes) = read_optional_limit(&dir.join("memory.max"))? else {
-            return Ok(None);
         };
-        if limit_bytes == 0 {
-            return Ok(None);
-        }
-
-        // Prefer working set over raw charge. Missing memory.stat is not fatal;
-        // fall back to the conservative raw cgroup charge.
-        let stat_path = dir.join("memory.stat");
-        let inactive_file = if stat_path.is_file() {
-            read_stat_u64(&stat_path, "inactive_file")?
-        } else {
-            0
+        let Some(limit_bytes) = limit else {
+            continue;
         };
-        let usage_bytes = charged_bytes.saturating_sub(inactive_file);
-        return Ok(Some(MemorySample {
-            usage_bytes,
+        let inactive_file = match read_optional_text(&directory.join("memory.stat"))? {
+            Some(contents) => parse_stat_u64(&contents, "inactive_file")
+                .map_err(|error| format!("parse {}/memory.stat: {error}", directory.display()))?,
+            None => 0,
+        };
+        let candidate = MemorySample {
+            usage_bytes: charged_bytes.saturating_sub(inactive_file),
             charged_bytes,
             limit_bytes,
             source: "cgroup_v2",
-        }));
-    }
-
-    Ok(None)
-}
-
-fn current_cgroup_dir(root: &PathBuf) -> Option<PathBuf> {
-    let contents = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let relative = contents.lines().find_map(|line| {
-        let mut parts = line.splitn(3, ':');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some("0"), Some(""), Some(path)) if path != "/" => Some(path.to_string()),
-            _ => None,
+        };
+        if selected.is_none_or(|previous| {
+            u128::from(candidate.usage_bytes) * u128::from(previous.limit_bytes)
+                > u128::from(previous.usage_bytes) * u128::from(candidate.limit_bytes)
+        }) {
+            selected = Some(candidate);
         }
-    })?;
-    let path = std::path::Path::new(&relative);
-    if path.is_absolute()
-        || path
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir))
-    {
-        return None;
     }
-    Some(root.join(path))
+    Ok(selected)
 }
 
-fn read_optional_limit(path: &PathBuf) -> Result<Option<u64>, String> {
-    if !path.is_file() {
+fn effective_memory_limit_bytes_at(root: &Path, contents: &str) -> Result<Option<u64>, String> {
+    let Some(directories) = cgroup_directories(root, contents)? else {
         return Ok(None);
+    };
+    let mut minimum: Option<u64> = None;
+    for directory in directories {
+        if let Some(limit) = read_optional_limit(&directory.join("memory.max"))? {
+            minimum = Some(minimum.map_or(limit, |previous| previous.min(limit)));
+        }
     }
-    let value = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?
-        .trim()
-        .to_string();
+    Ok(minimum)
+}
+
+fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read {}: {error}", path.display())),
+    }
+}
+
+fn read_optional_limit(path: &Path) -> Result<Option<u64>, String> {
+    let Some(contents) = read_optional_text(path)? else {
+        return Ok(None);
+    };
+    parse_optional_limit(&contents).map_err(|error| format!("parse {}: {error}", path.display()))
+}
+
+fn parse_optional_limit(contents: &str) -> Result<Option<u64>, String> {
+    let value = contents.trim();
     if value == "max" {
         return Ok(None);
     }
-    value
+    let limit = value
         .parse::<u64>()
-        .map(Some)
-        .map_err(|error| format!("parse {}: {error}", path.display()))
+        .map_err(|error| format!("parse memory limit: {error}"))?;
+    if limit == 0 {
+        return Err("zero memory limit".into());
+    }
+    Ok(Some(limit))
 }
 
-fn read_u64(path: &PathBuf) -> Result<u64, String> {
-    let value = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
+fn read_optional_u64(path: &Path) -> Result<Option<u64>, String> {
+    let Some(value) = read_optional_text(path)? else {
+        return Ok(None);
+    };
     value
         .trim()
         .parse::<u64>()
+        .map(Some)
         .map_err(|error| format!("parse integer from {}: {error}", path.display()))
 }
 
-fn read_stat_u64(path: &PathBuf, key: &str) -> Result<u64, String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|error| format!("read {}: {error}", path.display()))?;
-    contents
-        .lines()
-        .find_map(|line| {
-            let mut parts = line.split_whitespace();
-            match (parts.next(), parts.next()) {
-                (Some(found), Some(value)) if found == key => Some(value.to_string()),
-                _ => None,
-            }
-        })
-        .ok_or_else(|| format!("key `{key}` not found"))?
+fn parse_stat_u64(contents: &str, key: &str) -> Result<u64, String> {
+    let mut matches = contents.lines().filter_map(|line| {
+        let mut parts = line.split_whitespace();
+        (parts.next() == Some(key)).then(|| parts.collect::<Vec<_>>())
+    });
+    let values = matches
+        .next()
+        .ok_or_else(|| format!("key `{key}` not found"))?;
+    if values.len() != 1 || matches.next().is_some() {
+        return Err(format!("one integer value required for key `{key}`"));
+    }
+    values[0]
         .parse::<u64>()
         .map_err(|error| format!("parse key `{key}`: {error}"))
 }
@@ -188,3 +316,7 @@ fn sample_system_memory() -> Option<MemorySample> {
         source: "system",
     })
 }
+
+#[cfg(test)]
+#[path = "resource_tests.rs"]
+mod resource_tests;

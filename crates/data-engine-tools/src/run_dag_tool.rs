@@ -72,6 +72,21 @@ fn node_event_to_record(ev: &NodeEvent) -> Option<agentik_core::tools::ProgressR
     use agentik_core::tools::ProgressRecord;
     let label = ev.node_id.as_str();
     match &ev.kind {
+        NodeEventKind::Execution(observation) => Some(
+            ProgressRecord::new("execution")
+                .label(label)
+                .current(observation.current.unwrap_or(0))
+                .total(observation.total.unwrap_or(0))
+                .message(format!(
+                    "{}{}",
+                    observation.phase,
+                    observation
+                        .message
+                        .as_deref()
+                        .map(|message| format!(": {message}"))
+                        .unwrap_or_default()
+                )),
+        ),
         NodeEventKind::Status { status } => Some(
             ProgressRecord::new("status")
                 .label(label)

@@ -535,3 +535,395 @@ async fn non_incremental_ignores_dirty_marks() {
     assert_eq!(cnt(&ctr_a), 2, "a should re-execute (non-incremental)");
     assert_eq!(cnt(&ctr_b), 2, "b should re-execute (non-incremental)");
 }
+
+#[tokio::test]
+async fn restored_file_checkpoint_reuses_only_matching_hash_and_spec() {
+    use crate::{
+        dag::graph::PortOutputs,
+        value::{FileRef, NodeValue},
+    };
+    use sha2::{Digest, Sha256};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("checkpoint.txt");
+    let mut first = DAG::default();
+    first
+        .add_node_with_spec(
+            "writer".into(),
+            Box::new(FileOutputNode::new(path.clone())),
+            "file_output".into(),
+            serde_json::json!({"v":1}),
+        )
+        .unwrap();
+    let mut cfg = incremental_cfg();
+    cfg.input_hashing = crate::dag::InputHashing::ContentRequired;
+    first.run(&cfg, &test_ctx(), None).await.unwrap();
+    let fingerprint = first.recorded_fingerprint("writer").unwrap().to_string();
+    let mut file = FileRef::local(&path, None).unwrap();
+    file.fingerprint.as_mut().unwrap().content_hash = Some(format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(&path).unwrap())
+    ));
+    let mut outputs = PortOutputs::new();
+    outputs.insert_file(0, file);
+    drop(first);
+    let node = FileOutputNode::new(path.clone());
+    let count = node.runs.clone();
+    let mut second = DAG::default();
+    second
+        .add_node_with_spec(
+            "writer".into(),
+            Box::new(node),
+            "file_output".into(),
+            serde_json::json!({"v":1}),
+        )
+        .unwrap();
+    second
+        .restore_file_checkpoint("writer", &fingerprint, outputs.clone())
+        .unwrap();
+    assert!(second.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(
+        cnt(&count),
+        0,
+        "verified persisted output reused in fresh graph"
+    );
+    std::fs::write(&path, "corrupt bytes").unwrap();
+    assert!(second.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(cnt(&count), 1, "changed output recomputed");
+    let mut changed = DAG::default();
+    let node = FileOutputNode::new(path.clone());
+    let count = node.runs.clone();
+    changed
+        .add_node_with_spec(
+            "writer".into(),
+            Box::new(node),
+            "file_output".into(),
+            serde_json::json!({"v":2}),
+        )
+        .unwrap();
+    // Restore the matching current bytes with the old execution fingerprint.
+    let mut file = FileRef::local(&path, None).unwrap();
+    file.fingerprint.as_mut().unwrap().content_hash = Some(format!(
+        "{:x}",
+        Sha256::digest(std::fs::read(&path).unwrap())
+    ));
+    let mut outputs = PortOutputs::new();
+    outputs.insert_file(0, file);
+    changed
+        .restore_file_checkpoint("writer", &fingerprint, outputs)
+        .unwrap();
+    assert!(changed.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(cnt(&count), 1, "changed spec cannot reuse old fingerprint");
+    let mut untyped = PortOutputs::new();
+    untyped.insert(0, NodeValue::File(FileRef::local(&path, None).unwrap()));
+    assert!(
+        changed
+            .restore_file_checkpoint("writer", &fingerprint, untyped)
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn completion_publication_failure_blocks_descendants_and_cache_identity() {
+    let mut dag = DAG::default();
+    let a = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let b = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    dag.add_node("a".into(), Box::new(CountingEcho::new(a.clone())))
+        .unwrap();
+    dag.add_node("b".into(), Box::new(CountingEcho::new(b.clone())))
+        .unwrap();
+    dag.add_edge("a", "b", 0, 0).unwrap();
+    let mut cfg = incremental_cfg();
+    cfg.completion_publisher = Some(Arc::new(|_, _, _, details| {
+        let details = details.expect("successful task details must precede checkpoint publication");
+        assert!(details.task_manifest.is_some());
+        assert_eq!(details.exit_code, Some(0));
+        Err(crate::dag::DagError::Schedule(
+            "SYNTHETIC checkpoint ledger write failure".into(),
+        ))
+    }));
+    assert!(!dag.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(cnt(&a), 1);
+    assert_eq!(cnt(&b), 0);
+    assert_eq!(dag.status("a"), Some(RuntimeStatus::Failed));
+    assert_eq!(dag.status("b"), Some(RuntimeStatus::Skipped));
+    assert!(dag.recorded_fingerprint("a").is_none());
+    cfg.completion_publisher = None;
+    assert!(dag.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(cnt(&a), 2);
+    assert_eq!(cnt(&b), 1);
+}
+
+#[tokio::test]
+async fn runtime_projection_rejects_incremental_before_any_node_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let run_id = "ba4fbb5f-c9c1-4a2a-9a11-1bfe0377d5a1";
+    let projection = crate::runtime_output::RuntimeOutputProjection::new(
+        run_id.into(),
+        root.path().into(),
+        std::collections::BTreeMap::from([(
+            root.path().join("logical"),
+            root.path().join(run_id).join("physical"),
+        )]),
+    )
+    .unwrap()
+    .initialize_run_directory()
+    .unwrap();
+    let mut ctx = test_ctx();
+    ctx.runtime_output_projection = Some(Arc::new(projection));
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut dag = DAG::default();
+    dag.add_node("node".into(), Box::new(CountingEcho::new(counter.clone())))
+        .unwrap();
+    let error = dag.run(&incremental_cfg(), &ctx, None).await.unwrap_err();
+    assert!(error.to_string().contains("incremental reuse is disabled"));
+    assert_eq!(cnt(&counter), 0);
+    assert!(dag.output("node").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checkpoint_validation_error_cancels_and_joins_started_task_before_return() {
+    use crate::dag::node_event::NodeReporter;
+    use crate::dag::{DagError, DagNode, NodeInput, NodePorts};
+    use crate::value::{FileRef, PortType};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
+    use tokio::sync::{Notify, oneshot};
+
+    struct DropProof {
+        entered: Arc<Notify>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+        finished: Arc<AtomicBool>,
+    }
+    impl Drop for DropProof {
+        fn drop(&mut self) {
+            self.entered.notify_one();
+            // Hold destruction open so returning before join is observable,
+            // rather than a race with an immediately completing destructor.
+            let (lock, wake) = &*self.release;
+            let (released, _) = wake
+                .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(10), |v| !*v)
+                .unwrap();
+            self.finished.store(*released, Ordering::SeqCst);
+        }
+    }
+    #[derive(Clone)]
+    struct SlowNode {
+        ports: NodePorts,
+        started: Arc<Notify>,
+        drop_entered: Arc<Notify>,
+        release_drop: Arc<(Mutex<bool>, Condvar)>,
+        dropped: Arc<AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for SlowNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+        fn kind(&self) -> &'static str {
+            "checkpoint_cancel_join_probe"
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        async fn execute(
+            &mut self,
+            _: &crate::registry::NodeCtx,
+            _: &[NodeInput],
+            _: &NodeReporter,
+        ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+            let _proof = DropProof {
+                entered: self.drop_entered.clone(),
+                release: self.release_drop.clone(),
+                finished: self.dropped.clone(),
+            };
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+    #[derive(Clone)]
+    struct GateNode {
+        ports: NodePorts,
+        path: std::path::PathBuf,
+        wait_for_slow: Arc<AtomicBool>,
+        started: Arc<Notify>,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for GateNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+        fn kind(&self) -> &'static str {
+            "checkpoint_started_gate"
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn allows_cache_reuse(&self) -> bool {
+            false
+        }
+        async fn execute(
+            &mut self,
+            _: &crate::registry::NodeCtx,
+            _: &[NodeInput],
+            _: &NodeReporter,
+        ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+            if self.wait_for_slow.load(Ordering::SeqCst) {
+                self.started.notified().await;
+            }
+            let mut outputs = crate::dag::graph::PortOutputs::new();
+            outputs.insert_file(0, FileRef::local(&self.path, None)?);
+            Ok(outputs)
+        }
+    }
+    #[derive(Clone)]
+    struct CachedNode {
+        ports: NodePorts,
+        writer: FileOutputNode,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for CachedNode {
+        fn ports(&self) -> &NodePorts {
+            &self.ports
+        }
+        fn kind(&self) -> &'static str {
+            "checkpoint_cached_target"
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        async fn execute(
+            &mut self,
+            ctx: &crate::registry::NodeCtx,
+            inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<crate::dag::graph::PortOutputs, DagError> {
+            self.writer.execute(ctx, inputs, reporter).await
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let input = root.path().join("gate.txt");
+    std::fs::write(&input, b"SYN-UNCHANGED-CACHE-INPUT").unwrap();
+    let started = Arc::new(Notify::new());
+    let wait_for_slow = Arc::new(AtomicBool::new(false));
+    let drop_entered = Arc::new(Notify::new());
+    let release_drop = Arc::new((Mutex::new(false), Condvar::new()));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let writer = FileOutputNode::new(root.path().join("cached.txt"));
+    let calls = writer.runs.clone();
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(RecordingTaskExecutor::with_submissions(Arc::new(
+        Mutex::new(Vec::new()),
+    ))));
+    dag.add_node(
+        "gate".into(),
+        Box::new(GateNode {
+            ports: NodePorts::new().add_output_port_of_type(None, PortType::File),
+            path: input,
+            wait_for_slow: wait_for_slow.clone(),
+            started: started.clone(),
+        }),
+    )
+    .unwrap();
+    dag.add_node(
+        "cached".into(),
+        Box::new(CachedNode {
+            ports: NodePorts::new()
+                .add_input_port_of_type(None, PortType::File)
+                .add_output_port_of_type(None, PortType::File),
+            writer,
+        }),
+    )
+    .unwrap();
+    dag.add_edge("gate", "cached", 0, 0).unwrap();
+    let mut cfg = incremental_cfg();
+    cfg.max_concurrency = 2;
+    cfg.input_hashing = crate::dag::InputHashing::ContentRequired;
+    assert!(dag.run(&cfg, &test_ctx(), None).await.unwrap().ok);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    wait_for_slow.store(true, Ordering::SeqCst);
+    dag.add_node(
+        "slow".into(),
+        Box::new(SlowNode {
+            ports: NodePorts::new(),
+            started,
+            drop_entered: drop_entered.clone(),
+            release_drop: release_drop.clone(),
+            dropped: dropped.clone(),
+        }),
+    )
+    .unwrap();
+    let validations = Arc::new(AtomicUsize::new(0));
+    let observed = validations.clone();
+    cfg.checkpoint_reuse_validator = Some(Arc::new(move |id, _, _| {
+        assert_eq!(id, "cached");
+        observed.fetch_add(1, Ordering::SeqCst);
+        Err(DagError::Schedule(
+            "SYN EXACT CHECKPOINT VALIDATION FAILURE".into(),
+        ))
+    }));
+    let (done, mut result) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let outcome = dag.run(&cfg, &test_ctx(), None).await;
+        let _ = done.send(outcome);
+        dag
+    });
+    tokio::time::timeout(Duration::from_secs(3), drop_entered.notified())
+        .await
+        .unwrap();
+    // Exceed the normal scheduler's 2s abort grace: its timeout must not
+    // detach this fatal path and release the caller's execution lease.
+    let early = tokio::time::timeout(Duration::from_millis(2200), &mut result).await;
+    let returned_before_drop_finished = early.is_ok();
+    {
+        let (lock, wake) = &*release_drop;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+    }
+    let outcome = match early {
+        Ok(outcome) => outcome.unwrap(),
+        Err(_) => tokio::time::timeout(Duration::from_secs(3), &mut result)
+            .await
+            .unwrap()
+            .unwrap(),
+    };
+    let dag = task.await.unwrap();
+    assert!(
+        !returned_before_drop_finished,
+        "scheduler returned while an aborted task was still being destroyed"
+    );
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "started task must finish destruction before return"
+    );
+    assert_eq!(
+        validations.load(Ordering::SeqCst),
+        1,
+        "actual cache validator branch reached"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "validator Err must not become a cache miss"
+    );
+    assert!(
+        matches!(outcome, Err(DagError::Schedule(message)) if message == "SYN EXACT CHECKPOINT VALIDATION FAILURE")
+    );
+    assert_eq!(dag.status("cached"), Some(RuntimeStatus::Failed));
+    assert_eq!(dag.status("slow"), Some(RuntimeStatus::Cancelled));
+    assert!(dag.output("cached").is_none());
+    assert!(dag.recorded_fingerprint("slow").is_none());
+}

@@ -23,6 +23,48 @@ struct NoopNode {
     ports: NodePorts,
 }
 
+#[tokio::test]
+async fn process_publication_outputs_have_verified_content_hashes() {
+    use sha2::{Digest, Sha256};
+    let temp = tempfile::tempdir().unwrap();
+    let transport = ProcessTaskTransport::new(temp.path().join("worker"));
+    let lease = transport
+        .submit(
+            TaskDispatch {
+                spec: TaskSpec {
+                    id: "publication-hash".into(),
+                    kind: "process".into(),
+                    logical_node: None,
+                    axis: None,
+                    item_key: None,
+                    item: None,
+                    inputs: vec![],
+                    spec: serde_json::json!({"script":"printf 'publication bytes' > result.txt",
+                "outputs":[{"port":0,"pattern":"result.txt"}],
+                "typed_dispatch":{"output_directories":{"/destination_prefix":0}}}),
+                    outputs: vec![TaskOutputBinding {
+                        name: "files".into(),
+                        port: 0,
+                        payload: "file_set".into(),
+                        artifact_paths: vec![],
+                    }],
+                },
+                resources: TaskResources::default(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+    let receipt = transport.wait(&lease).await.unwrap();
+    assert_eq!(receipt.exit_code, 0);
+    let file = &receipt.output_artifacts_by_port[&0][0];
+    assert_eq!(std::fs::read(&file.path).unwrap(), b"publication bytes");
+    assert_eq!(
+        file.fingerprint.as_ref().unwrap().content_hash.as_deref(),
+        Some(format!("{:x}", Sha256::digest(b"publication bytes")).as_str())
+    );
+}
+
 impl Default for NoopNode {
     fn default() -> Self {
         Self {
@@ -138,6 +180,9 @@ impl FakeRemoteTransport {
             .flat_map(|artifacts| artifacts.iter().cloned())
             .collect::<Vec<_>>();
         TaskAttemptReceipt {
+            stdout_log: None,
+            stderr_log: None,
+            log_capture_error: None,
             task_id: dispatch.spec.id.clone(),
             executor: "fake-remote".into(),
             status: "success".into(),

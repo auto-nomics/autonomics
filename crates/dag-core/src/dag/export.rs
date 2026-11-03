@@ -163,6 +163,7 @@ struct FileEntry {
     format: Option<String>,
     content_hash: Option<String>,
     size: Option<u64>,
+    mtime_ns: Option<i128>,
     /// Declared output port that produced this artifact, when the entry
     /// came from `port_assignments` (the port-keyed spelling). Absent for
     /// `output_files` entries.
@@ -187,8 +188,28 @@ impl FileEntry {
                 .get("fingerprint")
                 .and_then(|fp| fp.get("size"))
                 .and_then(Value::as_u64),
+            mtime_ns: value
+                .get("fingerprint")
+                .and_then(|fp| fp.get("mtime_ns"))
+                .and_then(Value::as_i64)
+                .map(i128::from),
             port: None,
         })
+    }
+
+    /// New VFS artifacts carry an explicit vfs:// URI. A matching local
+    /// FileRef metadata identity must retain its host namespace even when
+    /// the VFS mounts `/` (or has a different file at the same bare path).
+    /// This identifies the address; it never upgrades hash verification.
+    fn matches_local_metadata(&self) -> bool {
+        let (Some(size), Some(mtime_ns)) = (self.size, self.mtime_ns) else {
+            return false;
+        };
+        let Ok(metadata) = std::fs::metadata(&self.path) else {
+            return false;
+        };
+        let observed = crate::value::FileFingerprint::from_metadata(&metadata);
+        metadata.is_file() && observed.size == size && observed.mtime_ns == mtime_ns
     }
 
     /// Bare lowercase hex when the recorded hash is in the recomputable
@@ -309,7 +330,7 @@ fn parse_nodes(report: &Value) -> Vec<NodeEntry> {
             }
             let outputs = outputs.into_values().collect();
             let mut logs = Vec::new();
-            for key in ["stdout_log", "stderr_log"] {
+            for key in ["stdout_log", "stderr_log", "task_manifest"] {
                 if let Some(entry) = execution
                     .and_then(|exec| exec.get(key))
                     .and_then(FileEntry::from_json)
@@ -914,6 +935,24 @@ pub async fn export_ro_crate(
     let mut skipped = Vec::new();
     let mut graph: Vec<Value> = Vec::new();
 
+    // Ship the original recorded report, not a reconstruction from a node
+    // spec. This includes actual argv, input bindings and failed-node evidence.
+    let report_bytes = serde_json::to_vec_pretty(report)
+        .map_err(|e| format!("serialize recorded run report: {e}"))?;
+    let report_path = "workflow/run-report.json";
+    std::fs::write(out_dir.join(report_path), &report_bytes)
+        .map_err(|e| format!("write recorded run report: {e}"))?;
+    files.push(ExportFile {
+        source: format!("run:{}:report", run.id),
+        exported_path: report_path.into(),
+        bytes: report_bytes.len() as u64,
+        sha256: Some(format!(
+            "sha256:{}",
+            hex_lower(&sha2::Sha256::digest(&report_bytes))
+        )),
+        sha256_verified: false,
+    });
+
     for entry in pull.values() {
         let exported = match pull_file(entry, storage, out_dir).await {
             Ok(exported) => exported,
@@ -1135,6 +1174,7 @@ fn referenced_input_entity(entry: &FileEntry) -> Value {
 }
 
 /// Why a file could not be pulled into the crate.
+#[derive(Debug)]
 enum PullFailure {
     /// The pulled bytes do not match the recorded hash — the export must
     /// abort: an evidence package that cannot vouch for its contents is
@@ -1156,7 +1196,9 @@ async fn pull_file(
     let fatal = |message: String| PullFailure::Fatal(message);
     let skip = |message: String| PullFailure::Skip(message);
 
-    // Resolve: vfs:// → store; mounted bare path → store; else host file.
+    // Explicit VFS URIs keep that namespace. Recognized local FileRefs keep
+    // theirs even under a root mount; legacy unrecognized bare mounted paths
+    // retain their previous VFS resolution. No permission-error fallback.
     let (virtual_path, target_rel) = if let Some(vpath) = entry.path.strip_prefix("vfs://") {
         let normalized = vfs::OpendalFileStorage::normalize_path(vpath);
         (
@@ -1166,7 +1208,7 @@ async fn pull_file(
     } else if entry.path.starts_with('/') {
         let normalized = vfs::OpendalFileStorage::normalize_path(&entry.path);
         let mounted = storage.is_some_and(|storage| storage.is_mounted(&normalized));
-        if mounted {
+        if mounted && !entry.matches_local_metadata() {
             (
                 Some(normalized.clone()),
                 format!("data/{}", normalized.trim_start_matches('/')),
@@ -1279,7 +1321,7 @@ async fn pull_file(
         source: entry.path.clone(),
         exported_path: target_rel,
         bytes,
-        sha256: entry.content_hash.clone(),
+        sha256: Some(format!("sha256:{computed}")),
         sha256_verified: verified,
     })
 }
@@ -1794,6 +1836,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn root_mount_preserves_local_file_identity_and_explicit_vfs_namespace() {
+        use vfs::{BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore};
+        let host = tempfile::tempdir().unwrap();
+        let virtual_root = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let path = host.path().join("dataset.rds");
+        std::fs::write(&path, b"ACTUAL LOCAL RDS").unwrap();
+        let reference = crate::value::FileRef::local(&path, Some("r_rds".into())).unwrap();
+        let mounts = vfs::VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "v".into(),
+                config: BackendConfig::local("/"),
+            }],
+            mount: vec![MountDefinition {
+                path: "/".into(),
+                backend: "v".into(),
+                source: virtual_root.path().to_string_lossy().into_owned(),
+                read_only: false,
+                permissions: Default::default(),
+            }],
+        };
+        let mounted = std::sync::Arc::new(MountedObjectStore::from_manifest(&mounts).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(virtual_root.path(), mounted);
+        let entry = FileEntry::from_json(&serde_json::to_value(&reference).unwrap()).unwrap();
+        // A root mount without a shadow must not hide a real host artifact.
+        let first = pull_file(&entry, Some(&storage), output.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(output.path().join(first.exported_path)).unwrap(),
+            b"ACTUAL LOCAL RDS"
+        );
+        assert!(!first.sha256_verified);
+        let shadow = virtual_root.path().join(path.strip_prefix("/").unwrap());
+        std::fs::create_dir_all(shadow.parent().unwrap()).unwrap();
+        std::fs::write(&shadow, b"DIFFERENT VFS BYTES").unwrap();
+        let second = pull_file(&entry, Some(&storage), output.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(output.path().join(second.exported_path)).unwrap(),
+            b"ACTUAL LOCAL RDS"
+        );
+        // An explicit URI must resolve through VFS, even when a host file exists.
+        let virtual_entry =
+            FileEntry::from_json(&json!({"path":format!("vfs://{}",path.display())})).unwrap();
+        let third = pull_file(&virtual_entry, Some(&storage), output.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(output.path().join(third.exported_path)).unwrap(),
+            b"DIFFERENT VFS BYTES"
+        );
+        // Legacy bare VFS references without a local metadata identity stay VFS.
+        let legacy = FileEntry::from_json(&json!({"path":path})).unwrap();
+        let fourth = pull_file(&legacy, Some(&storage), output.path())
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(output.path().join(fourth.exported_path)).unwrap(),
+            b"DIFFERENT VFS BYTES"
+        );
+    }
+
+    #[tokio::test]
     async fn resolve_run_accepts_unique_prefix() {
         let history = DagHistory::open_in_memory().await.unwrap();
         let mut run = sample_run();
@@ -1819,5 +1926,48 @@ mod tests {
     fn sha2_computed(bytes: &[u8]) -> Vec<u8> {
         use sha2::Digest;
         sha2::Sha256::digest(bytes).to_vec()
+    }
+    #[tokio::test]
+    async fn crate_delivers_exact_report_rds_logs_and_task_with_honest_fresh_hashes() {
+        let fixture = tempfile::tempdir().unwrap();
+        let rds = fixture.path().join("dataset.rds");
+        let stderr = fixture.path().join("stderr.log");
+        let task = fixture.path().join("task.json");
+        std::fs::write(&rds, b"SYNTHETIC RDS BYTES").unwrap();
+        std::fs::write(&stderr, b"official diagnostic\n").unwrap();
+        std::fs::write(&task, b"{\"spec\":\"synthetic\"}").unwrap();
+        let report = json!({"nodes":[{"id":"fit","node_type":"container","status":"failed",
+            "output_files":[{"path":rds}], "execution":{"exit_code":2,
+            "command_argv":["Rscript","/work/.autonomics/script"],
+            "stderr_log":{"path":stderr},"task_manifest":{"path":task}}}]});
+        let out = tempfile::tempdir().unwrap();
+        let summary = export_ro_crate(&sample_run(), &report, None, out.path(), None)
+            .await
+            .unwrap();
+        assert!(summary.skipped.is_empty());
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &std::fs::read(out.path().join("workflow/run-report.json")).unwrap()
+            )
+            .unwrap(),
+            report
+        );
+        for source in [&rds, &stderr, &task] {
+            let entry = summary
+                .files
+                .iter()
+                .find(|f| f.source == source.to_string_lossy())
+                .unwrap();
+            let raw = std::fs::read(out.path().join(&entry.exported_path)).unwrap();
+            assert_eq!(raw, std::fs::read(source).unwrap());
+            assert_eq!(
+                entry.sha256,
+                Some(format!("sha256:{}", hex_lower(&sha2::Sha256::digest(&raw))))
+            );
+            assert!(
+                !entry.sha256_verified,
+                "fresh digest cannot pretend historical verification"
+            );
+        }
     }
 }

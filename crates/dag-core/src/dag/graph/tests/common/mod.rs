@@ -644,6 +644,8 @@ impl DagNode for DetailedNode {
         reporter.info("detailed node started");
         reporter.error("detailed node error stream");
         reporter.set_run_details(crate::dag::runtime::NodeRunDetails {
+            worker_software: None,
+            worker_stop: None,
             image: Some("localhost/test@sha256:abc".into()),
             image_digest: Some("sha256:abc".into()),
             exit_code: Some(if self.fail { 42 } else { 0 }),
@@ -654,6 +656,7 @@ impl DagNode for DetailedNode {
             output_artifacts_by_port: Default::default(),
             workspace: None,
             task_manifest: None,
+            command_argv: None,
         });
         if self.fail {
             return Err(DagError::Schedule("intentional failure".into()));

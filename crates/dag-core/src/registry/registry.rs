@@ -45,6 +45,10 @@ pub fn new_isolated_ctx(runtime_env: Arc<RuntimeEnv>) -> SessionContext {
 }
 
 pub trait NodeFactory: Send + Sync {
+    /// Identity captured when the resident factory was loaded, never a disk reread.
+    fn resident_plugin(&self) -> Option<ResidentPlugin> {
+        None
+    }
     /// The plugin namespace that owns this node kind.
     ///
     /// Built-in factories use [`BUILTIN_NODE_PLUGIN`]; manifest-backed
@@ -116,9 +120,11 @@ pub struct NodeCtx {
     /// tokio worker thread and starve agent message processing.
     ///
     /// Sized to `num_cpus.saturating_sub(2).max(1)` — leaving ≥ 2 worker
-    /// threads for `AgentEngineActor`s and tool execution. `None` in
+    /// threads for `SessionServer` actors and tool execution. `None` in
     /// tests and legacy code paths (unlimited).
     pub global_sem: Option<Arc<tokio::sync::Semaphore>>,
+    /// Immutable destinations for this invocation; absent for legacy execution.
+    pub runtime_output_projection: Option<Arc<crate::runtime_output::RuntimeOutputProjection>>,
 }
 
 impl NodeCtx {
@@ -134,6 +140,22 @@ impl NodeCtx {
             bundle_registry: Arc::new(BundleRegistry::new()),
             bound_data_bundles: BoundDataBundles::new(),
             global_sem: None,
+            runtime_output_projection: None,
+        }
+    }
+
+    /// Resolve a declared publication directory without changing its frozen spec.
+    /// A projected invocation must retain the actual run-directory identity.
+    pub fn resolve_output_directory(
+        &self,
+        declared: &std::path::Path,
+    ) -> std::result::Result<std::path::PathBuf, crate::dag::DagError> {
+        match &self.runtime_output_projection {
+            Some(projection) => {
+                projection.verify_runtime_directory()?;
+                projection.resolve(declared)
+            }
+            None => Ok(declared.to_path_buf()),
         }
     }
 
@@ -195,6 +217,15 @@ impl NodeCtx {
     }
 }
 
+/// Load-time evidence carried by a resident manifest factory and its clones.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResidentPlugin {
+    pub identity: crate::fingerprint::PluginIdentity,
+    pub source_root: Option<std::path::PathBuf>,
+    pub loaded_at_unix_ms: u64,
+    pub process_id: u32,
+}
+
 /// Summary of a registered node kind returned by [`NodeRegistry::list_nodes`].
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeInfo {
@@ -207,6 +238,8 @@ pub struct NodeInfo {
     pub desc: String,
     pub deprecated: bool,
     pub data_bundles: Vec<DataBundleBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resident_plugin: Option<ResidentPlugin>,
 }
 
 /// The single source of truth of "which node kinds exist and how to build one from spec."
@@ -215,10 +248,10 @@ pub struct NodeInfo {
 /// methods.
 pub struct NodeRegistry {
     node_ctx: NodeCtx,
-    nodes: RwLock<HashMap<String, Arc<dyn NodeFactory>>>,
+    nodes: Arc<RwLock<HashMap<String, Arc<dyn NodeFactory>>>>,
     /// Kinds registered more than once (last write still wins, but the
     /// conflict is recorded and surfaces via [`Self::assert_no_conflicts`]).
-    conflicts: RwLock<Vec<String>>,
+    conflicts: Arc<RwLock<Vec<String>>>,
 }
 
 impl NodeRegistry {
@@ -230,8 +263,18 @@ impl NodeRegistry {
     pub fn new(node_ctx: NodeCtx) -> Self {
         Self {
             node_ctx,
-            nodes: RwLock::new(Default::default()),
-            conflicts: RwLock::new(Vec::new()),
+            nodes: Arc::new(RwLock::new(Default::default())),
+            conflicts: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Share trusted factories and their hot-reload state while binding every
+    /// subsequently built node to this session's storage/runtime credentials.
+    pub fn with_node_ctx(&self, node_ctx: NodeCtx) -> Self {
+        Self {
+            node_ctx,
+            nodes: Arc::clone(&self.nodes),
+            conflicts: Arc::clone(&self.conflicts),
         }
     }
 
@@ -304,11 +347,11 @@ impl NodeRegistry {
         let mut nodes = self.nodes.write().expect("node registry lock poisoned");
         let mut temporary = NodeRegistry {
             node_ctx: self.node_ctx.clone(),
-            nodes: RwLock::new(std::mem::take(&mut *nodes)),
+            nodes: Arc::new(RwLock::new(std::mem::take(&mut *nodes))),
             // `reload_plugin` is a deliberate, supervised replacement;
             // duplicate-kind detections within the temporary batch are
             // expected and don't need to surface as registry-level conflicts.
-            conflicts: RwLock::new(Vec::new()),
+            conflicts: Arc::new(RwLock::new(Vec::new())),
         };
         plugin.register(&mut temporary);
         *nodes = temporary.into_nodes();
@@ -340,6 +383,25 @@ impl NodeRegistry {
     }
 
     pub fn build_node(&self, node_kind: &str, spec: serde_json::Value) -> Result<Box<dyn DagNode>> {
+        self.build_node_with_policy(node_kind, spec, false)
+    }
+
+    /// A frozen research spec must never be silently repaired like a live
+    /// model-generated spec. Semantic changes require an explicit amendment.
+    pub fn build_node_strict(
+        &self,
+        node_kind: &str,
+        spec: serde_json::Value,
+    ) -> Result<Box<dyn DagNode>> {
+        self.build_node_with_policy(node_kind, spec, true)
+    }
+
+    fn build_node_with_policy(
+        &self,
+        node_kind: &str,
+        spec: serde_json::Value,
+        strict: bool,
+    ) -> Result<Box<dyn DagNode>> {
         let node_factory = self.get_node_factory(node_kind)?;
         // Repair common LLM spec pathologies (object-wrapped arrays like
         // `{"item": x}`, numeric strings for number fields) against the
@@ -350,7 +412,13 @@ impl NodeRegistry {
                 "failed to serialize spec schema for kind '{node_kind}': {e}"
             ))
         })?;
-        let spec = super::spec_normalize::normalize_against_schema(spec, &schema);
+        let normalized = super::spec_normalize::normalize_against_schema(spec.clone(), &schema);
+        if strict && normalized != spec {
+            return Err(Error::Unknown(format!(
+                "frozen node '{node_kind}' requires normalization; amend the explicit contract instead"
+            )));
+        }
+        let spec = normalized;
         let bindings = node_factory.data_bundles_for_spec(spec.clone())?;
         let build_ctx = self
             .node_ctx
@@ -446,6 +514,30 @@ impl NodeRegistry {
                 desc: factory.desc().to_string(),
                 deprecated: factory.deprecated(),
                 data_bundles: factory.data_bundles(),
+                resident_plugin: factory.resident_plugin(),
+            })
+            .collect()
+    }
+
+    pub fn list_node_interfaces(&self) -> Vec<(NodeInfo, NodePorts)> {
+        let factories: Vec<_> = self
+            .nodes()
+            .iter()
+            .map(|(address, factory)| (address.clone(), Arc::clone(factory)))
+            .collect();
+        factories
+            .into_iter()
+            .map(|(address, factory)| {
+                let node = NodeInfo {
+                    address,
+                    plugin: factory.plugin().to_string(),
+                    kind: factory.kind().to_string(),
+                    desc: factory.desc().to_string(),
+                    deprecated: factory.deprecated(),
+                    data_bundles: factory.data_bundles(),
+                    resident_plugin: factory.resident_plugin(),
+                };
+                (node, factory.ports())
             })
             .collect()
     }
@@ -458,8 +550,9 @@ impl NodeRegistry {
 
     fn into_nodes(self) -> HashMap<String, Arc<dyn NodeFactory>> {
         self.nodes
-            .into_inner()
+            .read()
             .expect("node registry lock poisoned")
+            .clone()
     }
 }
 
@@ -487,7 +580,14 @@ mod tests {
             "fake"
         }
         fn spec_schema(&self) -> schemars::Schema {
-            schemars::Schema::default()
+            if self.kind == "strict_numeric" {
+                schemars::Schema::try_from(
+                    serde_json::json!({"type":"object","properties":{"number":{"type":"number"}}}),
+                )
+                .unwrap()
+            } else {
+                schemars::Schema::default()
+            }
         }
         fn ports(&self) -> NodePorts {
             NodePorts::new()
@@ -502,6 +602,27 @@ mod tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         ))
+    }
+
+    #[test]
+    fn frozen_specs_cannot_silently_normalize_numeric_strings() {
+        let mut registry = registry();
+        registry.register(Box::new(FakeFactory {
+            plugin: BUILTIN_NODE_PLUGIN,
+            kind: "strict_numeric",
+        }));
+        let spec = serde_json::json!({"number":"2"});
+        let error = registry
+            .build_node_strict("strict_numeric", spec.clone())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("requires normalization"));
+        let exploratory = registry.build_node("strict_numeric", spec).err().unwrap();
+        assert!(
+            exploratory
+                .to_string()
+                .contains("fake factory cannot build")
+        ); // Reaches factory normally.
     }
 
     #[test]

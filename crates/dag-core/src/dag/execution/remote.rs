@@ -84,6 +84,75 @@ pub struct RemoteTaskExecutor {
 }
 
 impl RemoteTaskExecutor {
+    async fn observe_logs(
+        &self,
+        receipt: &TaskAttemptReceipt,
+        attempt_key: &str,
+        reporter: &crate::dag::node_event::NodeReporter,
+    ) -> (Option<String>, bool) {
+        let mut details = reporter.take_run_details().unwrap_or_default();
+        let mut diagnostic = None;
+        let mut observed_empty_stderr = false;
+        if let Some(error) = &receipt.log_capture_error {
+            reporter.warn(format!("remote log collection failed: {error}"));
+        }
+        for (name, source) in [
+            ("stdout", &receipt.stdout_log),
+            ("stderr", &receipt.stderr_log),
+        ] {
+            let Some(source) = source else { continue };
+            // Slurm supplies bounded snapshots. Reject oversized/unmeasured
+            // log references instead of downloading unbounded worker output.
+            if source
+                .fingerprint
+                .as_ref()
+                .is_none_or(|fp| fp.size > 66 * 1024)
+            {
+                reporter.warn(format!(
+                    "remote {name} log is unmeasured or exceeds the transport bound"
+                ));
+                continue;
+            }
+            match self
+                .artifact_store
+                .download(source.clone(), attempt_key, &format!("remote-{name}.log"))
+                .await
+            {
+                Ok(local) => {
+                    let reference =
+                        match self.artifact_store.retained_reference(source.clone()).await {
+                            Ok(Some(retained)) => retained,
+                            _ => local.clone(),
+                        };
+                    if name == "stderr" {
+                        details.stderr_log = Some(reference);
+                        if let Ok(bytes) = std::fs::read(&local.path) {
+                            let text = String::from_utf8_lossy(&bytes);
+                            let tail = text
+                                .chars()
+                                .rev()
+                                .take(4096)
+                                .collect::<String>()
+                                .chars()
+                                .rev()
+                                .collect::<String>();
+                            if !tail.trim().is_empty() {
+                                diagnostic = Some(tail.trim().to_owned());
+                            } else {
+                                observed_empty_stderr = true;
+                            }
+                        }
+                    } else {
+                        details.stdout_log = Some(reference);
+                    }
+                }
+                Err(error) => reporter.warn(format!("cannot retrieve remote {name} log: {error}")),
+            }
+        }
+        reporter.set_run_details(details);
+        (diagnostic, observed_empty_stderr)
+    }
+
     pub fn new(
         transport: Arc<dyn TaskTransport>,
         artifact_store: Arc<dyn TaskArtifactStore>,
@@ -115,6 +184,11 @@ impl RemoteTaskExecutor {
                 "remote file-set outputs must be loaded as a group by port".into(),
             )),
             "dataframe" => {
+                if artifact.path.starts_with("vfs://") {
+                    return Ok(NodeValue::DataFrame(
+                        super::retained_arrow::load_retained_arrow(artifact, engine_ctx).await?,
+                    ));
+                }
                 let file = std::fs::File::open(&artifact.path).map_err(|error| {
                     DagError::Schedule(format!(
                         "cannot open remote Arrow artifact `{}`: {error}",
@@ -127,7 +201,8 @@ impl RemoteTaskExecutor {
                         artifact.path
                     ))
                 })?;
-                let batches = reader
+                let schema = reader.schema();
+                let mut batches = reader
                     .into_iter()
                     .collect::<std::result::Result<Vec<_>, _>>()
                     .map_err(|error| {
@@ -136,6 +211,11 @@ impl RemoteTaskExecutor {
                             artifact.path
                         ))
                     })?;
+                // IPC files may have a schema but no record batches. Preserve
+                // that schema instead of asking DataFusion to infer from [].
+                if batches.is_empty() {
+                    batches.push(arrow::record_batch::RecordBatch::new_empty(schema));
+                }
                 let dataframe = engine_ctx
                     .session()
                     .read_batches(batches)
@@ -174,7 +254,7 @@ impl RemoteTaskExecutor {
         }
     }
 
-    async fn load_output(
+    pub(super) async fn load_output(
         artifacts: &[FileRef],
         payload: &str,
         engine_ctx: &NodeCtx,
@@ -212,6 +292,14 @@ impl TaskExecutor for RemoteTaskExecutor {
     async fn run(&self, execution: TaskExecution) -> JobResult {
         let start = std::time::Instant::now();
         let task_id = execution.submission.spec.id.clone();
+        if let Err(error) = self.transport.ensure_ready() {
+            return JobResult::Failed {
+                id: task_id,
+                error,
+                duration: start.elapsed(),
+                details: execution.reporter.take_run_details(),
+            };
+        }
         let engine_ctx = Arc::clone(&execution.engine_ctx);
         let cancellation = execution.cancellation.clone();
         let mut workspace = match LocalTaskWorkspace::create(
@@ -228,16 +316,34 @@ impl TaskExecutor for RemoteTaskExecutor {
                 };
             }
         };
+        let attempt_key = workspace.attempt_key();
         let mut staged_submission = execution.submission.clone();
-        let dispatch = workspace
-            .stage_inputs(
+        execution
+            .reporter
+            .phase("staging_inputs", "preparing remote task inputs");
+        let staged = workspace
+            .stage_inputs_with_remote_observed(
                 &mut staged_submission,
                 execution.engine_ctx.opendal.as_deref(),
+                Some(self.artifact_store.as_ref()),
+                Some(&execution.reporter),
             )
             .await
-            .and_then(|()| staged_submission.into_remote_dispatch());
+            .and_then(|remote_inputs| {
+                let mut dispatch = staged_submission.into_remote_dispatch()?;
+                if dispatch.spec.kind == "process" {
+                    let process = dispatch.spec.spec.as_object_mut().ok_or_else(|| {
+                        DagError::Schedule("process specification must be an object".into())
+                    })?;
+                    process.insert(
+                        "_autonomics_attempt_key".into(),
+                        serde_json::Value::String(attempt_key.clone()),
+                    );
+                }
+                Ok((dispatch, remote_inputs))
+            });
 
-        let dispatch = match dispatch {
+        let (dispatch, remote_inputs) = match staged {
             Ok(dispatch) => dispatch,
             Err(error) => {
                 let duration = start.elapsed();
@@ -267,10 +373,26 @@ impl TaskExecutor for RemoteTaskExecutor {
             let mut uploaded_inputs = Vec::new();
             for (port, input) in dispatch.spec.inputs.iter().enumerate() {
                 for (index, path) in input.staged_paths.iter().enumerate() {
+                    if let Some(remote) = remote_inputs.get(&(input.port, index)) {
+                        uploaded_inputs.push(remote.clone());
+                        continue;
+                    }
                     let artifact = Self::local_artifact(path)?;
+                    let basename = Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("input");
+                    let name = if matches!(input.source, super::TaskInputSource::SpecFile { .. }) {
+                        format!(
+                            "input-{port}-{index}-{}",
+                            super::process::sanitize_path_component(basename)
+                        )
+                    } else {
+                        format!("input-{port}-{index}")
+                    };
                     let uploaded = self
                         .artifact_store
-                        .upload(artifact, &task_id, &format!("input-{port}-{index}"))
+                        .upload_observed(artifact, &attempt_key, &name, &execution.reporter)
                         .await?;
                     uploaded_inputs.push(uploaded);
                 }
@@ -311,7 +433,7 @@ impl TaskExecutor for RemoteTaskExecutor {
         }
 
         let outcome = tokio::select! {
-            receipt = self.transport.wait(&lease) => WaitOutcome::Receipt(receipt),
+            receipt = self.transport.wait_observed(&lease, &execution.reporter) => WaitOutcome::Receipt(receipt),
             _ = cancellation.cancelled() => WaitOutcome::Cancelled,
             _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => WaitOutcome::TimedOut,
         };
@@ -319,7 +441,17 @@ impl TaskExecutor for RemoteTaskExecutor {
         let receipt = match outcome {
             WaitOutcome::Receipt(Ok(receipt)) => receipt,
             WaitOutcome::Receipt(Err(error)) => {
-                let _ = self.transport.cancel(&lease).await;
+                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                    // An unconfirmed cancel must surface in logs: the remote
+                    // job may still be running, so nothing may clean its
+                    // workspace.
+                    tracing::warn!(
+                        task = %task_id,
+                        lease = %lease.lease_id,
+                        error = %cancel_error,
+                        "remote task failed and its cancel could not be confirmed"
+                    );
+                }
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -340,7 +472,14 @@ impl TaskExecutor for RemoteTaskExecutor {
                 };
             }
             WaitOutcome::Cancelled => {
-                let _ = self.transport.cancel(&lease).await;
+                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                    tracing::warn!(
+                        task = %task_id,
+                        lease = %lease.lease_id,
+                        error = %cancel_error,
+                        "remote task cancelled but its stop could not be confirmed; retaining remote workspace"
+                    );
+                }
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -361,7 +500,14 @@ impl TaskExecutor for RemoteTaskExecutor {
                 };
             }
             WaitOutcome::TimedOut => {
-                let _ = self.transport.cancel(&lease).await;
+                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                    tracing::warn!(
+                        task = %task_id,
+                        lease = %lease.lease_id,
+                        error = %cancel_error,
+                        "remote task timed out and its cancel could not be confirmed; retaining remote workspace"
+                    );
+                }
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -407,10 +553,25 @@ impl TaskExecutor for RemoteTaskExecutor {
             };
         }
 
+        let (diagnostic, observed_empty_stderr) = self
+            .observe_logs(&receipt, &attempt_key, &execution.reporter)
+            .await;
         if receipt.status != "success" {
             let error = DagError::Schedule(format!(
-                "remote task failed with status `{}` and exit code `{}`",
-                receipt.status, receipt.exit_code
+                "remote task failed with status `{}` and exit code `{}`; {}",
+                receipt.status,
+                receipt.exit_code,
+                diagnostic
+                    .map(|text| format!("stderr: {text}"))
+                    .unwrap_or_else(|| {
+                        if let Some(error) = &receipt.log_capture_error {
+                            format!("stderr unavailable: log collection failed: {error}")
+                        } else if observed_empty_stderr {
+                            "stderr is empty".into()
+                        } else {
+                            "stderr unavailable; inspect the attempt logs".into()
+                        }
+                    })
             ));
             let duration = start.elapsed();
             let mut details = execution.reporter.take_run_details();
@@ -465,18 +626,41 @@ impl TaskExecutor for RemoteTaskExecutor {
         let download = async {
             let task_manifest = self
                 .artifact_store
-                .download(receipt.task_manifest.clone(), &task_id, "task.json")
+                .download_observed(
+                    receipt.task_manifest.clone(),
+                    &attempt_key,
+                    "task.json",
+                    &execution.reporter,
+                )
                 .await?;
             let mut local_outputs = BTreeMap::<u8, Vec<FileRef>>::new();
             for (port, artifacts) in &remote_outputs {
                 let mut downloaded = Vec::with_capacity(artifacts.len());
                 for (index, artifact) in artifacts.iter().enumerate() {
+                    let file_payload = output_contracts.iter().any(|contract| {
+                        contract.port == *port
+                            && matches!(
+                                contract.payload.as_str(),
+                                "file" | "file_set" | "dataframe"
+                            )
+                    });
+                    if file_payload {
+                        if let Some(reference) = self
+                            .artifact_store
+                            .retained_reference(artifact.clone())
+                            .await?
+                        {
+                            downloaded.push(reference);
+                            continue;
+                        }
+                    }
                     downloaded.push(
                         self.artifact_store
-                            .download(
+                            .download_observed(
                                 artifact.clone(),
-                                &task_id,
+                                &attempt_key,
                                 &format!("output-{port}-{index}"),
+                                &execution.reporter,
                             )
                             .await?,
                     );
@@ -499,6 +683,15 @@ impl TaskExecutor for RemoteTaskExecutor {
                     Self::load_output(&artifacts, &contract.payload, engine_ctx.as_ref()).await?;
                 outputs.insert(contract.port, value);
             }
+            if let Some(value) = execution.submission.spec.spec.get("typed_dispatch") {
+                let envelope: super::typed_worker::TypedWorkerEnvelope =
+                    serde_json::from_value(value.clone()).map_err(|error| {
+                        DagError::Schedule(format!("invalid typed publication envelope: {error}"))
+                    })?;
+                local_outputs.extend(
+                    super::typed_publication::publish(&envelope, &mut outputs, &engine_ctx).await?,
+                );
+            }
             Ok::<_, DagError>((task_manifest, local_outputs, outputs))
         }
         .await;
@@ -514,7 +707,9 @@ impl TaskExecutor for RemoteTaskExecutor {
                     self.name(),
                     &mut details,
                     logs,
-                    127,
+                    // Publication/transfer failure is a coordinator failure,
+                    // not a different exit status for the stopped worker.
+                    receipt.exit_code,
                     "remote_output_download_failed",
                     duration,
                 );
@@ -533,6 +728,9 @@ impl TaskExecutor for RemoteTaskExecutor {
             .collect::<Vec<_>>();
         let mut details = execution.reporter.take_run_details();
         let logs = execution.reporter.take_logs();
+        let run_details = details.get_or_insert_with(Default::default);
+        run_details.output_artifacts = output_artifacts;
+        run_details.output_artifacts_by_port = local_outputs;
         workspace.complete(
             &task_id,
             self.name(),
@@ -544,11 +742,11 @@ impl TaskExecutor for RemoteTaskExecutor {
         );
         details.get_or_insert_with(Default::default);
         if let Some(details) = details.as_mut() {
-            details.workspace = Some(receipt.workspace.clone());
+            // The coordinator attempt contains its actual receipt and status.
+            // A worker workspace is a different host namespace; its retained
+            // artifacts carry their own explicit references.
             details.task_manifest = Some(remote_task_manifest);
             details.exit_code = Some(receipt.exit_code);
-            details.output_artifacts = output_artifacts;
-            details.output_artifacts_by_port = local_outputs;
         }
 
         JobResult::Success {
@@ -559,3 +757,7 @@ impl TaskExecutor for RemoteTaskExecutor {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "remote_attempt_tests.rs"]
+mod tests;

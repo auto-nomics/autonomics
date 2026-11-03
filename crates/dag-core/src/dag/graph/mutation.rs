@@ -340,7 +340,9 @@ impl DAG {
         Ok(())
     }
 
-    /// Remove all nodes, edges, statuses, outputs, and errors — a full reset.
+    /// Remove graph and run state while retaining the deployment executor and
+    /// configured execution policy. Clearing or restoring a graph must not
+    /// silently move subsequent computation back onto the coordinator.
     pub fn clear(&mut self) {
         self.nodes.clear();
         self.graph.clear();
@@ -416,10 +418,10 @@ impl DAG {
         let had_outputs = !self.outputs.is_empty();
         self.outputs.clear();
         self.fingerprints.clear();
-        for id in self.nodes.keys() {
-            self.statuses.insert(id.clone(), RuntimeStatus::Pending);
-        }
-        self.errors.clear();
+        // Cache residency is separate from the last execution outcome.
+        // `is_dirty` already marks these nodes for the next dispatch; changing
+        // their status to Pending makes an ended live projection look like an
+        // interrupted run. Retain failures and terminal worker observations.
         had_outputs
     }
 
@@ -457,20 +459,42 @@ impl DAG {
     pub(super) async fn invalidate_stale_file_outputs(
         &mut self,
         storage: Option<&vfs::OpendalFileStorage>,
+        event_sink: Option<tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>>,
     ) {
         let mut stale = Vec::new();
         for (id, outputs) in self.outputs.iter() {
+            let (tx, _rx) = tokio::sync::mpsc::channel(1);
+            let reporter = crate::dag::node_event::NodeReporter::new(id.clone(), tx)
+                .with_live_view(self.live_view.clone())
+                .with_external_sink(event_sink.clone());
+            let mut index = 0;
             let mut changed = false;
             for value in outputs.values() {
                 match value {
                     NodeValue::File(file) => {
-                        if crate::fingerprint::cached_file_changed(file, storage).await {
+                        index += 1;
+                        if crate::fingerprint::cached_file_changed_observed(
+                            file,
+                            storage,
+                            Some(&reporter),
+                            &format!("verifying_cache:{index}"),
+                        )
+                        .await
+                        {
                             changed = true;
                         }
                     }
                     NodeValue::FileSet(files) => {
                         for file in files {
-                            if crate::fingerprint::cached_file_changed(file, storage).await {
+                            index += 1;
+                            if crate::fingerprint::cached_file_changed_observed(
+                                file,
+                                storage,
+                                Some(&reporter),
+                                &format!("verifying_cache:{index}"),
+                            )
+                            .await
+                            {
                                 changed = true;
                             }
                         }

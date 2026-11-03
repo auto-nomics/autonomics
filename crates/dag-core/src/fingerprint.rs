@@ -1,13 +1,13 @@
 //! Node execution fingerprints and content-level cache invalidation.
 //!
 //! A fingerprint is a blake3 digest over *everything that determines a node's
-//! output*: its kind, canonical spec, engine version, the identity of every
-//! input value it consumes, and — for plugin-backed nodes — the identity of
-//! the plugin implementation that executes (see [`PluginIdentity`]).
-//! Following the Nextflow task-hash model, one digest simultaneously serves
-//! as provenance evidence ("this output came from exactly these inputs"), a
-//! cache key (equal fingerprint ⇒ equal result), and an invalidation check
-//! (see [`cached_file_changed`]).
+//! output*: its kind, canonical spec, engine version, source revision, the
+//! identity of every input value it consumes, and — for plugin-backed
+//! nodes — the identity of the plugin implementation that executes (see
+//! [`PluginIdentity`]). Following the Nextflow task-hash model, one digest
+//! simultaneously serves as provenance evidence ("this output came from
+//! exactly these inputs"), a cache key (equal fingerprint ⇒ equal result),
+//! and an invalidation check (see [`cached_file_changed`]).
 //!
 //! Input identity is value-shaped:
 //! - file-like values contribute their path plus a content hash when one is
@@ -32,17 +32,17 @@ use crate::dag::graph::{EdgeLabel, PortOutputs};
 use crate::value::{FileFingerprint, FileRef, NodeValue};
 
 /// Domain separator for the fingerprint hash, so digests from different
-/// schemes or versions can never collide. v2 adds the source revision to
-/// the digest (F15); v1 digests are not compatible by design.
+/// schemes or versions can never collide.
 ///
-/// v2 adds the plugin-identity constituent (WO-R09): v1 digests covered only
-/// kind + spec + engine version + input identities, so swapping a plugin
-/// family's scripts, manifest, or image under an unchanged kind/spec kept the
-/// fingerprint — and its cache — stale. Every node's fingerprint changes once
-/// when an engine built with v2 first recomputes it, plugin-backed or not
-/// (the absent-plugin marker is itself a constituent).
-pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v2";
-
+/// v3 (F15 ⊕ WO-R09 merge) adds **both** the source revision and the
+/// plugin-identity constituent: v1 covered only kind + spec + engine
+/// version + input identities, so an implementation change with an
+/// unchanged spec — engine rebuild or plugin family script/manifest/image
+/// swap — kept the fingerprint, and its cache, stale. Every node's
+/// fingerprint changes once when an engine built with v3 first recomputes
+/// it, plugin-backed or not (the absent-plugin marker is itself a
+/// constituent). v1/v2 digests are not compatible by design.
+pub const FINGERPRINT_DOMAIN: &str = "autonomics-node-fingerprint-v3";
 /// Marker written into the digest when a node has no retained spec (raw
 /// `add_node` path, tests only) — auditable degradation, never silent.
 pub const NOSPEC_TAG: &str = "nospec";
@@ -60,6 +60,20 @@ pub const NOSCRIPT_TAG: &str = "noscript";
 /// content digest (legacy / built-in bundles) — visible degradation, never a
 /// silently unchecked mount.
 pub const NODIGEST_TAG: &str = "nodigest";
+
+/// Bind a read-only external dependency state to the ordinary execution
+/// fingerprint. Nodes without such state retain their exact previous key.
+pub fn bind_cache_dependency_state(base: String, state: Option<&serde_json::Value>) -> String {
+    let Some(state) = state else {
+        return base;
+    };
+    let mut hasher = Hasher::new();
+    hasher.update(b"autonomics.cache-dependency.v1\0");
+    hasher.update(base.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(&serde_json::to_vec(state).expect("JSON Value is serializable"));
+    hasher.finalize().to_hex().to_string()
+}
 
 // ── input identities ──────────────────────────────────────────────────────────
 
@@ -157,7 +171,7 @@ pub fn collect_input_identities(
 /// Built by the plugin loader from the *loaded* definition (not re-read from
 /// disk at dispatch time), so the fingerprint always reflects what the
 /// engine would actually execute.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PluginIdentity {
     /// `sha256:{hex}` over the family `manifest.toml` bytes exactly as
     /// loaded — every declaration (node definitions, params, panels, image
@@ -180,7 +194,7 @@ pub struct PluginIdentity {
 }
 
 /// One mounted catalog panel, in the shape that matters for identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PanelIdentity {
     /// Local binding slot the node mounts through.
     pub binding: String,
@@ -196,7 +210,7 @@ pub struct PanelIdentity {
 /// [`crate::source_revision()`] into the digest.
 ///
 /// ```text
-/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ kind ‖ spec ‖ plugin ‖ Σ sorted identities )
+/// blake3( FINGERPRINT_DOMAIN ‖ engine_version ‖ rev ‖ kind ‖ spec ‖ plugin ‖ Σ sorted identities )
 /// ```
 ///
 /// * `spec = None` marks the node as spec-less (see [`NOSPEC_TAG`]).
@@ -377,53 +391,96 @@ fn encode_fingerprint(feed: &mut dyn FnMut(&[u8]), fingerprint: Option<&FileFing
 
 // ── content hashing (Content mode + invalidation confirm) ─────────────────────
 
-/// Best-effort sha256 over a file-like path, resolved through the object
-/// store when possible. Returns the bare lowercase hex digest.
+/// Best-effort sha256 over a resolved file-like value. Returns the bare
+/// lowercase hex digest.
 ///
-/// Resolution merges the two historical precedents: `vfs://` URIs go straight
-/// to the store; bare absolute / `file://` paths go to the store **only when
-/// mounted** (mirroring `file_to_dataframe::source_path`), otherwise the host
-/// filesystem is read directly with `tokio::fs`.
+/// `vfs://` values read the object store; bare paths and `file://` values read
+/// the host filesystem. These are upstream FileRef identities, not unresolved
+/// node-spec paths: a virtual mount must not replace the host bytes consumed
+/// downstream, or hide their modification or disappearance.
 pub async fn file_sha256(
     path: &str,
     storage: Option<&vfs::OpendalFileStorage>,
 ) -> Option<(u64, String)> {
+    file_sha256_observed(path, storage, None, "hashing_input").await
+}
+
+async fn file_sha256_observed(
+    path: &str,
+    storage: Option<&vfs::OpendalFileStorage>,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+    phase: &str,
+) -> Option<(u64, String)> {
+    if let Some(reporter) = reporter {
+        reporter.phase(phase, "verifying input content");
+    }
     if let Some(vpath) = path.strip_prefix("vfs://") {
         let storage = storage?;
         return storage
-            .sha256(&vfs::OpendalFileStorage::normalize_path(vpath))
+            .sha256_with_progress(
+                &vfs::OpendalFileStorage::normalize_path(vpath),
+                |current, total| {
+                    if let Some(reporter) = reporter {
+                        reporter.phase_progress(phase, current, Some(total), "bytes");
+                    }
+                },
+            )
             .await
             .ok();
     }
-    let candidate = path.strip_prefix("file://").unwrap_or(path);
-    if candidate.starts_with('/') {
-        let normalized = vfs::OpendalFileStorage::normalize_path(candidate);
-        if let Some(storage) = storage
-            && storage.is_mounted(&normalized)
-        {
-            return storage.sha256(&normalized).await.ok();
-        }
-        return host_sha256(candidate).await;
-    }
-    // Relative path: host filesystem only.
-    host_sha256(path).await
+    host_sha256_observed(
+        path.strip_prefix("file://").unwrap_or(path),
+        reporter,
+        phase,
+    )
+    .await
 }
 
 async fn host_sha256(path: &str) -> Option<(u64, String)> {
+    host_sha256_observed(path, None, "hashing_input").await
+}
+
+async fn host_sha256_observed(
+    path: &str,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+    phase: &str,
+) -> Option<(u64, String)> {
     use tokio::io::AsyncReadExt;
 
     let mut file = tokio::fs::File::open(path).await.ok()?;
     let metadata = file.metadata().await.ok()?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
+    let mut bytes_read = 0u64;
+    let mut last = std::time::Instant::now();
+    if let Some(reporter) = reporter {
+        reporter.phase_progress(phase, 0, Some(metadata.len()), "bytes");
+    }
     loop {
         let read = file.read(&mut buffer).await.ok()?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
+        bytes_read += read as u64;
+        if last.elapsed() >= std::time::Duration::from_secs(1) {
+            if let Some(reporter) = reporter {
+                reporter.phase_progress(phase, bytes_read, Some(metadata.len()), "bytes");
+            }
+            last = std::time::Instant::now();
+        }
     }
-    Some((metadata.len(), hex_lower(&hasher.finalize())))
+    let after = file.metadata().await.ok()?;
+    if bytes_read != metadata.len()
+        || after.len() != metadata.len()
+        || after.modified().ok() != metadata.modified().ok()
+    {
+        return None;
+    }
+    if let Some(reporter) = reporter {
+        reporter.phase_progress(phase, bytes_read, Some(metadata.len()), "bytes");
+    }
+    Some((bytes_read, hex_lower(&hasher.finalize())))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -445,14 +502,39 @@ pub async fn upgrade_identities_with_content_hashes(
     identities: &mut [InputIdentity],
     storage: Option<&vfs::OpendalFileStorage>,
 ) {
+    upgrade_identities_with_content_hashes_observed(identities, storage, None).await
+}
+
+pub async fn upgrade_identities_with_content_hashes_observed(
+    identities: &mut [InputIdentity],
+    storage: Option<&vfs::OpendalFileStorage>,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+) {
+    let mut index = 0;
     for identity in identities.iter_mut() {
         match &mut identity.value {
             IdentityValue::File { path, fingerprint } => {
-                upgrade_one(path, fingerprint, storage).await;
+                upgrade_one(
+                    path,
+                    fingerprint,
+                    storage,
+                    reporter,
+                    &format!("hashing_input:{index}"),
+                )
+                .await;
+                index += 1;
             }
             IdentityValue::FileSet(entries) => {
                 for (path, fingerprint) in entries.iter_mut() {
-                    upgrade_one(path, fingerprint, storage).await;
+                    upgrade_one(
+                        path,
+                        fingerprint,
+                        storage,
+                        reporter,
+                        &format!("hashing_input:{index}"),
+                    )
+                    .await;
+                    index += 1;
                 }
             }
             IdentityValue::DataFrame { .. } => {}
@@ -461,10 +543,103 @@ pub async fn upgrade_identities_with_content_hashes(
     }
 }
 
+/// Fail-closed input identity for registered research executions. Existing
+/// digests are expectations to verify, not permission to skip reading bytes.
+pub async fn require_content_hashes(
+    identities: &mut [InputIdentity],
+    storage: Option<&vfs::OpendalFileStorage>,
+) -> Result<(), String> {
+    require_content_hashes_observed(identities, storage, None).await
+}
+
+pub async fn require_content_hashes_observed(
+    identities: &mut [InputIdentity],
+    storage: Option<&vfs::OpendalFileStorage>,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+) -> Result<(), String> {
+    async fn verify(
+        path: &str,
+        fingerprint: &mut Option<FileFingerprint>,
+        storage: Option<&vfs::OpendalFileStorage>,
+        reporter: Option<&crate::dag::node_event::NodeReporter>,
+        phase: &str,
+    ) -> Result<(), String> {
+        let (size, actual) = file_sha256_observed(path, storage, reporter, phase)
+            .await
+            .ok_or_else(|| format!("required content hash unavailable for {path}"))?;
+        if let Some(expected) = fingerprint
+            .as_ref()
+            .and_then(|fp| fp.content_hash.as_deref())
+        {
+            let expected = expected.strip_prefix("sha256:").unwrap_or(expected);
+            if expected.len() != 64
+                || !expected
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(format!(
+                    "required SHA256 has an unsupported identity for {path}"
+                ));
+            }
+            if expected != actual {
+                return Err(format!("required content hash mismatch for {path}"));
+            }
+        }
+        let slot = fingerprint.get_or_insert_with(|| FileFingerprint {
+            size,
+            mtime_ns: 0,
+            content_hash: None,
+            immutable_remote: false,
+        });
+        slot.size = size;
+        slot.content_hash = Some(format!("sha256:{actual}"));
+        Ok(())
+    }
+    let mut index = 0;
+    for identity in identities {
+        match &mut identity.value {
+            IdentityValue::File { path, fingerprint } => {
+                verify(
+                    path,
+                    fingerprint,
+                    storage,
+                    reporter,
+                    &format!("hashing_input:{index}"),
+                )
+                .await?;
+                index += 1;
+            }
+            IdentityValue::FileSet(entries) => {
+                for (path, fingerprint) in entries {
+                    verify(
+                        path,
+                        fingerprint,
+                        storage,
+                        reporter,
+                        &format!("hashing_input:{index}"),
+                    )
+                    .await?;
+                    index += 1;
+                }
+            }
+            IdentityValue::DataFrame { upstream: None } => {
+                return Err("required dataframe upstream identity unavailable".into());
+            }
+            IdentityValue::Channel(_) => {
+                return Err("live channels cannot satisfy required content identity".into());
+            }
+            IdentityValue::DataFrame { upstream: Some(_) } => {}
+        }
+    }
+    Ok(())
+}
+
 async fn upgrade_one(
     path: &str,
     fingerprint: &mut Option<FileFingerprint>,
     storage: Option<&vfs::OpendalFileStorage>,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+    phase: &str,
 ) {
     if fingerprint
         .as_ref()
@@ -472,7 +647,7 @@ async fn upgrade_one(
     {
         return;
     }
-    if let Some((size, hex)) = file_sha256(path, storage).await {
+    if let Some((size, hex)) = file_sha256_observed(path, storage, reporter, phase).await {
         let slot = fingerprint.get_or_insert_with(|| FileFingerprint {
             size: 0,
             mtime_ns: 0,
@@ -489,18 +664,18 @@ async fn upgrade_one(
 // ── content-level invalidation ────────────────────────────────────────────────
 
 /// Whether a cached file output has changed since `file.fingerprint` was
-/// recorded. Three-stage judgement, in cost order:
+/// recorded. A mutable recorded content hash takes precedence over metadata:
 ///
 /// 1. **Immutable remote**: published objects carry
 ///    [`FileFingerprint::immutable_remote`] and a content hash — clean
 ///    without touching the filesystem (also covers bare virtual paths that
 ///    lack the `vfs://` prefix, which the old path-spelling check missed).
-/// 2. **Metadata match**: local stat succeeds and size + mtime match —
-///    clean, zero extra I/O.
-/// 3. **Content confirm**: metadata differs (or the stat failed) but the
-///    recorded hash is in the `sha256:` dialect — recompute the digest and
-///    compare, **ignoring mtime**: a touched-but-unchanged file is clean.
-///    Only files that were already about to be judged stale pay for a read.
+/// 2. **Content confirm**: a mutable recorded SHA256 (bare or `sha256:`) is always
+///    recomputed, even when size and mtime match. Identical bytes remain
+///    clean after a touch; altered bytes with preserved metadata are stale.
+///    An unsupported recorded hash is stale, never downgraded to metadata.
+/// 3. **Metadata match**: when no hash was recorded, local stat succeeds
+///    and size + mtime match — clean, zero extra I/O.
 /// 4. Anything else — stale.
 ///
 /// A file with no recorded fingerprint never invalidates (unchanged
@@ -508,6 +683,15 @@ async fn upgrade_one(
 pub async fn cached_file_changed(
     file: &FileRef,
     storage: Option<&vfs::OpendalFileStorage>,
+) -> bool {
+    cached_file_changed_observed(file, storage, None, "verifying_cache").await
+}
+
+pub async fn cached_file_changed_observed(
+    file: &FileRef,
+    storage: Option<&vfs::OpendalFileStorage>,
+    reporter: Option<&crate::dag::node_event::NodeReporter>,
+    phase: &str,
 ) -> bool {
     let Some(expected) = file.fingerprint.as_ref() else {
         return false;
@@ -518,7 +702,19 @@ pub async fn cached_file_changed(
         return false;
     }
 
-    // Stage 2: local metadata match.
+    if let Some(hash) = expected.content_hash.as_deref() {
+        let expected_hex = hash.strip_prefix("sha256:").unwrap_or(hash);
+        if expected_hex.len() == 64
+            && expected_hex.bytes().all(|b| b.is_ascii_hexdigit())
+            && let Some((_, actual_hex)) =
+                file_sha256_observed(&file.path, storage, reporter, phase).await
+            && actual_hex.eq_ignore_ascii_case(expected_hex)
+        {
+            return false;
+        }
+        return true;
+    }
+
     if let Some(current) = FileFingerprint::from_path(&file.path)
         && current.size == expected.size
         && current.mtime_ns == expected.mtime_ns
@@ -526,29 +722,51 @@ pub async fn cached_file_changed(
         return false;
     }
 
-    // Stage 3: content confirmation for the recomputable dialect. Note the
-    // comparison is against `from_path`-style expectations too: a recorded
-    // hash makes the mtime field untrustworthy (publishers of hashed local
-    // files used to be perpetually stale for exactly this reason).
-    if let Some(hash) = expected
-        .content_hash
-        .as_deref()
-        .filter(|hash| hash.starts_with("sha256:"))
-    {
-        let expected_hex = hash.strip_prefix("sha256:").unwrap_or(hash);
-        if let Some((_, actual_hex)) = file_sha256(&file.path, storage).await
-            && actual_hex.eq_ignore_ascii_case(expected_hex)
-        {
-            return false;
-        }
-    }
-
     true
 }
 
 #[cfg(test)]
+#[path = "content_cache_regressions.rs"]
+mod content_cache_regressions;
+
+#[cfg(test)]
+#[path = "cache_dependency_tests.rs"]
+mod cache_dependency_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn content_required_rejects_missing_or_changed_bytes_instead_of_metadata_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.txt");
+        let path = path.to_str().unwrap();
+        let mut identities = vec![file_identity(path, None)];
+        assert!(require_content_hashes(&mut identities, None).await.is_err());
+        std::fs::write(path, b"original").unwrap();
+        require_content_hashes(&mut identities, None).await.unwrap();
+        std::fs::write(path, b"modified").unwrap(); // same byte count
+        assert!(require_content_hashes(&mut identities, None).await.is_err());
+        let mut etag = vec![file_identity(path, Some(fp(8, 0, Some("etag-123"))))];
+        assert!(require_content_hashes(&mut etag, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn content_required_rejects_any_missing_fileset_member_or_unbound_dataframe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("present");
+        std::fs::write(&path, b"bytes").unwrap();
+        let mut identity = file_identity("unused", None);
+        identity.value = IdentityValue::FileSet(vec![
+            (path.to_str().unwrap().into(), None),
+            (dir.path().join("missing").to_str().unwrap().into(), None),
+        ]);
+        assert!(require_content_hashes(&mut [identity], None).await.is_err());
+        let mut identity = file_identity("unused", None);
+        identity.value = IdentityValue::DataFrame { upstream: None };
+        assert!(require_content_hashes(&mut [identity], None).await.is_err());
+    }
 
     fn file_identity(path: &str, fingerprint: Option<FileFingerprint>) -> InputIdentity {
         InputIdentity {
@@ -601,9 +819,14 @@ mod tests {
             "/data/x.csv",
             Some(fp(10, 1234, Some("sha256:deadbeef"))),
         )];
-        let reference =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v1", &base, None);
-
+        let reference = compute_node_fingerprint_with_revision(
+            "sql",
+            Some(&serde_json::json!({"q": 1})),
+            "v1",
+            "aaaaaaaaaaaa",
+            &base,
+            None,
+        );
         let changed_kind = compute_node_fingerprint_with_revision(
             "other_kind",
             Some(&serde_json::json!({"q": 1})),
@@ -612,7 +835,7 @@ mod tests {
             &base,
             None,
         );
-        compute_node_fingerprint_with_revision(
+        let changed_spec = compute_node_fingerprint_with_revision(
             "sql",
             Some(&serde_json::json!({"q": 2})),
             "v1",
@@ -620,7 +843,7 @@ mod tests {
             &base,
             None,
         );
-        compute_node_fingerprint_with_revision(
+        let changed_engine = compute_node_fingerprint_with_revision(
             "sql",
             Some(&serde_json::json!({"q": 1})),
             "v2",
@@ -636,25 +859,22 @@ mod tests {
             &base,
             None,
         );
-        let changed_spec =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 2})), "v1", &base, None);
-        let changed_engine =
-            compute_node_fingerprint("sql", Some(&serde_json::json!({"q": 1})), "v2", &base, None);
         let changed_hash = {
             let identities = vec![file_identity(
                 "/data/x.csv",
                 Some(fp(10, 1234, Some("sha256:feedface"))),
             )];
-            compute_node_fingerprint(
+            compute_node_fingerprint_with_revision(
                 "sql",
                 Some(&serde_json::json!({"q": 1})),
                 "v1",
+                "aaaaaaaaaaaa",
                 &identities,
                 None,
             )
         };
-        let nospec = compute_node_fingerprint("sql", None, "v1", &base, None);
-
+        let nospec =
+            compute_node_fingerprint_with_revision("sql", None, "v1", "aaaaaaaaaaaa", &base, None);
         for candidate in [
             changed_kind,
             changed_spec,

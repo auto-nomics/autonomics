@@ -92,6 +92,14 @@ pub enum DagError {
     #[error("scheduler: {0}")]
     Schedule(String),
 
+    /// The submission protocol withheld the entire non-idempotent payload.
+    /// This applies only to this attempt, never to an older unresolved intent.
+    #[error("SSH submission payload NOT_SENT: {message}; local SSH child stopped: {local_ssh_stopped}")]
+    SubmissionNotSent {
+        message: String,
+        local_ssh_stopped: bool,
+    },
+
     /// An edge is wired but its predecessor completed without publishing a
     /// value on the connected output port, so the input was never delivered.
     /// Detected at dispatch time — previously the input was dropped silently
@@ -227,6 +235,7 @@ impl DagError {
                 format!("edge {from_node}.{from_port} -> {to_node}.{to_port}: {reason}"),
             ),
             Self::Schedule(s) => ("schedule", s.clone()),
+            Self::SubmissionNotSent { .. } => ("submission_not_sent", self.to_string()),
             Self::PortTypeMismatch {
                 from_node,
                 from_port,

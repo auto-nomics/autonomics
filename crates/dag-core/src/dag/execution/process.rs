@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::contract::{TaskAttemptReceipt, TaskDispatch, TaskResources, task_timeout};
 use super::local::LocalTaskExecutor;
@@ -23,6 +24,10 @@ use crate::value::FileRef;
 /// environment bindings, and output file patterns relative to its workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessTaskSpec {
+    /// Explicit SIF execution on a configured Slurm backend. Never ignored by
+    /// the ordinary host-process transport.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<super::apptainer::ApptainerContainer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -44,7 +49,14 @@ impl ProcessTaskSpec {
     }
 
     pub fn validate(&self) -> Result<(), DagError> {
-        if self.script.is_none() && self.command.is_empty() {
+        if let Some(container) = &self.container {
+            container.validate(self)?;
+        }
+        let uses_image_defaults = self
+            .container
+            .as_ref()
+            .is_some_and(|container| container.mode == super::apptainer::ApptainerMode::Run);
+        if self.script.is_none() && self.command.is_empty() && !uses_image_defaults {
             return Err(DagError::Schedule(
                 "process task requires either script or command".into(),
             ));
@@ -166,41 +178,18 @@ impl ProcessTaskTransport {
         })
     }
 
-    fn parse_process(dispatch: &TaskDispatch) -> Result<ProcessTaskSpec, DagError> {
-        if dispatch.spec.kind != "process" {
-            return Err(DagError::Schedule(format!(
-                "process transport cannot execute task kind `{}`",
-                dispatch.spec.kind
-            )));
-        }
-        let process = ProcessTaskSpec::parse(&dispatch.spec.spec)?;
-
-        let expected_ports = dispatch
-            .spec
-            .outputs
-            .iter()
-            .map(|output| output.port)
-            .collect::<BTreeSet<_>>();
-        let actual_ports = process
-            .outputs
-            .iter()
-            .map(|output| output.port)
-            .collect::<BTreeSet<_>>();
-        if expected_ports != actual_ports {
-            return Err(DagError::Schedule(format!(
-                "process outputs must match task output ports; expected {expected_ports:?}, got {actual_ports:?}"
-            )));
-        }
-        Ok(process)
-    }
-
     fn prepare(
         &self,
         dispatch: TaskDispatch,
         artifacts: Vec<FileRef>,
         lease_id: &str,
     ) -> Result<PreparedProcessTask, DagError> {
-        let process = Self::parse_process(&dispatch)?;
+        let process = parse_process_task(&dispatch)?;
+        if process.container.is_some() {
+            return Err(DagError::Schedule(
+                "Apptainer process tasks require a configured Slurm transport; host execution refused".into(),
+            ));
+        }
         let workspace = self
             .workspace_root
             .join(sanitize_path_component(&dispatch.spec.id))
@@ -290,62 +279,43 @@ impl ProcessTaskTransport {
         };
         command.current_dir(&workspace).kill_on_drop(true);
 
-        let mut environment = process.env.clone();
-        environment.insert("AUTONOMICS_TASK_ID".into(), dispatch.spec.id.clone());
-        environment.insert(
-            "AUTONOMICS_WORKSPACE".into(),
-            workspace.to_string_lossy().into_owned(),
-        );
-        environment.insert(
-            "AUTONOMICS_INPUTS".into(),
-            serde_json::to_string(&inputs_by_name).map_err(|error| {
-                DagError::Schedule(format!("cannot serialize process inputs: {error}"))
-            })?,
-        );
-        environment.insert(
-            "AUTONOMICS_INPUT_COUNT".into(),
-            inputs_by_name
-                .values()
-                .map(|paths| paths.len())
-                .sum::<usize>()
-                .to_string(),
-        );
-        for (name, paths) in &inputs_by_name {
-            let joined = paths
-                .iter()
-                .map(|path| path.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(":");
-            environment.insert(
-                format!("AUTONOMICS_INPUT_{}", sanitize_env_name(name)),
-                joined,
-            );
-            for (index, path) in paths.iter().enumerate() {
-                environment.insert(
-                    format!("AUTONOMICS_INPUT_{}_{index}", sanitize_env_name(name)),
-                    path.to_string_lossy().into_owned(),
-                );
-            }
-        }
-        let process_environment = environment.clone();
-        for (name, value) in environment {
+        let process_environment = process_task_environment(
+            &dispatch.spec.id,
+            &workspace.to_string_lossy(),
+            &process.env,
+            &inputs_by_name,
+        )?;
+        for (name, value) in &process_environment {
             command.env(name, value);
         }
 
         let stdout_path = workspace.join("stdout.log");
         let stderr_path = workspace.join("stderr.log");
-        let stdout = std::fs::File::create(&stdout_path).map_err(|error| {
+        let open_log = |path: &Path| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(path)
+        };
+        let stdout = open_log(&stdout_path).map_err(|error| {
             DagError::Schedule(format!(
                 "cannot create process stdout `{}`: {error}",
                 stdout_path.display()
             ))
         })?;
-        let stderr = std::fs::File::create(&stderr_path).map_err(|error| {
+        let stderr = open_log(&stderr_path).map_err(|error| {
             DagError::Schedule(format!(
                 "cannot create process stderr `{}`: {error}",
                 stderr_path.display()
             ))
         })?;
+        let stdout_capture = stdout
+            .try_clone()
+            .map_err(|error| DagError::Schedule(error.to_string()))?;
+        let stderr_capture = stderr
+            .try_clone()
+            .map_err(|error| DagError::Schedule(error.to_string()))?;
         command.stdout(stdout).stderr(stderr);
         if let Some(script) = &process.script {
             if cfg!(windows) {
@@ -430,8 +400,41 @@ impl ProcessTaskTransport {
                     )));
                 }
                 let mut artifacts = Vec::with_capacity(files.len());
+                let publication_port = dispatch
+                    .spec
+                    .spec
+                    .get("typed_dispatch")
+                    .and_then(|envelope| envelope.get("output_directories"))
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|directories| {
+                        directories
+                            .values()
+                            .any(|port| port.as_u64() == Some(u64::from(output.port)))
+                    });
                 for path in files {
-                    artifacts.push(FileRef::local(&path, format_for_path(&path))?);
+                    let mut artifact = FileRef::local(&path, format_for_path(&path))?;
+                    if publication_port {
+                        let (size, hash) = crate::fingerprint::file_sha256(&artifact.path, None)
+                            .await
+                            .ok_or_else(|| {
+                                DagError::Schedule(
+                                    "cannot measure process publication output".into(),
+                                )
+                            })?;
+                        if artifact.fingerprint
+                            != FileRef::local(&path, artifact.format.clone())?.fingerprint
+                            || artifact
+                                .fingerprint
+                                .as_ref()
+                                .is_none_or(|fp| fp.size != size)
+                        {
+                            return Err(DagError::Schedule(
+                                "process publication output changed during hashing".into(),
+                            ));
+                        }
+                        artifact.fingerprint.as_mut().unwrap().content_hash = Some(hash);
+                    }
+                    artifacts.push(artifact);
                 }
                 artifacts_by_port.insert(output.port, artifacts);
             }
@@ -454,6 +457,15 @@ impl ProcessTaskTransport {
             },
             workspace: workspace.to_string_lossy().into_owned(),
             task_manifest: manifest,
+            stdout_log: capture_process_log(
+                stdout_capture,
+                &workspace.join("transport-stdout.log"),
+            ),
+            stderr_log: capture_process_log(
+                stderr_capture,
+                &workspace.join("transport-stderr.log"),
+            ),
+            log_capture_error: None,
             output_artifacts,
             output_artifacts_by_port: artifacts_by_port,
         };
@@ -468,6 +480,45 @@ impl ProcessTaskTransport {
             ))
         })?;
         Ok(receipt)
+    }
+}
+
+fn capture_process_log(mut source: std::fs::File, target: &Path) -> Option<FileRef> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let mut capture = || -> std::io::Result<FileRef> {
+        const LIMIT: u64 = 64 * 1024;
+        let before = source.metadata()?;
+        source.seek(SeekFrom::Start(before.len().saturating_sub(LIMIT)))?;
+        let mut data = if before.len() > LIMIT {
+            b"[truncated: final 65536 bytes follow]\n".to_vec()
+        } else {
+            vec![]
+        };
+        (&mut source).take(LIMIT).read_to_end(&mut data)?;
+        let after = source.metadata()?;
+        if before.len() != after.len() || before.modified()? != after.modified()? {
+            return Err(std::io::Error::other("process log changed during capture"));
+        }
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(target)?;
+        output.write_all(&data)?;
+        output.sync_all()?;
+        let mut file =
+            FileRef::local(target, Some("text".into())).map_err(std::io::Error::other)?;
+        file.fingerprint
+            .as_mut()
+            .expect("local file has a fingerprint")
+            .content_hash = Some(format!("{:x}", Sha256::digest(&data)));
+        Ok(file)
+    };
+    match capture() {
+        Ok(file) => Some(file),
+        Err(error) => {
+            tracing::warn!(%error, "cannot capture process log");
+            None
+        }
     }
 }
 
@@ -525,7 +576,7 @@ impl TaskTransport for ProcessTaskTransport {
     }
 }
 
-fn sanitize_path_component(value: &str) -> String {
+pub(super) fn sanitize_path_component(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|character| {
@@ -547,7 +598,7 @@ fn sanitize_path_component(value: &str) -> String {
     }
 }
 
-fn sanitize_env_name(value: &str) -> String {
+pub(super) fn sanitize_env_name(value: &str) -> String {
     value
         .chars()
         .map(|character| {
@@ -560,14 +611,14 @@ fn sanitize_env_name(value: &str) -> String {
         .collect()
 }
 
-fn format_for_path(path: &Path) -> Option<String> {
+pub(super) fn format_for_path(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase())
         .filter(|extension| !extension.is_empty())
 }
 
-fn render_process_script(
+pub(super) fn render_process_script(
     script: &str,
     environment: &BTreeMap<String, String>,
     inputs_by_name: &BTreeMap<String, Vec<PathBuf>>,
@@ -592,4 +643,84 @@ fn render_process_script(
         rendered = rendered.replace(&format!("{{{{env.{name}}}}}"), value);
     }
     rendered
+}
+
+/// Parse and cross-check the `process` payload of a dispatched task: the
+/// kind must be `process`, the spec must validate, and the declared output
+/// ports must match the task contract. Shared by the local process
+/// transport and the Slurm transport so both backends enforce the same
+/// payload contract.
+pub(super) fn parse_process_task(dispatch: &TaskDispatch) -> Result<ProcessTaskSpec, DagError> {
+    if dispatch.spec.kind != "process" {
+        return Err(DagError::Schedule(format!(
+            "process transport cannot execute task kind `{}`",
+            dispatch.spec.kind
+        )));
+    }
+    let process = ProcessTaskSpec::parse(&dispatch.spec.spec)?;
+
+    let expected_ports = dispatch
+        .spec
+        .outputs
+        .iter()
+        .map(|output| output.port)
+        .collect::<BTreeSet<_>>();
+    let actual_ports = process
+        .outputs
+        .iter()
+        .map(|output| output.port)
+        .collect::<BTreeSet<_>>();
+    if expected_ports != actual_ports {
+        return Err(DagError::Schedule(format!(
+            "process outputs must match task output ports; expected {expected_ports:?}, got {actual_ports:?}"
+        )));
+    }
+    Ok(process)
+}
+
+/// Build the environment a `process` task runs under: the spec's own
+/// bindings plus the `AUTONOMICS_*` task-identity variables. Shared by the
+/// local process transport and the Slurm transport so a remote job sees the
+/// identical environment contract.
+pub(super) fn process_task_environment(
+    task_id: &str,
+    workspace: &str,
+    env: &BTreeMap<String, String>,
+    inputs_by_name: &BTreeMap<String, Vec<PathBuf>>,
+) -> Result<BTreeMap<String, String>, DagError> {
+    let mut environment = env.clone();
+    environment.insert("AUTONOMICS_TASK_ID".into(), task_id.to_string());
+    environment.insert("AUTONOMICS_WORKSPACE".into(), workspace.to_string());
+    environment.insert(
+        "AUTONOMICS_INPUTS".into(),
+        serde_json::to_string(inputs_by_name).map_err(|error| {
+            DagError::Schedule(format!("cannot serialize process inputs: {error}"))
+        })?,
+    );
+    environment.insert(
+        "AUTONOMICS_INPUT_COUNT".into(),
+        inputs_by_name
+            .values()
+            .map(|paths| paths.len())
+            .sum::<usize>()
+            .to_string(),
+    );
+    for (name, paths) in inputs_by_name {
+        let joined = paths
+            .iter()
+            .map(|path| path.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(":");
+        environment.insert(
+            format!("AUTONOMICS_INPUT_{}", sanitize_env_name(name)),
+            joined,
+        );
+        for (index, path) in paths.iter().enumerate() {
+            environment.insert(
+                format!("AUTONOMICS_INPUT_{}_{index}", sanitize_env_name(name)),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+    }
+    Ok(environment)
 }

@@ -37,6 +37,16 @@ fn evidence_max_bytes() -> Option<u64> {
 }
 
 impl LocalTaskWorkspace {
+    /// Stable within one invocation, different for every coordinator attempt.
+    /// Keep logical node IDs out of artifact paths shared by repeated runs.
+    pub(super) fn attempt_key(&self) -> String {
+        use sha2::Digest;
+        format!(
+            "attempt-{:x}",
+            sha2::Sha256::digest(self.manifest.path.as_bytes())
+        )
+    }
+
     pub(super) fn create(
         root: &std::path::Path,
         submission: &TaskSubmission,
@@ -96,8 +106,13 @@ impl LocalTaskWorkspace {
     async fn write_dataframe(
         path: &std::path::Path,
         dataframe: &datafusion::prelude::DataFrame,
+        transport_data: bool,
     ) -> Result<FileRef, DagError> {
-        let cap = evidence_max_bytes();
+        let cap = if transport_data {
+            None
+        } else {
+            evidence_max_bytes()
+        };
         let schema = dataframe.schema();
         let batches = dataframe.clone().collect().await.map_err(|error| {
             DagError::Schedule(format!("cannot materialize DataFrame output: {error}"))
@@ -159,52 +174,112 @@ impl LocalTaskWorkspace {
         FileRef::local(path, Some("arrow".into()))
     }
 
-    async fn read_source(
-        path: &str,
-        storage: Option<&vfs::OpendalFileStorage>,
-    ) -> Result<Vec<u8>, DagError> {
-        if let Some(virtual_path) = path.strip_prefix("vfs://") {
-            let storage = storage.ok_or_else(|| {
-                DagError::Schedule(format!(
-                    "cannot stage VFS input `{path}` because no object store is configured"
-                ))
-            })?;
-            let length = storage
-                .content_length(virtual_path)
-                .await
-                .map_err(|error| {
-                    DagError::Schedule(format!("cannot stat VFS input `{path}`: {error}"))
-                })?;
-            let bytes = storage
-                .read_range(virtual_path, 0..length)
-                .await
-                .map_err(|error| {
-                    DagError::Schedule(format!("cannot read VFS input `{path}`: {error}"))
-                })?;
-            return Ok(bytes.to_vec());
-        }
-
-        let local_path = path.strip_prefix("file://").unwrap_or(path);
-        std::fs::read(local_path).map_err(|error| {
-            DagError::Schedule(format!("cannot stage local input `{local_path}`: {error}"))
-        })
-    }
-
     async fn stage_file(
         input_root: &std::path::Path,
         sequence: &mut u64,
         source: &FileRef,
         storage: Option<&vfs::OpendalFileStorage>,
+        reporter: Option<&crate::dag::node_event::NodeReporter>,
     ) -> Result<FileRef, DagError> {
-        let bytes = Self::read_source(&source.path, storage).await?;
-        let staged_path = input_root.join(format!("input-{}.bin", *sequence));
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let phase = format!("staging_input:{}", *sequence);
+        if let Some(reporter) = reporter {
+            reporter.phase(&phase, "preparing task input");
+        }
+        let basename = std::path::Path::new(&source.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("input.bin");
+        let staged_path = input_root.join(format!(
+            "input-{}-{}",
+            *sequence,
+            super::process::sanitize_path_component(basename)
+        ));
         *sequence += 1;
-        std::fs::write(&staged_path, bytes).map_err(|error| {
-            DagError::Schedule(format!(
-                "cannot write staged input `{}`: {error}",
-                staged_path.display()
-            ))
-        })?;
+        let failure = |error: std::io::Error| {
+            DagError::Schedule(format!("task input staging failed: {error}"))
+        };
+        let mut output = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged_path)
+            .await
+            .map_err(failure)?;
+        let mut current = 0u64;
+        let mut last = std::time::Instant::now();
+        let total;
+        if let Some(virtual_path) = source.path.strip_prefix("vfs://") {
+            let storage = storage
+                .ok_or_else(|| DagError::Schedule("task input requires object storage".into()))?;
+            total = storage
+                .content_length(virtual_path)
+                .await
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
+            if let Some(reporter) = reporter {
+                reporter.phase_progress(&phase, 0, Some(total), "bytes");
+            }
+            while current < total {
+                let end = (current + 8 * 1024 * 1024).min(total);
+                let buffer = storage
+                    .read_range(virtual_path, current..end)
+                    .await
+                    .map_err(|e| DagError::Schedule(e.to_string()))?;
+                let bytes = buffer.to_bytes();
+                let take = ((end - current) as usize).min(bytes.len());
+                if take == 0 {
+                    return Err(DagError::Schedule(
+                        "task input ended before its declared length".into(),
+                    ));
+                }
+                output.write_all(&bytes[..take]).await.map_err(failure)?;
+                current += take as u64;
+                if last.elapsed() >= std::time::Duration::from_secs(1) {
+                    if let Some(reporter) = reporter {
+                        reporter.phase_progress(&phase, current, Some(total), "bytes");
+                    }
+                    last = std::time::Instant::now();
+                }
+            }
+        } else {
+            let mut input =
+                tokio::fs::File::open(source.path.strip_prefix("file://").unwrap_or(&source.path))
+                    .await
+                    .map_err(failure)?;
+            let before = input.metadata().await.map_err(failure)?;
+            total = before.len();
+            if let Some(reporter) = reporter {
+                reporter.phase_progress(&phase, 0, Some(total), "bytes");
+            }
+            let mut buffer = vec![0; 1024 * 1024];
+            loop {
+                let count = input.read(&mut buffer).await.map_err(failure)?;
+                if count == 0 {
+                    break;
+                }
+                output.write_all(&buffer[..count]).await.map_err(failure)?;
+                current += count as u64;
+                if last.elapsed() >= std::time::Duration::from_secs(1) {
+                    if let Some(reporter) = reporter {
+                        reporter.phase_progress(&phase, current, Some(total), "bytes");
+                    }
+                    last = std::time::Instant::now();
+                }
+            }
+            let after = input.metadata().await.map_err(failure)?;
+            if current != total
+                || after.len() != total
+                || before.modified().ok() != after.modified().ok()
+            {
+                return Err(DagError::Schedule(
+                    "task input changed while staging".into(),
+                ));
+            }
+        }
+        output.sync_all().await.map_err(failure)?;
+        drop(output);
+        if let Some(reporter) = reporter {
+            reporter.phase_progress(&phase, current, Some(total), "bytes");
+        }
         let mut staged = FileRef::local(&staged_path, source.format.clone())?;
         if source.fingerprint.is_some() {
             staged.fingerprint = source.fingerprint.clone();
@@ -233,6 +308,28 @@ impl LocalTaskWorkspace {
         submission: &mut TaskSubmission,
         storage: Option<&vfs::OpendalFileStorage>,
     ) -> Result<(), DagError> {
+        self.stage_inputs_with_remote(submission, storage, None)
+            .await?;
+        Ok(())
+    }
+
+    pub(super) async fn stage_inputs_with_remote(
+        &mut self,
+        submission: &mut TaskSubmission,
+        storage: Option<&vfs::OpendalFileStorage>,
+        artifact_store: Option<&dyn super::traits::TaskArtifactStore>,
+    ) -> Result<BTreeMap<(u8, usize), FileRef>, DagError> {
+        self.stage_inputs_with_remote_observed(submission, storage, artifact_store, None)
+            .await
+    }
+
+    pub(super) async fn stage_inputs_with_remote_observed(
+        &mut self,
+        submission: &mut TaskSubmission,
+        storage: Option<&vfs::OpendalFileStorage>,
+        artifact_store: Option<&dyn super::traits::TaskArtifactStore>,
+        reporter: Option<&crate::dag::node_event::NodeReporter>,
+    ) -> Result<BTreeMap<(u8, usize), FileRef>, DagError> {
         let input_root = self.root.join("inputs");
         std::fs::create_dir_all(&input_root).map_err(|error| {
             DagError::Schedule(format!(
@@ -242,12 +339,32 @@ impl LocalTaskWorkspace {
         })?;
         let mut sequence = 0u64;
         let mut staged_by_port = std::collections::BTreeMap::<u8, Vec<String>>::new();
+        let mut remote_inputs = BTreeMap::new();
 
         for input in &mut submission.inputs {
             if let NodeValue::DataFrame(dataframe) = &input.data {
+                if let (Some(store), Some(origin)) = (
+                    artifact_store,
+                    super::retained_arrow::pure_retained_arrow_origin(dataframe),
+                ) {
+                    if let Some(remote) = store.remote_input(origin, storage).await? {
+                        staged_by_port
+                            .entry(input.port)
+                            .or_default()
+                            .push(remote.path.clone());
+                        remote_inputs.insert((input.port, 0), remote);
+                        continue;
+                    }
+                }
                 let path = input_root.join(format!("input-{sequence}.arrow"));
                 sequence += 1;
-                let artifact = Self::write_dataframe(&path, dataframe).await?;
+                if let Some(reporter) = reporter {
+                    reporter.phase(
+                        "serializing_inputs",
+                        "serializing a table for remote execution",
+                    );
+                }
+                let artifact = Self::write_dataframe(&path, dataframe, true).await?;
                 staged_by_port
                     .entry(input.port)
                     .or_default()
@@ -270,8 +387,18 @@ impl LocalTaskWorkspace {
                 NodeValue::DataFrame(_) | NodeValue::Channel(_) => continue,
             };
             let mut staged_files = Vec::with_capacity(sources.len());
-            for source in &sources {
-                let staged = Self::stage_file(&input_root, &mut sequence, source, storage).await?;
+            for (index, source) in sources.iter().enumerate() {
+                let resolved = if let Some(store) = artifact_store {
+                    store.remote_input(source.clone(), storage).await?
+                } else {
+                    None
+                };
+                let staged = if let Some(remote) = resolved {
+                    remote_inputs.insert((input.port, index), remote.clone());
+                    remote
+                } else {
+                    Self::stage_file(&input_root, &mut sequence, source, storage, reporter).await?
+                };
                 staged_by_port
                     .entry(input.port)
                     .or_default()
@@ -295,7 +422,7 @@ impl LocalTaskWorkspace {
             }
         }
         self.manifest = Self::write_manifest(&self.root, submission)?;
-        Ok(())
+        Ok(remote_inputs)
     }
 
     pub(super) async fn publish_outputs(
@@ -323,7 +450,7 @@ impl LocalTaskWorkspace {
             match value {
                 NodeValue::DataFrame(dataframe) => {
                     let path = output_root.join(format!("port-{port}.arrow"));
-                    let artifact = Self::write_dataframe(&path, dataframe).await?;
+                    let artifact = Self::write_dataframe(&path, dataframe, false).await?;
                     port_artifacts.push(artifact);
                 }
                 NodeValue::File(file) => port_artifacts.push(file.clone()),
@@ -442,6 +569,9 @@ impl LocalTaskWorkspace {
                 .unwrap_or(if status == "success" { 0 } else { 1 }),
             workspace: self.root.to_string_lossy().into_owned(),
             task_manifest: self.manifest.clone(),
+            stdout_log: details.stdout_log.clone(),
+            stderr_log: details.stderr_log.clone(),
+            log_capture_error: None,
             output_artifacts: details.output_artifacts.clone(),
             output_artifacts_by_port: details.output_artifacts_by_port.clone(),
         };

@@ -26,6 +26,8 @@ pub struct DagNodeView {
     pub dirty: bool,
     pub inputs: Vec<DagPortView>,
     pub outputs: Vec<DagPortView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<super::live::ExecutionObservation>,
 }
 
 /// One dataflow edge, including exact port wiring.
@@ -44,9 +46,51 @@ pub struct DagTuiSnapshot {
     pub nodes: Vec<DagNodeView>,
     /// Edges in graph insertion order.
     pub edges: Vec<DagEdgeView>,
+    #[serde(default)]
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub observed_at_ms: u64,
 }
 
 impl DagTuiSnapshot {
+    /// DOT from the independent projection, including live phase/counters.
+    /// JSON string quoting is also valid DOT string quoting; identifiers and
+    /// labels can never inject additional graph statements.
+    pub fn to_dot(&self) -> String {
+        let quote = |text: &str| serde_json::to_string(text).expect("string serialization");
+        let mut dot = String::from("digraph DAG {\n");
+        for node in &self.nodes {
+            let mut label = format!("{}\n{}\n{:?}", node.id, node.kind, node.status);
+            if let Some(execution) = &node.execution {
+                label.push_str(&format!("\n{}", execution.phase));
+                if let Some(current) = execution.current {
+                    label.push_str(&format!(
+                        " {current}/{} {}",
+                        execution.total.map_or("?".into(), |n| n.to_string()),
+                        execution.unit.as_deref().unwrap_or("items")
+                    ));
+                }
+            }
+            dot.push_str(&format!(
+                "  {} [label={}];\n",
+                quote(&node.id),
+                quote(&label)
+            ));
+        }
+        for edge in &self.edges {
+            dot.push_str(&format!(
+                "  {} -> {} [label={}];\n",
+                quote(&edge.from),
+                quote(&edge.to),
+                quote(&format!("{} -> {}", edge.from_port, edge.to_port))
+            ));
+        }
+        dot.push_str("}\n");
+        dot
+    }
+
     pub fn node(&self, id: &str) -> Option<&DagNodeView> {
         self.nodes.iter().find(|node| node.id == id)
     }

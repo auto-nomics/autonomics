@@ -313,15 +313,30 @@ pub struct RunRecord {
 #[derive(Clone)]
 pub struct DagHistory {
     conn: turso::Connection,
+    strict_evidence: bool,
 }
 
 impl DagHistory {
     /// Open (or create) a local history database at `path`.
     ///
     /// Creates the schema if it doesn't exist. The database file is created
-    /// on first use.
+    /// on first use. Damaged WAL requires explicit recovery in every mode;
+    /// no automatic sidecar quarantine or shortened-history fallback is allowed.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, DagError> {
-        let path = path.as_ref();
+        Self::open_local(path.as_ref(), false).await
+    }
+
+    /// Formal evidence may not discard damaged WAL sidecars and silently
+    /// create a shorter history. Corruption requires explicit investigation.
+    pub async fn open_strict(path: impl AsRef<Path>) -> Result<Self, DagError> {
+        Self::open_local(path.as_ref(), true).await
+    }
+
+    pub fn is_strict_evidence(&self) -> bool {
+        self.strict_evidence
+    }
+
+    async fn open_local(path: &Path, strict_evidence: bool) -> Result<Self, DagError> {
         let path_str = path
             .to_str()
             .ok_or_else(|| DagError::History("history db path is not valid UTF-8".into()))?;
@@ -332,17 +347,29 @@ impl DagHistory {
             })?;
         }
 
-        match Self::try_open_local(path_str).await {
-            Ok(history) => Ok(history),
-            Err(error) if is_torn_wal_error(&error) => {
-                tracing::warn!(
-                    db = path_str,
-                    error = %error,
-                    "DAG history WAL torn on open; quarantining sidecars and retrying"
-                );
-                quarantine_wal_sidecars(path);
-                Self::try_open_local(path_str).await
+        Self::open_once(path, strict_evidence, || Self::try_open_local(path_str)).await
+    }
+
+    async fn open_once<F, Fut>(
+        path: &Path,
+        strict_evidence: bool,
+        attempt: F,
+    ) -> Result<Self, DagError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Self, DagError>>,
+    {
+        match attempt().await {
+            Ok(mut history) => {
+                history.strict_evidence = strict_evidence;
+                Ok(history)
             }
+            Err(error) if is_torn_wal_error(&error) => Err(DagError::History(format!(
+                "RECOVERY_REQUIRED: DAG history WAL cannot be read at {}: {error}. \
+                 Automatic WAL quarantine/retry is disabled; preserve the database \
+                 and sidecars and investigate a verified offline copy",
+                path.display()
+            ))),
             Err(error) => Err(error),
         }
     }
@@ -365,7 +392,10 @@ impl DagHistory {
             .await
             .map_err(|e| DagError::History(format!("set busy_timeout: {e}")))?;
 
-        let history = Self { conn };
+        let history = Self {
+            conn,
+            strict_evidence: false,
+        };
         history.init_schema().await?;
         Ok(history)
     }
@@ -381,7 +411,10 @@ impl DagHistory {
             .connect()
             .map_err(|e| DagError::History(format!("failed to connect in-memory db: {e}")))?;
 
-        let history = Self { conn };
+        let history = Self {
+            conn,
+            strict_evidence: false,
+        };
         history.init_schema().await?;
         Ok(history)
     }
@@ -895,40 +928,6 @@ fn is_torn_wal_error(error: &DagError) -> bool {
     error.to_string().contains("short read on WAL frame")
 }
 
-fn quarantine_wal_sidecars(db_path: &Path) {
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-
-    for suffix in ["-wal", "-shm", "-twal", "-tshm"] {
-        let sidecar = append_path_suffix(db_path, suffix);
-        if !sidecar.exists() {
-            continue;
-        }
-        let target = append_path_suffix(db_path, &format!("{suffix}.corrupt-{timestamp}"));
-        match std::fs::rename(&sidecar, &target) {
-            Ok(()) => tracing::warn!(
-                from = %sidecar.display(),
-                to = %target.display(),
-                "quarantined DAG history WAL sidecar"
-            ),
-            Err(error) => tracing::warn!(
-                from = %sidecar.display(),
-                to = %target.display(),
-                error = %error,
-                "failed to quarantine DAG history WAL sidecar"
-            ),
-        }
-    }
-}
-
-fn append_path_suffix(path: &Path, suffix: &str) -> std::path::PathBuf {
-    let mut result = path.as_os_str().to_owned();
-    result.push(suffix);
-    std::path::PathBuf::from(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -950,33 +949,83 @@ mod tests {
         }
     }
 
-    #[test]
-    fn quarantine_moves_history_sidecars_without_touching_main_db() {
-        let directory = tempfile::tempdir().unwrap();
-        let db_path = directory.path().join("dag-history.db");
-        std::fs::write(&db_path, b"main-db").unwrap();
-        std::fs::write(append_path_suffix(&db_path, "-wal"), b"wal").unwrap();
-        std::fs::write(append_path_suffix(&db_path, "-tshm"), b"tshm").unwrap();
+    #[tokio::test]
+    async fn torn_wal_open_refuses_retry_in_both_modes_and_preserves_evidence() {
+        for strict in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("dag-history.db");
+            let fixtures = [
+                ("dag-history.db", b"main".as_slice()),
+                ("dag-history.db-wal", b"committed runs"),
+                ("dag-history.db-tshm", b"index"),
+            ];
+            for (name, bytes) in fixtures {
+                std::fs::write(dir.path().join(name), bytes).unwrap();
+            }
+            let calls = std::sync::atomic::AtomicUsize::new(0);
+            let result = DagHistory::open_once(&path, strict, || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::ready(Err(DagError::History(
+                    "I/O error: short read on WAL frame at offset 4096: expected 4096 bytes, got 0"
+                        .into(),
+                )))
+            })
+            .await;
+            let error = match result {
+                Ok(_) => panic!("torn WAL must refuse startup"),
+                Err(e) => e,
+            };
+            assert!(error.to_string().contains("RECOVERY_REQUIRED"));
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(
+                std::fs::read_dir(dir.path()).unwrap().count(),
+                fixtures.len()
+            );
+            for (name, bytes) in fixtures {
+                assert_eq!(std::fs::read(dir.path().join(name)).unwrap(), bytes);
+            }
+        }
+    }
 
-        quarantine_wal_sidecars(&db_path);
-
-        assert_eq!(std::fs::read(&db_path).unwrap(), b"main-db");
-        assert!(!append_path_suffix(&db_path, "-wal").exists());
-        assert!(!append_path_suffix(&db_path, "-tshm").exists());
-        let names: Vec<String> = std::fs::read_dir(directory.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
-            .collect();
+    #[tokio::test]
+    async fn strict_open_preserves_committed_history_and_rejects_corrupt_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("strict-history.db");
+        let id = {
+            let history = DagHistory::open_strict(&path).await.unwrap();
+            history
+                .commit(
+                    "formal",
+                    &DagManifest::default(),
+                    None::<&RunReportStub>,
+                    "TEST evidence",
+                )
+                .await
+                .unwrap()
+        };
+        let reopened = DagHistory::open_strict(&path).await.unwrap();
+        assert!(reopened.is_strict_evidence());
+        assert_eq!(reopened.ref_head("formal").await.unwrap().unwrap().id, id);
+        drop(reopened);
+        assert!(!DagHistory::open(&path).await.unwrap().is_strict_evidence());
         assert!(
-            names
-                .iter()
-                .any(|name| name.starts_with("dag-history.db-wal.corrupt-"))
+            !DagHistory::open_in_memory()
+                .await
+                .unwrap()
+                .is_strict_evidence()
         );
-        assert!(
-            names
-                .iter()
-                .any(|name| name.starts_with("dag-history.db-tshm.corrupt-"))
-        );
+        let broken = dir.path().join("broken.db");
+        let bytes = b"NOT A DATABASE: preserve failure evidence";
+        std::fs::write(&broken, bytes).unwrap();
+        assert!(DagHistory::open_strict(&broken).await.is_err());
+        assert_eq!(std::fs::read(&broken).unwrap(), bytes);
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("corrupt-")
+        }));
     }
 
     #[tokio::test]

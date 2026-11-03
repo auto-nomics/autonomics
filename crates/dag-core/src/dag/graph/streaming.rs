@@ -137,7 +137,7 @@ impl DAG {
                     *count = count.saturating_sub(1);
                 }
             }
-            self.statuses.insert(target.clone(), RuntimeStatus::Running);
+            self.set_live_status(target.clone(), RuntimeStatus::Running);
             stream
                 .node_items
                 .entry(target.clone())
@@ -148,6 +148,9 @@ impl DAG {
                 .get(&target)
                 .map(Vec::len)
                 .unwrap_or_default();
+            NodeReporter::new(target.clone(), tx.clone())
+                .with_live_view(self.live_view.clone())
+                .phase_progress("streaming", input_count as u64, None, "items");
             stream.node_counts.insert(target.clone(), input_count);
 
             let outputs = {
@@ -179,7 +182,8 @@ impl DAG {
                     .entry(output_port)
                     .or_default()
                     .push(output_item.clone());
-                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone())
+                    .with_live_view(self.live_view.clone());
                 reporter
                     .emit_channel_item(output_port, sequence, output_item)
                     .await;
@@ -251,7 +255,8 @@ impl DAG {
                     .get_mut(&output_port)
                     .unwrap()
                     .push(output_item.clone());
-                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone())
+                    .with_live_view(self.live_view.clone());
                 reporter
                     .emit_channel_item(output_port, sequence, output_item)
                     .await;
@@ -279,7 +284,7 @@ impl DAG {
                 outputs.insert(port, crate::ChannelValue { items });
             }
             self.outputs.insert(target.clone(), outputs);
-            self.statuses.insert(target.clone(), RuntimeStatus::Success);
+            self.set_live_status(target.clone(), RuntimeStatus::Success);
             self.fingerprints.remove(&target);
 
             let ports = self
@@ -294,7 +299,8 @@ impl DAG {
                     .and_then(|items| items.get(&port))
                     .map(Vec::len)
                     .unwrap_or_default();
-                let reporter = NodeReporter::new(target.clone(), tx.clone());
+                let reporter = NodeReporter::new(target.clone(), tx.clone())
+                    .with_live_view(self.live_view.clone());
                 stream.pending_closes.insert(target.clone());
                 reporter.close_channel(port, item_count as u64).await;
             }

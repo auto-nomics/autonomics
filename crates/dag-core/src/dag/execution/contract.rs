@@ -72,6 +72,7 @@ pub struct TaskSpec {
 /// Where a process input came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskInputSource {
+    SpecFile { pointer: String },
     UpstreamPort { from: String, from_port: u8 },
     ScatterItem { axis: String },
     DynamicFanoutItem { axis: String },
@@ -163,6 +164,13 @@ pub struct TaskAttemptReceipt {
     pub exit_code: i32,
     pub workspace: String,
     pub task_manifest: FileRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout_log: Option<FileRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr_log: Option<FileRef>,
+    /// Log collection failed independently of the worker's terminal outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_capture_error: Option<String>,
     /// File-backed outputs that must be transferred back to the coordinator.
     pub output_artifacts: Vec<FileRef>,
     /// File-backed outputs grouped by the port that produced them.

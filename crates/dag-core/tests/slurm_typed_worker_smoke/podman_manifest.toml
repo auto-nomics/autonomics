@@ -1,0 +1,50 @@
+schema_version = 1
+plugin_name = "hpc_probe"
+
+[image]
+reference = "IMAGE_REFERENCE_PLACEHOLDER"
+
+[[nodes]]
+kind = "typed_podman_allocation_observe"
+desc = "Synthetic root-only OCI observer"
+doc = "Technical Slurm allocation and namespace observation; no scientific payload."
+timeout_secs = 120
+canonical_input_sources = true
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [{ path = "proof.json", format = "json" }]
+
+[nodes.command]
+interpreter = "/observer"
+argv = ["--output", "$output0", "--input", "$input0", "--mode", "observe"]
+
+[nodes.resources]
+cpus = 1.0
+memory = "1GiB"
+network = "isolated"
+read_only_rootfs = true
+pull_policy = "never"
+
+[[nodes]]
+kind = "typed_podman_allocation_pids_denied"
+desc = "Synthetic unsupported explicit PID request"
+doc = "Technical denial: the shared site PID hierarchy must not satisfy this per-task limit."
+timeout_secs = 120
+canonical_input_sources = true
+
+[nodes.ports]
+inputs = [{ type = "file" }]
+outputs = [{ path = "proof.json", format = "json" }]
+
+[nodes.command]
+interpreter = "/observer"
+argv = ["--output", "$output0", "--input", "$input0", "--mode", "observe"]
+
+[nodes.resources]
+cpus = 1.0
+memory = "1GiB"
+pids_limit = 32
+network = "isolated"
+read_only_rootfs = true
+pull_policy = "never"

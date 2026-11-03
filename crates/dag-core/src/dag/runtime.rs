@@ -129,17 +129,49 @@ pub enum InputHashing {
     /// Nextflow-style semantics at the cost of reading every unhashed input
     /// on every run.
     Content,
+    /// Re-read every file input and require a complete SHA256. An unreadable
+    /// file or disagreement with a recorded SHA256 aborts scheduling. This
+    /// mode never degrades to metadata, even for previously hashed inputs.
+    ContentRequired,
 }
+
+/// Trusted publisher invoked after output validation and before downstream
+/// release. A publication error fails the producer and skips descendants.
+/// Callers may canonicalize output locations while retaining their port types.
+pub type CompletionPublisher = std::sync::Arc<
+    dyn Fn(
+            &str,
+            &str,
+            super::graph::PortOutputs,
+            Option<&NodeRunDetails>,
+        ) -> Result<super::graph::PortOutputs, DagError>
+        + Send
+        + Sync,
+>;
+
+/// Trusted host validation immediately before a cached output is released.
+/// This is a byte/provenance check, not research authorization. A false result
+/// recomputes the node; an error aborts rather than consuming altered evidence.
+pub type CheckpointReuseValidator = std::sync::Arc<
+    dyn Fn(&str, &str, &super::graph::PortOutputs) -> Result<bool, DagError> + Send + Sync,
+>;
 
 /// Scheduler tuning knobs.
 #[derive(Clone)]
 pub struct SchedulerConfig {
     /// Maximum number of nodes running concurrently (semaphore permits).
+    /// Zero disables the per-DAG concurrency gate, including for nodes added
+    /// by dynamic fanout. A NodeCtx global semaphore, when present, still
+    /// applies independently. Local defaults remain CPU-derived.
     pub max_concurrency: usize,
+    pub completion_publisher: Option<CompletionPublisher>,
+    /// Per-invocation capability. Projected incremental execution requires it;
+    /// the formal host installs only independently replayed CAS checkpoints.
+    pub checkpoint_reuse_validator: Option<CheckpointReuseValidator>,
     /// When set, ready jobs are dispatched in fixed-size barrier waves: no
     /// job from wave N+1 starts until every dispatched job in wave N has
-    /// terminated. `max_concurrency` remains the upper bound for actually
-    /// running jobs.
+    /// terminated. A nonzero `max_concurrency` remains the upper bound for
+    /// actually running jobs; zero does not introduce a concurrency limit.
     pub wave_size: Option<usize>,
     /// When `true`, [`NodeReport::output_rows`] is populated by forcing every
     /// successful node's `DataFrame` to be collected (i.e. `SELECT COUNT(*)`
@@ -186,6 +218,8 @@ impl Default for SchedulerConfig {
             .unwrap_or(1);
         Self {
             max_concurrency: cpus,
+            completion_publisher: None,
+            checkpoint_reuse_validator: None,
             wave_size: None,
             compute_row_counts: false,
             incremental: false,
@@ -257,8 +291,16 @@ pub struct DagErrorReport {
 /// [`crate::dag::node_event::NodeReporter::set_run_details`] and carried to
 /// [`NodeReport::execution`] through the terminal `JobResult` — so it survives
 /// both the success and the failure path.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeRunDetails {
+    /// Measured software evidence from the actual remote execution path.
+    /// Absent on historical runs. Placement pins and heartbeats cannot fill it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_software: Option<serde_json::Value>,
+    /// Independently observed scheduler termination, separate from software
+    /// identity and payload success. Never populated from an output file alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_stop: Option<serde_json::Value>,
     /// Local or remote task workspace retained for debugging and resume.
     pub workspace: Option<String>,
     /// Machine-readable task manifest containing process identity and I/O contracts.
@@ -270,6 +312,11 @@ pub struct NodeRunDetails {
     pub image_digest: Option<String>,
     /// Process exit code (`0` on the success path).
     pub exit_code: Option<i32>,
+    /// Resolved in-container executable and arguments submitted to the runtime.
+    /// Environment values are deliberately excluded; credentials belong there.
+    /// Absent on historical records or when execution was never attempted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_argv: Option<Vec<String>>,
     /// Per-execution identity shared with the run's artifact directory (for
     /// container nodes: the container name, which also names the scratch
     /// directory and the `{artifact_prefix}/{run_name}/` output subtree).
@@ -395,6 +442,9 @@ pub struct NodeReport {
     pub item_key: Option<String>,
     /// Payload type of the first output value, when the node produced output.
     pub output_type: Option<String>,
+    /// Complete File/FileSet output inventory for durable audit consumers.
+    /// Use port_assignments when wiring declared scalar output ports.
+    pub output_files: Vec<crate::value::FileRef>,
     /// File outputs keyed by the declared output port that produced them.
     ///
     /// This is the deterministic port contract and must be used when wiring
@@ -451,6 +501,8 @@ pub struct NodeReport {
 /// whether the whole run succeeded.
 #[derive(Debug)]
 pub struct RunReport {
+    /// Immutable operator target selected for this invocation.
+    pub execution_binding: Option<serde_json::Value>,
     pub ok: bool,
     /// Non-fatal runtime warnings, such as a successful DAG run whose
     /// history snapshot could not be persisted.
@@ -458,6 +510,8 @@ pub struct RunReport {
     /// Snapshot id committed after this run. `None` when history is absent,
     /// the snapshot commit failed, or an unchanged manifest was skipped.
     pub snapshot_id: Option<String>,
+    /// Actual invocation destinations, separate from the frozen DAG definition.
+    pub runtime_output_projection: Option<crate::runtime_output::RuntimeOutputProjection>,
     /// Engine-minted run id, populated by the data engine after the run
     /// record is persisted. Lets the agent's `run_dag` return carry the
     /// same id `dag_runs_log` queries against, so drill-down is one tool
@@ -484,10 +538,21 @@ impl Serialize for RunReport {
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = serializer.serialize_struct("RunReport", 10)?;
+        let mut st = serializer.serialize_struct(
+            "RunReport",
+            9 + usize::from(self.execution_binding.is_some())
+                + usize::from(self.runtime_output_projection.is_some())
+                + usize::from(self.run_id.is_some()),
+        )?;
         st.serialize_field("ok", &self.ok)?;
+        if let Some(binding) = &self.execution_binding {
+            st.serialize_field("execution_binding", binding)?;
+        }
         st.serialize_field("warnings", &self.warnings)?;
         st.serialize_field("snapshot_id", &self.snapshot_id)?;
+        if let Some(projection) = &self.runtime_output_projection {
+            st.serialize_field("runtime_output_projection", projection)?;
+        }
         if let Some(run_id) = &self.run_id {
             st.serialize_field("run_id", run_id)?;
         }
@@ -496,15 +561,16 @@ impl Serialize for RunReport {
         st.serialize_field("logical_nodes", &self.logical_nodes)?;
         st.serialize_field("waves", &self.waves)?;
 
-        // Convert hashbrown HashMaps to std HashMaps for serialization.
-        let statuses: std::collections::HashMap<&str, RuntimeStatus> = self
+        // Formal history and outcome independently serialize this report.
+        // Sorted keys preserve byte/CAS identity without changing wire fields.
+        let statuses: BTreeMap<&str, RuntimeStatus> = self
             .statuses
             .iter()
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
         st.serialize_field("statuses", &statuses)?;
 
-        let errors: std::collections::HashMap<&str, DagErrorReport> = self
+        let errors: BTreeMap<&str, DagErrorReport> = self
             .errors
             .iter()
             .map(|(k, v)| (k.as_str(), v.to_report()))
@@ -539,6 +605,168 @@ mod tests {
     use arrow_schema::{DataType, Field, Fields};
 
     use super::*;
+
+    fn multi_node_report(reverse_insertion: bool) -> RunReport {
+        let mut report = RunReport {
+            execution_binding: None,
+            ok: false,
+            warnings: vec!["SYNTHETIC serialization fixture".into()],
+            snapshot_id: Some("SYNTHETIC-snapshot".into()),
+            runtime_output_projection: None,
+            run_id: Some("SYNTHETIC-run".into()),
+            resource: Default::default(),
+            nodes: Vec::new(),
+            logical_nodes: Vec::new(),
+            waves: Vec::new(),
+            statuses: Default::default(),
+            errors: Default::default(),
+        };
+        let mut ids: Vec<_> = (0..16).collect();
+        if reverse_insertion {
+            ids.reverse();
+        }
+        for index in ids {
+            let id = format!("node-{index:02}");
+            let failed = index % 2 == 0;
+            report.statuses.insert(
+                id.clone(),
+                if failed {
+                    RuntimeStatus::Failed
+                } else {
+                    RuntimeStatus::Success
+                },
+            );
+            if failed {
+                report
+                    .errors
+                    .insert(id, DagError::Schedule(format!("SYNTHETIC failure {index}")));
+            }
+        }
+        report
+            .statuses
+            .insert("错误-β".into(), RuntimeStatus::Failed);
+        report.errors.insert(
+            "错误-β".into(),
+            DagError::UnknownNode("SYNTHETIC Unicode 节点".into()),
+        );
+        report
+    }
+
+    #[test]
+    fn run_report_serialization_reuses_identical_bytes_and_cas_identity() {
+        use sha2::{Digest, Sha256};
+
+        let report = multi_node_report(false);
+        let first = serde_json::to_vec(&report).unwrap();
+        let first_identity = Sha256::digest(&first);
+        // The old serializer constructed new randomly seeded std HashMaps on
+        // every call, even though this same report had not changed at all.
+        for _ in 0..64 {
+            let next = serde_json::to_vec(&report).unwrap();
+            assert_eq!(next, first);
+            assert_eq!(Sha256::digest(&next), first_identity);
+        }
+        let reversed = multi_node_report(true);
+        assert_eq!(serde_json::to_vec(&reversed).unwrap(), first);
+    }
+
+    #[test]
+    fn run_report_status_and_error_maps_keep_sorted_keys_and_complete_values() {
+        let report = multi_node_report(true);
+        let statuses: BTreeMap<_, _> = report
+            .statuses
+            .iter()
+            .map(|(key, value)| (key.as_str(), *value))
+            .collect();
+        let errors: BTreeMap<_, _> = report
+            .errors
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.to_report()))
+            .collect();
+        let raw = serde_json::to_string(&report).unwrap();
+        // Check bytes, not only Value equality (which would hide key order).
+        assert!(raw.ends_with(&format!(
+            "\"statuses\":{},\"errors\":{}}}",
+            serde_json::to_string(&statuses).unwrap(),
+            serde_json::to_string(&errors).unwrap(),
+        )));
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 10);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["snapshot_id"], "SYNTHETIC-snapshot");
+        assert_eq!(value["run_id"], "SYNTHETIC-run");
+        assert!(value.get("runtime_output_projection").is_none());
+        assert_eq!(value["statuses"].as_object().unwrap().len(), 17);
+        assert_eq!(value["errors"].as_object().unwrap().len(), 9);
+        for (id, status) in &statuses {
+            assert_eq!(
+                value["statuses"][*id],
+                serde_json::to_value(status).unwrap()
+            );
+        }
+        for (id, error) in &errors {
+            assert_eq!(value["errors"][*id], serde_json::to_value(error).unwrap());
+        }
+        assert_eq!(value["errors"]["错误-β"]["kind"], "unknown_node");
+        assert_eq!(
+            value["errors"]["错误-β"]["message"],
+            "SYNTHETIC Unicode 节点"
+        );
+    }
+
+    #[test]
+    fn runtime_projection_is_optional_and_serializes_its_exact_identity() {
+        let mut report = RunReport {
+            execution_binding: None,
+            ok: true,
+            warnings: Vec::new(),
+            snapshot_id: None,
+            runtime_output_projection: None,
+            run_id: None,
+            resource: Default::default(),
+            nodes: Vec::new(),
+            logical_nodes: Vec::new(),
+            waves: Vec::new(),
+            statuses: Default::default(),
+            errors: Default::default(),
+        };
+        let legacy = serde_json::to_value(&report).unwrap();
+        assert!(legacy.get("run_id").is_none());
+        assert_eq!(legacy.as_object().unwrap().len(), 9);
+        assert!(legacy.get("runtime_output_projection").is_none());
+        let root = tempfile::tempdir().unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let run_id = "ba4fbb5f-c9c1-4a2a-9a11-1bfe0377d5a1";
+        let projection = crate::runtime_output::RuntimeOutputProjection::new(
+            run_id.into(),
+            root.path().into(),
+            BTreeMap::from([(
+                root.path().join("logical"),
+                root.path().join(run_id).join("physical"),
+            )]),
+        )
+        .unwrap()
+        .initialize_run_directory()
+        .unwrap();
+        report.runtime_output_projection = Some(projection.clone());
+        report.run_id = Some(run_id.into());
+        let mut projected = serde_json::to_value(&report).unwrap();
+        assert_eq!(projected.as_object().unwrap().len(), 11);
+        assert_eq!(
+            projected.as_object_mut().unwrap().remove("run_id"),
+            Some(serde_json::json!(run_id))
+        );
+        let actual = projected
+            .as_object_mut()
+            .unwrap()
+            .remove("runtime_output_projection")
+            .unwrap();
+        assert_eq!(actual, serde_json::to_value(projection).unwrap());
+        assert_eq!(projected, legacy);
+    }
 
     fn fields(n: usize, ty: DataType) -> Fields {
         let vec: Vec<Arc<Field>> = (0..n)

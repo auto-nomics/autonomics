@@ -3118,6 +3118,7 @@ dependencies = [
  "datafusion",
  "futures",
  "glob",
+ "libc",
  "opendal",
  "petgraph",
  "schemars 1.2.2",

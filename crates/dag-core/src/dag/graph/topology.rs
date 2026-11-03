@@ -105,6 +105,7 @@ impl DAG {
             };
             let ports = node.ports();
             nodes.push(super::super::view::DagNodeView {
+                execution: None,
                 kind: node.kind().to_string(),
                 status: self.status(&id).unwrap_or_default(),
                 dirty: self.is_dirty(&id),
@@ -142,7 +143,11 @@ impl DAG {
             })
             .collect();
 
-        super::super::view::DagTuiSnapshot { nodes, edges }
+        super::super::view::DagTuiSnapshot {
+            nodes,
+            edges,
+            ..Default::default()
+        }
     }
 
     /// Build a human-readable cycle path like `A → B → C → A` from the first

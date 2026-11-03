@@ -13,6 +13,10 @@ use crate::dag::runtime::{
 };
 use crate::value::NodeValue;
 
+#[cfg(test)]
+#[path = "row_count_regressions.rs"]
+mod row_count_regressions;
+
 /// Accumulates the physical reports under one logical node into a
 /// [`LogicalRunSummary`].
 #[derive(Default)]
@@ -288,6 +292,22 @@ impl DAG {
                     })
                     .unwrap_or_default();
 
+                let output_files = self
+                    .outputs
+                    .get(id)
+                    .map(|outputs| {
+                        outputs
+                            .values()
+                            .flat_map(|value| match value {
+                                NodeValue::File(file) => vec![file.clone()],
+                                NodeValue::FileSet(files) => files.clone(),
+                                NodeValue::DataFrame(_) => Vec::new(),
+                                NodeValue::Channel(_) => Vec::new(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 // Extract output schema from the first output port's DataFrame.
                 // `schema()` only inspects the LogicalPlan — it does NOT trigger
                 // execution, so it's safe (and free) to query unconditionally.
@@ -351,6 +371,7 @@ impl DAG {
                     scatter_axis: physical_job.and_then(|job| job.axis.clone()),
                     item_key: physical_job.and_then(|job| job.item_key.clone()),
                     output_type,
+                    output_files,
                     port_assignments,
                     output_schema,
                     output_rows,
@@ -381,7 +402,7 @@ impl DAG {
     /// Execution model: each count future is spawned on the runtime and we
     /// `join_all` them so multiple nodes' counts run in parallel instead of
     /// blocking the report on the slowest single scan.
-    async fn collect_row_counts(&self, all_ids: &[NodeId]) -> HashMap<NodeId, usize> {
+    pub(super) async fn collect_row_counts(&self, all_ids: &[NodeId]) -> HashMap<NodeId, usize> {
         // Build a list of (id, owned future). Cloning `DataFrame` is cheap (it
         // wraps an `Arc<LogicalPlan>`), so we can move each clone into its own
         // future without contention.
@@ -401,29 +422,12 @@ impl DAG {
             pairs.push((id_owned, Box::pin(async move { owned.count().await })));
         }
 
-        // Join all counts concurrently. If any future panics or returns an
-        // error, fall back to 0 for that node — the row count is purely
-        // diagnostic and shouldn't poison the report.
-        let futs: Vec<_> = pairs.into_iter().map(|(_, f)| f).collect();
+        let (identities, futs): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
         let results = futures::future::join_all(futs).await;
-
-        // We need the ids in the order that matches `results`. Rebuild the
-        // ordered list by walking `all_ids` and skipping nodes that had no
-        // output DataFrame — keeping the result-index aligned with the source
-        // ordering.
-        let mut counts: HashMap<NodeId, usize> = HashMap::new();
-        let mut result_iter = results.into_iter();
-        for id in all_ids {
-            if self
-                .outputs
-                .get(id)
-                .and_then(|d| d.values().next())
-                .is_some()
-                && let Some(res) = result_iter.next()
-            {
-                counts.insert(id.clone(), res.unwrap_or(0));
-            }
-        }
-        counts
+        identities
+            .into_iter()
+            .zip(results)
+            .filter_map(|(identity, result)| result.ok().map(|count| (identity, count)))
+            .collect()
     }
 }

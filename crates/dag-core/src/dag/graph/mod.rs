@@ -99,6 +99,7 @@ pub type Result<T> = std::result::Result<T, DagError>;
 /// fighting the graph's borrow.
 #[derive(Default)]
 pub struct DAG {
+    pub live_view: super::live::LiveDagView,
     /// Node payloads, keyed by id. Public so external tooling can introspect.
     pub nodes: HashMap<NodeId, Box<dyn DagNode>>,
     /// Connectivity index (edge weight carries the port label).
@@ -148,6 +149,7 @@ pub struct DAG {
 impl Clone for DAG {
     fn clone(&self) -> Self {
         Self {
+            live_view: super::live::LiveDagView::default(),
             nodes: self.nodes.clone(),
             graph: self.graph.clone(),
             id_to_idx: self.id_to_idx.clone(),
@@ -172,6 +174,17 @@ impl Clone for DAG {
 }
 
 impl DAG {
+    fn set_live_status(&mut self, id: NodeId, status: RuntimeStatus) -> Option<RuntimeStatus> {
+        self.live_view.status(&id, status);
+        self.statuses.insert(id, status)
+    }
+
+    fn publish_live_statuses(&self) {
+        let mut view = self.tui_snapshot();
+        view.running = true;
+        self.live_view.publish(view);
+    }
+
     /// Query the runtime status of a node. Returns `None` if the DAG has never
     /// been run.
     pub fn status(&self, id: &str) -> Option<RuntimeStatus> {
@@ -189,6 +202,51 @@ impl DAG {
         self.fingerprints.get(id).map(String::as_str)
     }
 
+    /// Restore only private, caller-verified file checkpoints. The scheduler
+    /// still computes current fingerprints and checks file staleness before
+    /// deciding whether to reuse them. No cached status bypasses readiness.
+    pub fn restore_file_checkpoint(
+        &mut self,
+        id: &str,
+        fingerprint: &str,
+        outputs: PortOutputs,
+    ) -> Result<()> {
+        let node = self
+            .nodes
+            .get(id)
+            .ok_or_else(|| DagError::UnknownNode(id.into()))?;
+        if fingerprint.len() != 64
+            || !fingerprint
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || outputs.is_empty()
+        {
+            return Err(DagError::Schedule("invalid checkpoint identity".into()));
+        }
+        for (port, value) in outputs.iter() {
+            let file = value.as_file()?;
+            let declared = node
+                .ports()
+                .output_port(*port)
+                .ok_or_else(|| DagError::Schedule("checkpoint port absent".into()))?;
+            if !declared.data_type.accepts(value.data_type())
+                || !declared.accepts_format(file.format.as_deref())
+                || file
+                    .fingerprint
+                    .as_ref()
+                    .and_then(|f| f.content_hash.as_ref())
+                    .is_none()
+            {
+                return Err(DagError::Schedule(
+                    "checkpoint output lacks typed content identity".into(),
+                ));
+            }
+        }
+        self.outputs.insert(id.into(), outputs);
+        self.fingerprints.insert(id.into(), fingerprint.into());
+        Ok(())
+    }
+
     /// Install the factory used to materialize runtime-discovered jobs.
     pub fn set_dynamic_node_builder(&mut self, builder: DynamicNodeBuilder) {
         self.dynamic_node_builder = Some(builder);
@@ -197,6 +255,25 @@ impl DAG {
     /// Replace the backend used to execute dispatched physical tasks.
     pub fn set_task_executor(&mut self, executor: std::sync::Arc<dyn TaskExecutor>) {
         self.task_executor = TaskExecutorHandle { executor };
+    }
+
+    /// Clone the installed policy router for bounded auxiliary output reads.
+    /// The caller must still bind the run and use normal executor admission.
+    pub fn task_executor(&self) -> Arc<dyn TaskExecutor> {
+        self.task_executor.executor.clone()
+    }
+
+    /// Start an isolated graph under the same deployment execution policy.
+    /// Nodes, outputs, checkpoints, statuses and graph-specific resource
+    /// overrides are deliberately excluded. In particular, a new agent
+    /// session must not replace an installed remote router with local defaults.
+    pub fn empty_with_execution_policy(&self) -> Self {
+        Self {
+            task_executor: self.task_executor.clone(),
+            default_task_resources: self.default_task_resources.clone(),
+            dynamic_node_builder: self.dynamic_node_builder.clone(),
+            ..Self::default()
+        }
     }
 
     /// Set resources for one concrete physical node.

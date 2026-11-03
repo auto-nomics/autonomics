@@ -60,6 +60,31 @@ impl crate::dag::DagNode for WaveTrackingNode {
 }
 
 #[tokio::test]
+async fn idle_cache_release_preserves_failure_and_worker_evidence() -> Result<()> {
+    let workspace_root = tempfile::tempdir().unwrap();
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(LocalTaskExecutor::with_workspace_root(workspace_root.path())));
+    dag.add_node_with_spec(
+        "sleep".into(), Box::new(SleepingNode::new(std::time::Duration::from_secs(5))),
+        "sleeping_test_node".into(), serde_json::json!({"seconds":5}),
+    )?;
+    dag.set_task_resources("sleep", TaskResources {
+        cpus: Some(1), memory_bytes: Some(1024), max_duration_ms: Some(10),
+    })?;
+    let report = dag.run(&SchedulerConfig::default(), &test_ctx(), None).await?;
+    assert!(!report.ok);
+    let failed = report.nodes.iter().find(|n| n.id == "sleep").unwrap();
+    assert!(failed.error.as_ref().unwrap().message.contains("exceeded max_duration_ms"));
+    assert!(dag.node_run_details.contains_key("sleep"));
+    let details = serde_json::to_value(dag.node_run_details.get("sleep")).unwrap();
+    dag.release_output_cache();
+    dag.release_output_cache();
+    assert_eq!(dag.status("sleep"), Some(RuntimeStatus::Failed));
+    assert_eq!(serde_json::to_value(dag.node_run_details.get("sleep")).unwrap(), details);
+    Ok(())
+}
+
+#[tokio::test]
 async fn local_executor_enforces_task_timeout() -> Result<()> {
     let workspace_root = tempfile::tempdir().unwrap();
     let mut dag = DAG::default();
@@ -546,5 +571,407 @@ async fn wave_size_creates_a_strict_barrier() -> Result<()> {
         first_wave_finishes < second_wave_starts,
         "wave 1 must finish before wave 2 starts: {events:?}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn wave_scheduler_rejects_unpublished_evidence_before_downstream_dispatch() -> Result<()> {
+    let root = tempfile::tempdir().unwrap();
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(LocalTaskExecutor::with_workspace_root(
+        root.path(),
+    )));
+    let source = FileOutputNode::new(root.path().join("source.tsv"));
+    let source_runs = Arc::clone(&source.runs);
+    dag.add_node_with_spec(
+        "source".into(),
+        Box::new(source),
+        "file_output_test_node".into(),
+        serde_json::json!({"role": "producer"}),
+    )?;
+    dag.add_node(
+        "downstream".into(),
+        Box::new(EchoNode::from_ports(
+            NodePorts::new()
+                .add_input_port_of_type(None, PortType::File)
+                .add_output_port_of_type(None, PortType::File),
+        )),
+    )?;
+    dag.add_edge("source", "downstream", 0, 0)?;
+    let published = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&published);
+    let report = dag
+        .run(
+            &SchedulerConfig {
+                wave_size: Some(1),
+                completion_publisher: Some(Arc::new(move |id, fingerprint, _, _| {
+                    assert_eq!(fingerprint.len(), 64);
+                    recorded.lock().unwrap().push(id.to_string());
+                    Err(crate::dag::DagError::Schedule(
+                        "durable evidence publication refused".into(),
+                    ))
+                })),
+                ..SchedulerConfig::default()
+            },
+            &test_ctx(),
+            None,
+        )
+        .await?;
+    assert!(!report.ok);
+    assert_eq!(source_runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(report.status("source"), Some(RuntimeStatus::Failed));
+    assert_eq!(report.status("downstream"), Some(RuntimeStatus::Skipped));
+    assert_eq!(*published.lock().unwrap(), ["source"]);
+    assert!(dag.output("source").is_none());
+    assert!(dag.output("downstream").is_none());
+    assert!(
+        report
+            .nodes
+            .iter()
+            .find(|n| n.id == "source")
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("durable evidence publication refused")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn wave_scheduler_passes_only_published_artifact_references_to_consumers() -> Result<()> {
+    let root = tempfile::tempdir().unwrap();
+    let published_path = root.path().join("private-published.tsv");
+    let expected_path = published_path.to_string_lossy().into_owned();
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(LocalTaskExecutor::with_workspace_root(
+        root.path(),
+    )));
+    dag.add_node_with_spec(
+        "source".into(),
+        Box::new(FileOutputNode::new(root.path().join("scratch.tsv"))),
+        "file_output_test_node".into(),
+        serde_json::json!({"role": "producer"}),
+    )?;
+    dag.add_node(
+        "downstream".into(),
+        Box::new(EchoNode::from_ports(
+            NodePorts::new()
+                .add_input_port_of_type(None, PortType::File)
+                .add_output_port_of_type(None, PortType::File),
+        )),
+    )?;
+    dag.add_edge("source", "downstream", 0, 0)?;
+    let published = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&published);
+    let report = dag
+        .run(
+            &SchedulerConfig {
+                wave_size: Some(1),
+                completion_publisher: Some(Arc::new(move |id, _, outputs, _| {
+                    recorded.lock().unwrap().push(id.to_string());
+                    let file = outputs.get(&0).unwrap().as_file()?;
+                    if id == "source" {
+                        std::fs::copy(&file.path, &published_path)
+                            .map_err(|e| crate::dag::DagError::Schedule(e.to_string()))?;
+                        let mut result = crate::dag::graph::PortOutputs::new();
+                        result.insert_file(0, crate::value::FileRef::local(&published_path, None)?);
+                        Ok(result)
+                    } else {
+                        assert_eq!(file.path, expected_path);
+                        assert_eq!(std::fs::read_to_string(&file.path).unwrap(), "run 1");
+                        Ok(outputs)
+                    }
+                })),
+                ..SchedulerConfig::default()
+            },
+            &test_ctx(),
+            None,
+        )
+        .await?;
+    assert!(report.ok, "{report:?}");
+    assert_eq!(report.status("downstream"), Some(RuntimeStatus::Success));
+    assert_eq!(*published.lock().unwrap(), ["source", "downstream"]);
+    assert_eq!(report.waves.len(), 2);
+    assert_eq!(
+        dag.output("downstream")
+            .unwrap()
+            .get(&0)
+            .unwrap()
+            .as_file()?
+            .path,
+        root.path().join("private-published.tsv").to_string_lossy()
+    );
+    Ok(())
+}
+
+struct CoordinatorProbe {
+    started: std::sync::atomic::AtomicUsize,
+    active: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
+    release: tokio::sync::Semaphore,
+}
+
+struct CoordinatorProbeGuard(Arc<CoordinatorProbe>);
+
+impl Drop for CoordinatorProbeGuard {
+    fn drop(&mut self) {
+        self.0
+            .active
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+struct CoordinatorProbeExecutor(Arc<CoordinatorProbe>);
+
+#[async_trait::async_trait]
+impl crate::dag::TaskExecutor for CoordinatorProbeExecutor {
+    fn name(&self) -> &'static str {
+        "coordinator-dispatch-probe"
+    }
+
+    async fn run(
+        &self,
+        mut execution: crate::dag::TaskExecution,
+    ) -> crate::dag::node_event::JobResult {
+        use crate::dag::node_event::JobResult;
+        use std::sync::atomic::Ordering::SeqCst;
+        let _active = if execution.node.kind() == "dynamic_item" {
+            let active = self.0.active.fetch_add(1, SeqCst) + 1;
+            let guard = CoordinatorProbeGuard(self.0.clone());
+            self.0.peak.fetch_max(active, SeqCst);
+            self.0.started.fetch_add(1, SeqCst);
+            let permit = tokio::select! {
+                permit = self.0.release.acquire() => permit.ok(),
+                _ = execution.cancellation.cancelled() => None,
+            };
+            let Some(permit) = permit else {
+                return JobResult::Failed {
+                    id: execution.submission.spec.id,
+                    error: crate::dag::DagError::Schedule("probe cancelled".into()),
+                    duration: std::time::Duration::ZERO,
+                    details: None,
+                };
+            };
+            permit.forget();
+            Some(guard)
+        } else {
+            None
+        };
+        let result = execution
+            .node
+            .execute(
+                &execution.engine_ctx,
+                &execution.submission.inputs,
+                &execution.reporter,
+            )
+            .await;
+        match result {
+            Ok(outputs) => JobResult::Success {
+                id: execution.submission.spec.id,
+                outputs,
+                duration: std::time::Duration::ZERO,
+                details: None,
+            },
+            Err(error) => JobResult::Failed {
+                id: execution.submission.spec.id,
+                error,
+                duration: std::time::Duration::ZERO,
+                details: None,
+            },
+        }
+    }
+}
+
+fn coordinator_probe() -> Arc<CoordinatorProbe> {
+    Arc::new(CoordinatorProbe {
+        started: 0.into(),
+        active: 0.into(),
+        peak: 0.into(),
+        release: tokio::sync::Semaphore::new(0),
+    })
+}
+
+async fn wait_for_coordinator_probe(probe: &CoordinatorProbe, count: usize) -> bool {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while probe.started.load(std::sync::atomic::Ordering::SeqCst) < count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
+fn independent_coordinator_probe_dag(probe: Arc<CoordinatorProbe>, count: usize) -> Result<DAG> {
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(CoordinatorProbeExecutor(probe)));
+    for index in 0..count {
+        dag.add_node_with_spec(
+            format!("probe-{index}"),
+            Box::new(DynamicItemNode::new(index.to_string())),
+            "dynamic_item".into(),
+            serde_json::json!({"value":index.to_string()}),
+        )?;
+    }
+    Ok(dag)
+}
+
+#[tokio::test]
+async fn zero_coordinator_limit_dispatches_sixteen_ready_nodes_while_explicit_limit_remains()
+-> Result<()> {
+    use std::sync::atomic::Ordering::SeqCst;
+    for limit in [0, 2] {
+        let probe = coordinator_probe();
+        let mut dag = independent_coordinator_probe_dag(probe.clone(), 16)?;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_cancel = cancel.clone();
+        let run = tokio::spawn(async move {
+            dag.run_with_external_cancel(
+                &SchedulerConfig {
+                    max_concurrency: limit,
+                    memory_guard: None,
+                    ..SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+                run_cancel,
+            )
+            .await
+        });
+        let expected = if limit == 0 { 16 } else { limit };
+        let ready = wait_for_coordinator_probe(&probe, expected).await;
+        if !ready {
+            cancel.cancel();
+        }
+        probe.release.add_permits(16);
+        let report = run.await.unwrap()?;
+        assert!(
+            ready,
+            "limit {limit} did not admit {expected} independent ready nodes"
+        );
+        assert!(report.ok, "{report:?}");
+        assert_eq!(probe.started.load(SeqCst), 16);
+        assert_eq!(probe.peak.load(SeqCst), expected);
+        assert_eq!(probe.active.load(SeqCst), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn zero_coordinator_limit_applies_to_dynamic_fanout_beyond_initial_graph_size() -> Result<()>
+{
+    use crate::dag::{ChannelOperator, DagNode, LogicalGraph, LogicalNode};
+    use std::sync::atomic::Ordering::SeqCst;
+    let logical = LogicalGraph::builder()
+        .add_node(LogicalNode::channel(
+            "source",
+            ChannelOperator::OfItems {
+                items: (0..16)
+                    .map(|index| serde_json::json!(index.to_string()))
+                    .collect(),
+            },
+        ))
+        .add_node(LogicalNode::dynamic_for_each(
+            "process",
+            "dynamic_item",
+            serde_json::json!({"value":"{{item}}"}),
+            "item",
+        ))
+        .add_node(LogicalNode::channel("collect", ChannelOperator::Collect))
+        .add_edge("source", "process", 0, 0)
+        .add_edge("process", "collect", 0, 0)
+        .build();
+    let physical = logical
+        .compile(|_, _| unreachable!("planner builds dynamic/channel nodes"))
+        .unwrap();
+    let probe = coordinator_probe();
+    let mut dag = DAG::default();
+    dag.set_task_executor(Arc::new(CoordinatorProbeExecutor(probe.clone())));
+    dag.set_dynamic_node_builder(Arc::new(|kind, spec| {
+        assert_eq!(kind, "dynamic_item");
+        Ok(Box::new(DynamicItemNode::new(
+            spec["value"].as_str().unwrap().to_owned(),
+        )) as Box<dyn DagNode>)
+    }));
+    dag.install_compiled_graph(logical, physical)?;
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let run_cancel = cancel.clone();
+    let run = tokio::spawn(async move {
+        let report = dag
+            .run_with_external_cancel(
+                &SchedulerConfig {
+                    max_concurrency: 0,
+                    memory_guard: None,
+                    ..SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+                run_cancel,
+            )
+            .await;
+        (dag, report)
+    });
+    let ready = wait_for_coordinator_probe(&probe, 16).await;
+    if !ready {
+        cancel.cancel();
+    }
+    probe.release.add_permits(16);
+    let (dag, report) = run.await.unwrap();
+    let report = report?;
+    assert!(
+        ready,
+        "all sixteen dynamically created items must enter before any is released"
+    );
+    assert!(report.ok, "{report:?}");
+    assert_eq!(probe.peak.load(SeqCst), 16);
+    assert_eq!(probe.active.load(SeqCst), 0);
+    let crate::value::NodeValue::Channel(values) = &dag.output("collect#0").unwrap()[&0] else {
+        panic!("dynamic gather did not produce a channel")
+    };
+    assert_eq!(values.items.len(), 16);
+    Ok(())
+}
+
+#[tokio::test]
+async fn optional_coordinator_gate_cancellation_releases_all_running_and_waiting_tasks()
+-> Result<()> {
+    use std::sync::atomic::Ordering::SeqCst;
+    for limit in [0, 2] {
+        let probe = coordinator_probe();
+        let mut dag = independent_coordinator_probe_dag(probe.clone(), 16)?;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_cancel = cancel.clone();
+        let run = tokio::spawn(async move {
+            dag.run_with_external_cancel(
+                &SchedulerConfig {
+                    max_concurrency: limit,
+                    memory_guard: None,
+                    ..SchedulerConfig::default()
+                },
+                &test_ctx(),
+                None,
+                run_cancel,
+            )
+            .await
+        });
+        let expected = if limit == 0 { 16 } else { limit };
+        let ready = wait_for_coordinator_probe(&probe, expected).await;
+        cancel.cancel();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap()?;
+        assert!(
+            ready,
+            "probe did not reach expected concurrency before cancellation"
+        );
+        assert!(!report.ok);
+        assert_eq!(
+            probe.active.load(SeqCst),
+            0,
+            "cancelled execution futures must be destroyed before returning"
+        );
+    }
     Ok(())
 }
