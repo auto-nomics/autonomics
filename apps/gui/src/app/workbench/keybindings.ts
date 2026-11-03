@@ -5,6 +5,7 @@
  */
 
 import { useEffect } from "react";
+import { openWikiSearch } from "@/features/wiki/wiki-state";
 import { openPalette } from "./command-registry";
 import { togglePanel, toggleSidebar } from "./workbench-store";
 
@@ -24,9 +25,12 @@ export function useWorkbenchKeybindings(): void {
       } else if (key === "j" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         togglePanel();
+      } else if (key === "k" && !event.shiftKey && !event.altKey) {
+        // Wiki quick search — global since the wiki panel is tabs now.
+        event.preventDefault();
+        openWikiSearch();
       }
-      // Ctrl+K stays with the wiki search dialog (M2 moves it into the
-      // command service); Ctrl+R stays with the prompt-history dialog.
+      // Ctrl+R stays with the prompt-history dialog.
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

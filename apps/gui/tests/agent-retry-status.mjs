@@ -89,7 +89,7 @@ try {
   // …and the status keeps "retrying" although the host frame said running
   // (workspace status row + inspector overview row + workbench status bar
   // all show it).
-  assert.equal(await page.getByText('retrying', { exact: true }).count(), 3, 'status must read retrying');
+  assert.equal(await page.getByText('retrying', { exact: true }).count(), 2, 'status must read retrying');
 
   // Stage 2: the request ultimately fails for good.
   sendFrame({ id: 4, event: 'agent', data: { agent: '/root/alpha', event: { Error: 'fatal boom' } } });
@@ -102,7 +102,7 @@ try {
   // The fatal error renders and the status flips to error (both rows).
   await assert.doesNotReject(() => page.getByText('fatal boom').waitFor({ state: 'visible' }));
   await page.waitForTimeout(300);
-  assert.equal(await page.getByText('error', { exact: true }).count(), 3, 'status must read error');
+  assert.equal(await page.getByText('error', { exact: true }).count(), 2, 'status must read error');
   assert.equal(await page.getByText('retrying', { exact: true }).count(), 0, 'retrying must not survive the fatal error');
   assert.equal(await page.locator('pre', { hasText: 'fatal boom' }).count(), 1, 'exactly one fatal error item');
 

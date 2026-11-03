@@ -18,8 +18,6 @@ try {
   page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR', e.stack); });
 
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
-  // Hold the event stream open so hydration runs exactly once.
-  await page.route('**/api/v1/events', () => new Promise(() => {}));
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     if (path === '/events') return;
@@ -27,13 +25,19 @@ try {
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     // Loose bib/wiki/system fixtures: the shell test cares about chrome, not content.
     if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], total: 0 } });
-    if (path.startsWith('/wiki/')) return route.fulfill({ json: { entries: [], total: 0, health: true } });
+    if (path === '/wiki/entries' || path.startsWith('/wiki/entries?')) return route.fulfill({ json: { entries: [{ id: 'w1', title: '词条甲', alias: [], tags: [], ctime: 1, mtime: 1 }] } });
+    if (path === '/wiki/entries/w1') return route.fulfill({ json: { id: 'w1', title: '词条甲', alias: [], tags: [], content: '# 词条甲\n\n正文。', ctime: 1, mtime: 1 } });
     if (path === '/model-config') return route.fulfill({ json: { models: [], providers: [] } });
     if (path === '/settings') return route.fulfill({ json: {} });
     if (path === '/profiles') return route.fulfill({ json: [] });
     if (path === '/gateway/status') return route.fulfill({ json: { running: true } });
+    if (path === '/storage/agents') return route.fulfill({ json: [{ id: 'a2', name: '/root/beta', config_json: { kind: 'researcher' }, created_at: 1, last_active: 1 }] });
+    if (path === '/agents' && route.request().method() === 'POST') return route.fulfill({ json: { path: '/root/beta' } });
     return route.fulfill({ status: 404, json: { error: 'Not mocked: ' + path } });
   });
+  // Registered last so LIFO precedence holds the SSE stream open (a
+  // fall-through to the network would 404 and flip the UI to reconnecting).
+  await page.route('**/api/v1/events', () => new Promise(() => {}));
   await page.goto(origin);
 
   // ── Shell chrome ──────────────────────────────────────────────────────
@@ -41,15 +45,15 @@ try {
   const rail = page.getByRole('navigation', { name: '工作台活动栏' });
   await rail.getByRole('button', { name: 'Bibliography' }).waitFor();
   await rail.getByRole('button', { name: 'Wiki' }).waitFor();
-  await rail.getByRole('button', { name: 'Agent 副窗' }).waitFor();
+  await rail.getByRole('button', { name: 'Agent', exact: true }).waitFor();
   await rail.getByRole('button', { name: 'CONFIG' }).waitFor();
   await page.locator('aside[data-slot=workbench-sidebar]').waitFor();
-  await page.getByRole('complementary', { name: 'Agent 辅助区' }).waitFor();
+  // The hydrate-seeded agent opens as a workbench editor tab; the chat
+  // portals into it (no auxiliary bar anymore).
+  const agentTab = page.locator('[data-editor-group] [role="tab"][title="/root/alpha"]');
+  await agentTab.waitFor();
   await page.getByPlaceholder('输入消息…').waitFor();
   await page.getByText('Gateway 已连接').waitFor();
-
-  // Editor area starts empty.
-  await page.getByText('搜索命令').waitFor();
 
   // ── Activity bar opens container editors ──────────────────────────────
   await rail.getByRole('button', { name: 'Bibliography' }).click();
@@ -67,15 +71,25 @@ try {
   await page.keyboard.press('Control+p');
   const palette = page.getByRole('dialog');
   await palette.getByText('Command palette').waitFor();
-  await palette.getByPlaceholder('Search commands').fill('wiki');
+  await palette.getByPlaceholder('Search commands').fill('knowledge');
   await palette.getByRole('button').first().click();
-  const wikiTab = page.getByRole('tab', { name: '知识库' });
-  await wikiTab.waitFor();
-  await page.locator('section[aria-label="知识库工作区"]').waitFor();
+  // Opening the knowledge base reveals the wiki container (browse view).
+  await page.locator('aside[data-slot=workbench-sidebar]').getByRole('group', { name: '知识库工作区' }).waitFor();
+  // Ctrl+K opens the wiki search over any editor.
+  await page.keyboard.press('Control+k');
+  const searchDialog = page.locator('[data-slot="dialog-content"]:visible');
+  await searchDialog.waitFor();
+  await page.keyboard.press('Escape');
+  await searchDialog.waitFor({ state: 'detached' });
 
-  // ── Tab close → empty state ──────────────────────────────────────────
-  await wikiTab.getByRole('button', { name: '关闭 知识库' }).click();
-  await wikiTab.waitFor({ state: 'detached' });
+  // ── Wiki entries are editor tabs ──────────────────────────────────────
+  await page.getByRole('button', { name: /词条甲/ }).first().click();
+  const wikiEntryTab = page.getByRole('tab', { name: '词条甲' });
+  await wikiEntryTab.waitFor();
+  const wikiSection = page.locator('section[aria-label="知识库工作区"]');
+  await wikiSection.getByRole('heading', { name: '词条甲' }).first().waitFor();
+  await wikiEntryTab.getByRole('button', { name: '关闭 词条甲' }).click();
+  await wikiEntryTab.waitFor({ state: 'detached' });
 
   // ── Split editor ─────────────────────────────────────────────────────
   await bibTab.click(); // bibliography active again
@@ -96,12 +110,20 @@ try {
   await page.keyboard.press('Control+j');
   await panel.waitFor({ state: 'hidden' });
 
-  // ── Aux toggle hides the docked chat without unmounting it ───────────
+  // ── Agent tab close → chat hides; resume brings it back ───────────────
   const composer = page.getByPlaceholder('输入消息…');
-  await page.getByLabel('Agent 副窗').click();
+  await agentTab.getByRole('button', { name: '关闭 alpha' }).click();
   await composer.waitFor({ state: 'hidden' });
-  await page.getByLabel('Agent 副窗').click();
+  // With no agent tab left the workspace picker is detached — the resume
+  // dialog (palette) is the re-entry path.
+  await page.keyboard.press('Control+Shift+p');
+  const resumePalette = page.locator('[data-slot="dialog-content"]:visible');
+  await resumePalette.getByPlaceholder('Search commands').fill('resume');
+  await resumePalette.getByRole('button').first().click();
+  const resumeDialog = page.locator('[data-slot="dialog-content"]:visible');
+  await resumeDialog.getByRole('button', { name: 'Resume' }).first().click();
   await composer.waitFor({ state: 'visible' });
+  await page.locator('[data-editor-group] [role="tab"][title="/root/beta"]').waitFor();
 
   // ── Layout persistence across a reload ───────────────────────────────
   const persisted = await page.evaluate(() => {
@@ -110,9 +132,11 @@ try {
   assert.ok(persisted && persisted.version === 2, 'v2 layout key must exist');
   assert.ok(persisted.groups.main.editors.some(e => e.kind === 'bibliography'), 'bibliography editor must persist');
   await page.reload();
+  // All pre-reload tabs restore (keep-alive bodies remount from persisted
+  // state); the active tab is the last activated one (the resumed agent).
   await page.getByRole('tab', { name: '文献与证据' }).waitFor();
-  await page.locator('section[aria-label="文献工作区"]').waitFor();
-  await page.getByRole('complementary', { name: 'Agent 辅助区' }).waitFor();
+  await page.getByRole('tab', { name: 'beta' }).waitFor();
+  await composer.waitFor({ state: 'visible' });
 
   // Keep-alive: editors opened before the reload remount from persisted
   // state, the config tab should still be in the strip.

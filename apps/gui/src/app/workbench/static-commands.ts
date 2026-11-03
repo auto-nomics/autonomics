@@ -10,19 +10,18 @@ import {
   closeEditor,
   closeSplit,
   getWorkbenchState,
+  openAgentEditor,
   openEditor,
   setContainer,
   setContainerView,
   setPanelTab,
   splitEditor,
-  toggleAux,
   togglePanel,
   toggleSidebar,
 } from "./workbench-store";
 
 registerCommands("shell", [
   { id: "workbench.toggle-sidebar", title: "Toggle side bar", category: "view", keywords: "ctrl b sidebar visibility", run: toggleSidebar },
-  { id: "workbench.toggle-aux", title: "Toggle agent auxiliary bar", category: "view", keywords: "chat assistant panel right", run: toggleAux },
   { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", run: togglePanel },
   { id: "workbench.panel-events", title: "Show event stream panel", category: "view", keywords: "events log frames", run: () => { setPanelTab("events"); } },
   { id: "workbench.panel-notices", title: "Show notices panel", category: "view", keywords: "notifications notices", run: () => { setPanelTab("notices"); } },
@@ -38,7 +37,11 @@ registerCommands("shell", [
   { id: "workbench.open-bibliography", title: "Open bibliography", category: "go", keywords: "papers library collections literature", run: openBibliographyEditor },
   { id: "workbench.open-wiki", title: "Open knowledge base", category: "go", keywords: "wiki knowledge entries", run: () => {
     setContainer("wiki");
-    openEditor({ kind: "wiki" });
+    setContainerView("wiki", "browse");
+  } },
+  { id: "workbench.open-agents", title: "Show agent overview", category: "go", keywords: "agents overview chat", run: () => {
+    setContainer("agents");
+    setContainerView("agents", "overview");
   } },
   { id: "workbench.open-config", title: "Open settings", category: "go", keywords: "config model provider preferences", run: () => openEditor({ kind: "config" }) },
   { id: "workbench.cycle-theme", title: "Cycle color theme", category: "view", keywords: "light dark system theme", run: () => { cycleThemeMode(); } },
@@ -51,4 +54,9 @@ export function openBibliographyEditor(workspace?: string): void {
   setContainer("bibliography");
   setContainerView("bibliography", view);
   openEditor({ kind: "bibliography", params: { workspace: view } });
+}
+
+/** Opens (or focuses) the agent's editor tab — the unified chat window. */
+export function openAgentTab(path: string): void {
+  if (path) openAgentEditor(path);
 }

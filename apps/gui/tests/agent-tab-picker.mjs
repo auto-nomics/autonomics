@@ -55,8 +55,9 @@ try {
   await page.getByText('alpha answer').waitFor({ state: 'visible' });
 
   // Viewport tabs: only the initially opened agent renders as a tab —
-  // live-but-unopened agents (beta, gamma) do NOT auto-open tabs.
-  const tab = (name) => page.locator('[data-tab-strip] button[title="/root/' + name + '"]');
+  // live-but-unopened agents (beta, gamma) do NOT auto-open tabs. Tabs
+  // live in the workbench editor strip; title = full path.
+  const tab = (name) => page.locator('[data-editor-group] [role="tab"][title="/root/' + name + '"]');
   await tab('alpha').waitFor({ state: 'visible' });
   assert.equal(await tab('beta').count(), 0, 'live agent without an open view has no tab');
 
@@ -68,7 +69,9 @@ try {
   const pickerInput = page.locator('[data-slot="command-input"]');
   await pickerInput.waitFor({ state: 'visible' });
   assert.equal(await search.getAttribute('aria-expanded'), 'true', 'search button reports expanded');
-  assert.equal(await tab('alpha').count(), 0, 'tab strip leaves the bar while picking');
+  // The workspace picker overlays the workspace header; workbench editor
+  // tabs (the unified strip) stay mounted beside it.
+  assert.equal(await tab('alpha').count(), 1, 'workbench tabs stay while picking');
   const items = page.locator('[data-slot="command-item"]');
   // One new-agent entry + the open tab (alpha) + the two live-unopened
   // agents (beta, gamma); no stored identities (page mocked empty).
@@ -85,7 +88,7 @@ try {
   await page.getByText('beta answer').waitFor({ state: 'visible' });
   await pickerInput.waitFor({ state: 'detached' });
   await tab('beta').waitFor({ state: 'visible' });
-  assert.equal(await page.getByRole('button', { name: 'beta', exact: true }).count(), 1, 'tab strip returns after picking');
+  assert.equal(await page.getByRole('tab', { name: 'beta', exact: true }).count(), 1, 'tab strip returns after picking');
 
   // Reopen: clicking an item directly also switches and closes.
   await search.click();

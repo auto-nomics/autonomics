@@ -373,23 +373,29 @@ try {
   await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
 
   // ── 检索弹窗:Ctrl+K / 图标唤起,BM25 结果行点击在新 tab 打开 ──
-  const searchDialog = page.locator('[data-slot="dialog-content"]');
+  const searchDialog = page.locator('[data-slot="dialog-content"]:visible');
   await page.keyboard.press('Control+K');
   await searchDialog.waitFor();
   await page.keyboard.press('Escape');
-  await searchDialog.waitFor({ state: 'hidden' });
-  await wiki.getByTitle('检索(Ctrl+K)').click();
+  await searchDialog.waitFor({ state: 'detached' });
+  // The search icon now lives in the wiki sidebar header.
+  await page.getByTitle('检索(Ctrl+K)').click();
   await searchDialog.locator('input').first().fill('番茄');
   await searchDialog.getByRole('button', { name: /番茄栽培/ }).first().waitFor({ timeout: 10_000 });
-  const tabCountBefore = await wiki.locator('[role="tab"]').count();
+  // One entry = one editor tab: clicking a result for an already-open
+  // entry reuses and activates its tab instead of duplicating it.
+  const tabCountBefore = await page.locator('[data-editor-group] [role="tab"]').count();
   await searchDialog.getByRole('button', { name: /番茄栽培/ }).first().click();
-  await searchDialog.waitFor({ state: 'hidden' });
-  await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
+  await searchDialog.waitFor({ state: 'detached' });
+  const entryTab = page.getByRole('tab', { name: '番茄栽培' });
+  await entryTab.waitFor();
   assert.equal(
-    await wiki.locator('[role="tab"]').count(),
-    tabCountBefore + 1,
-    'search result opens a new tab',
+    await page.locator('[data-editor-group] [role="tab"]').count(),
+    tabCountBefore,
+    'search result reuses the existing entry tab',
   );
+  assert.equal(await entryTab.getAttribute('aria-selected'), 'true', 'reused tab becomes active');
+  await page.getByRole('tab', { name: '番茄栽培' }).getByRole('button', { name: '关闭 番茄栽培' }).click();
 
   assert.deepEqual(errors, []);
   console.log('wiki siyuan modes: ok');

@@ -51,7 +51,7 @@ try {
   await page.goto(origin);
   await page.getByRole('button', { name: 'Search agents' }).click();
   await page.locator('[data-slot="command-item"]').filter({ hasText: '/root/beta' }).click();
-  await page.getByRole('button', { name: 'beta', exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'beta', exact: true }).waitFor();
   await page.evaluate(() => window.sendTestEvent(`id: 1\nevent: agent\ndata: ${JSON.stringify({ agent: '/root/beta', event: { ContextList: { context: { id: 's2', created_at: 1, last_active: 1 } } } })}\n\n`));
   await requested;
   await page.evaluate(() => window.sendTestEvent(`id: 2\nevent: agent\ndata: ${JSON.stringify({ agent: '/root/beta', event: { UserMessageAcknowledged: 'live prompt' } })}\n\nid: 3\nevent: agent\ndata: ${JSON.stringify({ agent: '/root/beta', event: { TextDelta: 'live answer' } })}\n\n`));

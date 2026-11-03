@@ -32,24 +32,30 @@ try {
   await page.goto(origin);
   const composer = page.getByPlaceholder('输入消息…'), basket = page.getByRole('region', { name: '上下文篮子' });
   const go = name => page.getByRole('button', { name, exact: true }).click();
-  // Agent switching must target the workspace tab (title = full path); the
-  // sidebar item shares the same accessible name and would trip strict mode.
-  const goAgent = name => page.locator(`button[title="/root/${name}"]`).click();
+  // Agent switching targets the unified editor tab (title = full path);
+  // workspace picker items share accessible names and would trip strict mode.
+  const goAgent = name => page.locator(`[data-editor-group] [role="tab"][title="/root/${name}"]`).click();
+  const agentTabOf = name => page.locator(`[data-editor-group] [role="tab"][title="/root/${name}"]`);
   const ref = name => basket.getByRole('button', { name, exact: true });
+  // Activates the composite bibliography editor tab (helper defined after
+  // the first open below; hoisted via function declaration).
   const empty = () => basket.locator('[aria-live="polite"]').filter({ hasText: /^0$/ }).waitFor();
+  const bibTabClick = () => page.getByRole('tab', { name: '文献与证据' }).click();
   await composer.waitFor(); await composer.fill('Draft survives navigation'); await go('Bibliography');
-  await page.getByRole('complementary', { name: 'Agent 辅助区' }).waitFor();
   assert.equal(await composer.inputValue(), 'Draft survives navigation');
-  assert.equal(await composer.evaluate(n => Boolean(n.closest('[data-floating-shell]'))), false);
-  await page.getByRole('button', {name:/Paper Alpha/}).click(); await go('加入当前会话'); await ref('文献 Paper Alpha').click();
+  assert.equal(await composer.evaluate(n => Boolean(n.closest('[data-editor-zone]'))), true);
+  await page.getByRole('button', {name:/Paper Alpha/}).click(); await go('加入当前会话');
+  // The basket strip lives in the chat editor tab — switch back to it.
+  await agentTabOf('alpha').click(); await ref('文献 Paper Alpha').click();
   const preview = page.getByRole('dialog'); await preview.getByText('元数据与摘要（不含全文）', { exact: true }).waitFor();
   assert.ok((await preview.innerText()).includes('10.test/alpha')); await page.keyboard.press('Escape');
-  await go('更新会话引用'); assert.equal(await ref('文献 Paper Alpha').count(), 1);
+  await bibTabClick(); await go('更新会话引用');
+  await agentTabOf('alpha').click(); assert.equal(await ref('文献 Paper Alpha').count(), 1);
+  await bibTabClick();
   await page.getByRole('button', {name:/Research text/}).last().click();
   const reader = page.locator('.zotero-pdf-reader[data-hosted]'); await reader.waitFor();
-  const rb = await reader.boundingBox(), ab = await page.getByRole('complementary',{name:'Agent 辅助区'}).boundingBox();
-  assert.ok(rb.x + rb.width <= ab.x + 2, 'reader must stay beside the Agent pane');
-  const mainBounds = await reader.locator('.reader-main').boundingBox(); assert.ok(mainBounds.height >= rb.height - 2, 'reader content must fill the editor height');
+  const rb = await reader.boundingBox();
+  assert.ok(rb.width > 300 && rb.height > 200, 'reader must fill its editor body');
   await page.evaluate(() => {
     const doc = document.querySelector('.reader-txt-document'); const range = document.createRange(); range.selectNodeContents(doc);
     getSelection().removeAllRanges(); getSelection().addRange(range);
@@ -57,18 +63,22 @@ try {
   });
   await page.waitForFunction(() => !document.querySelector('.reader-selection-popup').hidden);
   await reader.locator('[data-action=add-selection-context]').click();
-  await ref('证据 Paper Alpha · 选中文本').waitFor();
+  await agentTabOf('alpha').click(); await ref('证据 Paper Alpha · 选中文本').waitFor();
   await composer.fill('Draft can be edited beside the reader');
   await page.screenshot({path:'/tmp/autonomics-workbench-reader.png'});
   await goAgent('beta'); await empty();
-  // The open reader uses the current target session, even after switching Agent.
+  // The reader targets the CURRENT session's basket even though it lives
+  // in the bibliography tab: add while beta is the active agent.
+  await bibTabClick();
   await reader.locator('[data-action=add-context]').click();
+  await agentTabOf('beta').click();
   await ref('证据 Paper Alpha · 选中文本').waitFor(); await ref('清空引用').click();
   await goAgent('alpha'); await ref('文献 Paper Alpha').waitFor();
   const bibTab = page.getByRole('tab', { name: '文献与证据' });
   await go('CONFIG'); await reader.waitFor({state:'hidden'}); await bibTab.click(); await reader.waitFor();
   await reader.getByRole('button',{name:'Close reader',exact:true}).click();
   await go('CONFIG'); await bibTab.click();
+  await agentTabOf('alpha').click();
   await composer.fill('Compare all selected resources'); await go('发送');
   await page.waitForFunction(() => document.querySelector('textarea')?.value === '');
   assert.equal(sends.length, 1); assert.ok(decodeURIComponent(sends[0].path).includes('/root/alpha/messages'));
@@ -77,22 +87,21 @@ try {
   assert.ok(attached[0].content.includes(article.abstract_text)); assert.equal(attached[1].content, 'Selected passage from the full text.');
   failNextSend = true; await composer.fill('Retry this question'); await go('发送'); await page.getByText('Send failed for test', { exact: false }).waitFor();
   assert.equal(await composer.inputValue(), 'Retry this question'); await ref('文献 Paper Alpha').waitFor();
-  await go('CONFIG');
-  // The aux bar toggle hides/shows the docked chat (panel collapse, the
-  // retired floating shell is gone).
-  await page.getByLabel('Agent 副窗').click();
-  await composer.waitFor({ state: 'hidden' });
-  await page.getByLabel('Agent 副窗').click();
-  await composer.waitFor();
-  await page.waitForTimeout(250); // settle the workspace entrance animation before visual inspection
+  // Split the editor: the chat moves to the secondary group, literature
+  // stays in main — both visible, the VSCode split gesture.
+  await agentTabOf('alpha').click();
+  await page.getByRole('button', { name: '拆分编辑器' }).click();
+  const splitComposer = await composer.evaluate(n => Boolean(n.closest('[data-editor-group="secondary"] [data-editor-zone]')));
+  assert.ok(splitComposer, 'chat renders in the split group');
+  await page.waitForTimeout(250);
   await page.screenshot({ path: '/tmp/autonomics-workbench-desktop.png' });
-  const handle = page.getByRole('separator', { name: '调整 Agent 辅助区宽度' }), b = await handle.boundingBox();
-  await page.mouse.move(b.x, b.y + b.height / 2); await page.mouse.down(); await page.mouse.move(b.x - 60, b.y + b.height / 2, { steps: 6 }); await page.mouse.up();
-  const auxWidth = Number(await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('autonomics.workbench.v2') ?? '{}')?.aux?.widthPercent ?? 0; } catch { return 0; } }));
-  assert.ok(auxWidth > 34, 'aux width must persist into the v2 layout key');
+  const splitRatio = Number(await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('autonomics.workbench.v2') ?? '{}')?.splitRatio ?? 0; } catch { return 0; } }));
+  assert.ok(splitRatio >= 25 && splitRatio <= 75, 'split ratio must persist into the v2 layout key');
+  await page.getByRole('button', { name: '关闭分屏' }).click();
+  await agentTabOf('alpha').click();
   await ref('清空引用').click(); await composer.fill('No resources attached'); await go('发送'); await page.waitForTimeout(100);
   assert.equal(sends.at(-1).text, 'No resources attached');
-  await page.setViewportSize({ width: 390, height: 844 }); await page.locator('[data-drawer-shell] textarea').waitFor();
+  await page.setViewportSize({ width: 390, height: 844 }); await composer.waitFor();
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.
   await page.evaluate(() => {

@@ -45,66 +45,9 @@ try {
     await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
   };
 
-  // ── Desktop: workspace + inspector, one resizable boundary ───────────
+  // ── Desktop: agent chat is an editor tab in the unified strip ─────────
   {
-    // 1440 (like workbench-context): at 1280 the aux bar (40% ≈ 405px)
-    // cannot fit a 280px inspector plus a usable chat column, so the
-    // 60px drag would crush the composer below its minimum width.
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
-    page.on('dialog', dialog => dialog.accept());
-    await mockApi(page);
-
-    await page.goto(origin);
-    const composer = page.getByPlaceholder('输入消息…');
-    await composer.waitFor({ state: 'visible' });
-    // Three panel groups: outer (editor|aux), center vertical (editor|panel),
-    // aux inner (workspace|inspector).
-    assert.equal(await page.locator('[data-group]').count(), 3, 'desktop renders outer, center and aux panel groups');
-    assert.equal(await page.locator('[data-panel]#agents').count(), 0, 'agents sidebar is retired');
-    const dockedInFloat = await composer.evaluate(node => Boolean(node.closest('.fixed')));
-    assert.equal(dockedInFloat, false, 'workspace must stay docked on desktop');
-
-    const inspectorWidth = () => page.locator('[data-panel]#inspector').evaluate(node => node.getBoundingClientRect().width);
-    const right0 = await inspectorWidth();
-    assert.ok(Math.abs(right0 - 280) <= 12, `inspector panel should default near 280px, got ${right0}`);
-
-    // Drag the inspector handle leftwards: the inspector panel follows the
-    // pointer (right side grows as the boundary moves left).
-    const handle = page.getByRole('separator', { name: 'Resize inspector sidebar' });
-    const hb = await handle.boundingBox();
-    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(hb.x + hb.width / 2 - 60, hb.y + hb.height / 2, { steps: 6 });
-    await page.mouse.up();
-    const right1 = await inspectorWidth();
-    assert.ok(Math.abs(right1 - (right0 + 60)) <= 10, `inspector panel must grow by ~60px, got ${right1} from ${right0}`);
-    const stored = await page.evaluate(() => localStorage.getItem('autonomics.agent.layout'));
-    assert.ok(stored && JSON.parse(stored).inspector > 0, 'dragged layout must persist');
-
-    // Collapse via the tab-bar toggle and expand back to the saved size.
-    await page.getByRole('button', { name: 'Toggle right sidebar' }).click();
-    await page.waitForTimeout(120);
-    assert.ok(await inspectorWidth() < 2, 'toggle must collapse the inspector panel');
-    await page.getByRole('button', { name: 'Toggle right sidebar' }).click();
-    await page.waitForTimeout(120);
-    const right2 = await inspectorWidth();
-    assert.ok(Math.abs(right2 - right1) <= 10, `re-expand must restore the size, got ${right2} vs ${right1}`);
-
-    // Reload: the dragged layout survives.
-    await page.reload();
-    await composer.waitFor({ state: 'visible' });
-    const right3 = await inspectorWidth();
-    assert.ok(Math.abs(right3 - right1) <= 10, `layout must survive a reload, got ${right3} vs ${right1}`);
-
-    assert.deepEqual(errors, []);
-    await page.close();
-  }
-
-  // ── Mobile: the chat lives in the drawer shell + tab-bar switching ──
-  {
-    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
@@ -115,21 +58,65 @@ try {
     await page.goto(origin);
     const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
-    // The workspace renders in the drawer shell on mobile (no aux bar below md).
-    const inDrawer = await composer.evaluate(node => Boolean(node.closest('[data-drawer-shell]')));
-    assert.ok(inDrawer, 'mobile composer renders inside the drawer shell');
+    // The workspace portals into the active agent tab inside the editor area.
+    const inEditor = await composer.evaluate(node => Boolean(node.closest('[data-editor-zone]')));
+    assert.ok(inEditor, 'workspace renders inside the editor area (unified tabs)');
+    const alphaTab = page.locator('[data-editor-group] [role="tab"][title="/root/alpha"]');
+    const betaTab = page.locator('[data-editor-group] [role="tab"][title="/root/beta"]');
+    await alphaTab.waitFor({ state: 'visible' });
+    await betaTab.waitFor({ state: 'visible' });
+    assert.equal(await alphaTab.getAttribute('aria-selected'), 'true', 'first agent tab is active');
 
-    // Agents switch through the tab bar; the drawer stays put.
+    // Switching agent tabs swaps the conversation.
+    await betaTab.click();
+    await assert.doesNotReject(() => page.getByText('beta prompt').waitFor({ state: 'visible' }));
+
+    // Closing the active tab falls back to the remaining one.
+    await betaTab.getByRole('button', { name: '关闭 beta' }).click();
+    await composer.waitFor({ state: 'visible' });
+    await alphaTab.waitFor({ state: 'visible' });
+    await page.getByText('alpha prompt').waitFor({ state: 'visible' });
+
+    // Reload: the open-tab list (persisted minus the closed tab) restores.
+    await page.reload();
+    await composer.waitFor({ state: 'visible' });
+    await page.locator('[data-editor-group] [role="tab"][title="/root/alpha"]').waitFor({ state: 'visible' });
+    await assert.doesNotReject(() => page.getByText('alpha prompt').waitFor({ state: 'visible' }));
+
+    assert.deepEqual(errors, []);
+    await page.close();
+  }
+
+  // ── Mobile: the editor area is fullscreen; the sidebar is a drawer ──
+  {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('dialog', dialog => dialog.accept());
+    await mockApi(page);
+    await page.addInitScript(() => localStorage.setItem('autonomics.openTabs', JSON.stringify(['/root/alpha', '/root/beta'])));
+
+    await page.goto(origin);
+    const composer = page.getByPlaceholder('输入消息…');
+    await composer.waitFor({ state: 'visible' });
+    // No FAB/drawer anymore: the chat is a fullscreen editor tab.
+    assert.equal(await page.locator('[data-drawer-shell]').count(), 0, 'no drawer shell');
+    assert.equal(await page.getByRole('button', { name: '打开 Agent 副窗' }).count(), 0, 'no FAB');
+    const inEditor = await composer.evaluate(node => Boolean(node.closest('[data-editor-zone]')));
+    assert.ok(inEditor, 'workspace renders in the fullscreen editor area');
+
+    // Agents switch through the editor tab strip.
     await page.getByTitle('/root/beta').click();
     await assert.doesNotReject(() => page.getByText('beta prompt').waitFor({ state: 'visible' }));
 
-    // Collapse to the FAB and reopen.
-    await page.getByRole('button', { name: '收起 Agent 抽屉' }).click();
-    const fab = page.getByRole('button', { name: '打开 Agent 副窗' });
-    await fab.waitFor({ state: 'visible' });
-    await composer.waitFor({ state: 'hidden' });
-    await fab.click();
-    await composer.waitFor({ state: 'visible' });
+    // The sidebar drawer opens via edge swipe; drawer footer carries theme/logout.
+    await page.evaluate(() => {
+      const touch = (x, y) => new Touch({ identifier: 1, target: document.body, clientX: x, clientY: y });
+      const fire = (type, x, y) => document.dispatchEvent(new TouchEvent(type, { touches: [touch(x, y)], bubbles: true, cancelable: true }));
+      fire('touchstart', 10, 420); fire('touchmove', 180, 420);
+    });
+    await page.getByRole('button', { name: '退出登录' }).waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: '收起侧栏' }).click();
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 0, `page must not scroll horizontally, overflow ${overflow}px`);

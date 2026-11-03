@@ -1,6 +1,7 @@
 /**
  * Workbench layout store: sidebar containers, editor groups/tabs, the
- * auxiliary (chat) bar, the bottom panel.
+ * bottom panel. Agent chat and wiki entries live in the editor area like
+ * every other kind — there is no separate auxiliary hosting anymore.
  *
  * Module-level external store in the theme.ts pattern: plain state, a
  * listener set, a referentially-stable snapshot consumed through
@@ -11,7 +12,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export type ContainerId = "bibliography" | "wiki";
+export type ContainerId = "bibliography" | "wiki" | "agents";
 export type GroupId = "main" | "secondary";
 export type EditorId = string;
 export type PanelTab = "events" | "notices";
@@ -33,7 +34,6 @@ export type WorkbenchState = {
   revision: number;
   sidebar: { collapsed: boolean; container: ContainerId | null };
   containerViews: Record<ContainerId, string>;
-  aux: { visible: boolean; widthPercent: number; inspectorOpen: boolean };
   panel: { visible: boolean; heightPercent: number; tab: PanelTab; unreadNotices: number };
   groups: { active: GroupId; main: EditorGroup; secondary: EditorGroup | null };
   /** Main-group share of the split layout, percent (25–75). */
@@ -44,9 +44,9 @@ const STORAGE_KEY = "autonomics.workbench.v2";
 /** Pre-workbench key, still owned by this store (mobile drawer reads it). */
 export const SIDEBAR_COLLAPSED_KEY = "autonomics.workbench.sidebar.collapsed";
 
-/** Default aux share: wide enough for the docked chat plus a ~280px
- *  inspector column at 1280×800 (48px rail + 220px side bar included). */
-const AUX_WIDTH_DEFAULT = 40;
+/** Pre-M2 wiki tab persistence; migrated into editor tabs, then removed. */
+const WIKI_TABS_KEY = "wiki.tabs.v1";
+
 const PANEL_HEIGHT_DEFAULT = 30;
 
 function clampPercent(value: number, min: number, max: number, fallback: number) {
@@ -54,8 +54,16 @@ function clampPercent(value: number, min: number, max: number, fallback: number)
 }
 
 function isContainerId(value: unknown): value is ContainerId {
-  return value === "bibliography" || value === "wiki";
+  return value === "bibliography" || value === "wiki" || value === "agents";
 }
+
+/** A wiki editor's per-instance state (history stack + cursor + mode). */
+export type WikiEntryEditorState = {
+  stack: Array<{ kind: "entry"; entryId: string; title: string }>;
+  cursor: number;
+  mode: "read" | "edit";
+  title: string;
+};
 
 /** Stable editor id: `kind:key` with recursively sorted object keys, so the
  *  same logical editor opened with differently-ordered params reuses the tab. */
@@ -75,8 +83,7 @@ function defaultState(): WorkbenchState {
   return {
     revision: 0,
     sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography" },
-    containerViews: { bibliography: "library", wiki: "browse" },
-    aux: { visible: true, widthPercent: AUX_WIDTH_DEFAULT, inspectorOpen: readLegacyInspectorOpen() },
+    containerViews: { bibliography: "library", wiki: "browse", agents: "overview" },
     panel: { visible: false, heightPercent: PANEL_HEIGHT_DEFAULT, tab: "events", unreadNotices: 0 },
     groups: { active: "main", main: { editors: [], activeId: null }, secondary: null },
     splitRatio: 50,
@@ -93,33 +100,60 @@ function readLegacySidebarCollapsed(): boolean {
   }
 }
 
-/** Legacy default for the aux inspector: open unless a saved agent layout
- *  collapsed it (mirrors layoutSideOpen(readAgentLayout(), "inspector")). */
-function readLegacyInspectorOpen(): boolean {
+/** Migrates the pre-M2 wiki tab strip into editor tabs. Runs whenever the
+ *  legacy key is still present; the key is removed afterwards. Locations
+ *  on a tab's history stack that point at the (retired) home view are
+ *  dropped, and a home-current tab activates the wiki browse view instead. */
+function migrateWikiTabs(): {
+  editors: EditorRef[];
+  activeId: EditorId | null;
+  browseActive: boolean;
+} | null {
   try {
-    const raw = localStorage.getItem("autonomics.agent.layout");
-    if (!raw) return true;
-    const parsed = JSON.parse(raw) as { inspector?: unknown } | null;
-    const size = parsed?.inspector;
-    return typeof size === "number" ? size > 0.5 : true;
-  } catch {
-    return true;
-  }
-}
-
-/** One-time migration from the pre-workbench placement keys. */
-function migrateLegacy(): Partial<WorkbenchState> | null {
-  try {
-    const placement = localStorage.getItem("autonomics.workbench.agent.placement");
-    const width = Number(localStorage.getItem("autonomics.workbench.agent.width"));
-    if (placement === null && !Number.isFinite(width)) return null;
-    return {
-      aux: {
-        visible: placement !== "hidden",
-        widthPercent: clampPercent(width, 20, 60, AUX_WIDTH_DEFAULT),
-        inspectorOpen: readLegacyInspectorOpen(),
-      },
+    const raw = localStorage.getItem(WIKI_TABS_KEY);
+    if (!raw) return null;
+    localStorage.removeItem(WIKI_TABS_KEY);
+    const parsed = JSON.parse(raw) as {
+      tabs?: Array<{
+        id?: unknown;
+        stack?: Array<{ kind?: unknown; entryId?: unknown; title?: unknown }>;
+        cursor?: unknown;
+        mode?: unknown;
+      }>;
+      activeId?: unknown;
     };
+    if (!Array.isArray(parsed.tabs)) return null;
+    const editors: EditorRef[] = [];
+    let activeId: EditorId | null = null;
+    let browseActive = false;
+    for (const tab of parsed.tabs) {
+      if (!Array.isArray(tab.stack) || tab.stack.length === 0) continue;
+      const stack = tab.stack.filter(
+        (loc): loc is { kind: "entry"; entryId: string; title: string } =>
+          loc?.kind === "entry" && typeof loc.entryId === "string",
+      );
+      const cursorIndex = typeof tab.cursor === "number" ? tab.cursor : 0;
+      if (!stack.length) {
+        if (tab.id === parsed.activeId) browseActive = true;
+        continue;
+      }
+      const cursor = Math.min(Math.max(0, cursorIndex), stack.length - 1);
+      const current = stack[cursor];
+      const id = `wiki-entry:${editorKey({ entryId: current.entryId })}`;
+      const existing = editors.find((editor) => editor.id === id);
+      if (!existing) {
+        editors.push({
+          id,
+          kind: "wiki-entry",
+          params: { entryId: current.entryId },
+          state: { stack, cursor, mode: tab.mode === "edit" ? "edit" : "read", title: current.title ?? "" },
+          pinned: false,
+        });
+      }
+      if (tab.id === parsed.activeId) activeId = id;
+    }
+    if (!editors.length && !browseActive) return null;
+    return { editors, activeId, browseActive };
   } catch {
     return null;
   }
@@ -143,13 +177,13 @@ function reviveState(raw: unknown): WorkbenchState | null {
       container: isContainerId(source.sidebar?.container) ? source.sidebar.container : base.sidebar.container,
     },
     containerViews: { ...base.containerViews, ...(source.containerViews ?? {}) },
-    aux: { ...base.aux, ...(source.aux ?? {}), widthPercent: clampPercent(source.aux?.widthPercent ?? NaN, 20, 60, AUX_WIDTH_DEFAULT) },
     panel: {
       ...base.panel,
       ...(source.panel ?? {}),
       heightPercent: clampPercent(source.panel?.heightPercent ?? NaN, 15, 70, PANEL_HEIGHT_DEFAULT),
       unreadNotices: 0,
-    },    groups: {
+    },
+    groups: {
       active: source.groups?.active === "secondary" && source.groups.secondary ? "secondary" : "main",
       main: isEditorGroup(source.groups?.main) ? source.groups.main : base.groups.main,
       secondary: isEditorGroup(source.groups?.secondary) ? source.groups.secondary : null,
@@ -161,17 +195,34 @@ function reviveState(raw: unknown): WorkbenchState | null {
 }
 
 function loadState(): WorkbenchState {
+  let loaded: WorkbenchState | null = null;
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      const revived = reviveState(JSON.parse(stored));
-      if (revived) return revived;
+      loaded = reviveState(JSON.parse(stored));
     }
   } catch {
     /* corrupt or unavailable storage: fall through to defaults */
   }
-  const base = defaultState();
-  return { ...base, ...migrateLegacy() };
+  let state = loaded ?? defaultState();
+  // The legacy wiki tab strip folds in whenever it is still present —
+  // covers upgrades from the panel era AND from the M1 transitional shell.
+  const wiki = migrateWikiTabs();
+  if (wiki) {
+    state = {
+      ...state,
+      containerViews: { ...state.containerViews, wiki: wiki.browseActive ? "browse" : state.containerViews.wiki },
+      groups: {
+        ...state.groups,
+        main: {
+          editors: [...wiki.editors, ...state.groups.main.editors],
+          activeId: wiki.activeId ?? state.groups.main.activeId,
+        },
+      },
+    };
+    if (wiki.activeId) state.groups.active = "main";
+  }
+  return state;
 }
 
 const listeners = new Set<() => void>();
@@ -183,7 +234,6 @@ function persist() {
       version: 2,
       sidebar: { container: state.sidebar.container },
       containerViews: state.containerViews,
-      aux: state.aux,
       panel: {
         visible: state.panel.visible,
         heightPercent: state.panel.heightPercent,
@@ -292,6 +342,57 @@ export function activateEditor(groupId: GroupId, id: EditorId): void {
       active: groupId,
       [groupId]: { ...groupData, activeId: id },
     },
+  });
+}
+
+/** Activates an editor wherever it lives (agent-tab sync and openers). */
+export function activateEditorById(id: EditorId): void {
+  if (state.groups.main.editors.some((editor) => editor.id === id)) {
+    activateEditor("main", id);
+  } else if (state.groups.secondary?.editors.some((editor) => editor.id === id)) {
+    activateEditor("secondary", id);
+  }
+}
+
+/** Editor id helpers for the kind-keyed tabs the shell syncs. */
+export function agentEditorId(path: string): EditorId {
+  return `agent:${editorKey({ path })}`;
+}
+
+export function wikiEntryEditorId(entryId: string): EditorId {
+  return `wiki-entry:${editorKey({ entryId })}`;
+}
+
+export function findEditor(id: EditorId): EditorRef | undefined {
+  return state.groups.main.editors.find((editor) => editor.id === id)
+    ?? state.groups.secondary?.editors.find((editor) => editor.id === id);
+}
+
+export function openAgentEditor(path: string, activate = true): EditorId {
+  return openEditor({ kind: "agent", params: { path }, activate });
+}
+
+export function openWikiEntryEditor(entryId: string, options: { title?: string; mode?: "read" | "edit"; forceNew?: boolean } = {}): EditorId {
+  const id = wikiEntryEditorId(entryId);
+  const existing = findEditor(id);
+  if (existing && !options.forceNew) {
+    if (options.mode || options.title) {
+      const state = (existing.state as WikiEntryEditorState | null) ?? { stack: [{ kind: "entry", entryId, title: options.title ?? "" }], cursor: 0, mode: "read", title: options.title ?? "" };
+      patchEditorState(id, {
+        ...state,
+        mode: options.mode ?? state.mode,
+        title: options.title ?? state.title,
+      });
+    }
+    activateEditorById(id);
+    return id;
+  }
+  const stack = [{ kind: "entry" as const, entryId, title: options.title ?? "" }];
+  return openEditor({
+    kind: "wiki-entry",
+    params: { entryId },
+    state: { stack, cursor: 0, mode: options.mode ?? "read", title: options.title ?? "" },
+    activate: true,
   });
 }
 
@@ -444,34 +545,6 @@ export function setSidebarCollapsed(collapsed: boolean): void {
 
 export function toggleSidebar(): void {
   setSidebarCollapsed(!state.sidebar.collapsed);
-}
-
-// ---------------------------------------------------------------------------
-// Auxiliary bar (agent chat)
-// ---------------------------------------------------------------------------
-
-export function setAuxVisible(visible: boolean): void {
-  if (state.aux.visible === visible) return;
-  commit({ ...state, aux: { ...state.aux, visible } });
-}
-
-export function toggleAux(): void {
-  setAuxVisible(!state.aux.visible);
-}
-
-export function setAuxWidth(percent: number): void {
-  const widthPercent = clampPercent(percent, 20, 60, AUX_WIDTH_DEFAULT);
-  if (state.aux.widthPercent === widthPercent) return;
-  commit({ ...state, aux: { ...state.aux, widthPercent } });
-}
-
-export function setAuxInspectorOpen(open: boolean): void {
-  if (state.aux.inspectorOpen === open) return;
-  commit({ ...state, aux: { ...state.aux, inspectorOpen: open } });
-}
-
-export function toggleAuxInspector(): void {
-  setAuxInspectorOpen(!state.aux.inspectorOpen);
 }
 
 // ---------------------------------------------------------------------------

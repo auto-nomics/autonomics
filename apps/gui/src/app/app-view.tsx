@@ -4,7 +4,7 @@
 // lives in app/workbench/.
 import { ContextBasketProvider } from "@/features/context/context-basket";
 import { useAgentRuntime } from "@/app/use-agent-runtime";
-import { setAuxVisible } from "@/app/workbench/workbench-store";
+import { openAgentTab } from "@/app/workbench/static-commands";
 import { WorkbenchShell } from "@/app/workbench/workbench-shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -69,9 +69,9 @@ export function App() {
     <ContextBasketProvider
       scope={runtime.activeAgent && runtime.activeContextId ? JSON.stringify([runtime.activeAgent, runtime.activeContextId]) : null}
       contextLabel={runtime.activeAgent.split("/").pop() || "未选择 Agent"}
-      // Adding a context resource reveals the agent auxiliary bar so the
-      // basket strip is visible where the chat lives.
-      onAdd={() => setAuxVisible(true)}
+      // Adding a context resource opens the active agent's editor tab so
+      // the basket strip is visible where the chat lives.
+      onAdd={() => openAgentTab(runtime.activeAgent)}
     >
       <WorkbenchShell runtime={runtime} />
     </ContextBasketProvider>

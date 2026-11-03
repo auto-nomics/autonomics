@@ -1,17 +1,20 @@
 /**
  * Editor tab strip for one editor group. Tabs carry the registered kind's
- * title/icon; closing consults the kind's confirmLeave veto (used from M2
- * by unsaved wiki edits).
+ * title/icon; closing consults the kind's confirmLeave veto. Agent tabs
+ * drive the runtime: activating selects the agent, closing closes the
+ * runtime's view window (which the shell syncs back into the strip).
  */
 
 import { X } from "lucide-react";
 import { SplitSquareHorizontal, Columns2 } from "lucide-react";
+import { useWorkbenchRuntime } from "../runtime-context";
 import { cn } from "@/lib/utils";
 import { editorKind } from "../editor-registry";
 import { activateEditor, closeEditor, closeSplit, splitEditor, useWorkbenchState, type EditorGroup, type GroupId } from "../workbench-store";
 
 export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
   const state = useWorkbenchState();
+  const runtime = useWorkbenchRuntime();
   const split = state.groups.secondary !== null;
   const isMain = props.groupId === "main";
 
@@ -27,16 +30,22 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
         const active = editor.id === props.group.activeId;
         const Icon = kind.icon?.(editor);
         const title = kind.title(editor);
+        const longName = kind.name?.(editor) ?? title;
+        const isAgent = editor.kind === "agent";
         return (
           // VSCode-shaped tab: flat cells on the strip; the active tab
-          // lifts to the background color with a 2px accent on top.
+          // lifts to the background color with a 2px accent on top. The
+          // title attribute carries the long name (agent = full path).
           <div
             key={editor.id}
             role="tab"
             aria-selected={active}
             aria-label={title}
-            title={title}
-            onClick={() => activateEditor(props.groupId, editor.id)}
+            title={longName}
+            onClick={() => {
+              activateEditor(props.groupId, editor.id);
+              if (isAgent) runtime.selectAgent(String(editor.params.path ?? ""));
+            }}
             className={cn(
               "group/tab relative flex min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5 border-r px-2.5 text-xs",
               active
@@ -54,7 +63,8 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
               onClick={(event) => {
                 event.stopPropagation();
                 if (kind.confirmLeave?.(editor)) return; // vetoed (unsaved edits)
-                closeEditor(editor.id);
+                if (isAgent) runtime.closeTab(String(editor.params.path ?? ""));
+                else closeEditor(editor.id);
               }}
               className="rounded-sm p-0.5 opacity-0 transition hover:bg-accent focus-visible:opacity-100 group-hover/tab:opacity-100 disabled:opacity-30"
             >

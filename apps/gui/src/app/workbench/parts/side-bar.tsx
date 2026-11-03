@@ -7,17 +7,20 @@
  */
 
 import { useEffect, useRef } from "react";
-import { BookOpen, Camera, Compass, Library, LogOut, Monitor, Moon, PanelLeft, Rss, Search, Sun } from "lucide-react";
+import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelLeft, Rss, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
+import { AgentInspector, openAgentDialog } from "@/features/agent";
+import { WikiSidebarView } from "@/features/wiki/wiki-sidebar-view";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
+import { useWorkbenchRuntime } from "../runtime-context";
 
-type ContainerView = { id: string; label: string; name: string; icon: LucideIcon };
+
 
 const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: string; icon: LucideIcon }[] = [
   { id: "library", label: "文献库", name: "Bibliography library", icon: Library },
@@ -26,18 +29,15 @@ const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: stri
   { id: "subscriptions", label: "订阅", name: "Subscriptions", icon: Rss },
 ];
 
-const WIKI_VIEWS: readonly ContainerView[] = [
-  { id: "browse", label: "浏览知识库", name: "Wiki browse", icon: BookOpen },
-  { id: "search", label: "检索(Ctrl+K)", name: "Wiki search", icon: Search },
-];
-
 const CONTAINER_TITLES: Record<ContainerId, string> = {
   bibliography: "文献与证据",
   wiki: "知识库",
+  agents: "Agent",
 };
 
 function ContainerBody({ container }: { container: ContainerId }) {
   const state = useWorkbenchState();
+  const runtime = useWorkbenchRuntime();
   if (container === "bibliography") {
     const active = state.containerViews.bibliography ?? "library";
     return (
@@ -60,28 +60,34 @@ function ContainerBody({ container }: { container: ContainerId }) {
       </div>
     );
   }
-  const active = state.containerViews.wiki ?? "browse";
+  if (container === "wiki") {
+    return (
+      <div role="group" aria-label="知识库工作区" className="flex min-h-0 flex-1 flex-col">
+        <WikiSidebarView />
+      </div>
+    );
+  }
+  // agents container: the inspector lives here now (overview view).
   return (
-    <div role="group" aria-label="知识库工作区" className="flex flex-col gap-0.5 p-2">
-      {WIKI_VIEWS.map((view) => (
-        <Button
-          key={view.id}
-          size="sm"
-          variant={active === view.id ? "secondary" : "ghost"}
-          className="w-full shrink-0 justify-start gap-2 px-2"
-          aria-label={view.name}
-          aria-current={active === view.id ? "page" : undefined}
-          title={view.label}
-          onClick={() => {
-            // M1: browse/search live inside the composite wiki editor; the
-            // sidebar shortcuts open it (Ctrl+K reaches the search dialog).
-            openEditor({ kind: "wiki" });
+    <div role="group" aria-label="Agent 工作区" className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <AgentInspector
+          activeAgent={runtime.activeAgent}
+          activeInfo={runtime.agents.find((agent) => agent.path === runtime.activeAgent)}
+          status={runtime.statuses[runtime.activeAgent]}
+          plan={runtime.plans[runtime.activeAgent] ?? null}
+          usage={runtime.usage[runtime.activeAgent] ?? null}
+          display={runtime.display}
+          inspectorOpen
+          onToggleDisplay={(key) => void runtime.toggleDisplay(key)}
+          onOpenDag={() => {
+            if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } });
           }}
-        >
-          <view.icon />
-          <span className="truncate text-xs">{view.label}</span>
-        </Button>
-      ))}
+          onOpenCopy={() => openAgentDialog("copy")}
+          onOpenHistory={() => openAgentDialog("history")}
+          onRefreshHistory={runtime.refreshHistory}
+        />
+      </div>
     </div>
   );
 }

@@ -4,19 +4,14 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
-  Bot,
   Brain,
   CheckCircle2,
-  ChevronDown,
   CircleDashed,
   Copy,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   Search,
   Terminal,
   Wrench,
-  X,
   XCircle,
 } from "lucide-react";
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
@@ -33,7 +28,6 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Trace,
@@ -57,15 +51,11 @@ import {
 import { ToolPayloadPreview, ToolPayloadView, parseMaybeJson } from "./agent-json";
 import { AgentComposer } from "./composer";
 
-/** Where the workspace renders: docked in the auxiliary bar, or in the
- *  bottom drawer overlay (mobile). The component instance survives mode
- *  changes — only the portal target moves — so transcript state never
- *  resets. (The retired "standby" mode went away with the old shell: the
- *  workbench keeps the dock slot connected even when the aux bar is
- *  hidden, so the workspace is always docked on desktop.) */
-export type AgentWorkspaceMode = "docked" | "drawer";
-
-const DRAWER_COLLAPSED_KEY = "autonomics.workspace.drawer.collapsed";
+/** The workspace renders through a portal into the active agent editor
+ *  tab's slot (or an off-document container while no slot is attached).
+ *  The single component instance survives slot changes — only the portal
+ *  target moves, and per-agent state lives in the runtime store. */
+export type AgentWorkspaceMode = "docked";
 
 /** Sliding-window transcript rendering: only the tail of the message list
  *  stays mounted; earlier messages load on demand (button or scroll-to-top). */
@@ -308,10 +298,9 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
 }
 
 export type AgentWorkspaceProps = {
-  mode: AgentWorkspaceMode;
-  /** The auxiliary-bar DOM node registered by the workbench shell; null
-   *  only before the shell has attached it (the detached fallback covers
-   *  that window). */
+  mode?: AgentWorkspaceMode;
+  /** The active agent editor tab's slot DOM node; null while no agent tab
+   *  is active (the detached fallback keeps the subtree mounted). */
   dockedSlot: HTMLDivElement | null;
   agents: AgentInfo[];
   activeAgent: string;
@@ -325,7 +314,6 @@ export type AgentWorkspaceProps = {
   display: DisplaySettings;
   draft: string;
   busy: string | null;
-  rightOpen: boolean;
   /** Cached catalog rows (all providers) for the composer model switcher. */
   modelCatalog: ModelRow[];
   /** Fetches the catalog once; the switcher awaits it before opening so
@@ -349,10 +337,8 @@ export type AgentWorkspaceProps = {
   onCancel: () => void;
   /** 压缩对话(POST /agents/{id}/compact)——composer 内的 Archive 图标。 */
   onCompact: () => void;
-  showInspectorToggle?: boolean;
-  /** Open view windows (paths) — the tab strip. A path may have no live
-   *  instance (dormant tab: identity stored, passivated by the idle
-   *  TTL); sending from it re-activates the identity. */
+  /** Open view windows (paths) — mirrored into workbench agent tabs by
+   *  the shell; shown here in the merged picker. */
   openTabs: string[];
   onSelectAgent: (path: string) => void;
   /** 关闭当前标签页——纯视图操作。virtual-actor 模式下实例归 daemon
@@ -367,7 +353,6 @@ export type AgentWorkspaceProps = {
   /** Activates a stored identity (switch if live, respawn otherwise)
    *  and makes it the active tab. */
   onResumeAgent: (agent: StoredAgent) => void;
-  onToggleRight: () => void;
   onOpenDag: () => void;
 };
 
@@ -375,7 +360,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const basket = useContextBasket();
   const sendMessage = () => props.onSendMessage(serializeContext(basket?.resources ?? []));
   const {
-    mode,
     dockedSlot,
     agents,
     activeAgent,
@@ -387,35 +371,17 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     display,
     draft,
     busy,
-    rightOpen,
     modelCatalog,
   } = props;
 
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(DRAWER_COLLAPSED_KEY) === "true"; } catch { return false; }
-  });
-  useEffect(() => {
-    if (basket?.revealVersion) setCollapsed(false);
-  }, [basket?.revealVersion]);
-  // Drawer overlay body; null while the drawer is collapsed or not the
-  // active hosting mode.
-  const [drawerBody, setDrawerBody] = useState<HTMLDivElement | null>(null);
   // Off-document container that keeps the workspace subtree mounted while
-  // no real portal target exists (first frames, hidden collapsed state).
+  // no agent editor tab hosts it.
   const detachedRef = useRef<HTMLDivElement | null>(null);
   if (!detachedRef.current && typeof document !== "undefined") {
     detachedRef.current = document.createElement("div");
   }
 
-  useEffect(() => {
-    try { localStorage.setItem(DRAWER_COLLAPSED_KEY, String(collapsed)); } catch { /* preference storage may be unavailable */ }
-  }, [collapsed]);
-
-  const target = mode === "docked" && dockedSlot
-    ? dockedSlot
-    : mode === "drawer" && !collapsed && drawerBody
-      ? drawerBody
-      : detachedRef.current!;
+  const target = dockedSlot ?? detachedRef.current!;
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   // Server-side identity search: keystrokes debounce into one bounded
@@ -442,7 +408,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const windowStartRef = useRef(0);
   const pendingAnchorRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
 
-  const docked = mode === "docked";
   const activeInfo = agents.find((agent) => agent.path === activeAgent);
   const running = statusLabel(statuses[activeAgent]);
 
@@ -572,8 +537,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     <div
       className={cn(
         "flex min-h-0 flex-1 flex-col",
-        // Entrance for (re)docking into the agent view's center column.
-        mode === "docked" &&
+        // Entrance for (re)docking into an agent editor tab.
         "animate-in fade-in-0 slide-in-from-bottom-2 duration-200 motion-reduce:animate-none",
       )}
     >
@@ -597,16 +561,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   onValueChange={(value) => searchStoredDebounced(value)}
                 />
               </div>
-              {docked && props.showInspectorToggle !== false && (
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Toggle right sidebar"
-                  onClick={props.onToggleRight}
-                >
-                  {rightOpen ? <PanelRightClose /> : <PanelRightOpen />}
-                </Button>
-              )}
             </div>
             <CommandList className="max-h-64 rounded-none! border-t">
               <CommandEmpty>没有匹配的 agent</CommandEmpty>
@@ -686,60 +640,11 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         ) : (
           <div className="flex h-10 items-center gap-1 px-1.5">
             {searchToggle}
-            {/* Pinned left of the tab strip: stays visible and clickable no
-                matter how far the agent tabs have scrolled. */}
             <Button size="icon-sm" variant="ghost" aria-label="New agent" className="shrink-0" onClick={props.onSpawn}>
               <Plus />
             </Button>
-            {/* Vertical margins (not an explicit height): the base
-                component's self-stretch needs height:auto to work — an
-                explicit h-* would make it fall back to flex-start and pin
-                the line to the top edge. 40px row - 2×6px = 28px, matching
-                the size-7 icon buttons. */}
-            <Separator orientation="vertical" className="my-1.5 shrink-0" />
-            <div data-tab-strip="" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {props.openTabs.map((path) => {
-                const live = agents.some((agent) => agent.path === path);
-                return (
-                  <div
-                    key={path}
-                    className={cn(
-                      "group/tab flex shrink-0 items-center gap-1.5 rounded-md border border-transparent py-1 pr-1 pl-2 text-xs",
-                      activeAgent === path ? "border-border bg-card shadow-sm" : "text-muted-foreground hover:bg-accent",
-                    )}
-                  >
-                    <AgentStatusIcon status={live ? statuses[path] : "dormant"} />
-                    <button
-                      type="button"
-                      onClick={() => props.onSelectAgent(path)}
-                      className="max-w-40 truncate"
-                      title={path}
-                    >
-                      {leafName(path)}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Close tab"
-                      title="关闭标签页（不影响 agent 运行状态）"
-                      onClick={() => props.onCloseAgent(path)}
-                      className="rounded-sm p-1 opacity-0 transition hover:bg-accent group-hover/tab:opacity-100"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-            {docked && props.showInspectorToggle !== false && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Toggle right sidebar"
-                onClick={props.onToggleRight}
-              >
-                {rightOpen ? <PanelRightClose /> : <PanelRightOpen />}
-              </Button>
-            )}
+            {/* Agent tabs live in the workbench editor strip now; the
+                header keeps only the picker and the new-agent action. */}
           </div>
         )}
       </div>
@@ -850,50 +755,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   return (
     <>
-      {mode === "drawer" && (collapsed ? (
-        // Collapsed drawer: a floating action button that reopens the
-        // workspace; the pulsing dot keeps streaming visible at a glance.
-        <button
-          type="button"
-          aria-label="打开 Agent 副窗"
-          title="打开 Agent 副窗"
-          onClick={() => setCollapsed(false)}
-          className="fixed right-4 bottom-4 z-40 grid size-12 place-items-center rounded-full border bg-card text-foreground shadow-2xl transition-colors hover:bg-accent animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none"
-        >
-          <Bot className="size-5" />
-          {streaming && (
-            <span className="absolute right-2.5 top-2.5 size-2.5 animate-pulse rounded-full border-2 border-card bg-sky-400" />
-          )}
-        </button>
-      ) : (
-        // Bottom drawer overlay: a full-screen sheet below md (the app's
-        // single desktop breakpoint), an inset rounded card at md and up.
-        // Non-modal — the view behind stays usable, the header button
-        // folds it back to the FAB.
-        <div
-          data-drawer-shell=""
-          className="fixed inset-0 z-40 flex flex-col overflow-hidden bg-card shadow-2xl motion-reduce:animate-none md:inset-x-3 md:top-auto md:bottom-3 md:h-[min(80dvh,640px)] md:rounded-xl md:border-t animate-in fade-in-0 slide-in-from-bottom-4 duration-200"
-        >
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-muted/50 px-2">
-            <AgentStatusIcon status={statuses[activeAgent]} />
-            <span className="min-w-0 truncate text-xs font-medium">{activeAgent || "Agent"}</span>
-            <span className="shrink-0 text-[11px] text-muted-foreground">{running}</span>
-            {streaming && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="ml-auto"
-              aria-label="收起 Agent 抽屉"
-              aria-expanded={true}
-              title="收起为副窗按钮"
-              onClick={() => setCollapsed(true)}
-            >
-              <ChevronDown />
-            </Button>
-          </div>
-          <div ref={setDrawerBody} className="flex min-h-0 flex-1 flex-col bg-background" />
-        </div>
-      ))}
       {createPortal(content, target)}
     </>
   );

@@ -1,35 +1,43 @@
 /**
  * Workbench shell: title bar / activity bar / side bar / editor area /
- * bottom panel / auxiliary (agent chat) bar / status bar — the VSCode
- * layout skeleton, hosting the existing feature components.
+ * bottom panel / status bar — the VSCode layout skeleton. Every window is
+ * an editor tab: agent chat portals into the active agent tab's slot,
+ * wiki entries, bibliography, config and DAG are regular tabs.
  *
- * Panel-count stability: both ResizablePanelGroups always mount their two
- * panels; hiding the bottom panel or the aux bar collapses the panel to 0%
- * (collapse → expand, never unmount), so the editor bodies and the
- * portaled AgentWorkspace never churn.
+ * Panel-count stability: the center ResizablePanelGroup always mounts its
+ * two panels; hiding the bottom panel collapses it to 0% (collapse →
+ * expand, never unmount), so editor bodies never churn.
+ *
+ * Agent tab sync: the runtime's openTabs/activeAgent (persisted view
+ * windows) mirror the workbench agent tabs — opening/selecting in one
+ * place converges in the other.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { gatewayRequest } from "@/gateway";
-import { AgentWorkspace, AgentDialogs, SpawnAgentDialog, openAgentDialog } from "@/features/agent";
+import { AgentWorkspace, AgentDialogs, SpawnAgentDialog } from "@/features/agent";
+import { SearchDialog } from "@/features/wiki/search-dialog";
+import { closeWikiSearch, useWikiSearchOpen } from "@/features/wiki/wiki-state";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { registerCommands } from "./command-registry";
 import { CommandPalette } from "./command-palette";
 import { registerWorkbenchEditorKinds } from "./editor-kinds";
+import { useAgentSlot } from "./agent-slot-registry";
 import "./static-commands";
 import { useWorkbenchKeybindings } from "./keybindings";
 import {
+  activateEditorById,
+  agentEditorId,
   bumpUnreadNotices,
+  closeEditor,
+  openAgentEditor,
   openEditor,
-  setAuxInspectorOpen,
-  setAuxWidth,
+  openWikiEntryEditor,
   setPanelHeight,
   setSidebarCollapsed,
-  toggleAux,
-  toggleAuxInspector,
   togglePanel,
   toggleSidebar,
   useWorkbenchState,
@@ -42,10 +50,27 @@ import { SideBar } from "./parts/side-bar";
 import { EditorArea } from "./parts/editor-area";
 import { BottomPanel } from "./parts/bottom-panel";
 import { StatusBar } from "./parts/status-bar";
-import { AuxAgentPane } from "./parts/aux-agent-pane";
 
 // Editor kinds register once at module load.
 registerWorkbenchEditorKinds();
+
+/** Wiki search dialog driven by the wiki search store; results open
+ *  wiki-entry editor tabs through the workbench opener. */
+function WikiSearchDialog() {
+  const open = useWikiSearchOpen();
+  return (
+    <SearchDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) closeWikiSearch();
+      }}
+      onOpen={(id, title) => {
+        closeWikiSearch();
+        openWikiEntryEditor(id, { title });
+      }}
+    />
+  );
+}
 
 export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
   const state = useWorkbenchState();
@@ -53,7 +78,6 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
   const mobile = !isDesktop;
   useWorkbenchKeybindings();
 
-  const [auxSlot, setAuxSlot] = useState<HTMLDivElement | null>(null);
   const [spawnOpen, setSpawnOpen] = useState(false);
 
   // Viewport crossings reset the sidebar: drawer closed on mobile; entering
@@ -68,19 +92,9 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     if (!isDesktop) setSidebarCollapsed(true);
   }, [isDesktop]);
 
-  // Mirror visibility flags onto the collapsible panels (collapse → 0%,
-  // expand — never unmount, so portal targets stay connected).
-  const auxPanelRef = useRef<PanelImperativeHandle | null>(null);
-  useEffect(() => {
-    const panel = auxPanelRef.current;
-    if (!panel) return;
-    if (state.aux.visible) {
-      if (panel.isCollapsed()) panel.expand();
-    } else if (!panel.isCollapsed()) {
-      panel.collapse();
-    }
-  }, [state.aux.visible]);
-
+  // Mirror the bottom-panel visibility onto its collapsible panel
+  // (collapse → 0%, expand — never unmount, so editor bodies keep their
+  // DOM and state).
   const bottomPanelRef = useRef<PanelImperativeHandle | null>(null);
   useEffect(() => {
     const panel = bottomPanelRef.current;
@@ -103,6 +117,44 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     }
     seenNoticesRef.current = Math.max(count, seenNoticesRef.current);
   }, [runtime.notices.length, state.panel.visible, state.panel.tab]);
+
+  // Agent tab sync (runtime openTabs/activeAgent ⇔ workbench agent tabs).
+  useEffect(() => {
+    const openTabs = runtime.openTabs;
+    const activeAgent = runtime.activeAgent;
+    const livePaths = new Set<string>();
+    const activePaths = new Set<string>();
+    const main = state.groups.main;
+    const secondary = state.groups.secondary;
+    for (const [groupId, group] of [["main", main], ["secondary", secondary]] as const) {
+      for (const editor of group?.editors ?? []) {
+        if (editor.kind !== "agent") continue;
+        const path = String(editor.params.path ?? "");
+        livePaths.add(path);
+        if (editor.id === group?.activeId) activePaths.add(path);
+        void groupId;
+      }
+    }
+    // Open tabs the runtime knows but the strip lacks (openTabs order).
+    for (const path of openTabs) {
+      if (!livePaths.has(path)) openAgentEditor(path, path === activeAgent);
+    }
+    // Close tabs the runtime dropped (closeTab from the strip already ran).
+    for (const path of livePaths) {
+      if (!openTabs.includes(path)) closeEditor(agentEditorId(path));
+    }
+    // Focus follows the runtime's active agent — but only when an agent
+    // tab is already the active editor (tab switching mirrors selection)
+    // or nothing is active yet. Opening another kind of editor must not
+    // have the sync effect steal focus back to the chat.
+    if (activeAgent && openTabs.includes(activeAgent) && !activePaths.has(activeAgent)) {
+      const activeGroup = state.groups.active === "secondary" ? state.groups.secondary : state.groups.main;
+      const activeEditor = activeGroup?.editors.find((editor) => editor.id === activeGroup?.activeId);
+      if (!activeEditor || activeEditor.kind === "agent") {
+        activateEditorById(agentEditorId(activeAgent));
+      }
+    }
+  }, [runtime.openTabs, runtime.activeAgent, state.groups]);
 
   // Effort refresh keyed to the active agent (workspace composer needs it).
   const refreshEffort = useCallback(() => {
@@ -128,6 +180,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     { id: "agent.compact", title: "Compact conversation", category: "agent", keywords: "compress summarize context", run: compact },
     { id: "agent.model", title: "Select model", category: "config", keywords: "model provider api key activate", run: () => openEditor({ kind: "config" }) },
     { id: "agent.dag", title: "View DAG", category: "data", keywords: "graph pipeline topology node edge", run: openDag },
+    { id: "agent.open", title: "Open agent tab", category: "agent", keywords: "open chat transcript window", run: () => openAgentEditor(runtime.activeAgent) },
     { id: "view.thinking", title: "Toggle thinking blocks", category: "view", keywords: "collapse fold reasoning", run: () => void runtime.toggleDisplay("collapse_thinking") },
     { id: "view.tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => void runtime.toggleDisplay("collapse_tool_calls") },
     { id: "view.tool-results", title: "Toggle tool results", category: "view", keywords: "collapse fold output", run: () => void runtime.toggleDisplay("collapse_tool_results") },
@@ -139,18 +192,13 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
 
   const logout = useCallback(() => void runtime.logout(), [runtime]);
 
-  const handleBandLayout = useCallback((layout: Record<string, number>) => {
-    const size = layout["agent-assistant"];
-    if (state.aux.visible && size >= 20 && size <= 60) setAuxWidth(size);
-  }, [state.aux.visible]);
-
   const handleCenterLayout = useCallback((layout: Record<string, number>) => {
     const size = layout["workbench-panel"];
     if (state.panel.visible && size >= 15 && size <= 70) setPanelHeight(size);
   }, [state.panel.visible]);
 
   const activeAgent = runtime.activeAgent;
-  const activeInfo = runtime.agents.find((agent) => agent.path === activeAgent);
+  const activeAgentSlot = useAgentSlot(activeAgent);
 
   return (
     <WorkbenchRuntimeContext.Provider value={runtime}>
@@ -165,95 +213,41 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           onToggleSidebar={toggleSidebar}
           panelVisible={state.panel.visible}
           onTogglePanel={togglePanel}
-          auxVisible={state.aux.visible}
-          onToggleAux={toggleAux}
           onLogout={logout}
         />
 
-        {mobile ? (
-          <div className="flex min-h-0 min-w-0 flex-col">
-            <EditorArea />
-          </div>
-        ) : (
-          <div className="flex min-h-0 min-w-0">
-            <ActivityBar
-              mobile={false}
-              onToggleSidebar={toggleSidebar}
-              onToggleAux={toggleAux}
-              onTogglePanel={togglePanel}
-              onLogout={logout}
+        <div className="flex min-h-0 min-w-0">
+          <ActivityBar
+            mobile={mobile}
+            onToggleSidebar={toggleSidebar}
+            onTogglePanel={togglePanel}
+            onLogout={logout}
+          />
+          {!mobile && !state.sidebar.collapsed && (
+            <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
+          )}
+          <ResizablePanelGroup orientation="vertical" onLayoutChanged={handleCenterLayout} className="min-h-0 min-w-0 flex-1">
+            <ResizablePanel id="workbench-editors" minSize="30%" className="flex min-w-0">
+              <EditorArea />
+            </ResizablePanel>
+            <ResizableHandle
+              aria-label="调整面板高度"
+              className={cn(!state.panel.visible && "pointer-events-none w-0 opacity-0")}
             />
-            {!state.sidebar.collapsed && (
-              <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
-            )}
-            <ResizablePanelGroup
-              orientation="horizontal"
-              onLayoutChanged={handleBandLayout}
-              className="min-h-0 min-w-0 flex-1"
+            <ResizablePanel
+              id="workbench-panel"
+              panelRef={bottomPanelRef}
+              defaultSize={`${state.panel.heightPercent}%`}
+              minSize="80px"
+              maxSize="70%"
+              collapsible
+              collapsedSize="0%"
+              className="flex min-h-0 min-w-0 flex-col"
             >
-              <ResizablePanel id="workbench-editor" minSize="35%" className="flex min-w-0 flex-col">
-                <ResizablePanelGroup
-                  orientation="vertical"
-                  onLayoutChanged={handleCenterLayout}
-                  className="min-h-0 min-w-0 flex-1"
-                >
-                  <ResizablePanel id="workbench-editors" minSize="30%" className="flex min-w-0">
-                    <EditorArea />
-                  </ResizablePanel>
-                  <ResizableHandle
-                    aria-label="调整面板高度"
-                    className={cn(!state.panel.visible && "pointer-events-none w-0 opacity-0")}
-                  />
-                  <ResizablePanel
-                    id="workbench-panel"
-                    panelRef={bottomPanelRef}
-                    defaultSize={`${state.panel.heightPercent}%`}
-                    minSize="80px"
-                    maxSize="70%"
-                    collapsible
-                    collapsedSize="0%"
-                    className="flex min-h-0 min-w-0 flex-col"
-                  >
-                    <BottomPanel frameLog={runtime.frameLog} notices={runtime.notices} />
-                  </ResizablePanel>
-                </ResizablePanelGroup>
-              </ResizablePanel>
-              <ResizableHandle
-                aria-label="调整 Agent 辅助区宽度"
-                className={cn(!state.aux.visible && "pointer-events-none w-0 opacity-0")}
-              />
-              <ResizablePanel
-                id="agent-assistant"
-                panelRef={auxPanelRef}
-                defaultSize={`${state.aux.widthPercent}%`}
-                minSize="320px"
-                maxSize="60%"
-                collapsible
-                collapsedSize="0%"
-                className="flex min-w-0 flex-col"
-              >
-                <aside aria-label="Agent 辅助区" className="flex min-h-0 min-w-0 flex-1 flex-col">
-                  <AuxAgentPane
-                    onSlotChange={setAuxSlot}
-                    inspectorOpen={state.aux.inspectorOpen}
-                    onSetInspectorOpen={setAuxInspectorOpen}
-                    activeAgent={activeAgent}
-                    activeInfo={activeInfo}
-                    status={runtime.statuses[activeAgent]}
-                    plan={runtime.plans[activeAgent] ?? null}
-                    usage={runtime.usage[activeAgent] ?? null}
-                    display={runtime.display}
-                    onToggleDisplay={(key) => void runtime.toggleDisplay(key)}
-                    onOpenDag={openDag}
-                    onOpenCopy={() => openAgentDialog("copy")}
-                    onOpenHistory={() => openAgentDialog("history")}
-                    onRefreshHistory={runtime.refreshHistory}
-                  />
-                </aside>
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          </div>
-        )}
+              <BottomPanel frameLog={runtime.frameLog} notices={runtime.notices} />
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
 
         <StatusBar runtime={runtime} />
 
@@ -261,12 +255,12 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           <SideBar mobile collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
         )}
 
-        {/* One workspace instance survives breakpoints and layout changes. */}
+        {/* One workspace instance portals into the active agent tab's slot
+            (agent-slot-registry); it parks off-document when no agent tab
+            is active. */}
         <AgentWorkspace
-          mode={mobile ? "drawer" : "docked"}
-          dockedSlot={auxSlot}
+          dockedSlot={activeAgentSlot}
           agents={runtime.agents}
-          openTabs={runtime.openTabs}
           activeAgent={activeAgent}
           statuses={runtime.statuses}
           messages={runtime.messages[activeAgent] ?? []}
@@ -276,7 +270,6 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           display={runtime.display}
           draft={runtime.draft}
           busy={runtime.busy}
-          rightOpen={state.aux.inspectorOpen}
           onDraftChange={runtime.setDraft}
           onSendMessage={(context) => void runtime.sendMessage(context)}
           onCancel={cancel}
@@ -287,13 +280,13 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           agentEffort={runtime.agentEfforts[activeAgent]}
           onRefreshEffort={refreshEffort}
           onChangeEffort={(path, effort) => runtime.setAgentEffort(path, effort)}
-          onSelectAgent={runtime.selectAgent}
+          onSelectAgent={(path) => runtime.selectAgent(path)}
+          openTabs={runtime.openTabs}
           onCloseAgent={runtime.closeTab}
           onSpawn={() => setSpawnOpen(true)}
           storedAgents={runtime.storedAgents}
           onSearchStoredAgents={(query) => void runtime.refreshStoredAgents(query)}
           onResumeAgent={(agent) => void runtime.resumeAgent(agent)}
-          onToggleRight={toggleAuxInspector}
           onOpenDag={openDag}
         />
 
@@ -314,6 +307,8 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           busy={runtime.busy}
           onSpawnAgent={runtime.spawnAgent}
         />
+
+        <WikiSearchDialog />
 
         <CommandPalette />
       </main>

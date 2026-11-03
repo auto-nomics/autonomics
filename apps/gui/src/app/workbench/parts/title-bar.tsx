@@ -14,7 +14,6 @@ import {
   Moon,
   PanelBottom,
   PanelLeft,
-  PanelRight,
   Sun,
   X,
 } from "lucide-react";
@@ -103,8 +102,6 @@ export function TitleBar(props: {
   onToggleSidebar: () => void;
   panelVisible: boolean;
   onTogglePanel: () => void;
-  auxVisible: boolean;
-  onToggleAux: () => void;
   onLogout: () => void;
 }) {
   return (
@@ -125,9 +122,6 @@ export function TitleBar(props: {
             </Button>
             <Button size="icon-sm" variant="ghost" aria-label={props.panelVisible ? "收起面板" : "打开面板"} aria-pressed={props.panelVisible} title={props.panelVisible ? "收起面板(Ctrl+J)" : "打开面板(Ctrl+J)"} onClick={props.onTogglePanel}>
               <PanelBottom />
-            </Button>
-            <Button size="icon-sm" variant="ghost" aria-label="Agent 对话" aria-pressed={props.auxVisible} title={props.auxVisible ? "隐藏 Agent 对话" : "显示 Agent 对话"} onClick={props.onToggleAux}>
-              <PanelRight />
             </Button>
             <span className="mx-1 h-4 w-px bg-border" aria-hidden />
             <ThemeButton />
