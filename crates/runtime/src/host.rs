@@ -37,7 +37,6 @@ use data_engine::runtime::DataEngineClient;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 use crate::config::RuntimeConfig;
-use crate::control::DelegationStatus;
 use crate::error::Result;
 
 mod agent_handle;
@@ -59,7 +58,7 @@ pub use vfs_setup::bibliography_file_storage;
 
 use events::{PendingDelivery, SpawnNotice};
 
-use delegation::{HostDelegation, push_delegation_progress};
+use delegation::DelegationLedger;
 use relay::AgentEntry;
 use status::derive_agent_status;
 
@@ -93,9 +92,10 @@ pub struct RuntimeHost {
     cmd_rx: tokio::sync::mpsc::UnboundedReceiver<crate::control::HostCommand>,
     /// Clonable control handle — passed to agent tools.
     control: crate::control::HostControl,
-    /// First-class delegation ledger. Keyed by stable delegation ID, so the
-    /// same target can safely process multiple queued requests.
-    delegations: HashMap<uuid::Uuid, HostDelegation>,
+    /// First-class delegation ledger — the authoritative in-memory state
+    /// for tracked request-response delegations. See
+    /// [`delegation::DelegationLedger`].
+    ledger: DelegationLedger,
     /// Current model (for spawning agents from tools). Set by TUI at startup.
     model: Option<Arc<ArcSwapOption<Model>>>,
     /// Channel for receiving background spawn outcomes. Background spawn
@@ -163,7 +163,7 @@ impl RuntimeHost {
             event_rx,
             cmd_rx,
             control,
-            delegations: HashMap::new(),
+            ledger: DelegationLedger::new(),
             model: None,
             registration_rx,
             registration_tx,
@@ -232,75 +232,33 @@ impl RuntimeHost {
         match &event {
             AgentEvent::TurnStarted {
                 turn_id,
-                session_id,
                 delegation_id,
-                ..
             } => {
-                if let Some(delegation_id) = delegation_id {
-                    if let Some(record) = self.delegations.get_mut(delegation_id) {
-                        record.snapshot.status = DelegationStatus::Running;
-                        record.snapshot.turn_id = Some(*turn_id);
-                        record.snapshot.session_id = Some(*session_id);
-                        record.snapshot.updated_at = unix_epoch_ms();
-                        let progress = record.progress.clone();
-                        self.persist_delegation(*delegation_id);
-                        self.persist_turn_start(&name, *turn_id, *session_id, Some(*delegation_id));
-                        push_delegation_progress(
-                            &progress,
-                            "turn_started",
-                            "running",
-                            &format!("turn={turn_id} session={session_id}"),
-                        );
-                    }
+                if let Some(delegation_id) = delegation_id
+                    && self.ledger.mark_running(delegation_id, *turn_id)
+                {
+                    self.persist_delegation(*delegation_id);
                 }
-                self.persist_turn_start(&name, *turn_id, *session_id, *delegation_id);
+                // Every turn start persists, delegation or not — when the
+                // branch above fired, `*delegation_id` is the same
+                // `Some(id)`, so no second call is needed there.
+                self.persist_turn_start(&name, *turn_id, *delegation_id);
             }
             AgentEvent::TurnCompleted {
                 turn_id,
-                session_id,
                 delegation_id,
                 status,
                 telemetry,
-                ..
             } => {
                 let response = self.network.accumulated_response(&name).to_string();
-                if let Some(delegation_id) = delegation_id {
-                    if let Some(record) = self.delegations.get_mut(delegation_id) {
-                        record.snapshot.status = match status {
-                            agentik_types::TurnExecutionStatus::Completed => {
-                                DelegationStatus::Completed
-                            }
-                            agentik_types::TurnExecutionStatus::Interrupted => {
-                                DelegationStatus::Interrupted
-                            }
-                            agentik_types::TurnExecutionStatus::Failed => DelegationStatus::Failed,
-                        };
-                        record.snapshot.turn_id = Some(*turn_id);
-                        record.snapshot.response = Some(response.clone());
-                        record.snapshot.updated_at = unix_epoch_ms();
-                        let progress = record.progress.clone();
-                        let completion_status = record.snapshot.status;
-                        let reply_tx = record.reply_tx.take();
-                        self.persist_delegation(*delegation_id);
-                        push_delegation_progress(
-                            &progress,
-                            "turn_completed",
-                            completion_status.as_str(),
-                            &status::truncate_preview(&response, 240),
-                        );
-                        if let Some(reply_tx) = reply_tx {
-                            let _ = reply_tx.send(response);
-                        }
-                    }
+                if let Some(delegation_id) = delegation_id
+                    && self
+                        .ledger
+                        .complete_turn(delegation_id, *turn_id, *status, &response)
+                {
+                    self.persist_delegation(*delegation_id);
                 }
-                self.persist_turn_finish(
-                    &name,
-                    *telemetry,
-                    *turn_id,
-                    *session_id,
-                    *delegation_id,
-                    *status,
-                );
+                self.persist_turn_finish(&name, *telemetry, *turn_id, *delegation_id, *status);
             }
             _ => {}
         }
@@ -327,18 +285,15 @@ impl RuntimeHost {
                 .as_ref()
                 .map(|status| status.tag())
                 .unwrap_or("active");
-            for record in self.delegations.values_mut() {
-                if record.snapshot.target_path == name
-                    && record.snapshot.status == DelegationStatus::Running
-                    && record.snapshot.turn_id.is_some()
-                {
-                    push_delegation_progress(
-                        &record.progress,
-                        "agent_event",
-                        status,
-                        last_event.as_deref().unwrap_or_default(),
-                    );
-                }
+            // The event stream tags agents by registry name (a path
+            // string) — parse it once here at the membrane; the ledger
+            // works in `AgentPath` beyond this point.
+            if let Ok(target) = agentik_types::AgentPath::try_from(name.as_str()) {
+                self.ledger.push_target_progress(
+                    &target,
+                    status,
+                    last_event.as_deref().unwrap_or_default(),
+                );
             }
         }
 
@@ -360,8 +315,7 @@ impl RuntimeHost {
     pub async fn recv_next(&mut self) -> NextEvent {
         // Computed before the select — the deadline call borrows all of
         // `self`, which would fight the per-field channel borrows below.
-        let passivation_at =
-            tokio::time::Instant::from_std(self.next_passivation_deadline());
+        let passivation_at = tokio::time::Instant::from_std(self.next_passivation_deadline());
         tokio::select! {
             tagged = self.event_rx.recv() => {
                 match tagged {

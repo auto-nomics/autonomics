@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use rustpython_ast::TextSize;
 
-use super::interp::{json_to_value, value_to_json, EvalError, ErrKind, EvalResult, Value};
-use super::{GraphEditOp, ScriptState, MAX_API_OPERATIONS, MAX_MAP_SIZE};
+use super::interp::{ErrKind, EvalError, EvalResult, Value, json_to_value, value_to_json};
+use super::{GraphEditOp, MAX_API_OPERATIONS, MAX_MAP_SIZE, ScriptState};
 
 pub(crate) const HOST_FUNCTIONS: &[&str] = &[
     "node",
@@ -158,14 +158,12 @@ pub(crate) fn port_arg(value: &Value, label: &str, offset: Offset) -> EvalResult
                 kind: ErrKind::Type,
                 message: format!("{label} must be an int, got '{}'", other.type_name()),
                 offset,
-            })
+            });
         }
     };
-    u8::try_from(as_int).map_err(|_| {
-        EvalError {
-            kind: ErrKind::Value,
-            message: format!("invalid {label} {as_int}"),
-            offset,
-        }
+    u8::try_from(as_int).map_err(|_| EvalError {
+        kind: ErrKind::Value,
+        message: format!("invalid {label} {as_int}"),
+        offset,
     })
 }

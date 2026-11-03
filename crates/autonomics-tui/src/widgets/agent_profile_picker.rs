@@ -143,6 +143,11 @@ impl AgentProfilePickerState {
 
     pub fn close(&mut self) {
         self.visible = false;
+        // Reset the query so the next open's initial (empty-query) page
+        // passes the stale-guard in `AgentRecordsLoaded` handling — a
+        // leftover query would make that page look stale and the picker
+        // would never reopen.
+        self.query.clear();
         self.delete_confirm_id = None;
         self.delete_confirm_input.clear();
         self.rename_id = None;
@@ -398,7 +403,13 @@ impl AgentProfilePickerState {
 
         // Build the tree recursively.
         let mut stored_rows = Vec::new();
-        build_tree(&agent_paths, &self.collapsed, &force_expand, &mut stored_rows, 0);
+        build_tree(
+            &agent_paths,
+            &self.collapsed,
+            &force_expand,
+            &mut stored_rows,
+            0,
+        );
 
         // ── "New agent" section ──
         // Merged create flow: the resume picker doubles as the profile
@@ -594,7 +605,8 @@ impl StatefulWidget for AgentProfilePicker {
 
         let preview_inner = render_preview_frame(content.preview, buf, self.accent);
         if let Some(kind) = state.selected_kind() {
-            let lines = kind_preview_lines(kind, vec![("Action", "create a new agent".to_string())]);
+            let lines =
+                kind_preview_lines(kind, vec![("Action", "create a new agent".to_string())]);
             Widget::render(
                 Paragraph::new(truncate_preview_lines(lines, preview_inner.height as usize)),
                 preview_inner,
@@ -722,5 +734,43 @@ impl StatefulWidget for AgentProfilePicker {
             };
             Widget::render(Paragraph::new(error_or_cursor), inner_rename, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(name: &str) -> agentik_core::storage::AgentRecord {
+        agentik_core::storage::AgentRecord {
+            id: uuid::Uuid::new_v4(),
+            name: name.to_string(),
+            config_json: serde_json::json!({"kind": "researcher"}),
+            created_at: 0,
+            last_active: 0,
+        }
+    }
+
+    /// Regression: closing the picker must reset the query. The initial
+    /// open fetches with an empty query and `AgentRecordsLoaded` handling
+    /// drops pages whose query no longer matches — a leftover query from a
+    /// previous open made the initial page look stale, so the picker never
+    /// became visible again.
+    #[test]
+    fn close_resets_query_for_next_open() {
+        let mut state = AgentProfilePickerState::default();
+        state.open();
+        state.push_char('r');
+        state.push_char('e');
+        assert_eq!(state.query, "re");
+
+        state.close();
+        assert!(!state.visible);
+        assert_eq!(state.query, "", "close() must clear the search query");
+
+        // The next open's initial (empty-query) page must not be treated
+        // as stale by the caller's guard.
+        state.set_records(&[record("/root/researcher")]);
+        assert_eq!(state.items.len(), 1);
     }
 }

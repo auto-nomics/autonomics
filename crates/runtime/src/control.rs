@@ -11,6 +11,7 @@
 use agentik_core::tools::ProgressBuffer;
 use agentik_core::{AgentRuntimeConfig, AgentRuntimeOverrides};
 use agentik_sdk::model::Model;
+use agentik_types::AgentPath;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
@@ -573,11 +574,14 @@ impl DelegationStatus {
 }
 
 /// Queryable record for one agent-to-agent task.
+///
+/// Paths are typed [`AgentPath`] — serde-transparent, so the JSON shape
+/// (`"/root/caller/worker"` strings) is unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationSnapshot {
     pub delegation_id: Uuid,
-    pub caller_path: Option<String>,
-    pub target_path: String,
+    pub caller_path: Option<AgentPath>,
+    pub target_path: AgentPath,
     pub task: String,
     pub status: DelegationStatus,
     pub turn_id: Option<Uuid>,

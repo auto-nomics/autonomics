@@ -51,7 +51,7 @@ impl Context {
             .collect::<Vec<_>>()
             .join("\n");
         if !preview.is_empty() {
-            self.shared.send_event(if from_user {
+            self.core.send_event(if from_user {
                 AgentEvent::UserMessageAcknowledged(preview)
             } else {
                 AgentEvent::MessageInjected(preview)
@@ -298,7 +298,7 @@ impl Context {
                 telemetry: self.telemetry,
             };
             let _ = tx.send(PersistOp::ReplaceSessionState {
-                agent_id: self.shared.id,
+                agent_id: self.core.id,
                 session_id: self.id,
                 state,
             });

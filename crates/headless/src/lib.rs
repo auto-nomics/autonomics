@@ -141,7 +141,6 @@ impl TranslationState {
         match event {
             AgentEvent::TurnStarted {
                 turn_id,
-                session_id,
                 delegation_id: None,
             } => {
                 // A fresh top-level turn: reset per-turn usage.
@@ -149,10 +148,7 @@ impl TranslationState {
                 self.turn_telemetry = Telemetry::default();
                 self.current_turn_id = turn_id;
                 self.current_turn_active = true;
-                vec![RunEvent::TurnStarted(TurnStartedEvent {
-                    turn_id,
-                    session_id,
-                })]
+                vec![RunEvent::TurnStarted(TurnStartedEvent { turn_id })]
             }
 
             AgentEvent::ToolCall { name, input } => {
@@ -272,6 +268,10 @@ impl TranslationState {
                 self.fold_turn_telemetry();
                 self.current_turn_active = false;
                 match status {
+                    // A parked turn (background wait_task) is NOT terminal:
+                    // the watcher wakes the agent into a fresh turn, and
+                    // the run keeps streaming. No run event is emitted.
+                    TurnExecutionStatus::Pause => vec![],
                     TurnExecutionStatus::Completed => {
                         self.terminal = Some(Terminal::Completed);
                         vec![RunEvent::TurnCompleted(TurnCompletedEvent {

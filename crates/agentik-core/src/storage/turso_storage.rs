@@ -1858,9 +1858,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::ContextState;
     use crate::lifecycle::AgentLifecycleStatus;
     use crate::profile::{AgentKind, AgentProfileConfig};
-    use crate::context::ContextState;
     use crate::storage::AgentRuntimeOverrides;
     use agentik_sdk::AgentMessageExt;
 
@@ -2971,7 +2971,11 @@ mod tests {
         store.touch_agent(agent_id).await.unwrap();
         reader.await.unwrap();
 
-        let record = store.get_agent_by_name("/root/locked").await.unwrap().unwrap();
+        let record = store
+            .get_agent_by_name("/root/locked")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(record.id, agent_id);
     }
 

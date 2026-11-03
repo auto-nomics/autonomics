@@ -171,7 +171,7 @@ impl App {
                 self.spawn_client_task("search_stored_agents", move || async move {
                     match client.search_storage_agents(&query, 100).await {
                         Ok(records) => {
-                            let _ = tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
+                            tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
                                 query,
                                 records,
                             });

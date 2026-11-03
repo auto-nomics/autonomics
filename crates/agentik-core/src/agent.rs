@@ -31,8 +31,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::error::{AgentError, Result};
 use crate::context::{AgentCore, Context};
+use crate::error::{AgentError, Result};
 use crate::storage::{AgentRecord, AgentStorage, PersistOp, StorageError};
 use crate::tools::ToolRegistration;
 use agentik_types::ContextInfo;
@@ -99,14 +99,9 @@ pub struct Agent {
     pub(crate) internal_event_tx: UnboundedSender<InternalEvent>,
     /// Receiver consumed once by [`run()`]; `None` after that.
     pub(crate) internal_event_rx: Option<UnboundedReceiver<InternalEvent>>,
-    /// Initial messages from the builder. Used as a fallback when no
-    /// session records exist in storage. Consumed during `run()`.
-    pub(crate) initial_messages: Option<Vec<agentik_sdk::types::messages::Message>>,
     /// Cancel token from the builder, used when auto-creating the context.
     pub(crate) cancel_token: CancellationToken,
 }
-
-const RESTORED_SESSION_TITLE: &str = "Restored";
 
 impl Agent {
     pub fn builder() -> crate::agent_builder::AgentBuilder {
@@ -388,33 +383,6 @@ impl Agent {
             }
         }
 
-        // ── Fallback: no session records in storage ──
-        // If the builder provided initial messages and no context was
-        // restored, create one with those messages and bind it.
-        if self.context.is_none() && self.recovery_notice.is_none() {
-            if let Some(messages) = self.initial_messages.take() {
-                let id = Uuid::new_v4();
-                let state = crate::context::ContextState {
-                    messages,
-                    summary: None,
-                    ancestor_summaries: Vec::new(),
-                    telemetry: agentik_types::ContextTelemetry::default(),
-                };
-                let mut s = Context::new_with_state(
-                    id,
-                    self.shared.clone(),
-                    state,
-                    self.cancel_token.clone(),
-                );
-                s.title = Some(RESTORED_SESSION_TITLE.into());
-                s.resume().await;
-                self.persist_session_title(id, RESTORED_SESSION_TITLE).await;
-                self.bind_context(id).await;
-                self.context = Some(s);
-                tracing::info!("created fallback session from builder initial messages");
-            }
-        }
-
         loop {
             let event = match rx.recv().await {
                 Some(e) => e,
@@ -472,12 +440,12 @@ impl Agent {
 
             if should_run {
                 let tx = self.internal_event_tx.clone();
-                if let Some(session) = self.context.as_mut() {
-                    session.run_context(&tx, &mut rx, delegation_id).await;
+                if let Some(context) = self.context.as_mut() {
+                    context.run_context(&tx, &mut rx, delegation_id).await;
                     // A cancel can replace the token while run_context owns
                     // the receiver. Keep Agent-owned context creation in
                     // sync with that fresh token.
-                    self.cancel_token = session.cancel_token.clone();
+                    self.cancel_token = context.cancel_token.clone();
                 }
             }
         }

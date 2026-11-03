@@ -39,8 +39,8 @@ pub mod storage;
 pub mod types;
 
 pub use storage::{
-    ArtifactEntry, CachedFileOutput, MaintenancePolicy, ReferenceEntry, ResultCache,
-    RunAwareCleanReport, AgentActivityTracker, StorageCoordinator, StorageStatus,
+    AgentActivityTracker, ArtifactEntry, CachedFileOutput, MaintenancePolicy, ReferenceEntry,
+    ResultCache, RunAwareCleanReport, StorageCoordinator, StorageStatus,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -849,9 +849,7 @@ impl DataEngineClient {
     {
         self.activity.touch(&self.agent_id);
         self.tx
-            .send(EngineMsg {
-                cmd,
-            })
+            .send(EngineMsg { cmd })
             .map_err(|_| ClientError::ServerClosed)?;
         reply_rx
             .await
@@ -1426,11 +1424,7 @@ impl DataEngineManager {
     /// engine's `history_ref` is set to `history_ref` instead of the
     /// default `"main"` — this is what gives each agent its own isolated
     /// snapshot lineage in the shared history database.
-    pub fn client_for_agent_with_ref(
-        &self,
-        agent_id: &str,
-        history_ref: &str,
-    ) -> DataEngineClient {
+    pub fn client_for_agent_with_ref(&self, agent_id: &str, history_ref: &str) -> DataEngineClient {
         let mut actors = self.actors.lock().expect("actors mutex poisoned");
 
         // Fast path: actor already exists and is not being evicted. A
@@ -1451,7 +1445,10 @@ impl DataEngineManager {
         // Slow path: create new actor.
         // Use the caller-provided history_ref so each agent gets its own
         // snapshot lineage instead of all committing to "main".
-        let new_engine = self.template.new_isolated_engine().with_history_ref(history_ref);
+        let new_engine = self
+            .template
+            .new_isolated_engine()
+            .with_history_ref(history_ref);
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let running = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));

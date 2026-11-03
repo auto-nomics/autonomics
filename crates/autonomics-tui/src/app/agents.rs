@@ -184,7 +184,6 @@ impl App {
     /// side drops pages whose query has already moved on.
     pub(super) fn schedule_stored_agent_search(&mut self) {
         let query = self.state.agent_profile_picker.query.clone();
-        let client = self.client.clone();
         let tx = self.app_event_tx.clone();
         self.spawn_client_task("search_stored_agents_debounce", move || async move {
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -270,47 +269,47 @@ impl App {
                     return;
                 }
                 match self.state.agent_profile_picker.selected() {
-                Some(crate::widgets::agent_profile_picker::PickerSelection::NewAgent(kind)) => {
-                    // Merged picker: same naming flow the old profile
-                    // picker drove — stash the kind, open the name input.
-                    self.state.agent_profile_picker.close();
-                    self.state.pending_profile = Some(kind);
-                    self.state
-                        .name_input
-                        .open(format!(" New Agent ({kind}) "), kind.name());
-                }
-                Some(crate::widgets::agent_profile_picker::PickerSelection::Stored(item)) => {
-                    // If this agent is already open in a leaf, just switch focus
-                    // instead of spawning a duplicate.
-                    if let Some(idx) = self
-                        .state
-                        .sessions
-                        .iter()
-                        .position(|s| s.agent_id == item.id)
-                    {
-                        tracing::info!(
-                            agent_id = %item.id,
-                            leaf_idx = idx,
-                            "agent already open — switching focus instead of restoring"
-                        );
-                        self.state.active_agent_idx = idx;
+                    Some(crate::widgets::agent_profile_picker::PickerSelection::NewAgent(kind)) => {
+                        // Merged picker: same naming flow the old profile
+                        // picker drove — stash the kind, open the name input.
                         self.state.agent_profile_picker.close();
-                        return;
+                        self.state.pending_profile = Some(kind);
+                        self.state
+                            .name_input
+                            .open(format!(" New Agent ({kind}) "), kind.name());
                     }
+                    Some(crate::widgets::agent_profile_picker::PickerSelection::Stored(item)) => {
+                        // If this agent is already open in a leaf, just switch focus
+                        // instead of spawning a duplicate.
+                        if let Some(idx) = self
+                            .state
+                            .sessions
+                            .iter()
+                            .position(|s| s.agent_id == item.id)
+                        {
+                            tracing::info!(
+                                agent_id = %item.id,
+                                leaf_idx = idx,
+                                "agent already open — switching focus instead of restoring"
+                            );
+                            self.state.active_agent_idx = idx;
+                            self.state.agent_profile_picker.close();
+                            return;
+                        }
 
-                    let config_json = item.config_json.clone();
-                    // `item.path` is the full persisted AgentPath. Preserve its
-                    // hierarchy so child agents restore their original runtime ID.
-                    self.state.agent_profile_picker.close();
-                    // Tolerant parse covers both the current per-agent config
-                    // shape and legacy full-profile rows.
-                    let config = agentik_core::AgentProfileConfig::from_json(&config_json);
-                    self.spawn_agent_at_path(config, item.path);
-                }
-                None => {
-                    // Folder row — expand/collapse.
-                    self.state.agent_profile_picker.toggle_expand();
-                }
+                        let config_json = item.config_json.clone();
+                        // `item.path` is the full persisted AgentPath. Preserve its
+                        // hierarchy so child agents restore their original runtime ID.
+                        self.state.agent_profile_picker.close();
+                        // Tolerant parse covers both the current per-agent config
+                        // shape and legacy full-profile rows.
+                        let config = agentik_core::AgentProfileConfig::from_json(&config_json);
+                        self.spawn_agent_at_path(config, item.path);
+                    }
+                    None => {
+                        // Folder row — expand/collapse.
+                        self.state.agent_profile_picker.toggle_expand();
+                    }
                 }
             }
             _ => {}

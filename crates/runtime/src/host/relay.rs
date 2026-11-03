@@ -38,9 +38,6 @@ pub(super) struct AgentEntry {
     /// `GetAgentInfo` / `GetStatus` (which serialize `AgentInfo`) see the
     /// same value that `update_agent_status` last set.
     pub(super) info: crate::control::AgentInfo,
-    /// Agent kind used to instantiate this agent (capability metadata
-    /// and tool assembly).
-    pub(super) kind: AgentKind,
     /// Live runtime status — the agent's unified
     /// [`agentik_types::AgentLifecycleStatus`]. Updated on every observed
     /// [`agentik_sdk::types::AgentEvent`] that carries a lifecycle signal.
@@ -90,7 +87,6 @@ impl RuntimeHost {
         info: crate::control::AgentInfo,
     ) -> crate::control::AgentInfo {
         let path = handle.path.clone();
-        let kind = handle.kind;
         let agent_id = handle.agent_id;
         let relay_name = path.as_str().to_string();
         let model = handle.model.clone(); // Clone Arc before moving handle
@@ -117,7 +113,6 @@ impl RuntimeHost {
                 status: info.status,
                 last_event: info.last_event.clone(),
                 info: info.clone(),
-                kind,
                 model,
                 memory,
                 inbound_pending: Arc::new(AtomicBool::new(false)),

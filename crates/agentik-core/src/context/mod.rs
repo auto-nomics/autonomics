@@ -40,8 +40,8 @@
 pub mod error;
 
 mod compaction;
-mod messages;
 mod core;
+mod messages;
 mod tool_images;
 mod workflow;
 
@@ -209,7 +209,7 @@ pub struct Context {
     turn: Option<Turn>,
 
     /// Back-reference to shared agent resources.
-    pub(crate) shared: Arc<AgentCore>,
+    pub(crate) core: Arc<AgentCore>,
 }
 
 impl Context {
@@ -222,21 +222,21 @@ impl Context {
     }
 
     /// Create a new empty session.
-    pub(crate) fn new(id: Uuid, shared: Arc<AgentCore>) -> Self {
+    pub(crate) fn new(id: Uuid, core: Arc<AgentCore>) -> Self {
         let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
             agentik_types::AgentPlan::new(),
         )));
         let mut toolset = Toolset::from_registry_with_tasks(
-            shared.tool_registry.clone(),
-            shared.tasks.clone(),
-            shared.event_tx(),
+            core.tool_registry.clone(),
+            core.tasks.clone(),
+            core.event_tx(),
         );
         // The same Arc must back both the Toolset context and the Context
         // field, or `update_plan` writes and `set_plan` restores would
         // diverge from what `inject_state_notices` reads.
         toolset.set_session_plan(id, Arc::clone(&plan));
         let now = chrono::Utc::now().timestamp_millis();
-        let persist_tx = shared.persist_tx.get().cloned();
+        let persist_tx = core.persist_tx.get().cloned();
         Self {
             id,
             title: None,
@@ -257,49 +257,7 @@ impl Context {
             pending_system_prompt: None,
             plan,
             turn: None,
-            shared,
-        }
-    }
-
-    /// Create a session pre-loaded with conversation state (restore path).
-    pub(crate) fn new_with_state(
-        id: Uuid,
-        shared: Arc<AgentCore>,
-        state: ContextState,
-        cancel_token: CancellationToken,
-    ) -> Self {
-        let plan = Arc::new(arc_swap::ArcSwap::new(Arc::new(
-            agentik_types::AgentPlan::new(),
-        )));
-        let mut toolset = Toolset::from_registry_with_tasks(
-            shared.tool_registry.clone(),
-            shared.tasks.clone(),
-            shared.event_tx(),
-        );
-        toolset.set_session_plan(id, Arc::clone(&plan));
-        let now = chrono::Utc::now().timestamp_millis();
-        let persist_tx = shared.persist_tx.get().cloned();
-        Self {
-            id,
-            title: None,
-            created_at: now,
-            last_active: now,
-            messages: state.messages,
-            summary: state.summary,
-            ancestor_summaries: state.ancestor_summaries,
-            telemetry: state.telemetry,
-            parent_session_id: None,
-            fork_point_message_id: None,
-            persist_tx,
-            lifecycle: AgentLifecycle::new(),
-            toolset,
-            token_budget: TokenBudget::default(),
-            cancel_token,
-            active_wait_watchers: HashMap::new(),
-            pending_system_prompt: None,
-            plan,
-            turn: None,
-            shared,
+            core,
         }
     }
 
@@ -317,7 +275,7 @@ impl Context {
     /// `AgentEvent::LifecycleChanged` if the status actually changed.
     pub(crate) fn set_lifecycle(&mut self, status: agentik_types::AgentLifecycleStatus) {
         if self.lifecycle.set_status(status) {
-            self.shared.send_event(AgentEvent::LifecycleChanged(status));
+            self.core.send_event(AgentEvent::LifecycleChanged(status));
         }
     }
 
@@ -376,7 +334,7 @@ impl Context {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64,
-            agent_id: self.shared.id,
+            agent_id: self.core.id,
             agent_status: *self.lifecycle.status(),
             state: ContextState {
                 messages: self.messages.clone(),
@@ -390,7 +348,7 @@ impl Context {
 
     pub async fn persist_snapshot(&self) {
         let snapshot = self.snapshot();
-        if let Some(storage) = &self.shared.storage {
+        if let Some(storage) = &self.core.storage {
             let _ = storage.as_ref().create_snapshot(snapshot).await;
         }
     }
@@ -402,7 +360,7 @@ impl Context {
         self.pause_telemetry();
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         self.persist_snapshot().await;
-        if let Some(storage) = &self.shared.storage {
+        if let Some(storage) = &self.core.storage {
             let _ = storage.end_session(self.id).await;
         }
     }
@@ -411,13 +369,13 @@ impl Context {
     pub async fn resume(&mut self) {
         // Start a WAL session if we don't have persist_tx wired yet.
         if self.persist_tx.is_none() {
-            if let Some(tx) = self.shared.persist_tx.get() {
+            if let Some(tx) = self.core.persist_tx.get() {
                 self.persist_tx = Some(tx.clone());
             }
         }
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.start_session(self.shared.id, self.id).await;
-            let _ = storage.touch_agent(self.shared.id).await;
+        if let Some(storage) = &self.core.storage {
+            let _ = storage.start_session(self.core.id, self.id).await;
+            let _ = storage.touch_agent(self.core.id).await;
         }
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         self.last_active = chrono::Utc::now().timestamp_millis();
@@ -438,6 +396,22 @@ impl From<&Context> for ContextInfo {
             fork_point_message_id: s.fork_point_message_id.clone(),
         }
     }
+}
+
+// ── Dynamic context injection ─────────────────────────
+// (merged from the former top-level `context.rs` module)
+
+/// Optional callback for dynamic context injection.
+///
+/// If provided, the agent calls `poll()` at each loop boundary (before
+/// each LLM request). When it returns `Some(text)`, the text is injected
+/// as a user message into memory. Return `None` to skip.
+///
+/// This replaces the previous `AgentContext` reactive store with a much
+/// simpler callback interface.
+#[async_trait]
+pub trait ContextProvider: Send + Sync {
+    async fn poll(&self) -> Option<String>;
 }
 
 // ── Test support ────────────────────────────────────────────────────
@@ -557,20 +531,4 @@ mod tests {
             "total elapsed spans both active stretches"
         );
     }
-}
-
-// ── Dynamic context injection ─────────────────────────
-// (merged from the former top-level `context.rs` module)
-
-/// Optional callback for dynamic context injection.
-///
-/// If provided, the agent calls `poll()` at each loop boundary (before
-/// each LLM request). When it returns `Some(text)`, the text is injected
-/// as a user message into memory. Return `None` to skip.
-///
-/// This replaces the previous `AgentContext` reactive store with a much
-/// simpler callback interface.
-#[async_trait]
-pub trait ContextProvider: Send + Sync {
-    async fn poll(&self) -> Option<String>;
 }

@@ -6,19 +6,18 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::agent::{Agent, AgentConfig};
+use crate::context::AgentCore;
 use crate::context::ContextProvider;
 use crate::error::AgentError;
 use crate::memory::{
     MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding, memory_registrations,
 };
-use crate::context::AgentCore;
 use crate::storage::AgentStorage;
 use crate::tools::{ToolRegistration, ToolRegistry};
 use agentik_sdk::types::messages::Message;
 
 pub struct AgentBuilder {
     model: Arc<ArcSwapOption<Model>>,
-    initial_messages: Vec<Message>,
     context_provider: Option<Arc<dyn ContextProvider>>,
     config: AgentConfig,
     storage: Option<Arc<dyn AgentStorage>>,
@@ -40,7 +39,6 @@ impl Clone for AgentBuilder {
     fn clone(&self) -> Self {
         Self {
             model: self.model.clone(),
-            initial_messages: self.initial_messages.clone(),
             context_provider: self.context_provider.clone(),
             config: self.config.clone(),
             storage: self.storage.clone(),
@@ -61,7 +59,6 @@ impl AgentBuilder {
     pub fn new() -> Self {
         Self {
             model: Default::default(),
-            initial_messages: Vec::new(),
             context_provider: None,
             config: AgentConfig::default(),
             storage: None,
@@ -84,11 +81,6 @@ impl AgentBuilder {
 
     pub fn with_model(mut self, model: Arc<ArcSwapOption<Model>>) -> Self {
         self.model = model;
-        self
-    }
-
-    pub fn with_initial_messages(mut self, messages: Vec<Message>) -> Self {
-        self.initial_messages = messages;
         self
     }
 
@@ -241,11 +233,6 @@ impl AgentBuilder {
             recovery_notice: None,
             internal_event_tx,
             internal_event_rx: Some(internal_event_rx),
-            initial_messages: if self.initial_messages.is_empty() {
-                None
-            } else {
-                Some(self.initial_messages)
-            },
             cancel_token,
         })
     }

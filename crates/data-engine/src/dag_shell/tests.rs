@@ -165,8 +165,8 @@ fn statement_whitelist_rejects_unreachable_constructs() {
         "x: int = 1\n",
     ] {
         let (registry, snapshot) = sandbox();
-        let error = execute_script(script, Duration::from_millis(100), &snapshot, &registry)
-            .unwrap_err();
+        let error =
+            execute_script(script, Duration::from_millis(100), &snapshot, &registry).unwrap_err();
         assert_eq!(error.code, "parse_error", "script: {script}");
     }
 }
@@ -302,9 +302,18 @@ for i in range(3):
         result_json(script),
         serde_json::json!("node_0-node_1-node_2")
     );
-    assert_eq!(result_json(r#""a,b,c".split(",")"#), serde_json::json!(["a", "b", "c"]));
-    assert_eq!(result_json(r#"f"{1 + 1}={bool(2)}""#), serde_json::json!("2=True"));
-    assert_eq!(result_json(r#""Hello".lower() + '!'"#), serde_json::json!("hello!"));
+    assert_eq!(
+        result_json(r#""a,b,c".split(",")"#),
+        serde_json::json!(["a", "b", "c"])
+    );
+    assert_eq!(
+        result_json(r#"f"{1 + 1}={bool(2)}""#),
+        serde_json::json!("2=True")
+    );
+    assert_eq!(
+        result_json(r#""Hello".lower() + '!'"#),
+        serde_json::json!("hello!")
+    );
 }
 
 #[test]
@@ -317,7 +326,10 @@ fn comprehensions_and_generators() {
         result_json(r#"{k: len(k) for k in ["a", "bb"]}"#),
         serde_json::json!({"a": 1, "bb": 2})
     );
-    assert_eq!(result_json("sum(x for x in range(4))"), serde_json::json!(6));
+    assert_eq!(
+        result_json("sum(x for x in range(4))"),
+        serde_json::json!(6)
+    );
     assert_eq!(
         result_json("[x * y for x in range(2) for y in range(2)]"),
         serde_json::json!([0, 0, 0, 1])
@@ -337,7 +349,10 @@ def add(a, b=2):
 
 #[test]
 fn unpacking_indices_and_slices() {
-    assert_eq!(result_json("a, b = [1, 2]\n[b, a]"), serde_json::json!([2, 1]));
+    assert_eq!(
+        result_json("a, b = [1, 2]\n[b, a]"),
+        serde_json::json!([2, 1])
+    );
     assert_eq!(result_json(r#""hello"[-1]"#), serde_json::json!("o"));
     assert_eq!(result_json("[1, 2, 3][::-1]"), serde_json::json!([3, 2, 1]));
     assert_eq!(result_json(r#""hello"[1:4]"#), serde_json::json!("ell"));
@@ -359,7 +374,9 @@ fn comparisons_and_logic() {
 fn walrus_and_tuple_iteration() {
     assert_eq!(result_json("(n := 5) + n"), serde_json::json!(10));
     assert_eq!(
-        result_json("total = 0\nfor key, value in [(\"a\", 1), (\"b\", 2)]:\n    total += value\ntotal"),
+        result_json(
+            "total = 0\nfor key, value in [(\"a\", 1), (\"b\", 2)]:\n    total += value\ntotal"
+        ),
         serde_json::json!(3)
     );
     assert_eq!(

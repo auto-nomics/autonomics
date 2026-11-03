@@ -13,8 +13,8 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, events, gui, hydration, lifecycle, model_config, observations, plugin_environments,
-    context, plugins, settings, skills, storage,
+    agents, context, events, gui, hydration, lifecycle, model_config, observations,
+    plugin_environments, plugins, settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -46,10 +46,7 @@ pub fn api_router(state: GatewayState) -> Router {
             get(agents::get_agent_config).put(agents::set_agent_config),
         )
         .route("/agents/{name}/dag", get(agents::get_agent_dag))
-        .route(
-            "/agents/{name}/context",
-            get(context::request_context_list),
-        )
+        .route("/agents/{name}/context", get(context::request_context_list))
         // ── storage (persisted agents / history / plans) ──
         .route("/storage/agents", get(storage::list_storage_agents))
         .route(

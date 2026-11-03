@@ -80,14 +80,12 @@ async fn gateway_run_streams_the_contract_jsonl() {
             "type": "run.started",
             "run_id": "<uuid>",
             "agent_id": "<uuid>",
-            "session_id": "<uuid>",
             "profile": "researcher",
             "model": "mock-model",
         }),
         serde_json::json!({
             "type": "turn.started",
             "turn_id": "<uuid>",
-            "session_id": "<uuid>",
         }),
         serde_json::json!({
             "type": "item.completed",

@@ -38,11 +38,8 @@ impl ContextCache {
     /// testable without a host.
     pub fn observe(&self, agent: &str, event: &AgentEvent) {
         let mut map = self.contexts.lock().expect("context cache mutex poisoned");
-        match event {
-            AgentEvent::ContextList { contexts } => {
-                map.insert(agent.to_string(), contexts.clone());
-            }
-            _ => {}
+        if let AgentEvent::ContextList { contexts } = event {
+            map.insert(agent.to_string(), contexts.clone());
         }
     }
 

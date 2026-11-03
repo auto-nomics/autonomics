@@ -4,8 +4,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement
 use utoipa::{Modify, OpenApi};
 
 use super::{
-    agents, events, hydration, lifecycle, model_config, observations, plugin_environments, plugins,
-    context, settings, skills, storage,
+    agents, context, events, hydration, lifecycle, model_config, observations, plugin_environments,
+    plugins, settings, skills, storage,
 };
 use crate::proto::*;
 

@@ -146,7 +146,7 @@ impl Context {
         toolcalls: &[ToolUse],
     ) -> Result<()> {
         let vision = self
-            .shared
+            .core
             .model
             .load()
             .as_ref()

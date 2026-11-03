@@ -62,8 +62,6 @@ pub struct RunStartedEvent {
     pub run_id: Uuid,
     /// Agent id assigned by the runtime (stable across restarts via storage).
     pub agent_id: Uuid,
-    /// Session the run executes in.
-    pub session_id: Uuid,
     /// Profile path the agent was spawned from.
     pub profile: String,
     /// Model name, when known at start.
@@ -74,8 +72,6 @@ pub struct RunStartedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TurnStartedEvent {
     pub turn_id: Uuid,
-    /// The context the turn runs in — the agent's sole working context.
-    pub session_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -252,10 +248,7 @@ mod tests {
     #[test]
     fn event_tags_are_dot_namespaced() {
         let turn_id = Uuid::nil();
-        let event = RunEvent::TurnStarted(TurnStartedEvent {
-            turn_id,
-            session_id: Uuid::nil(),
-        });
+        let event = RunEvent::TurnStarted(TurnStartedEvent { turn_id });
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["type"], "turn.started");
         assert_eq!(json["turn_id"], turn_id.to_string());
@@ -289,13 +282,11 @@ mod tests {
             RunEvent::RunStarted(RunStartedEvent {
                 run_id: Uuid::nil(),
                 agent_id: Uuid::nil(),
-                session_id: Uuid::nil(),
                 profile: "default".into(),
                 model: Some("test-model".into()),
             }),
             RunEvent::TurnStarted(TurnStartedEvent {
                 turn_id: Uuid::nil(),
-                session_id: Uuid::nil(),
             }),
             RunEvent::ItemStarted(ItemEvent {
                 item: RunItem {

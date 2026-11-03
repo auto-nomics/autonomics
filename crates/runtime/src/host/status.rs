@@ -68,6 +68,11 @@ pub(super) fn derive_agent_status(
                 Some(AgentLifecycleStatus::Error),
                 Some("turn failed".into()),
             ),
+            // A parked turn (background wait_task): resting, not terminal.
+            agentik_types::TurnExecutionStatus::Pause => (
+                Some(AgentLifecycleStatus::Waiting),
+                Some("waiting for background task".into()),
+            ),
         },
         AgentEvent::Done => (Some(AgentLifecycleStatus::Idle), Some("done".into())),
 
@@ -250,7 +255,9 @@ impl RuntimeHost {
         }
         entry.idle_since = if is_passivation_idle_status(entry.status)
             && entry.background_pending == 0
-            && !entry.inbound_pending.load(std::sync::atomic::Ordering::Acquire)
+            && !entry
+                .inbound_pending
+                .load(std::sync::atomic::Ordering::Acquire)
         {
             Some(entry.idle_since.unwrap_or_else(std::time::Instant::now))
         } else {
@@ -265,7 +272,6 @@ impl RuntimeHost {
             status,
             last_event: next_last_event.clone(),
         });
-
     }
 
     /// Passivate every registered agent whose idle timer has exceeded the
@@ -287,7 +293,9 @@ impl RuntimeHost {
             .agents
             .iter()
             .filter(|(_, entry)| {
-                !entry.inbound_pending.load(std::sync::atomic::Ordering::Acquire)
+                !entry
+                    .inbound_pending
+                    .load(std::sync::atomic::Ordering::Acquire)
                     && entry.idle_since.is_some_and(|since| since.elapsed() >= ttl)
             })
             .map(|(name, _)| name.clone())
@@ -460,7 +468,6 @@ mod status_derivation_tests {
     fn turn_completed_lands_on_idle() {
         let (s, ev) = derive_agent_status(&AgentEvent::TurnCompleted {
             turn_id: uuid::Uuid::new_v4(),
-            session_id: uuid::Uuid::new_v4(),
             delegation_id: None,
             status: agentik_types::TurnExecutionStatus::Completed,
             telemetry: agentik_types::TurnTelemetry::default(),
@@ -473,7 +480,6 @@ mod status_derivation_tests {
     fn turn_interrupted_lands_on_cancelled() {
         let (s, ev) = derive_agent_status(&AgentEvent::TurnCompleted {
             turn_id: uuid::Uuid::new_v4(),
-            session_id: uuid::Uuid::new_v4(),
             delegation_id: None,
             status: agentik_types::TurnExecutionStatus::Interrupted,
             telemetry: agentik_types::TurnTelemetry::default(),

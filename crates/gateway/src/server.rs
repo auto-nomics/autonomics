@@ -3,6 +3,7 @@
 
 mod agents;
 mod auth;
+mod context;
 mod docs;
 mod error;
 mod events;
@@ -14,7 +15,6 @@ mod observations;
 pub(crate) mod plugin_environments;
 mod plugins;
 mod router;
-mod context;
 mod settings;
 mod skills;
 mod state;

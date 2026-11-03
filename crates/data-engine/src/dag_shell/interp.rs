@@ -18,13 +18,13 @@ use std::time::Instant;
 use num_traits::ToPrimitive;
 use rustpython_ast as ast;
 use rustpython_ast::Ranged;
-use rustpython_parser::{parse, Mode};
+use rustpython_parser::{Mode, parse};
 
 use super::api;
 use super::{
-    DagShellError, DagShellSnapshot, GraphEditOp, ScriptExecution, ScriptState, MAX_API_OPERATIONS,
-    MAX_ARRAY_SIZE, MAX_CALL_LEVELS, MAX_EXPRESSION_DEPTH, MAX_INDENTATION, MAX_MAP_SIZE,
-    MAX_SCRIPT_OPERATIONS, MAX_STRING_SIZE,
+    DagShellError, DagShellSnapshot, GraphEditOp, MAX_API_OPERATIONS, MAX_ARRAY_SIZE,
+    MAX_CALL_LEVELS, MAX_EXPRESSION_DEPTH, MAX_INDENTATION, MAX_MAP_SIZE, MAX_SCRIPT_OPERATIONS,
+    MAX_STRING_SIZE, ScriptExecution, ScriptState,
 };
 use crate::node_registry::registry::NodeRegistry;
 
@@ -289,7 +289,10 @@ fn dedent(script: &str) -> String {
         if line.trim().is_empty() {
             continue;
         }
-        let indent: String = line.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+        let indent: String = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
         prefix = Some(match prefix {
             None => indent,
             Some(current) => current
@@ -581,7 +584,11 @@ pub(crate) fn run(
             match interp.exec_stmt(stmt, &globals)? {
                 Flow::Normal | Flow::Continue => {}
                 Flow::Break => {
-                    return Err(interp.error(ErrKind::Runtime, "'break' outside loop", stmt.start()))
+                    return Err(interp.error(
+                        ErrKind::Runtime,
+                        "'break' outside loop",
+                        stmt.start(),
+                    ));
                 }
                 Flow::Return(value) => {
                     // Module-level `return` is rejected during validation;
@@ -599,16 +606,13 @@ pub(crate) fn run(
     };
 
     let (operations, committed) = {
-        let state = interp
-            .state
-            .lock()
-            .map_err(|_| DagShellError {
-                code: "runtime_error".into(),
-                message: "script state poisoned".into(),
-                operation_index: None,
-                line: None,
-                column: None,
-            })?;
+        let state = interp.state.lock().map_err(|_| DagShellError {
+            code: "runtime_error".into(),
+            message: "script state poisoned".into(),
+            operation_index: None,
+            line: None,
+            column: None,
+        })?;
         (state.operations.clone(), state.committed)
     };
     let serialized = serialize_result(&result)?;
@@ -816,7 +820,10 @@ impl<'a> Interp<'a> {
             // evaluation; this arm is defense in depth.
             other => Err(self.error(
                 ErrKind::Runtime,
-                format!("{} is not supported in dag_shell scripts", other_headline(other)),
+                format!(
+                    "{} is not supported in dag_shell scripts",
+                    other_headline(other)
+                ),
                 other.start(),
             )),
         }
@@ -854,10 +861,7 @@ impl<'a> Interp<'a> {
             Value::List(list) => list.borrow().items.clone(),
             Value::Tuple(tuple) => tuple.items.clone(),
             other => {
-                return Err(self.type_error(
-                    offset,
-                    format!("cannot unpack {}", other.type_name()),
-                ))
+                return Err(self.type_error(offset, format!("cannot unpack {}", other.type_name())));
             }
         };
         if items.len() != targets.len() {
@@ -905,7 +909,10 @@ impl<'a> Interp<'a> {
             }
             other => Err(self.type_error(
                 subscript.start(),
-                format!("'{}' object does not support item assignment", other.type_name()),
+                format!(
+                    "'{}' object does not support item assignment",
+                    other.type_name()
+                ),
             )),
         }
     }
@@ -938,8 +945,7 @@ impl<'a> Interp<'a> {
                 self.make_tuple(items, tuple.start())
             }
             ast::Expr::Dict(dict_expr) => {
-                let Value::Dict(dict_cell) = self.make_dict(Vec::new(), dict_expr.start())?
-                else {
+                let Value::Dict(dict_cell) = self.make_dict(Vec::new(), dict_expr.start())? else {
                     unreachable!("make_dict returns Dict");
                 };
                 for (key_expr, value_expr) in dict_expr.keys.iter().zip(&dict_expr.values) {
@@ -985,7 +991,9 @@ impl<'a> Interp<'a> {
                             format!("bad operand type for unary +: '{}'", other.type_name()),
                         )),
                     },
-                    ast::UnaryOp::Invert => Err(self.unimplemented("the '~' operator", unary.start())),
+                    ast::UnaryOp::Invert => {
+                        Err(self.unimplemented("the '~' operator", unary.start()))
+                    }
                 }
             }
             ast::Expr::BoolOp(bool_op) => {
@@ -1129,9 +1137,7 @@ impl<'a> Interp<'a> {
                 }
                 let value = self.eval_expr(&formatted.value, scope)?;
                 let text = match formatted.conversion {
-                    ast::ConversionFlag::None | ast::ConversionFlag::Str => {
-                        self.to_display(&value)
-                    }
+                    ast::ConversionFlag::None | ast::ConversionFlag::Str => self.to_display(&value),
                     ast::ConversionFlag::Repr | ast::ConversionFlag::Ascii => self.repr(&value),
                 };
                 Ok(Rc::from(text.as_str()))
@@ -1163,12 +1169,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn lookup(
-        &mut self,
-        name: &str,
-        scope: &ScopeRef,
-        offset: ast::TextSize,
-    ) -> EvalResult<Value> {
+    fn lookup(&mut self, name: &str, scope: &ScopeRef, offset: ast::TextSize) -> EvalResult<Value> {
         if let Some(value) = scope.get(name) {
             return Ok(value);
         }
@@ -1218,11 +1219,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn eval_args(
-        &mut self,
-        args: &[ast::Expr],
-        scope: &ScopeRef,
-    ) -> EvalResult<Vec<Value>> {
+    fn eval_args(&mut self, args: &[ast::Expr], scope: &ScopeRef) -> EvalResult<Vec<Value>> {
         let mut values = Vec::with_capacity(args.len());
         for arg in args {
             if let ast::Expr::Starred(_) = arg {
@@ -1281,14 +1278,15 @@ impl<'a> Interp<'a> {
             let Some(position) = function.params.iter().position(|param| param.name == *name)
             else {
                 self.depth -= 1;
-                return Err(self.type_error(offset, format!("unexpected keyword argument '{name}'")));
+                return Err(
+                    self.type_error(offset, format!("unexpected keyword argument '{name}'"))
+                );
             };
             if bindings[position].is_some() {
                 self.depth -= 1;
-                return Err(self.type_error(
-                    offset,
-                    format!("multiple values for argument '{name}'"),
-                ));
+                return Err(
+                    self.type_error(offset, format!("multiple values for argument '{name}'"))
+                );
             }
             bindings[position] = Some(value.clone());
         }
@@ -1344,10 +1342,7 @@ impl<'a> Interp<'a> {
         };
         let no_kwargs = || -> EvalResult<()> {
             if !kwargs.is_empty() {
-                return Err(self.type_error(
-                    offset,
-                    format!("{name}() takes no keyword arguments"),
-                ));
+                return Err(self.type_error(offset, format!("{name}() takes no keyword arguments")));
             }
             Ok(())
         };
@@ -1358,11 +1353,7 @@ impl<'a> Interp<'a> {
                 let id = api::str_arg(&args[0], offset)?;
                 let kind = api::str_arg(&args[1], offset)?;
                 let spec = api::spec_to_json(&args[2], offset)?;
-                api::stage(
-                    &self.state,
-                    GraphEditOp::AddNode { id, kind, spec },
-                    offset,
-                )?;
+                api::stage(&self.state, GraphEditOp::AddNode { id, kind, spec }, offset)?;
                 Ok(Value::None)
             }
             "update_node" => {
@@ -1384,10 +1375,7 @@ impl<'a> Interp<'a> {
                         ));
                     }
                     let Value::Bool(flag) = value else {
-                        return Err(self.type_error(
-                            offset,
-                            "remove_node() cascade must be a bool",
-                        ));
+                        return Err(self.type_error(offset, "remove_node() cascade must be a bool"));
                     };
                     cascade = *flag;
                 }
@@ -1401,11 +1389,7 @@ impl<'a> Interp<'a> {
                     };
                     cascade = *flag;
                 }
-                api::stage(
-                    &self.state,
-                    GraphEditOp::RemoveNode { id, cascade },
-                    offset,
-                )?;
+                api::stage(&self.state, GraphEditOp::RemoveNode { id, cascade }, offset)?;
                 Ok(Value::None)
             }
             "edge" | "remove_edge" => {
@@ -1444,9 +1428,10 @@ impl<'a> Interp<'a> {
             "commit" => {
                 arity(0, 0)?;
                 no_kwargs()?;
-                let mut state = self.state.lock().map_err(|_| {
-                    self.error(ErrKind::Runtime, "script state poisoned", offset)
-                })?;
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| self.error(ErrKind::Runtime, "script state poisoned", offset))?;
                 state.api_operations += 1;
                 if state.api_operations > MAX_API_OPERATIONS {
                     return Err(self.limit_error(offset, api::API_LIMIT_MESSAGE));
@@ -1466,10 +1451,9 @@ impl<'a> Interp<'a> {
                 no_kwargs()?;
                 api::begin_query(&self.state, offset)?;
                 let id = api::str_arg(&args[0], offset)?;
-                let node = self
-                    .snapshot
-                    .node(&id)
-                    .ok_or_else(|| self.error(ErrKind::Runtime, format!("unknown node `{id}`"), offset))?;
+                let node = self.snapshot.node(&id).ok_or_else(|| {
+                    self.error(ErrKind::Runtime, format!("unknown node `{id}`"), offset)
+                })?;
                 let json = serde_json::json!({
                     "id": id,
                     "kind": node.kind,
@@ -1604,7 +1588,9 @@ impl<'a> Interp<'a> {
         let Some(generator) = generators.get(level) else {
             let value = emit(self, scope)?;
             if out.len() >= MAX_ARRAY_SIZE {
-                return Err(self.limit_error(generator_start(generators), "array size limit exceeded"));
+                return Err(
+                    self.limit_error(generator_start(generators), "array size limit exceeded")
+                );
             }
             out.push(value);
             return Ok(());
@@ -1635,7 +1621,12 @@ impl<'a> Interp<'a> {
         Ok(())
     }
 
-    fn bind_target(&mut self, target: &ast::Expr, value: Value, scope: &ScopeRef) -> EvalResult<()> {
+    fn bind_target(
+        &mut self,
+        target: &ast::Expr,
+        value: Value,
+        scope: &ScopeRef,
+    ) -> EvalResult<()> {
         self.assign_to(target, value, scope)
     }
 
@@ -1648,9 +1639,8 @@ impl<'a> Interp<'a> {
     ) -> EvalResult<Value> {
         let receiver = self.eval_expr(&subscript.value, scope)?;
         let offset = subscript.slice.start();
-        let not_subscriptable = |other: &Value| {
-            format!("'{}' object is not subscriptable", other.type_name())
-        };
+        let not_subscriptable =
+            |other: &Value| format!("'{}' object is not subscriptable", other.type_name());
         if let ast::Expr::Slice(slice) = &*subscript.slice {
             let lower = self.slice_bound(slice.lower.as_deref(), scope)?;
             let upper = self.slice_bound(slice.upper.as_deref(), scope)?;
@@ -1660,7 +1650,10 @@ impl<'a> Interp<'a> {
                     let items = list.borrow().items.clone();
                     let picked = py_slice_indices(items.len(), lower, upper, step)
                         .map_err(|message| self.value_error(offset, message))?;
-                    let out: Vec<Value> = picked.into_iter().map(|index| items[index].clone()).collect();
+                    let out: Vec<Value> = picked
+                        .into_iter()
+                        .map(|index| items[index].clone())
+                        .collect();
                     self.make_list(out, subscript.start())
                 }
                 Value::Tuple(tuple) => {
@@ -1734,7 +1727,10 @@ impl<'a> Interp<'a> {
             Value::Bool(value) => Ok(Some(i64::from(value))),
             other => Err(self.type_error(
                 bound.start(),
-                format!("slice indices must be integers, not '{}'", other.type_name()),
+                format!(
+                    "slice indices must be integers, not '{}'",
+                    other.type_name()
+                ),
             )),
         }
     }
@@ -1781,7 +1777,7 @@ impl<'a> Interp<'a> {
                             return Err(self.type_error(
                                 offset,
                                 format!("join expects str items, got '{}'", other.type_name()),
-                            ))
+                            ));
                         }
                     }
                 }
@@ -1800,7 +1796,7 @@ impl<'a> Interp<'a> {
                         return Err(self.type_error(
                             offset,
                             format!("separator must be str, not '{}'", other.type_name()),
-                        ))
+                        ));
                     }
                     None => text.split_whitespace().map(str::to_string).collect(),
                 };
@@ -1931,13 +1927,21 @@ impl<'a> Interp<'a> {
             (Value::Dict(dict), "keys") => {
                 arity(0)?;
                 let dict = dict.borrow();
-                let items = dict.entries.iter().map(|(key, _)| key_to_value(key)).collect();
+                let items = dict
+                    .entries
+                    .iter()
+                    .map(|(key, _)| key_to_value(key))
+                    .collect();
                 self.make_list(items, offset)
             }
             (Value::Dict(dict), "values") => {
                 arity(0)?;
                 let dict = dict.borrow();
-                let items = dict.entries.iter().map(|(_, value)| value.clone()).collect();
+                let items = dict
+                    .entries
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect();
                 self.make_list(items, offset)
             }
             (Value::Dict(dict), "items") => {
@@ -2057,7 +2061,13 @@ impl<'a> Interp<'a> {
     fn to_display(&self, value: &Value) -> String {
         match value {
             Value::None => "None".into(),
-            Value::Bool(b) => if *b { "True".into() } else { "False".into() },
+            Value::Bool(b) => {
+                if *b {
+                    "True".into()
+                } else {
+                    "False".into()
+                }
+            }
             Value::Int(i) => i.to_string(),
             Value::Float(f) => format_float(*f),
             Value::Str(s) => s.to_string(),
@@ -2191,16 +2201,14 @@ impl<'a> Interp<'a> {
                 (Value::Int(a), Value::Float(b)) => Ok(Value::Float(a as f64 * b)),
                 (Value::Float(a), Value::Int(b)) => Ok(Value::Float(a * b as f64)),
                 (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
-                (Value::Str(text), Value::Int(count))
-                | (Value::Int(count), Value::Str(text)) => {
+                (Value::Str(text), Value::Int(count)) | (Value::Int(count), Value::Str(text)) => {
                     let count = usize::try_from(count).unwrap_or(usize::MAX);
                     if text.len().saturating_mul(count) > MAX_STRING_SIZE {
                         return Err(self.limit_error(offset, "string size limit exceeded"));
                     }
                     self.make_string(text.repeat(count), offset)
                 }
-                (Value::List(list), Value::Int(count))
-                | (Value::Int(count), Value::List(list)) => {
+                (Value::List(list), Value::Int(count)) | (Value::Int(count), Value::List(list)) => {
                     let count = usize::try_from(count).unwrap_or(usize::MAX);
                     let items = list.borrow().items.clone();
                     if items.len().saturating_mul(count) > MAX_ARRAY_SIZE {
@@ -2224,7 +2232,11 @@ impl<'a> Interp<'a> {
                 (a, b) => match (numeric(a), numeric(b)) {
                     (Some(x), Some(y)) => {
                         if y == 0.0 {
-                            return Err(self.error(ErrKind::ZeroDivision, "division by zero", offset));
+                            return Err(self.error(
+                                ErrKind::ZeroDivision,
+                                "division by zero",
+                                offset,
+                            ));
                         }
                         Ok(Value::Float(x / y))
                     }
@@ -2249,7 +2261,11 @@ impl<'a> Interp<'a> {
                 (a, b) => match (numeric(a), numeric(b)) {
                     (Some(x), Some(y)) => {
                         if y == 0.0 {
-                            return Err(self.error(ErrKind::ZeroDivision, "division by zero", offset));
+                            return Err(self.error(
+                                ErrKind::ZeroDivision,
+                                "division by zero",
+                                offset,
+                            ));
                         }
                         let divided = (x / y).floor();
                         Ok(if op == FloorDiv {
@@ -2264,9 +2280,9 @@ impl<'a> Interp<'a> {
             Pow => match (&left, &right) {
                 (Value::Int(a), Value::Int(b)) => {
                     if *b < 0 {
-                        return Ok(Value::Float((*a as f64).powi(
-                            (*b).try_into().unwrap_or(i32::MAX),
-                        )));
+                        return Ok(Value::Float(
+                            (*a as f64).powi((*b).try_into().unwrap_or(i32::MAX)),
+                        ));
                     }
                     let exponent = u32::try_from(*b).unwrap_or(u32::MAX);
                     if exponent > 64 {
@@ -2366,15 +2382,18 @@ impl<'a> Interp<'a> {
                             return Err(self.type_error(
                                 offset,
                                 format!("'in <str>' requires str, not '{}'", other.type_name()),
-                            ))
+                            ));
                         }
                     },
                     Value::Range(range) => range_contains(range, left)?,
                     other => {
                         return Err(self.type_error(
                             offset,
-                            format!("argument of type '{}' is not a container", other.type_name()),
-                        ))
+                            format!(
+                                "argument of type '{}' is not a container",
+                                other.type_name()
+                            ),
+                        ));
                     }
                 };
                 Ok(if *op == In { contains } else { !contains })
@@ -2472,12 +2491,17 @@ impl<'a> Interp<'a> {
                     }
                     Ok(Value::Int(value.trunc() as i64))
                 }
-                Some(Value::Str(text)) => text.trim().parse::<i64>().map(Value::Int).map_err(|_| {
-                    self.value_error(offset, format!("invalid literal for int(): '{text}'"))
-                }),
+                Some(Value::Str(text)) => {
+                    text.trim().parse::<i64>().map(Value::Int).map_err(|_| {
+                        self.value_error(offset, format!("invalid literal for int(): '{text}'"))
+                    })
+                }
                 Some(other) => Err(self.type_error(
                     offset,
-                    format!("int() expects a number or string, got '{}'", other.type_name()),
+                    format!(
+                        "int() expects a number or string, got '{}'",
+                        other.type_name()
+                    ),
                 )),
             },
             "float" => match args.first() {
@@ -2492,14 +2516,20 @@ impl<'a> Interp<'a> {
                         "-inf" | "-infinity" => f64::NEG_INFINITY,
                         "nan" | "+nan" | "-nan" => f64::NAN,
                         other => other.parse::<f64>().map_err(|_| {
-                            self.value_error(offset, format!("invalid literal for float(): '{text}'"))
+                            self.value_error(
+                                offset,
+                                format!("invalid literal for float(): '{text}'"),
+                            )
                         })?,
                     };
                     Ok(Value::Float(parsed))
                 }
                 Some(other) => Err(self.type_error(
                     offset,
-                    format!("float() expects a number or string, got '{}'", other.type_name()),
+                    format!(
+                        "float() expects a number or string, got '{}'",
+                        other.type_name()
+                    ),
                 )),
             },
             "bool" => {
@@ -2538,11 +2568,7 @@ impl<'a> Interp<'a> {
                             } else {
                                 ordering == Ordering::Greater
                             };
-                            if take {
-                                item
-                            } else {
-                                current
-                            }
+                            if take { item } else { current }
                         }
                     });
                 }
@@ -2751,7 +2777,8 @@ fn value_eq(a: &Value, b: &Value) -> bool {
                 })
         }
         (Value::Range(x), Value::Range(y)) => {
-            range_len(x) == range_len(y) && (range_len(x) == 0 || (x.start == y.start && x.step == y.step))
+            range_len(x) == range_len(y)
+                && (range_len(x) == 0 || (x.start == y.start && x.step == y.step))
         }
         _ => match (numeric(a), numeric(b)) {
             (Some(x), Some(y)) => x == y,
@@ -2873,7 +2900,11 @@ fn format_float(value: f64) -> String {
     if value.is_nan() {
         "nan".into()
     } else if value.is_infinite() {
-        if value > 0.0 { "inf".into() } else { "-inf".into() }
+        if value > 0.0 {
+            "inf".into()
+        } else {
+            "-inf".into()
+        }
     } else {
         format!("{value}")
     }
@@ -2933,8 +2964,22 @@ fn generator_start(generators: &[ast::Comprehension]) -> ast::TextSize {
 
 fn builtin_function(name: &str) -> Option<&'static str> {
     const BUILTINS: &[&str] = &[
-        "len", "str", "int", "float", "bool", "abs", "min", "max", "sum", "round", "sorted",
-        "reversed", "range", "enumerate", "zip", "list",
+        "len",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "abs",
+        "min",
+        "max",
+        "sum",
+        "round",
+        "sorted",
+        "reversed",
+        "range",
+        "enumerate",
+        "zip",
+        "list",
     ];
     BUILTINS
         .iter()
@@ -2992,7 +3037,13 @@ pub(crate) fn value_to_json(value: &Value, depth: usize) -> Option<serde_json::V
                 let key = match key {
                     DictKey::Str(text) => text.to_string(),
                     DictKey::Int(i) => i.to_string(),
-                    DictKey::Bool(b) => if *b { "true".into() } else { "false".into() },
+                    DictKey::Bool(b) => {
+                        if *b {
+                            "true".into()
+                        } else {
+                            "false".into()
+                        }
+                    }
                     DictKey::None => "null".into(),
                     DictKey::Tuple(_) => return None,
                 };

@@ -68,9 +68,8 @@ impl Context {
         };
         turn.timing.start();
 
-        self.shared.send_event(AgentEvent::TurnStarted {
+        self.core.send_event(AgentEvent::TurnStarted {
             turn_id: turn.id,
-            session_id: self.id,
             delegation_id: turn.delegation_id,
         });
     }
@@ -82,9 +81,8 @@ impl Context {
         };
         let delegation_id = turn.delegation_id;
         let telemetry = self.finish_telemetry_for(&mut turn);
-        self.shared.send_event(AgentEvent::TurnCompleted {
+        self.core.send_event(AgentEvent::TurnCompleted {
             turn_id: turn.id,
-            session_id: self.id,
             delegation_id,
             status,
             telemetry,
@@ -116,13 +114,13 @@ impl Context {
 
         // Ensure WAL session is open.
         if self.persist_tx.is_none() {
-            if let Some(tx) = self.shared.persist_tx.get() {
+            if let Some(tx) = self.core.persist_tx.get() {
                 self.persist_tx = Some(tx.clone());
             }
         }
-        if let Some(storage) = &self.shared.storage {
-            let _ = storage.start_session(self.shared.id, self.id).await;
-            let _ = storage.touch_agent(self.shared.id).await;
+        if let Some(storage) = &self.core.storage {
+            let _ = storage.start_session(self.core.id, self.id).await;
+            let _ = storage.touch_agent(self.core.id).await;
         }
 
         let mut was_cancelled = false;
@@ -154,7 +152,7 @@ impl Context {
                  Any tool calls may have been partially executed. \
                  Background tasks may still be running.",
             ));
-            self.shared.send_event(AgentEvent::TurnAborted);
+            self.core.send_event(AgentEvent::TurnAborted);
             self.finish_turn(TurnExecutionStatus::Interrupted);
         } else if self.lifecycle.is_running() {
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
@@ -221,7 +219,7 @@ impl Context {
                     // The watcher will inject a message to resume.
                     if *self.lifecycle.status() != agentik_types::AgentLifecycleStatus::Waiting {
                         self.finish_turn(TurnExecutionStatus::Completed);
-                        self.shared.send_event(AgentEvent::Done);
+                        self.core.send_event(AgentEvent::Done);
                     }
                     true
                 } else {
@@ -237,7 +235,7 @@ impl Context {
                     error_chain = ?e,
                     "workflow failed"
                 );
-                self.shared.send_event(AgentEvent::Error(format!("{e}")));
+                self.core.send_event(AgentEvent::Error(format!("{e}")));
                 self.persist_snapshot().await;
                 self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
                 self.finish_turn(TurnExecutionStatus::Failed);
@@ -265,10 +263,7 @@ impl Context {
         let mut terminal = false;
         let mut control_pending = false;
         while let Ok(event) = rx.try_recv() {
-            if matches!(
-                event,
-                InternalEvent::ListContexts | InternalEvent::Shutdown
-            ) {
+            if matches!(event, InternalEvent::ListContexts | InternalEvent::Shutdown) {
                 // Re-queue for the outer Agent::run() loop.
                 let _ = internal_event_tx.send(event);
                 control_pending = true;
@@ -333,13 +328,13 @@ impl Context {
                     );
                     // Still emit the UI event so the task panel updates.
                     if let Some((_, ok)) = self.toolset.task_brief(seq).await {
-                        self.shared
+                        self.core
                             .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
                     }
                     return true;
                 }
                 if let Some((name, ok)) = self.toolset.task_brief(seq).await {
-                    self.shared
+                    self.core
                         .send_event(AgentEvent::ToolBackgroundComplete { seq, ok });
                     let note = if ok {
                         format!(
@@ -374,7 +369,7 @@ impl Context {
                 self.active_wait_watchers.clear();
                 if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Waiting {
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
-                    self.shared.send_event(AgentEvent::TurnAborted);
+                    self.core.send_event(AgentEvent::TurnAborted);
                 }
                 self.finish_turn(TurnExecutionStatus::Interrupted);
                 self.cancel_token = token.clone();
@@ -405,7 +400,7 @@ impl Context {
         self.poll_context_provider().await;
 
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
-        self.shared.send_event(AgentEvent::Requesting);
+        self.core.send_event(AgentEvent::Requesting);
         let response_message = self.request_with_retries().await?;
 
         let last_usage = response_message.usage.clone().unwrap_or_default();
@@ -416,12 +411,10 @@ impl Context {
         for block in &response_message.content {
             match block {
                 ContentBlock::Thinking { thinking, .. } if !thinking.is_empty() => {
-                    self.shared
-                        .send_event(AgentEvent::Thinking(thinking.clone()));
+                    self.core.send_event(AgentEvent::Thinking(thinking.clone()));
                 }
                 ContentBlock::Text { text } if !text.is_empty() => {
-                    self.shared
-                        .send_event(AgentEvent::LlmResponse(text.clone()));
+                    self.core.send_event(AgentEvent::LlmResponse(text.clone()));
                 }
                 _ => {}
             }
@@ -445,7 +438,7 @@ impl Context {
         self.persist_telemetry();
 
         for tc in &toolcalls {
-            self.shared.send_event(AgentEvent::ToolCall {
+            self.core.send_event(AgentEvent::ToolCall {
                 name: tc.name.clone(),
                 input: tc.input.clone(),
             });
@@ -527,7 +520,7 @@ impl Context {
                 // the task completes or the timeout expires. A child cancel
                 // token ensures the watcher exits silently if the user
                 // interrupts (Ctrl+C) while Waiting.
-                let tasks = self.shared.tasks.clone();
+                let tasks = self.core.tasks.clone();
                 let tx = internal_event_tx.clone();
                 let cancel = self.cancel_token.child_token();
                 self.active_wait_watchers.insert(task_seq, cancel.clone());
@@ -550,7 +543,7 @@ impl Context {
             // The watcher(s) will inject messages to re-enter run_context.
             // Emit tool results so the UI shows the "waiting" status.
             for tr in &tool_results {
-                self.shared.send_event(AgentEvent::ToolResult {
+                self.core.send_event(AgentEvent::ToolResult {
                     ok: !tr.is_error.unwrap_or_default(),
                     content: tr.text_content(),
                 });
@@ -574,7 +567,7 @@ impl Context {
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
 
         for tr in &tool_results {
-            self.shared.send_event(AgentEvent::ToolResult {
+            self.core.send_event(AgentEvent::ToolResult {
                 ok: !tr.is_error.unwrap_or_default(),
                 content: tr.text_content(),
             });
@@ -600,7 +593,7 @@ impl Context {
         // threshold, compact *now* to prevent an overflow on the next request.
         if !toolcalls.is_empty() {
             let context_length = self
-                .shared
+                .core
                 .model
                 .load()
                 .as_ref()
@@ -611,7 +604,7 @@ impl Context {
                 .token_budget
                 .should_compact(&conversation_msgs, context_length)
             {
-                let model = self.shared.model.load_full().ok_or_else(|| {
+                let model = self.core.model.load_full().ok_or_else(|| {
                     AgentError::MissingConfig("no active model configured".into())
                 })?;
                 let used_pct = self
@@ -641,12 +634,7 @@ impl Context {
     /// tools twice, while retrying here only repeats the LLM request.
     /// Each attempt rebuilds fresh state inside `request`.
     async fn request_with_retries(&mut self) -> Result<Message> {
-        let max_retries: u32 = self
-            .shared
-            .config
-            .max_retries
-            .try_into()
-            .unwrap_or(u32::MAX);
+        let max_retries: u32 = self.core.config.max_retries.try_into().unwrap_or(u32::MAX);
         let mut attempts_used = 0u32;
 
         loop {
@@ -666,7 +654,7 @@ impl Context {
                         backoff_secs,
                         "retrying retryable API request error"
                     );
-                    self.shared.send_event(AgentEvent::RetryableError {
+                    self.core.send_event(AgentEvent::RetryableError {
                         message: format!("{e}"),
                         attempt: attempts_used,
                         max_retries,
@@ -694,12 +682,12 @@ impl Context {
     /// semantics of the runtime-config cell).
     pub(super) fn effective_model(&self) -> Result<Arc<agentik_sdk::model::Model>> {
         let model = self
-            .shared
+            .core
             .model
             .load_full()
             .ok_or_else(|| AgentError::MissingConfig("no active model configured".into()))?;
         let effort = self
-            .shared
+            .core
             .memory
             .as_ref()
             .and_then(|memory| memory.runtime_config().reasoning_effort);
@@ -807,7 +795,7 @@ impl Context {
                 ) {
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Streaming);
                 }
-                self.shared.send_event(agent_event);
+                self.core.send_event(agent_event);
             }
         }
         tracing::info!("stream loop exited, awaiting final_message");
@@ -977,7 +965,7 @@ impl Context {
     }
 
     async fn poll_context_provider(&mut self) {
-        if let Some(provider) = &self.shared.context_provider {
+        if let Some(provider) = &self.core.context_provider {
             if let Some(text) = provider.poll().await {
                 let _ = self.remember(Message::user(text));
             }
@@ -994,7 +982,7 @@ impl Context {
             .build_tooluse_guidance();
 
         let identity = self
-            .shared
+            .core
             .system_prompt_identity
             .as_deref()
             .unwrap_or("You are a helpful assistant.");
@@ -1007,18 +995,18 @@ impl Context {
              Discover visible agents with `list_agents` or `route_task`, \
              delegate to your children with `delegate_to`, and never \
              delegate tasks to yourself.",
-            path = self.shared.path.as_str(),
-            name = self.shared.name(),
+            path = self.core.path.as_str(),
+            name = self.core.name(),
         ));
 
-        if let Some(ref extra) = self.shared.system_prompt_section {
+        if let Some(ref extra) = self.core.system_prompt_section {
             builder = builder.with_extra_section(extra);
         }
 
         // Inject cross-session memory. with_extra_section appends, so the
         // memory summary supplements the agent's profile section above
         // instead of replacing it.
-        if let Some(memory) = &self.shared.memory {
+        if let Some(memory) = &self.core.memory {
             if let Some(section) = memory.prompt_section().await {
                 builder = builder.with_extra_section(section);
             }

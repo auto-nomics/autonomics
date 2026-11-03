@@ -319,13 +319,11 @@ mod tests {
             RunEvent::RunStarted(RunStartedEvent {
                 run_id: Uuid::nil(),
                 agent_id: Uuid::nil(),
-                session_id: Uuid::nil(),
                 profile: "default".into(),
                 model: Some("test-model".into()),
             }),
             RunEvent::TurnStarted(TurnStartedEvent {
                 turn_id: Uuid::nil(),
-                session_id: Uuid::nil(),
             }),
             RunEvent::ItemStarted(ItemEvent {
                 item: RunItem {
@@ -382,7 +380,6 @@ mod tests {
         let mut processor = HumanProcessor::new(Vec::new(), Vec::new());
         processor.process(&RunEvent::TurnStarted(TurnStartedEvent {
             turn_id: Uuid::nil(),
-            session_id: Uuid::nil(),
         }));
         processor.process(&RunEvent::TurnFailed(TurnFailedEvent {
             turn_id: Uuid::nil(),

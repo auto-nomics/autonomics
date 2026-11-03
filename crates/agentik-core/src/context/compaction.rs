@@ -242,7 +242,7 @@ impl Context {
         // doesn't restore stale pre-compaction messages.
         if let Some(tx) = &self.persist_tx {
             let _ = tx.send(PersistOp::ReplaceSessionState {
-                agent_id: self.shared.id,
+                agent_id: self.core.id,
                 session_id: self.id,
                 state: ContextState {
                     messages: self.messages.clone(),
@@ -373,7 +373,7 @@ impl Context {
 
     /// Emit a compaction progress event on the observation channel.
     fn send_compact_event(&self, event: CompactEvent) {
-        self.shared.send_event(AgentEvent::Compact { event });
+        self.core.send_event(AgentEvent::Compact { event });
     }
 
     /// Manually trigger compaction on the active session.
@@ -392,7 +392,7 @@ impl Context {
             Ok(m) => m,
             Err(_) => {
                 tracing::warn!("manual compact requested but no model is configured");
-                self.shared.send_event(AgentEvent::Error(
+                self.core.send_event(AgentEvent::Error(
                     "No model configured for compaction".into(),
                 ));
                 return;
@@ -418,7 +418,7 @@ impl Context {
             }
             Err(e) => {
                 tracing::error!(error = %e, "manual compaction failed");
-                self.shared
+                self.core
                     .send_event(AgentEvent::Error(format!("Compaction failed: {e}")));
             }
         }

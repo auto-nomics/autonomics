@@ -14,8 +14,8 @@ use uuid::Uuid;
 use agentik_sdk::types::messages::Message;
 use agentik_types::{AgentPlan, ContextTelemetry, TurnTelemetry};
 
-use crate::lifecycle::AgentLifecycleStatus;
 use crate::context::ContextState;
+use crate::lifecycle::AgentLifecycleStatus;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Data types
@@ -58,7 +58,6 @@ pub struct AgentRelation {
     pub child_id: Uuid,
     pub kind: RelationKind,
 }
-
 
 /// The kind of relationship between two agents.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

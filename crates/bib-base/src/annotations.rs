@@ -500,10 +500,10 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
 fn not_found_message(text: &str, hint: Option<crate::anchor::Match>) -> String {
     use crate::anchor::{LineIndex, collapse_context};
     let lines = LineIndex::new(text);
-    let mut message = format!(
-        "quote not found in the article's fulltext; copy it verbatim from `vfs read`/`grep` \
-         of the article's fulltext_path (whitespace may differ, wording may not)"
-    );
+    let mut message = "quote not found in the article's fulltext; copy it verbatim from \
+         `vfs read`/`grep` of the article's fulltext_path (whitespace may differ, \
+         wording may not)"
+        .to_string();
     match hint {
         Some(hint) => {
             let line = lines.line_of_byte(hint.start_byte);

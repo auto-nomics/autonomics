@@ -4,7 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    ContentBlockDelta, Message, MessageStreamEvent, ContextTelemetry, StopReason, TurnTelemetry,
+    ContentBlockDelta, ContextTelemetry, Message, MessageStreamEvent, StopReason, TurnTelemetry,
 };
 
 /// Unified event emitted by the agent for external observation (TUI, logging, etc.).
@@ -69,9 +69,13 @@ pub enum AgentEvent {
 
     /// A conversation turn started. Unlike `Done`, this carries stable
     /// identities that can be correlated with a caller's delegation request.
+    ///
+    /// The executing context's identity is deliberately not carried: one
+    /// agent owns exactly one context, so the event envelope (which agent
+    /// emitted this) already identifies it. Durable turn records resolve
+    /// the context via the `agent_contexts` binding at persist time.
     TurnStarted {
         turn_id: Uuid,
-        session_id: Uuid,
         delegation_id: Option<Uuid>,
     },
 
@@ -80,7 +84,6 @@ pub enum AgentEvent {
     /// available to the host.
     TurnCompleted {
         turn_id: Uuid,
-        session_id: Uuid,
         delegation_id: Option<Uuid>,
         status: TurnExecutionStatus,
         #[serde(default)]
@@ -286,6 +289,7 @@ pub enum TurnExecutionStatus {
     Completed,
     Interrupted,
     Failed,
+    Pause,
 }
 
 /// Coarse-grained kind of a content block, sufficient for UI observation

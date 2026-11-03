@@ -90,7 +90,10 @@ impl Widget for TabBar<'_> {
             };
             let line = Line::from(vec![
                 Span::styled(" ", base),
-                Span::styled(status_icon(&status).to_string(), base.fg(status_color(&status))),
+                Span::styled(
+                    status_icon(&status).to_string(),
+                    base.fg(status_color(&status)),
+                ),
                 Span::styled(format!(" {name} "), base),
                 Span::styled("│", strip.fg(Color::DarkGray)),
             ]);

@@ -13,18 +13,19 @@ use super::RuntimeHost;
 
 impl RuntimeHost {
     pub(super) fn persist_delegation(&self, delegation_id: uuid::Uuid) {
-        let Some(snapshot) = self
-            .delegations
-            .get(&delegation_id)
-            .map(|record| record.snapshot.clone())
-        else {
+        let Some(snapshot) = self.ledger.get(&delegation_id) else {
             return;
         };
         let storage = self.infra.storage.clone();
         let record = AgentDelegationRecord {
             delegation_id: snapshot.delegation_id,
-            caller_path: snapshot.caller_path,
-            target_path: snapshot.target_path,
+            // Storage boundary: the DB record stays string-typed; the
+            // typed `AgentPath` projects down here.
+            caller_path: snapshot
+                .caller_path
+                .as_ref()
+                .map(|path| path.as_str().to_string()),
+            target_path: snapshot.target_path.as_str().to_string(),
             task: snapshot.task,
             status: snapshot.status.as_str().to_string(),
             turn_id: snapshot.turn_id,
@@ -48,7 +49,6 @@ impl RuntimeHost {
         &self,
         agent_path: &str,
         turn_id: uuid::Uuid,
-        session_id: uuid::Uuid,
         delegation_id: Option<uuid::Uuid>,
     ) {
         let Some(agent_id) = self
@@ -59,20 +59,28 @@ impl RuntimeHost {
             return;
         };
         let storage = self.infra.storage.clone();
-        let record = AgentTurnRecord {
-            turn_id,
-            agent_id,
-            session_id,
-            delegation_id,
-            status: "running".to_string(),
-            started_at: unix_epoch_ms(),
-            completed_at: None,
-            telemetry: None,
-        };
         agentik_core::supervise::spawn_safe_on(
             &self.infra.runtime_handle,
             &format!("persist_turn_start::{turn_id}"),
             async move {
+                // The executing context is not carried by the event (one
+                // context per agent makes it derivable) — resolve it from
+                // the `agent_contexts` binding, which is written before
+                // any turn of the owning agent can start.
+                let Ok(Some(session_id)) = storage.agent_context_id(agent_id).await else {
+                    tracing::debug!(%turn_id, "turn start not persisted: no bound context");
+                    return;
+                };
+                let record = AgentTurnRecord {
+                    turn_id,
+                    agent_id,
+                    session_id,
+                    delegation_id,
+                    status: "running".to_string(),
+                    started_at: unix_epoch_ms(),
+                    completed_at: None,
+                    telemetry: None,
+                };
                 if let Err(error) = storage.start_agent_turn(record).await {
                     tracing::warn!(%turn_id, %error, "failed to persist turn start");
                 }
@@ -85,7 +93,6 @@ impl RuntimeHost {
         agent_path: &str,
         telemetry: agentik_types::TurnTelemetry,
         turn_id: uuid::Uuid,
-        session_id: uuid::Uuid,
         delegation_id: Option<uuid::Uuid>,
         status: agentik_types::TurnExecutionStatus,
     ) {
@@ -101,11 +108,16 @@ impl RuntimeHost {
             agentik_types::TurnExecutionStatus::Completed => "completed",
             agentik_types::TurnExecutionStatus::Interrupted => "interrupted",
             agentik_types::TurnExecutionStatus::Failed => "failed",
+            agentik_types::TurnExecutionStatus::Pause => "paused",
         };
         agentik_core::supervise::spawn_safe_on(
             &self.infra.runtime_handle,
             &format!("persist_turn_finish::{turn_id}"),
             async move {
+                let Ok(Some(session_id)) = storage.agent_context_id(agent_id).await else {
+                    tracing::debug!(%turn_id, "turn finish not persisted: no bound context");
+                    return;
+                };
                 let record = AgentTurnRecord {
                     turn_id,
                     agent_id,
@@ -312,9 +324,7 @@ mod agent_persistence_tests {
                 let Some((event_path, event)) = host.recv_any().await else {
                     panic!("host1 event channel closed");
                 };
-                if event_path == path.as_str()
-                    && matches!(event, AgentEvent::ContextList { .. })
-                {
+                if event_path == path.as_str() && matches!(event, AgentEvent::ContextList { .. }) {
                     break;
                 }
             }
@@ -402,9 +412,10 @@ mod agent_persistence_tests {
                     panic!("host agent event channel closed");
                 };
                 if matches!(event, AgentEvent::Done)
-                    || matches!(event, AgentEvent::LifecycleChanged(
-                        agentik_types::AgentLifecycleStatus::Idle,
-                    ))
+                    || matches!(
+                        event,
+                        AgentEvent::LifecycleChanged(agentik_types::AgentLifecycleStatus::Idle,)
+                    )
                 {
                     return;
                 }
@@ -431,7 +442,10 @@ mod agent_persistence_tests {
                 }
                 seen.push(format!("{event_path}::{event:?}"));
                 if seen.len() > 40 {
-                    panic!("no ContextList; events seen: {seen:?}; live={} ", host.contains_agent(path.as_str()));
+                    panic!(
+                        "no ContextList; events seen: {seen:?}; live={} ",
+                        host.contains_agent(path.as_str())
+                    );
                 }
             }
         })
@@ -439,31 +453,34 @@ mod agent_persistence_tests {
         let sessions = match outcome {
             Ok(sessions) => sessions,
             Err(_) => {
-            let mut buffered = Vec::new();
-            while let Some((event_path, event)) = host.try_recv_any() {
-                buffered.push(format!("{event_path}::{event:?}"));
-            }
-            let status = host
-                .agents
-                .get(path.as_str())
-                .map(|entry| (entry.status.clone(), entry.background_pending, entry.last_event.clone()));
-            let probe_storage = host.storage().clone();
-            let probe_agent_id = agent_id;
-            let probe = tokio::time::timeout(
-                Duration::from_secs(3),
-                probe_storage.list_session_records(probe_agent_id),
-            )
-            .await;
-            let probe_result = match probe {
-                Err(_) => "list_session_records TIMED OUT (storage lock held?)".to_string(),
-                Ok(Err(e)) => format!("list_session_records errored: {e}"),
-                Ok(Ok(records)) => format!("list_session_records ok: {} rows", records.len()),
-            };
-            panic!(
-                "no ContextList; {probe_result}; live={} agents={:?}; status={status:?}; buffered after timeout: {buffered:#?}",
-                host.contains_agent(path.as_str()),
-                host.agent_names()
-            );
+                let mut buffered = Vec::new();
+                while let Some((event_path, event)) = host.try_recv_any() {
+                    buffered.push(format!("{event_path}::{event:?}"));
+                }
+                let status = host.agents.get(path.as_str()).map(|entry| {
+                    (
+                        entry.status,
+                        entry.background_pending,
+                        entry.last_event.clone(),
+                    )
+                });
+                let probe_storage = host.storage().clone();
+                let probe_agent_id = agent_id;
+                let probe = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    probe_storage.list_session_records(probe_agent_id),
+                )
+                .await;
+                let probe_result = match probe {
+                    Err(_) => "list_session_records TIMED OUT (storage lock held?)".to_string(),
+                    Ok(Err(e)) => format!("list_session_records errored: {e}"),
+                    Ok(Ok(records)) => format!("list_session_records ok: {} rows", records.len()),
+                };
+                panic!(
+                    "no ContextList; {probe_result}; live={} agents={:?}; status={status:?}; buffered after timeout: {buffered:#?}",
+                    host.contains_agent(path.as_str()),
+                    host.agent_names()
+                );
             }
         };
         assert_eq!(sessions.len(), 1);

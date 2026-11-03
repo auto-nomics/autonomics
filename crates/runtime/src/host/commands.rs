@@ -14,7 +14,7 @@ use futures::FutureExt;
 use crate::control::{AgentExecutionHistory, DelegationSnapshot, DelegationStatus};
 
 use super::RuntimeHost;
-use super::delegation::{HostDelegation, delegation_status_from_str, push_delegation_progress};
+use super::delegation::delegation_status_from_str;
 use super::events::{PendingDelivery, SpawnNotice};
 use super::relay::AgentCommand;
 use super::unix_epoch_ms;
@@ -141,8 +141,7 @@ impl RuntimeHost {
         let task_path = path.clone();
 
         self.infra.runtime_handle.spawn(async move {
-            let outcome =
-                activate_identity(&infra, model_slot, resolver, &task_path).await;
+            let outcome = activate_identity(&infra, model_slot, resolver, &task_path).await;
             let notice = match outcome {
                 Ok((handle, info)) => SpawnNotice::Activated { handle, info },
                 Err(reason) => SpawnNotice::Failed { path, reason },
@@ -334,16 +333,21 @@ impl RuntimeHost {
                         return;
                     }
                 };
-                if let Err(error) = self.validate_delegation_paths(&caller_path, &resolved) {
-                    let _ = reply_tx.send(error);
-                    return;
-                }
+                let target_path = match self.validate_delegation_paths(&caller_path, &resolved) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        let _ = reply_tx.send(error);
+                        return;
+                    }
+                };
                 let now = unix_epoch_ms();
-                let record = HostDelegation {
-                    snapshot: DelegationSnapshot {
+                self.ledger.open(
+                    DelegationSnapshot {
                         delegation_id,
-                        caller_path: Some(caller_path),
-                        target_path: resolved.clone(),
+                        // The validator already proved the caller parses;
+                        // the ledger stores the typed path.
+                        caller_path: agentik_types::AgentPath::try_from(caller_path.as_str()).ok(),
+                        target_path,
                         task: message.clone(),
                         status: DelegationStatus::Pending,
                         turn_id: None,
@@ -352,16 +356,9 @@ impl RuntimeHost {
                         created_at: now,
                         updated_at: now,
                     },
-                    reply_tx: Some(reply_tx),
-                    progress: progress.clone(),
-                };
-                push_delegation_progress(
-                    &record.progress,
-                    "delegation",
-                    "pending",
-                    &format!("target={resolved}"),
+                    Some(reply_tx),
+                    progress,
                 );
-                self.delegations.insert(delegation_id, record);
                 self.persist_delegation(delegation_id);
                 if self.agents.contains_key(&resolved) {
                     self.send_delegation_to(&resolved, message, delegation_id);
@@ -389,16 +386,18 @@ impl RuntimeHost {
                 let target_path =
                     target_path.map(|target| self.resolve_agent(&target).unwrap_or(target));
                 let live_records: Vec<_> = self
-                    .delegations
-                    .values()
-                    .map(|record| record.snapshot.clone())
+                    .ledger
+                    .snapshots()
+                    .cloned()
                     .filter(|record| {
-                        caller_path
+                        caller_path.as_deref().is_none_or(|value| {
+                            record
+                                .caller_path
+                                .as_ref()
+                                .is_some_and(|caller| caller.as_str() == value)
+                        }) && target_path
                             .as_deref()
-                            .is_none_or(|value| record.caller_path.as_deref() == Some(value))
-                            && target_path
-                                .as_deref()
-                                .is_none_or(|value| record.target_path == value)
+                            .is_none_or(|value| record.target_path.as_str() == value)
                             && status
                                 .as_deref()
                                 .is_none_or(|value| record.status.as_str() == value)
@@ -426,10 +425,21 @@ impl RuntimeHost {
                                 if live_ids.contains(&delegation_id) {
                                     return None;
                                 }
+                                // Storage boundary: rows are written from
+                                // validated paths, so both parse; a corrupt
+                                // row is dropped rather than poisoning the
+                                // typed snapshot.
+                                let caller_path = record
+                                    .caller_path
+                                    .as_deref()
+                                    .and_then(|path| agentik_types::AgentPath::try_from(path).ok());
+                                let target_path =
+                                    agentik_types::AgentPath::try_from(record.target_path.as_str())
+                                        .ok()?;
                                 Some(DelegationSnapshot {
                                     delegation_id,
-                                    caller_path: record.caller_path,
-                                    target_path: record.target_path,
+                                    caller_path,
+                                    target_path,
                                     task: record.task,
                                     status: delegation_status_from_str(&record.status),
                                     turn_id: record.turn_id,
@@ -641,7 +651,6 @@ impl RuntimeHost {
                     });
                 let _ = reply_tx.send(info);
             }
-
         }
     }
 
@@ -719,11 +728,12 @@ impl RuntimeHost {
     ///
     /// A direct child is always delegable regardless of its live status —
     /// messages queue on the child's relay and are processed turn by turn.
+    /// On success returns the validated, parsed target path.
     pub(super) fn validate_delegation_paths(
         &self,
         caller_path: &str,
         target_path: &str,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<agentik_types::AgentPath, String> {
         let caller = self.resolve_live_agent(caller_path, "caller", caller_path)?;
         // The TARGET may be dormant (virtual-actor activation brings it
         // up on delivery); hierarchy is validated on the paths alone.
@@ -740,7 +750,7 @@ impl RuntimeHost {
             return Err("Agents cannot delegate tasks to themselves.".to_string());
         }
         if target_path.is_direct_child_of(&caller_path) {
-            return Ok(());
+            return Ok(target_path);
         }
         if path_is_ancestor(&target_path, &caller_path) {
             return Err(format!(
@@ -1077,14 +1087,16 @@ async fn activate_identity(
 
     let model_override = match config.preferred_model.as_deref() {
         Some(spec) => {
-            let resolver = resolver.ok_or_else(|| {
-                "no model resolver installed; cannot resolve the agent's preferred model"
-            })?;
+            let resolver = resolver
+                .ok_or("no model resolver installed; cannot resolve the agent's preferred model")?;
             Some(resolver.resolve(spec).await?)
         }
         None => None,
     };
-    let slot_active = model_slot.as_ref().and_then(|slot| slot.load_full()).is_some();
+    let slot_active = model_slot
+        .as_ref()
+        .and_then(|slot| slot.load_full())
+        .is_some();
     if model_override.is_none() && !slot_active {
         return Err("No model configured on host.".to_string());
     }
@@ -1849,8 +1861,11 @@ mod communication_policy_tests {
 
         // Dormant delivery: activation → registration → buffered flush.
         let control = host.control();
-        let delivery =
-            tokio::spawn(async move { control.deliver_message_tracked("/root/wanderer", "wake up").await });
+        let delivery = tokio::spawn(async move {
+            control
+                .deliver_message_tracked("/root/wanderer", "wake up")
+                .await
+        });
         host.recv_and_process_command().await; // DeliverMessage → activation task
         host.recv_and_process_command().await; // SpawnNotice::Activated → register + flush
         wait_for_delivery_event(&mut host, "/root/wanderer", "wake up").await;
@@ -1917,14 +1932,19 @@ mod communication_policy_tests {
 
         // The next message re-activates the identity.
         let control = host.control();
-        let delivery =
-            tokio::spawn(async move { control.deliver_message_tracked("/root/sleeper", "again").await });
+        let delivery = tokio::spawn(async move {
+            control
+                .deliver_message_tracked("/root/sleeper", "again")
+                .await
+        });
         host.recv_and_process_command().await;
         host.recv_and_process_command().await;
         wait_for_delivery_event(&mut host, "/root/sleeper", "again").await;
         assert_eq!(delivery.await.unwrap(), Some(Ok(())));
         assert_eq!(
-            host.agents.get("/root/sleeper").and_then(|e| e.info.agent_id),
+            host.agents
+                .get("/root/sleeper")
+                .and_then(|e| e.info.agent_id),
             Some(record.id),
             "re-activation must reuse the stored identity"
         );

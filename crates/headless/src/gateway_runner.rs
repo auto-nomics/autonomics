@@ -242,7 +242,6 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
     processor.process(&RunEvent::RunStarted(RunStartedEvent {
         run_id: config.run_id,
         agent_id,
-        session_id: Uuid::nil(),
         profile: kind.name().to_string(),
         model: model_name,
     }));

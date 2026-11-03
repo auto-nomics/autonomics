@@ -223,7 +223,6 @@ fn translation_pairs_tools_and_counts_them() {
     let input = vec![
         AgentEvent::TurnStarted {
             turn_id: Uuid::nil(),
-            session_id: Uuid::nil(),
             delegation_id: None,
         },
         AgentEvent::ToolCall {
@@ -244,7 +243,6 @@ fn translation_pairs_tools_and_counts_them() {
         },
         AgentEvent::TurnCompleted {
             turn_id: Uuid::nil(),
-            session_id: Uuid::nil(),
             delegation_id: None,
             status: TurnExecutionStatus::Completed,
             telemetry: agentik_types::TurnTelemetry {
@@ -290,8 +288,26 @@ async fn session_resume_continues_the_same_session() {
     let daemon = start_mock_gateway_with_model(scripted_text_model_n("answer", 2)).await;
     let client = daemon.client();
 
-    // Run 1: capture the session id from turn.started.
-    let (first, first_jsonl) = run_jsonl(
+    // The event stream no longer carries context identity (one context per
+    // agent makes it derivable) — storage is the source of truth here.
+    async fn stored_session_id(client: &gateway::GatewayClient) -> Uuid {
+        let agents = client.list_storage_agents().await.unwrap();
+        let record = agents
+            .iter()
+            .find(|r| r.name == "/root/named_resume")
+            .expect("agent persisted");
+        let sessions = client.list_stored_sessions(record.id).await.unwrap();
+        assert_eq!(
+            sessions.len(),
+            1,
+            "one agent, one sole context; sessions: {:?}",
+            sessions.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
+        sessions[0].id
+    }
+
+    // Run 1.
+    let (first, _first_jsonl) = run_jsonl(
         client.clone(),
         GatewayRunConfig {
             prompt: "first prompt".into(),
@@ -302,13 +318,6 @@ async fn session_resume_continues_the_same_session() {
     .await
     .expect("startup succeeds");
     assert_eq!(first.outcome, Outcome::Completed);
-    let session_id: Uuid = first_jsonl
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .find(|v| v["type"] == "turn.started")
-        .and_then(|v| v["session_id"].as_str().map(String::from))
-        .and_then(|s| s.parse().ok())
-        .expect("turn.started carries a session id");
 
     // Wait for the post-shutdown snapshot flush to reach storage before
     // resuming (run 2 restores the agent from that storage) — polling
@@ -318,7 +327,7 @@ async fn session_resume_continues_the_same_session() {
             let agents = client.list_storage_agents().await.unwrap();
             if let Some(record) = agents.iter().find(|r| r.name == "/root/named_resume") {
                 let sessions = client.list_stored_sessions(record.id).await.unwrap();
-                if sessions.iter().any(|s| s.id == session_id) {
+                if !sessions.is_empty() {
                     return;
                 }
             }
@@ -327,11 +336,12 @@ async fn session_resume_continues_the_same_session() {
     })
     .await
     .expect("session snapshot flushed to storage");
+    let session_id = stored_session_id(&client).await;
 
     // Run 2: same daemon, same --name. There is no --session flag anymore —
     // the agent's sole working context (bound via agent_contexts on restore)
     // continues automatically.
-    let (second, second_jsonl) = run_jsonl(
+    let (second, _second_jsonl) = run_jsonl(
         client.clone(),
         GatewayRunConfig {
             prompt: "second prompt".into(),
@@ -341,21 +351,17 @@ async fn session_resume_continues_the_same_session() {
     )
     .await
     .expect("startup succeeds");
-    daemon.stop().await;
     assert_eq!(second.outcome, Outcome::Completed);
     assert_eq!(second.profile, first.profile, "same stored profile picked");
 
-    let resumed_id: Uuid = second_jsonl
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .find(|v| v["type"] == "turn.started")
-        .and_then(|v| v["session_id"].as_str().map(String::from))
-        .and_then(|s| s.parse().ok())
-        .expect("turn.started carries a session id");
+    // Assert against storage BEFORE stopping the daemon — the check goes
+    // through the gateway API.
     assert_eq!(
-        resumed_id, session_id,
-        "run 2 continued run 1's sole context by agent identity; events:\n{second_jsonl}"
+        stored_session_id(&client).await,
+        session_id,
+        "run 2 continued run 1's sole context by agent identity"
     );
+    daemon.stop().await;
 }
 
 /// Compaction progress events translate to the JSONL surface as follows:
