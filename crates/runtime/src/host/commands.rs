@@ -341,6 +341,7 @@ impl RuntimeHost {
                     }
                 };
                 let now = unix_epoch_ms();
+                let origin = agentik_types::MessageOrigin::agent(&caller_path);
                 self.ledger.open(
                     DelegationSnapshot {
                         delegation_id,
@@ -361,7 +362,7 @@ impl RuntimeHost {
                 );
                 self.persist_delegation(delegation_id);
                 if self.agents.contains_key(&resolved) {
-                    self.send_delegation_to(&resolved, message, delegation_id);
+                    self.send_delegation_to(&resolved, message, delegation_id, origin);
                 } else {
                     // Dormant target: activate it, then deliver on
                     // registration. The delegation ledger owns the reply
@@ -371,7 +372,7 @@ impl RuntimeHost {
                         PendingDelivery {
                             text: message,
                             delegation_id: Some(delegation_id),
-                            origin: agentik_types::MessageOrigin::Delegate,
+                            origin,
                             reply_tx: None,
                         },
                     );

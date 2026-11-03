@@ -1121,7 +1121,7 @@ mod tests {
             &mut ts,
             AgentEvent::MessageInjected {
                 text: "external".into(),
-                origin: agentik_types::MessageOrigin::Background,
+                origin: agentik_types::MessageOrigin::agent("/root/peer"),
             },
         );
 
@@ -1130,7 +1130,7 @@ mod tests {
             ts.messages.last(),
             Some(ChatLine::Injected {
                 text,
-                origin: agentik_types::MessageOrigin::Background,
+                origin: agentik_types::MessageOrigin::Agent { .. },
             }) if text == "external"
         ));
     }

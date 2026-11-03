@@ -312,10 +312,7 @@ async fn relay_loop(
                     text,
                     delegation_id,
                     origin,
-                }) => match delegation_id {
-                    Some(id) => handle.send_delegation(text, id),
-                    None => handle.send_message_with_origin(text, origin),
-                }
+                }) => handle.send_with_origin(text, origin, delegation_id),
                 Some(AgentCommand::Cancel) => {
                     handle.cancel();
                 }

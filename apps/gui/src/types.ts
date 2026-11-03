@@ -19,7 +19,9 @@ export type GatewayFrame = {
   data: any;
 };
 
-export type MessageOrigin = "user" | "delegate" | "background" | "system";
+/** Backend message provenance: bare tags for user/system, or the
+ *  authoring agent's path wrapped in the externally-tagged map form. */
+export type MessageOrigin = "user" | "system" | { agent: { path: string } };
 
 export type ChatItem = {
   id: number;
@@ -27,8 +29,10 @@ export type ChatItem = {
   text: string;
   usage?: string;
   kind?: "thinking" | "tool_call" | "tool_result";
-  /** Provenance of a system-side item — absent for user/assistant turns. */
-  origin?: Exclude<MessageOrigin, "user">;
+  /** Provenance kind of a system-side item — absent for user/assistant turns. */
+  origin?: "system" | "agent";
+  /** Authoring agent path when origin === "agent". */
+  originFrom?: string;
   time: number;
 };
 

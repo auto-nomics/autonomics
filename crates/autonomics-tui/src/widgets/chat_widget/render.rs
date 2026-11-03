@@ -269,10 +269,11 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         }
         ChatLine::Injected { origin, text } => {
             let label = match origin {
-                agentik_types::MessageOrigin::Delegate => "delegated task",
-                agentik_types::MessageOrigin::Background => "background",
-                agentik_types::MessageOrigin::System => "system",
-                agentik_types::MessageOrigin::User => "notice",
+                agentik_types::MessageOrigin::Agent { path } => {
+                    format!("agent · {path}")
+                }
+                agentik_types::MessageOrigin::System => "system".to_string(),
+                agentik_types::MessageOrigin::User => "notice".to_string(),
             };
             let mut lines = vec![Line::from(Span::styled(
                 format!("⌁ {label}"),

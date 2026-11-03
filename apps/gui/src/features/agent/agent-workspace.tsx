@@ -281,14 +281,15 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
   }
 
   if (message.role === "system") {
-    const labels: Record<NonNullable<ChatItem["origin"]>, string> = {
-      delegate: "Delegated task",
-      background: "Background notice",
-      system: "System",
-    };
+    const label =
+      message.origin === "agent"
+        ? message.originFrom
+          ? `Agent · ${message.originFrom}`
+          : "Agent"
+        : "System";
     return (
       <div className="mx-auto max-w-[85%] rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        <span className="mr-2 font-medium">{labels[message.origin ?? "system"]}</span>
+        <span className="mr-2 font-medium">{label}</span>
         <span className="whitespace-pre-wrap">{message.text}</span>
       </div>
     );

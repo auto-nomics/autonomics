@@ -85,7 +85,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                         state::ChatLine::User(text)
                     } else {
                         state::ChatLine::Injected {
-                            origin: msg.origin,
+                            origin: msg.origin.clone(),
                             text,
                         }
                     }

@@ -40,29 +40,33 @@ impl AgentHandle {
 impl AgentHandle {
     /// TUI user input; the caller has already displayed the message locally.
     pub fn send_message(&self, text: String) {
-        self.send_message_with_origin(text, agentik_types::MessageOrigin::User);
+        self.send_with_origin(text, agentik_types::MessageOrigin::User, None);
     }
 
-    pub(super) fn send_message_with_origin(
+    /// Deliver `text` with its provenance and, for tracked delegations,
+    /// the delegation id that rides the target's turn lifecycle.
+    pub(super) fn send_with_origin(
         &self,
         text: String,
         origin: agentik_types::MessageOrigin,
+        delegation_id: Option<uuid::Uuid>,
     ) {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text }],
             origin,
-            delegation_id: None,
+            delegation_id,
         });
     }
 
     /// Send a tracked request and carry the delegation ID through the target
     /// agent's turn lifecycle.
-    pub fn send_delegation(&self, text: String, delegation_id: uuid::Uuid) {
-        let _ = self.internal_tx.send(InternalEvent::MessageInject {
-            content: vec![ContentBlock::Text { text }],
-            origin: agentik_types::MessageOrigin::Delegate,
-            delegation_id: Some(delegation_id),
-        });
+    pub fn send_delegation(
+        &self,
+        text: String,
+        delegation_id: uuid::Uuid,
+        origin: agentik_types::MessageOrigin,
+    ) {
+        let _ = self.send_with_origin(text, origin, Some(delegation_id));
     }
 
     pub fn cancel(&mut self) {

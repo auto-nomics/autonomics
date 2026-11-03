@@ -365,9 +365,7 @@ impl Context {
                              Use `view_task_results` with task={seq} to view the error details."
                         )
                     };
-                    let _ = self.remember(
-                        Message::user(note).with_origin(agentik_types::MessageOrigin::Background),
-                    );
+                    let _ = self.remember(Message::injected(note));
                 }
                 true
             }
@@ -933,7 +931,7 @@ impl Context {
             };
             let _ = tx.send(InternalEvent::MessageInject {
                 content: vec![ContentBlock::Text { text: message }],
-                origin: agentik_types::MessageOrigin::Background,
+                origin: agentik_types::MessageOrigin::System,
                 delegation_id: None,
             });
             return;
@@ -1011,7 +1009,7 @@ impl Context {
 
         let _ = tx.send(InternalEvent::MessageInject {
             content: vec![ContentBlock::Text { text: message }],
-            origin: agentik_types::MessageOrigin::Background,
+            origin: agentik_types::MessageOrigin::System,
             delegation_id: None,
         });
     }

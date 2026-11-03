@@ -1,7 +1,8 @@
+use crate::path::AgentPath;
 use crate::reasoning::{ReasoningConfig, ReasoningEffort, ThinkingConfig};
 use crate::shared::{RequestId, Usage};
 use crate::tools::{ToolChoice, ToolDefinition};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
@@ -78,7 +79,10 @@ impl Message {
         let blocks: Vec<String> = self.content.iter().map(ContentBlock::log_summary).collect();
         let mut s = format!("[{role}] {}", blocks.join(" | "));
         if self.origin != MessageOrigin::default() {
-            s.push_str(&format!(" origin={}", self.origin.tag()));
+            match self.origin.agent_path() {
+                Some(path) => s.push_str(&format!(" origin=agent:{path}")),
+                None => s.push_str(&format!(" origin={}", self.origin.tag())),
+            }
         }
         if let Some(stop) = &self.stop_reason {
             s.push_str(&format!(" stop={stop:?}"));
@@ -107,32 +111,89 @@ pub enum Role {
 /// non-model contribution enters the conversation as `Role::User`.
 /// `origin` keeps the distinction durable (persisted with the transcript)
 /// without leaking onto the model wire.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(utoipa::ToSchema))]
+///
+/// Serialization: `User`/`System` serialize as bare strings (`"user"` /
+/// `"system"`); `Agent` serializes as `{"agent": {"path": "…"}}`. The
+/// deserializer also accepts the pre-`Agent` legacy string forms —
+/// `"delegate"` / `"background"` degrade to [`MessageOrigin::System`]
+/// because their authoring path was never recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageOrigin {
     /// A human typed it (gateway `DeliverMessage`, TUI prompt).
     #[default]
     User,
-    /// Injected on behalf of a `delegate_to` call from another agent.
-    Delegate,
-    /// Background task notice: completion notification or `wait_task`
-    /// wake-up carrying a task result.
-    Background,
+    /// Content authored by another agent, identified by its [`AgentPath`]
+    /// (a `delegate_to` task delivery).
+    Agent { path: AgentPath },
     /// Runtime feedback authored by the harness itself: interruption
-    /// markers, retry notices, plan/state notices, compaction checkpoints.
+    /// markers, retry notices, background-task notices, plan/state
+    /// notices, compaction checkpoints.
     System,
 }
 
 impl MessageOrigin {
-    /// Short lowercase tag for logs and UI badges.
+    /// [`MessageOrigin::Agent`] from a raw path string. Falls back to
+    /// [`MessageOrigin::System`] when `path` is not a valid [`AgentPath`] —
+    /// callers with pre-validated paths never hit that branch.
     #[must_use]
-    pub fn tag(self) -> &'static str {
+    pub fn agent(path: impl AsRef<str>) -> Self {
+        AgentPath::try_from(path.as_ref())
+            .map(|path| Self::Agent { path })
+            .unwrap_or(Self::System)
+    }
+
+    /// Short lowercase kind tag for logs and UI badges.
+    #[must_use]
+    pub fn tag(&self) -> &'static str {
         match self {
             Self::User => "user",
-            Self::Delegate => "delegate",
-            Self::Background => "background",
+            Self::Agent { .. } => "agent",
             Self::System => "system",
+        }
+    }
+
+    /// The authoring agent path, if any.
+    #[must_use]
+    pub fn agent_path(&self) -> Option<&AgentPath> {
+        match self {
+            Self::Agent { path } => Some(path),
+            _ => None,
+        }
+    }
+}
+
+/// Legacy-compatible deserialization: bare strings (`"user"`, `"system"`,
+/// and the pre-`Agent` `"delegate"` / `"background"` tags) alongside the
+/// current externally-tagged map form. See [`MessageOrigin`].
+impl<'de> Deserialize<'de> for MessageOrigin {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            /// `"user"` / `"system"`, or a legacy `"delegate"` /
+            /// `"background"` tag.
+            Tag(String),
+            /// `{"agent": {"path": "…"}}`.
+            Agent { agent: AgentFields },
+        }
+        #[derive(Deserialize)]
+        struct AgentFields {
+            path: AgentPath,
+        }
+
+        match Raw::deserialize(deserializer)? {
+            Raw::Tag(tag) => match tag.as_str() {
+                "user" => Ok(Self::User),
+                // Legacy tags predate path attribution — degrade honestly.
+                "delegate" | "background" => Ok(Self::System),
+                "system" => Ok(Self::System),
+                other => Err(serde::de::Error::unknown_field(
+                    other,
+                    &["user", "system", "agent"],
+                )),
+            },
+            Raw::Agent { agent: AgentFields { path } } => Ok(Self::Agent { path }),
         }
     }
 }
@@ -670,20 +731,30 @@ mod tests {
         assert_eq!(msg.role, Role::User);
     }
 
-    /// `origin` survives a JSON round trip and serializes snake_case.
+    /// `origin` survives a JSON round trip in the current format and never
+    /// reaches wire params.
     #[test]
     fn origin_round_trips_and_never_reaches_wire_params() {
-        for (origin, tag) in [
-            (MessageOrigin::User, "user"),
-            (MessageOrigin::Delegate, "delegate"),
-            (MessageOrigin::Background, "background"),
-            (MessageOrigin::System, "system"),
-        ] {
+        let cases = [
+            (
+                MessageOrigin::User,
+                serde_json::json!("user"),
+            ),
+            (
+                MessageOrigin::System,
+                serde_json::json!("system"),
+            ),
+            (
+                MessageOrigin::agent("/root/researcher"),
+                serde_json::json!({"agent": {"path": "/root/researcher"}}),
+            ),
+        ];
+        for (origin, expected) in cases {
             let msg = Message {
                 id: "m1".into(),
                 type_: "message".into(),
                 role: Role::User,
-                origin,
+                origin: origin.clone(),
                 content: vec![ContentBlock::Text { text: "hi".into() }],
                 model: None,
                 stop_reason: None,
@@ -692,7 +763,7 @@ mod tests {
                 request_id: None,
             };
             let json = serde_json::to_value(&msg).unwrap();
-            assert_eq!(json["origin"], tag);
+            assert_eq!(json["origin"], expected);
             let back: Message = serde_json::from_value(json).unwrap();
             assert_eq!(back.origin, origin);
 
@@ -706,6 +777,46 @@ mod tests {
         }
     }
 
+    /// Transcript rows persisted between the origin field's introduction
+    /// (string tags) and the `Agent { path }` upgrade must still load.
+    /// `"delegate"` / `"background"` degrade to [`MessageOrigin::System`]
+    /// — their authoring path was never recorded.
+    #[test]
+    fn legacy_string_origin_tags_deserialize() {
+        assert_eq!(
+            serde_json::from_value::<MessageOrigin>(serde_json::json!("user")).unwrap(),
+            MessageOrigin::User
+        );
+        assert_eq!(
+            serde_json::from_value::<MessageOrigin>(serde_json::json!("system")).unwrap(),
+            MessageOrigin::System
+        );
+        assert_eq!(
+            serde_json::from_value::<MessageOrigin>(serde_json::json!("delegate")).unwrap(),
+            MessageOrigin::System
+        );
+        assert_eq!(
+            serde_json::from_value::<MessageOrigin>(serde_json::json!("background")).unwrap(),
+            MessageOrigin::System
+        );
+        assert!(
+            serde_json::from_value::<MessageOrigin>(serde_json::json!("nonsense")).is_err(),
+            "unknown tags must be rejected"
+        );
+    }
+
+    /// Invalid paths fall back to System; valid ones keep the typed path.
+    #[test]
+    fn agent_constructor_validates_path() {
+        assert_eq!(
+            MessageOrigin::agent("/root/researcher"),
+            MessageOrigin::Agent {
+                path: "/root/researcher".parse().unwrap(),
+            }
+        );
+        assert_eq!(MessageOrigin::agent("not a path"), MessageOrigin::System);
+    }
+
     /// Non-default origins show up in log summaries.
     #[test]
     fn log_summary_reports_non_default_origin() {
@@ -713,7 +824,7 @@ mod tests {
             id: "m1".into(),
             type_: "message".into(),
             role: Role::User,
-            origin: MessageOrigin::Delegate,
+            origin: MessageOrigin::agent("/root/researcher"),
             content: vec![ContentBlock::Text {
                 text: "task".into(),
             }],
@@ -723,7 +834,13 @@ mod tests {
             usage: None,
             request_id: None,
         };
-        assert!(base.log_summary().contains("origin=delegate"));
+        assert!(base.log_summary().contains("origin=agent:/root/researcher"));
+
+        let system = Message {
+            origin: MessageOrigin::System,
+            ..base.clone()
+        };
+        assert!(system.log_summary().contains("origin=system"));
 
         let plain = Message {
             origin: MessageOrigin::User,

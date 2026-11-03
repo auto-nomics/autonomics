@@ -57,7 +57,7 @@ impl Context {
             } else {
                 self.core.send_event(AgentEvent::MessageInjected {
                     text: preview,
-                    origin,
+                    origin: origin.clone(),
                 });
             }
         }

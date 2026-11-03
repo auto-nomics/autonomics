@@ -15,7 +15,6 @@ import type {
   BackendMessage,
   ChatItem,
   GatewayFrame,
-  MessageOrigin,
   ModelRow,
   ContextInfo,
   StateSnapshot,
@@ -83,22 +82,44 @@ function makeItem(
   role: ChatItem["role"],
   text: string,
   kind?: ChatItem["kind"],
-  origin?: ChatItem["origin"],
+  origin?: { tag: "system" | "agent"; from?: string },
 ): ChatItem {
   itemSequence += 1;
-  return { id: itemSequence, role, text, kind, origin, time: Date.now() };
+  return {
+    id: itemSequence,
+    role,
+    text,
+    kind,
+    origin: origin?.tag,
+    originFrom: origin?.from,
+    time: Date.now(),
+  };
+}
+
+/** Normalize a backend MessageOrigin (bare tag or {agent:{path}}) into the
+ *  item-level shape; undefined for user-authored content. */
+function normalizeOrigin(
+  origin: unknown,
+): { tag: "system" | "agent"; from?: string } | undefined {
+  if (origin == null || origin === "user") return undefined;
+  if (typeof origin === "string") {
+    return origin === "agent" ? { tag: "agent" } : { tag: "system" };
+  }
+  const path = (origin as { agent?: { path?: unknown } }).agent?.path;
+  if (typeof path === "string") return { tag: "agent", from: path };
+  return { tag: "system" };
 }
 
 function convertMessage(message: any): ChatItem[] {
   const output: ChatItem[] = [];
-  // Non-user origins (delegation, background notice, harness feedback)
+  // Non-user origins (delegations, background notices, harness feedback)
   // ride in user-role messages on the wire; surface them as system items.
-  const origin: MessageOrigin | undefined = message.role === "user" ? (message.origin ?? "user") : undefined;
+  const origin = message.role === "user" ? normalizeOrigin(message.origin) : undefined;
   const textRole: ChatItem["role"] =
-    message.role === "user" ? (origin && origin !== "user" ? "system" : "user") : "assistant";
+    message.role === "user" ? (origin ? "system" : "user") : "assistant";
   let text = "";
   const pushText = () => {
-    if (text) output.push(makeItem(textRole, text, undefined, origin && origin !== "user" ? origin : undefined));
+    if (text) output.push(makeItem(textRole, text, undefined, origin));
     text = "";
   };
   for (const block of message.content ?? []) {
@@ -324,7 +345,7 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
       } else if (event.MessageInjected !== undefined) {
         const injected = event.MessageInjected;
-        appendMessage(agent, makeItem("system", injected.text, undefined, injected.origin));
+        appendMessage(agent, makeItem("system", injected.text, undefined, normalizeOrigin(injected.origin)));
         setPromptHistories((current) => {
           const history = current[agent] ?? [];
           return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };

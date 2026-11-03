@@ -214,13 +214,9 @@ impl RuntimeHost {
         name: &str,
         message: String,
         delegation_id: uuid::Uuid,
+        origin: agentik_types::MessageOrigin,
     ) {
-        if !self.enqueue_agent_message(
-            name,
-            message,
-            Some(delegation_id),
-            agentik_types::MessageOrigin::Delegate,
-        ) {
+        if !self.enqueue_agent_message(name, message, Some(delegation_id), origin) {
             tracing::warn!(
                 agent = name,
                 %delegation_id,
