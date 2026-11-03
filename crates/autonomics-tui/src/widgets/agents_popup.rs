@@ -14,7 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidgetRef, Widget},
 };
@@ -26,7 +26,6 @@ use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
-const ACCENT: Color = Color::Cyan;
 /// Prompt gutter width for the search input: `❯ ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
@@ -441,9 +440,10 @@ pub fn render_agents_popup(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
         return;
     }
 
+    let theme = crate::theme::current();
     let popup_w = (frame_area.width * 7 / 10).max(46);
     let popup = Popup::new(" Agents ", PopupControls::default())
-        .accent(ACCENT)
+        .accent(theme.accent)
         .width(popup_w);
     let inner = popup.render(frame_area, buf);
 
@@ -463,7 +463,7 @@ pub fn render_agents_popup(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     Widget::render(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(theme.text_faint)),
         v_regions[2],
         buf,
     );
@@ -472,43 +472,44 @@ pub fn render_agents_popup(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     let footer = Line::from(vec![
         Span::styled(
             " Enter",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" switch  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" switch  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "m/M",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" model  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" model  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "e/E",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" effort  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" effort  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "/",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" search  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" search  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Tab",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" filter  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" filter  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" close", Style::default().fg(Color::DarkGray)),
+        Span::styled(" close", Style::default().fg(theme.text_faint)),
     ]);
     Widget::render(Paragraph::new(footer), v_regions[4], buf);
 }
 
 fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
+    let theme = crate::theme::current();
     let prompt_style = if state.searching || !state.textarea.is_empty() {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     };
     buf.set_string(area.x, area.y, "❯", prompt_style);
     let ta_area = match area.width.checked_sub(PROMPT_GUTTER) {
@@ -529,7 +530,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupStat
                 ta_area.x,
                 ta_area.y,
                 " / search agents (names, model specs)",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             );
         }
         state.cursor_pos = state.searching.then_some((ta_area.x, ta_area.y));
@@ -551,9 +552,10 @@ fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
     if area.width < 4 {
         return;
     }
+    let theme = crate::theme::current();
     let selected_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(theme.on_accent)
+        .bg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
     let mut used = 1usize;
@@ -572,7 +574,7 @@ fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
         let text_style = if selected {
             selected_style
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme.text_dim)
         };
         let glyph_style = match status {
             Some(status) if !selected => Style::default().fg(status_color(status)),
@@ -588,7 +590,7 @@ fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
             pieces.push((" ".into(), selected_style));
         }
         pieces.push((count.to_string(), text_style));
-        pieces.push(("  ".into(), Style::default().fg(Color::DarkGray)));
+        pieces.push(("  ".into(), Style::default().fg(theme.text_faint)));
         let width: usize = pieces.iter().map(|(piece, _)| piece.width()).sum();
         if used + width > viewport {
             break;
@@ -607,6 +609,7 @@ fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
 /// active leaf) with trailing model and effort columns that drop out on
 /// narrow popups. The visible window scrolls around the selection.
 fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
+    let theme = crate::theme::current();
     if state.picker.items.is_empty() {
         let hint = if state.picker.query.is_empty() {
             "(no agents match this filter)"
@@ -614,7 +617,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
             "No matching agents"
         };
         Paragraph::new(hint)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(area, buf);
         return;
@@ -663,7 +666,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
         let line = agent_row_line(agent, is_selected, state.column, name_w, model_w, effort_w);
         Paragraph::new(line)
             .style(if is_selected {
-                Style::default().bg(Color::Rgb(35, 55, 70))
+                Style::default().bg(theme.selected_bg)
             } else {
                 Style::default()
             })
@@ -684,7 +687,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
         Paragraph::new(Line::from(Span::styled(
             format!("  +{hidden} more"),
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
         )))
         .render(
@@ -708,20 +711,21 @@ fn agent_row_line(
     model_w: Option<usize>,
     effort_w: Option<usize>,
 ) -> Line<'static> {
+    let theme = crate::theme::current();
     let cell_style = if selected {
         Style::default()
-            .fg(Color::White)
+            .fg(theme.text)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     };
     let (icon_style, name_style) = if selected {
         (
             Style::default()
-                .fg(Color::White)
+                .fg(theme.text)
                 .add_modifier(Modifier::BOLD),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.text)
                 .add_modifier(Modifier::BOLD),
         )
     } else {
@@ -729,10 +733,10 @@ fn agent_row_line(
             Style::default().fg(status_color(&agent.status)),
             if agent.is_active {
                 Style::default()
-                    .fg(Color::LightRed)
+                    .fg(theme.active_marker)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.text_dim)
             },
         )
     };

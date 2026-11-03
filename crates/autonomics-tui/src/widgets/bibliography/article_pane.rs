@@ -23,6 +23,7 @@ pub(super) struct ArticlePane<'a> {
 
 impl Widget for ArticlePane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let block = Block::default().title(self.tab_bar());
         let inner = block.inner(area);
         block.render(area, buf);
@@ -41,7 +42,7 @@ impl Widget for ArticlePane<'_> {
         };
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll as usize);
         Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(Style::new().fg(Color::DarkGray))
+            .style(Style::new().fg(theme.text_faint))
             .render(scrollbar_area, buf, &mut scrollbar_state);
     }
 }
@@ -50,20 +51,21 @@ impl ArticlePane<'_> {
     /// Title line listing every tab; the active one is accented so the
     /// `h`/`l` switching affordance is discoverable without a manual.
     fn tab_bar(&self) -> Line<'static> {
+        let theme = crate::theme::current();
         let mut spans = Vec::new();
         for (index, tab) in DetailsTab::TABS.into_iter().enumerate() {
             if index > 0 {
-                spans.push(Span::styled("│", Style::new().fg(Color::DarkGray)));
+                spans.push(Span::styled("│", Style::new().fg(theme.text_faint)));
             }
             let label = format!(" {} ", tab.label());
             let style = if tab == self.tab {
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD)
+                    Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD)
                 }
             } else {
-                Style::new().fg(Color::DarkGray)
+                Style::new().fg(theme.text_faint)
             };
             spans.push(Span::styled(label, style));
         }
@@ -74,7 +76,7 @@ impl ArticlePane<'_> {
         let Some(article) = self.article else {
             return vec![Line::styled(
                 "No article selected",
-                Style::new().fg(Color::DarkGray),
+                Style::new().fg(crate::theme::current().text_faint),
             )];
         };
         match self.tab {
@@ -85,6 +87,7 @@ impl ArticlePane<'_> {
     }
 
     fn metadata(&self, article: &Article) -> Vec<Line<'static>> {
+        let theme = crate::theme::current();
         let mut lines = vec![
             field("Title", article.title.clone()),
             field(
@@ -107,7 +110,7 @@ impl ArticlePane<'_> {
             Line::raw(""),
             Line::styled(
                 "Abstract",
-                Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD),
+                Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD),
             ),
         ];
         if let Some(text) = &article.abstract_text {
@@ -115,13 +118,14 @@ impl ArticlePane<'_> {
         } else {
             lines.push(Line::styled(
                 "Not available",
-                Style::new().fg(Color::DarkGray),
+                Style::new().fg(theme.text_faint),
             ));
         }
         lines
     }
 
     fn fulltext(&self, article: &Article) -> Vec<Line<'static>> {
+        let theme = crate::theme::current();
         match self.fulltext {
             Some(ft) if ft.text_content.is_some() => ft
                 .text_content
@@ -133,25 +137,26 @@ impl ArticlePane<'_> {
             Some(ft) => vec![
                 Line::styled(
                     "Full text uploaded; extraction pending",
-                    Style::new().fg(Color::Yellow),
+                    Style::new().fg(theme.warning),
                 ),
                 field("File", &ft.file_path),
                 field("Extractor", ft.extracted_by.clone().unwrap_or_default()),
             ],
             None => vec![
-                Line::styled("No full text stored", Style::new().fg(Color::DarkGray)),
+                Line::styled("No full text stored", Style::new().fg(theme.text_faint)),
                 Line::styled(
                     format!("Article ID: {}", article.id),
-                    Style::new().fg(Color::DarkGray),
+                    Style::new().fg(theme.text_faint),
                 ),
             ],
         }
     }
 
     fn notes(&self, article: &Article) -> Vec<Line<'static>> {
+        let theme = crate::theme::current();
         let empty = vec![Line::styled(
             "No notes yet",
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme.text_faint),
         )];
         let Some(notes) = self.annotations else {
             return empty;
@@ -172,7 +177,7 @@ impl ArticlePane<'_> {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
             format!("Article ID: {}", article.id),
-            Style::new().fg(Color::DarkGray),
+            Style::new().fg(theme.text_faint),
         ));
         lines
     }
@@ -180,14 +185,15 @@ impl ArticlePane<'_> {
 
 fn field(name: &str, value: impl Into<String>) -> Line<'static> {
     let value = value.into();
+    let theme = crate::theme::current();
     if value.is_empty() {
         return Line::from(vec![
-            Span::styled(format!("{name}: "), Style::new().fg(Color::DarkGray)),
-            Span::styled("—", Style::new().fg(Color::DarkGray)),
+            Span::styled(format!("{name}: "), Style::new().fg(theme.text_faint)),
+            Span::styled("—", Style::new().fg(theme.text_faint)),
         ]);
     }
     Line::from(vec![
-        Span::styled(format!("{name}: "), Style::new().fg(Color::Gray)),
+        Span::styled(format!("{name}: "), Style::new().fg(theme.text_dim)),
         Span::raw(value),
     ])
 }

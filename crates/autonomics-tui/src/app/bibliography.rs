@@ -110,7 +110,7 @@ impl App {
         .width(popup_width)
         .height(popup_height)
         .vertically_centered(true)
-        .accent(ratatui::style::Color::Cyan);
+        .accent(crate::theme::current().accent);
         let inner = popup.render(area, buf);
         crate::widgets::bibliography::BibliographyWidget::default().render(
             inner,

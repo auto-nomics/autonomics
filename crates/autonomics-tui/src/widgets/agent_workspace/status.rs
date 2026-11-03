@@ -28,15 +28,16 @@ pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
 }
 
 pub(crate) fn status_color(status: &AgentStatus) -> Color {
+    let theme = crate::theme::current();
     match status {
-        AgentStatus::Idle | AgentStatus::Aborted => Color::Green,
-        AgentStatus::Requesting | AgentStatus::Streaming => Color::Cyan,
-        AgentStatus::ToolRunning => Color::Yellow,
-        AgentStatus::Retrying => Color::Yellow,
-        AgentStatus::Error => Color::Red,
-        AgentStatus::Cancelled => Color::DarkGray,
-        AgentStatus::Waiting => Color::Blue,
-        AgentStatus::Compacting => Color::Magenta,
+        AgentStatus::Idle | AgentStatus::Aborted => theme.success,
+        AgentStatus::Requesting | AgentStatus::Streaming => theme.accent,
+        AgentStatus::ToolRunning => theme.warning,
+        AgentStatus::Retrying => theme.warning,
+        AgentStatus::Error => theme.error,
+        AgentStatus::Cancelled => theme.text_faint,
+        AgentStatus::Waiting => theme.info,
+        AgentStatus::Compacting => theme.accent_alt,
     }
 }
 

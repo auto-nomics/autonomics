@@ -17,7 +17,7 @@ pub(super) struct SearchBar<'a> {
 
 impl Widget for SearchBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let dim = Style::new().fg(Color::DarkGray);
+        let dim = Style::new().fg(crate::theme::current().text_faint);
         let block = Block::default()
             .title(Span::styled(
                 " Search ",

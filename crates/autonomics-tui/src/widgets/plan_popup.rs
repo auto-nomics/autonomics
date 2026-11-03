@@ -8,14 +8,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
 
 use crate::state::PlanState;
-
-const ACCENT: Color = Color::Cyan;
 
 /// Result of forwarding a key event to the plan popup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +86,7 @@ pub fn render_plan_popup(
         return;
     }
 
+    let theme = crate::theme::current();
     let rows = plan.steps.len().max(1) as u16;
     let height = (rows + 2).min(frame_area.height.saturating_sub(2)).max(3);
     let width = (frame_area.width * 7 / 10).max(40).min(frame_area.width);
@@ -105,15 +104,17 @@ pub fn render_plan_popup(
         .borders(ratatui::widgets::Borders::ALL)
         .title(Span::styled(
             title,
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ))
-        .border_style(Style::default().fg(ACCENT));
+        .border_style(Style::default().fg(theme.accent));
     let inner = block.inner(popup);
     block.render(popup, buf);
 
     if plan.is_empty() {
         Paragraph::new("(no active plan)")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(inner, buf);
         return;
@@ -134,7 +135,7 @@ pub fn render_plan_popup(
             Span::styled(text, style),
         ]))
         .style(if selected {
-            Style::default().bg(Color::Rgb(35, 55, 70))
+            Style::default().bg(theme.selected_bg)
         } else {
             Style::default()
         })
@@ -151,20 +152,21 @@ pub fn render_plan_popup(
 }
 
 fn step_style(step: &agentik_types::PlanStep) -> (&'static str, Style) {
+    let theme = crate::theme::current();
     match step.status {
         agentik_types::StepStatus::Completed => (
             "✔",
             Style::default()
-                .fg(Color::Green)
+                .fg(theme.success)
                 .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         ),
         agentik_types::StepStatus::InProgress => (
             "▶",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        agentik_types::StepStatus::Pending => ("○", Style::default().fg(Color::DarkGray)),
+        agentik_types::StepStatus::Pending => ("○", Style::default().fg(theme.text_faint)),
     }
 }
 

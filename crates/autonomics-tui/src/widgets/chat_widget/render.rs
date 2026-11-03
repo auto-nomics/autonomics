@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -37,12 +37,13 @@ fn sanitize_user_text(text: &str) -> String {
 }
 
 fn render_user_message(text: &str, width: u16) -> Vec<Line<'static>> {
+    let theme = crate::theme::current();
     let message = sanitize_user_text(text);
     if message.trim().is_empty() {
         return Vec::new();
     }
     let content_width = width.saturating_sub(USER_HORIZONTAL_RESERVE).max(1);
-    let style = Style::default().fg(Color::Cyan);
+    let style = Style::default().fg(theme.accent);
 
     let mut content_lines = Vec::new();
     for logical_line in message.trim_end_matches(['\r', '\n']).split('\n') {
@@ -60,7 +61,7 @@ fn render_user_message(text: &str, width: u16) -> Vec<Line<'static>> {
             spans.push(Span::styled(
                 prefix,
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(theme.accent)
                     .add_modifier(Modifier::DIM | Modifier::BOLD),
             ));
             spans.extend(
@@ -121,13 +122,14 @@ fn format_turn_usage(u: TurnUsage) -> String {
 
 /// Render a single `ChatLine` into one or more owned `Line<'static>`.
 pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>> {
+    let theme = crate::theme::current();
     match msg {
         ChatLine::User(text) => render_user_message(text, area.width),
         ChatLine::Assistant { text, usage } => {
             let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(
                 "Assistant",
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.text)
                     .add_modifier(Modifier::BOLD),
             ))];
             lines.extend(super::md_renderer::render_markdown_to_lines(
@@ -137,7 +139,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             if let Some(u) = usage {
                 lines.push(Line::from(Span::styled(
                     format_turn_usage(*u),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_faint),
                 )));
             }
             lines
@@ -149,7 +151,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 let prefix = if first { "💭 " } else { "   " };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_faint),
                 )));
                 first = false;
             }
@@ -158,14 +160,14 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::ToolCall { name, input } => {
             let mut lines = vec![Line::from(Span::styled(
                 format!("🔧 Calling: {}", name),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ))];
             if !input.is_empty() {
                 let display = try_pretty_json(input);
                 for line in display.lines() {
                     lines.push(Line::from(Span::styled(
                         format!("   {}", line),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_faint),
                     )));
                 }
             }
@@ -175,13 +177,13 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             vec![Line::from(Span::styled(
                 format!("⏳ Calling: {name} (running in background, task #{seq})"),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::DIM),
             ))]
         }
         ChatLine::ToolResult { ok, content } => {
             let icon = if *ok { "✓" } else { "✗" };
-            let color = if *ok { Color::Green } else { Color::Red };
+            let color = if *ok { theme.success } else { theme.error };
             let display = try_pretty_json(content);
             let mut lines = Vec::new();
             let mut first = true;
@@ -206,7 +208,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 let prefix = if first { "✗ Error: " } else { "         " };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.error),
                 )));
                 first = false;
             }
@@ -215,7 +217,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::Cancelled => {
             vec![Line::from(Span::styled(
                 "⊘ Turn cancelled by user",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ))]
         }
         ChatLine::RetryableError {
@@ -234,7 +236,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
-                    Style::default().fg(Color::Yellow),
+                    Style::default().fg(theme.warning),
                 )));
                 first = false;
             }
@@ -250,21 +252,21 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                     format_tokens(stats.freed_tokens),
                     stats.duration_ms as f64 / 1000.0,
                 ),
-                Style::default().fg(Color::Magenta),
+                Style::default().fg(theme.accent_alt),
             )),
             CompactResult::Failed(error) => Line::from(Span::styled(
                 format!("✗ compaction failed: {error}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             )),
             CompactResult::Skipped => Line::from(Span::styled(
                 "✦ compaction skipped — conversation too short",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             )),
         }],
         ChatLine::Separator => {
             vec![Line::from(Span::styled(
                 "─".repeat(area.width as usize),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ))]
         }
     }
@@ -294,13 +296,14 @@ pub(crate) fn render_line_with_settings(
     {
         return Vec::new();
     }
+    let theme = crate::theme::current();
     match msg {
         ChatLine::Thinking(text) if display.collapse_thinking => {
             let n = text.lines().count();
             vec![Line::from(Span::styled(
                 format!(" 💭 [thinking — {n} lines, collapsed]"),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
             ))]
         }
@@ -317,14 +320,14 @@ pub(crate) fn render_line_with_settings(
             };
             vec![Line::from(Span::styled(
                 format!(" 🔧 {name}{preview} [collapsed]"),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(theme.warning),
             ))]
         }
         ChatLine::ToolResult { ok, content } if display.collapse_tool_results => {
             let (icon, color) = if *ok {
-                ("✓", Color::Green)
+                ("✓", theme.success)
             } else {
-                ("✗", Color::Red)
+                ("✗", theme.error)
             };
             let n = content.chars().count();
             vec![Line::from(Span::styled(

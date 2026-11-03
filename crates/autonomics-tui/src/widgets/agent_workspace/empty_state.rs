@@ -13,12 +13,13 @@ pub(super) struct EmptyState;
 
 impl Widget for EmptyState {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(theme.text_faint))
             .title(Span::styled(
                 " No Agent ",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ));
         let inner = block.inner(area);
         block.render(area, buf);
@@ -57,16 +58,19 @@ impl EmptyState {
 
         Logo.render(middle[1], buf);
 
+        let theme = crate::theme::current();
         let hints = vec![
             Line::from(Span::styled(
                 "No agents running.",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                Style::default()
+                    .fg(theme.text_dim)
+                    .add_modifier(Modifier::DIM),
             )),
             Line::raw(""),
             Line::from(Span::styled(
                 "Ctrl+P → \"New agent\" or \"Resume agent\" to start.",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
             )),
         ];
@@ -76,31 +80,34 @@ impl EmptyState {
     }
 
     fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let message = if area.height > 5 {
             vec![
                 Line::from(Span::styled(
                     "AUTONOMICS",
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(theme.accent)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
                     "No agents running.",
-                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(theme.text_dim)
+                        .add_modifier(Modifier::DIM),
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
                     "Ctrl+P → \"New agent\" or \"Resume agent\" to start.",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(theme.text_faint)
                         .add_modifier(Modifier::DIM),
                 )),
             ]
         } else {
             vec![Line::from(Span::styled(
                 "No agents — press Ctrl+P to start",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ))]
         };
 

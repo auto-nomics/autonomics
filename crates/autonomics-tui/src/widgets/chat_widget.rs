@@ -2,7 +2,7 @@ mod md_highlight;
 mod md_math;
 mod md_renderer;
 mod md_table;
-mod md_theme;
+pub(crate) mod md_theme;
 pub(crate) mod render;
 pub(crate) mod text_layout;
 

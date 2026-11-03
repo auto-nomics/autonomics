@@ -65,7 +65,7 @@ impl<'a> Popup<'a> {
             title,
             width: 0,
             height: 0,
-            accent: Color::Cyan,
+            accent: crate::theme::current().accent,
             vertically_centered: false,
             controls,
         }
@@ -142,7 +142,7 @@ impl<'a> Popup<'a> {
         if self.controls.show_border {
             block = block
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray));
+                .border_style(Style::default().fg(crate::theme::current().text_faint));
         }
         if self.controls.show_title {
             block = block.title(Span::styled(

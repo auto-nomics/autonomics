@@ -357,10 +357,11 @@ impl StatefulWidget for DagTuiWidget<'_> {
     type State = DagViewState;
 
     fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer, state: &mut Self::State) {
+        let theme = crate::theme::current();
         let accent = if self.focused {
-            Color::Cyan
+            theme.accent
         } else {
-            Color::DarkGray
+            theme.text_faint
         };
         let block = Block::default()
             .borders(Borders::ALL)
@@ -378,7 +379,7 @@ impl StatefulWidget for DagTuiWidget<'_> {
                         self.snapshot.status_count(RuntimeStatus::Running),
                         self.snapshot.status_count(RuntimeStatus::Failed),
                     ),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.text_faint),
                 ),
             ]));
         let canvas = block.inner(area);
@@ -392,7 +393,7 @@ impl StatefulWidget for DagTuiWidget<'_> {
                 canvas.left(),
                 canvas.top(),
                 "No DAG nodes. Ask the agent to add one.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             );
             return;
         }
@@ -406,7 +407,7 @@ impl StatefulWidget for DagTuiWidget<'_> {
                 canvas.left(),
                 canvas.top(),
                 "DAG layout failed",
-                Style::default().fg(Color::Red),
+                Style::default().fg(theme.error),
             );
             return;
         };
@@ -517,27 +518,28 @@ fn cell_style(
     selected_edges: &[usize],
     statuses: &HashMap<usize, RuntimeStatus>,
 ) -> Style {
+    let theme = crate::theme::current();
     match cell.owner {
         HitResult::Node(id) => {
             if Some(id) == selected_ascii {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD)
             } else {
                 let (_, color) = statuses
                     .get(&id)
                     .map(|status| status_marker(*status))
-                    .unwrap_or(("○", Color::Gray));
+                    .unwrap_or(("○", theme.text_dim));
                 Style::default().fg(color)
             }
         }
         HitResult::Edge(index) if selected_edges.contains(&index) => {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme.warning)
         }
         HitResult::Edge(_) => Style::default().fg(cell_color(cell.color)),
-        HitResult::Subgraph(_) => Style::default().fg(Color::DarkGray),
-        HitResult::Dummy { .. } => Style::default().fg(Color::DarkGray),
-        _ => Style::default().fg(Color::Gray),
+        HitResult::Subgraph(_) => Style::default().fg(theme.text_faint),
+        HitResult::Dummy { .. } => Style::default().fg(theme.text_faint),
+        _ => Style::default().fg(theme.text_dim),
     }
 }
 
@@ -656,6 +658,7 @@ fn render_status_line(
     let Some(node) = state.selected.as_deref().and_then(|id| snapshot.node(id)) else {
         return;
     };
+    let theme = crate::theme::current();
     let (icon, color) = status_marker(node.status);
     let mut spans = vec![
         Span::raw(" "),
@@ -664,12 +667,12 @@ fn render_status_line(
         Span::styled(
             node.id.clone(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.text)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" · {}", node.kind),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         ),
         Span::styled(
             if node.dirty {
@@ -678,9 +681,9 @@ fn render_status_line(
                 " · cached"
             },
             Style::default().fg(if node.dirty {
-                Color::Yellow
+                theme.warning
             } else {
-                Color::Green
+                theme.success
             }),
         ),
     ];
@@ -692,7 +695,7 @@ fn render_status_line(
         };
         spans.push(Span::styled(
             format!("  ←→ dataflow · ↑↓ siblings · Tab next{fixture_hint} · R refresh · Esc close"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         ));
     }
     let line = Line::from(spans);
@@ -713,14 +716,15 @@ fn render_status_line(
 }
 
 fn status_marker(status: RuntimeStatus) -> (&'static str, Color) {
+    let theme = crate::theme::current();
     match status {
-        RuntimeStatus::Pending => ("○", Color::DarkGray),
-        RuntimeStatus::Ready => ("◐", Color::Yellow),
-        RuntimeStatus::Running => ("◉", Color::Cyan),
-        RuntimeStatus::Success => ("●", Color::Green),
-        RuntimeStatus::Failed => ("✗", Color::Red),
-        RuntimeStatus::Skipped => ("◍", Color::DarkGray),
-        RuntimeStatus::Cancelled => ("⊘", Color::Yellow),
+        RuntimeStatus::Pending => ("○", theme.text_faint),
+        RuntimeStatus::Ready => ("◐", theme.warning),
+        RuntimeStatus::Running => ("◉", theme.accent),
+        RuntimeStatus::Success => ("●", theme.success),
+        RuntimeStatus::Failed => ("✗", theme.error),
+        RuntimeStatus::Skipped => ("◍", theme.text_faint),
+        RuntimeStatus::Cancelled => ("⊘", theme.warning),
     }
 }
 

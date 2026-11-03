@@ -38,7 +38,7 @@ pub(crate) fn render_markdown_to_lines(
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_MATH;
     let parser = Parser::new_ext(content, opts);
-    let tokens = MdTokens::dark();
+    let tokens = crate::theme::current().md;
     let renderer = MdRenderer::new(tokens, available_width);
     renderer.render(parser)
 }

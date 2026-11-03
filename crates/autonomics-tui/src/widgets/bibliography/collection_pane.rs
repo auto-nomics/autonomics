@@ -20,10 +20,11 @@ pub(super) struct CollectionPane<'a> {
 
 impl Widget for CollectionPane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let border = Style::new().fg(if self.focused {
             self.accent
         } else {
-            Color::DarkGray
+            theme.text_faint
         });
         let block = Block::default()
             .title(Span::styled(
@@ -35,7 +36,7 @@ impl Widget for CollectionPane<'_> {
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(Color::DarkGray)
+                    Style::new().fg(theme.text_faint)
                 },
             ))
             .borders(Borders::RIGHT)
@@ -75,6 +76,7 @@ impl Widget for CollectionPane<'_> {
 }
 
 fn row(label: &str, selected: bool, width: u16) -> ListItem<'static> {
+    let theme = crate::theme::current();
     let marker = if selected { "▸ " } else { "  " };
     let budget = width.saturating_sub(2) as usize;
     let label = if label.chars().count() > budget {
@@ -87,7 +89,7 @@ fn row(label: &str, selected: bool, width: u16) -> ListItem<'static> {
         Span::styled(
             marker,
             if selected {
-                Style::new().fg(Color::LightYellow)
+                Style::new().fg(theme.highlight)
             } else {
                 Style::new()
             },

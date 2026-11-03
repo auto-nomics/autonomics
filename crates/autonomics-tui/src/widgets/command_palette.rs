@@ -11,7 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     widgets::StatefulWidgetRef,
 };
 
@@ -73,6 +73,8 @@ pub enum CommandAction {
     CopyMessage,
     /// Manually compact the active agent's conversation history.
     Compact,
+    /// Cycle the global color theme to the next preset (dark → light).
+    CycleTheme,
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -244,14 +246,15 @@ pub fn render_command_palette(
     state: &mut CommandPaletteState,
 ) {
     let picker = SearchablePicker::new(" Command Palette ")
-        .accent(ratatui::style::Color::Cyan)
+        .accent(crate::theme::current().accent)
         .footer_hint(" Enter run  ↑↓ navigate  Esc cancel");
 
     if !state.picker.visible {
         return;
     }
 
-    let popup = Popup::new(" Command Palette ", PopupControls::default()).accent(Color::Cyan);
+    let popup = Popup::new(" Command Palette ", PopupControls::default())
+        .accent(crate::theme::current().accent);
     let inner = popup.render(frame_area, buf);
     let regions = Layout::default()
         .direction(Direction::Vertical)
@@ -266,14 +269,14 @@ pub fn render_command_palette(
     picker.render_list_and_footer(regions[1], regions[2], buf, &mut state.picker);
 }
 
-const ACCENT: Color = Color::Cyan;
 const PROMPT_GUTTER: u16 = 2;
 
 fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut CommandPaletteState) {
+    let theme = crate::theme::current();
     let prompt_style = if state.textarea.is_empty() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, ">", prompt_style);
 
@@ -289,7 +292,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut CommandPaletteS
 
     if state.textarea.is_empty() {
         let placeholder_style = Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
         let placeholder = "search commands…";
         let truncated: String = placeholder.chars().take(ta_area.width as usize).collect();
@@ -448,6 +451,12 @@ fn default_commands() -> Vec<Command> {
             keywords: "refresh providers model".into(),
             category: "config".into(),
             action: CommandAction::ReloadConfig,
+        },
+        Command {
+            title: "Toggle theme".into(),
+            keywords: "theme color colourscheme dark light appearance skin".into(),
+            category: "app".into(),
+            action: CommandAction::CycleTheme,
         },
         Command {
             title: "Quit".into(),

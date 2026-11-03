@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
@@ -18,8 +18,6 @@ use ratatui::{
 use agentik_types::ReasoningEffort;
 
 use crate::widgets::popup::{Popup, PopupControls};
-
-const ACCENT: Color = Color::Yellow;
 
 /// One cyclable stop; `None` = inherit (model default).
 pub type EffortStop = Option<ReasoningEffort>;
@@ -137,9 +135,10 @@ pub fn render_agent_effort_picker(
         return;
     }
 
+    let theme = crate::theme::current();
     let height = EFFORT_STOPS.len() as u16 + 2;
     let popup = Popup::new(" Set Effort (bulk) ", PopupControls::default())
-        .accent(ACCENT)
+        .accent(theme.accent)
         .width(36.min(frame_area.width))
         .height(height.min(frame_area.height));
     let inner = popup.render(frame_area, buf);
@@ -154,22 +153,22 @@ pub fn render_agent_effort_picker(
         let line = Line::from(vec![
             Span::styled(
                 if selected { "› " } else { "  " },
-                Style::default().fg(ACCENT),
+                Style::default().fg(theme.accent),
             ),
             Span::styled(
                 effort_stop_label(*stop),
                 if selected {
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme.text)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Gray)
+                    Style::default().fg(theme.text_dim)
                 },
             ),
         ]);
         Paragraph::new(line)
             .style(if selected {
-                Style::default().bg(Color::Rgb(35, 55, 70))
+                Style::default().bg(theme.selected_bg)
             } else {
                 Style::default()
             })

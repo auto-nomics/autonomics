@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::{Buffer, StatefulWidget, Widget},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::StatefulWidgetRef,
     widgets::{Block, Padding, Paragraph},
@@ -214,7 +214,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         // the same dark-navy background, so lifecycle state and the input
         // read as a single bottom block. The chat's bottom padding is the
         // only separation from the transcript.
-        let band = Style::default().bg(Color::Rgb(24, 34, 46));
+        let band = Style::default().bg(crate::theme::current().band_bg);
         let status_bar = StatusBar {
             agent_path: self.agent_path,
             status: &ts.status,
@@ -306,11 +306,12 @@ fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::
         })
         .unwrap_or_default();
 
+    let theme = crate::theme::current();
     let header_style = Style::default()
-        .fg(Color::Magenta)
+        .fg(theme.accent_alt)
         .add_modifier(Modifier::BOLD);
     let summary_style = Style::default()
-        .fg(Color::DarkGray)
+        .fg(theme.text_faint)
         .add_modifier(Modifier::ITALIC);
 
     let mut lines = vec![Line::styled(
@@ -362,11 +363,12 @@ fn render_pending_queue(area: Rect, buf: &mut Buffer, messages: &[String]) {
         return;
     }
 
+    let theme = crate::theme::current();
     let header_style = Style::default()
-        .fg(Color::Gray)
+        .fg(theme.text_dim)
         .add_modifier(Modifier::BOLD);
     let message_style = Style::default()
-        .fg(Color::DarkGray)
+        .fg(theme.text_faint)
         .add_modifier(Modifier::ITALIC);
     let mut lines = vec![Line::styled(
         format!("Pending input ({})", messages.len()),

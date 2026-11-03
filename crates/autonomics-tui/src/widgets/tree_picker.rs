@@ -82,21 +82,22 @@ pub fn split_content(content: Rect, list_width: u16) -> PickerContent {
 }
 
 pub fn render_search(area: Rect, buf: &mut Buffer, accent: Color, query: &str, noun: &str) {
+    let theme = crate::theme::current();
     let placeholder = format!(" search {noun}…");
     let line = if query.is_empty() {
         Line::from(vec![
-            Span::styled("> ", Style::default().fg(Color::DarkGray)),
+            Span::styled("> ", Style::default().fg(theme.text_faint)),
             Span::styled(
                 placeholder,
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
             ),
         ])
     } else {
         Line::from(vec![
             Span::styled("> ", Style::default().fg(accent)),
-            Span::styled(query.to_string(), Style::default().fg(Color::White)),
+            Span::styled(query.to_string(), Style::default().fg(theme.text)),
         ])
     };
 
@@ -104,20 +105,22 @@ pub fn render_search(area: Rect, buf: &mut Buffer, accent: Color, query: &str, n
 }
 
 pub fn render_separator(area: Rect, buf: &mut Buffer) {
+    let theme = crate::theme::current();
     Widget::render(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(theme.text_faint)),
         area,
         buf,
     );
 }
 
 pub fn render_footer(area: Rect, buf: &mut Buffer, hint: &str) {
+    let theme = crate::theme::current();
     Widget::render(
         Paragraph::new(hint).style(
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
         ),
         area,
@@ -135,9 +138,10 @@ pub fn render_tree_list<T: PickerTreeRow>(
     accent: Color,
     list_state: &mut ListState,
 ) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(theme.text_faint))
         .title(Span::styled(
             title,
             Style::default().fg(accent).add_modifier(Modifier::BOLD),
@@ -161,13 +165,14 @@ pub fn render_tree_list<T: PickerTreeRow>(
 }
 
 fn tree_line<T: PickerTreeRow>(row: &T, selected: bool, accent: Color) -> Line<'static> {
+    let theme = crate::theme::current();
     let indent = "  ".repeat(row.depth());
     let (icon, icon_color) = if row.is_leaf() {
         ("●", accent)
     } else if row.expanded() {
-        ("▼", Color::Yellow)
+        ("▼", theme.warning)
     } else {
-        ("▶", Color::Yellow)
+        ("▶", theme.warning)
     };
 
     let (icon_style, name_style) = if selected {
@@ -176,10 +181,10 @@ fn tree_line<T: PickerTreeRow>(row: &T, selected: bool, accent: Color) -> Line<'
         (
             Style::default().fg(icon_color),
             if row.is_leaf() {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(theme.text_dim)
             } else {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD)
             },
         )
@@ -204,6 +209,7 @@ pub fn render_preview_frame(area: Rect, buf: &mut Buffer, accent: Color) -> Rect
 }
 
 pub fn render_preview_text(area: Rect, buf: &mut Buffer, text: &str) {
+    let theme = crate::theme::current();
     let display_area = Rect {
         x: area.x,
         y: area.y + 1,
@@ -213,7 +219,7 @@ pub fn render_preview_text(area: Rect, buf: &mut Buffer, text: &str) {
     Widget::render(
         Paragraph::new(text).style(
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
         ),
         display_area,
@@ -257,34 +263,37 @@ pub fn kind_preview_lines(
 }
 
 pub fn field_line(label: &str, value: impl Into<String>) -> Line<'static> {
+    let theme = crate::theme::current();
     Line::from(vec![
         Span::styled(
             format!("  {label:<11}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         ),
         Span::styled(
             value.into(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.text)
                 .add_modifier(Modifier::BOLD),
         ),
     ])
 }
 
 pub fn section_line(title: &str) -> Line<'static> {
+    let theme = crate::theme::current();
     Line::from(Span::styled(
         format!("  {title}:"),
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::BOLD),
     ))
 }
 
 pub fn flag_line(name: &str, enabled: bool) -> Line<'static> {
+    let theme = crate::theme::current();
     let (icon, color) = if enabled {
-        ("●", Color::Green)
+        ("●", theme.success)
     } else {
-        ("○", Color::DarkGray)
+        ("○", theme.text_faint)
     };
 
     Line::from(vec![
@@ -294,15 +303,16 @@ pub fn flag_line(name: &str, enabled: bool) -> Line<'static> {
         Span::styled(
             name.to_string(),
             Style::default().fg(if enabled {
-                Color::Gray
+                theme.text_dim
             } else {
-                Color::DarkGray
+                theme.text_faint
             }),
         ),
     ])
 }
 
 pub fn truncate_preview_lines(lines: Vec<Line<'static>>, height: usize) -> Vec<Line<'static>> {
+    let theme = crate::theme::current();
     if lines.len() <= height {
         return lines;
     }
@@ -311,14 +321,14 @@ pub fn truncate_preview_lines(lines: Vec<Line<'static>>, height: usize) -> Vec<L
     lines.truncate(height.saturating_sub(1));
     lines.push(Line::from(Span::styled(
         "    …",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(theme.text_faint),
     )));
     lines
 }
 
 fn selected_style(accent: Color) -> Style {
     Style::default()
-        .fg(Color::Black)
+        .fg(crate::theme::current().on_accent)
         .bg(accent)
         .add_modifier(Modifier::BOLD)
 }

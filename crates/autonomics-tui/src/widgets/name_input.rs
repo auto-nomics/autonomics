@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, StatefulWidgetRef, Widget},
 };
@@ -121,8 +121,9 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
         return;
     }
 
+    let theme = crate::theme::current();
     let popup = Popup::new(&state.title, PopupControls::default())
-        .accent(Color::Yellow)
+        .accent(theme.warning)
         .width(POPUP_WIDTH)
         .height(POPUP_HEIGHT)
         .vertically_centered(true);
@@ -141,7 +142,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
     Paragraph::new(Line::from(Span::styled(
         "Name",
         Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.warning)
             .add_modifier(Modifier::BOLD),
     )))
     .alignment(Alignment::Center)
@@ -165,7 +166,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
             editor_area.x,
             editor_area.y,
             placeholder,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         );
         state.cursor_pos = Some((editor_area.x, editor_area.y));
     } else {
@@ -181,7 +182,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
     Paragraph::new(Line::from(Span::styled(
         " Enter create  Esc cancel",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::DIM),
     )))
     .alignment(Alignment::Center)

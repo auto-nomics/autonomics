@@ -14,15 +14,12 @@
 
 use ratatui::layout::Rect;
 use ratatui::prelude::Buffer;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::state::{AgentSession, AgentStatus};
 use crate::widgets::agent_workspace::{display_name, status_color, status_icon};
-
-const STRIP_BG: Color = Color::Rgb(24, 24, 28);
-const ACTIVE_BG: Color = Color::Rgb(48, 48, 58);
 
 /// One tab segment's geometry within the strip — the single layout both
 /// the renderer and the mouse hit-test consume, so what you see is what
@@ -213,13 +210,14 @@ impl Widget for TabBar<'_> {
         if area.is_empty() {
             return;
         }
-        let strip = Style::default().bg(STRIP_BG);
+        let theme = crate::theme::current();
+        let strip = Style::default().bg(theme.strip_bg);
         for column in area.x..area.right() {
             buf[(column, area.y)].set_style(strip).set_symbol(" ");
         }
 
         let lay = layout(self.sessions, area.width, self.active_idx);
-        let dim = Style::default().fg(Color::DarkGray).bg(STRIP_BG);
+        let dim = Style::default().fg(theme.text_faint).bg(theme.strip_bg);
 
         if lay.left_indicator.1 > 0 {
             let line = Line::styled(format!(" +{}", lay.left_hidden), dim);
@@ -237,15 +235,15 @@ impl Widget for TabBar<'_> {
             let active = segment.idx == self.active_idx;
             let name = display_name(&session.name);
             let base = if active {
-                Style::default().bg(ACTIVE_BG).add_modifier(Modifier::BOLD)
+                Style::default().bg(theme.strip_active).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::DarkGray).bg(STRIP_BG)
+                Style::default().fg(theme.text_faint).bg(theme.strip_bg)
             };
             let line = Line::from(vec![
                 Span::styled(" ", base),
                 Span::styled(status_icon(&status).to_string(), base.fg(status_color(&status))),
                 Span::styled(format!(" {name} "), base),
-                Span::styled("│", strip.fg(Color::DarkGray)),
+                Span::styled("│", strip.fg(theme.text_faint)),
             ]);
             buf.set_line(area.x + segment.x, area.y, &line, segment.width);
         }

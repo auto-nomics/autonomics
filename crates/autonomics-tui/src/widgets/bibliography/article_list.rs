@@ -24,10 +24,11 @@ impl StatefulWidget for ArticleList<'_> {
     type State = ListState;
 
     fn render(self, area: Rect, buf: &mut Buffer, list_state: &mut Self::State) {
+        let theme = crate::theme::current();
         let border = Style::new().fg(if self.focused {
             self.accent
         } else {
-            Color::DarkGray
+            theme.text_faint
         });
         let block = Block::default()
             .title(Span::styled(
@@ -35,7 +36,7 @@ impl StatefulWidget for ArticleList<'_> {
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::new().fg(Color::DarkGray)
+                    Style::new().fg(theme.text_faint)
                 },
             ))
             .borders(Borders::RIGHT)
@@ -55,6 +56,7 @@ impl StatefulWidget for ArticleList<'_> {
 
 impl ArticleList<'_> {
     fn row(&self, article: &Article, width: u16) -> ListItem<'static> {
+        let theme = crate::theme::current();
         let selected = self.selected == Some(article.id.as_str());
         let year = article
             .year
@@ -74,14 +76,14 @@ impl ArticleList<'_> {
             Span::styled(
                 marker,
                 if selected {
-                    Style::new().fg(Color::LightYellow)
+                    Style::new().fg(theme.highlight)
                 } else {
                     Style::new()
                 },
             ),
-            Span::styled(year, Style::new().fg(Color::DarkGray)),
+            Span::styled(year, Style::new().fg(theme.text_faint)),
             Span::raw(" "),
-            Span::styled(fulltext, Style::new().fg(Color::Green)),
+            Span::styled(fulltext, Style::new().fg(theme.success)),
             Span::raw(" "),
             Span::styled(
                 article.title.clone(),
@@ -98,7 +100,7 @@ impl ArticleList<'_> {
             let suffix = format!(" · {}", author.display_name());
             let used: usize = spans.iter().map(|s| s.content.len()).sum();
             if used + suffix.len() <= width as usize {
-                spans.push(Span::styled(suffix, Style::new().fg(Color::DarkGray)));
+                spans.push(Span::styled(suffix, Style::new().fg(theme.text_faint)));
             }
         }
         ListItem::new(Line::from(spans))

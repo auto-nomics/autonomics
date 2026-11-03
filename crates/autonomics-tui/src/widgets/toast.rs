@@ -57,10 +57,11 @@ impl ToastVariant {
 
     /// Accent colour for the icon, title, and border.
     fn color(self) -> Color {
+        let theme = crate::theme::current();
         match self {
-            Self::Success => Color::Green,
-            Self::Error => Color::Red,
-            Self::Info => Color::Cyan,
+            Self::Success => theme.success,
+            Self::Error => theme.error,
+            Self::Info => theme.accent,
         }
     }
 }
@@ -249,7 +250,7 @@ impl ToastManager {
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(accent))
-            .style(Style::default().bg(Color::Black));
+            .style(Style::default().bg(crate::theme::current().overlay_bg));
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -260,13 +261,14 @@ impl ToastManager {
     }
 
     fn toast_lines(toast: &Toast) -> Vec<Line<'_>> {
+        let theme = crate::theme::current();
         let icon_style = Style::default()
             .fg(toast.variant.color())
             .add_modifier(Modifier::BOLD);
         let title_style = Style::default()
-            .fg(Color::White)
+            .fg(theme.overlay_text)
             .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(Color::Gray);
+        let desc_style = Style::default().fg(theme.text_dim);
 
         let mut lines = vec![Line::from(vec![
             Span::styled(format!("{} ", toast.variant.icon()), icon_style),

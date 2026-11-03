@@ -3,7 +3,7 @@
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, StatefulWidget, Widget as _},
 };
@@ -76,6 +76,7 @@ impl App {
     }
 
     pub(super) fn render_dag_view(&mut self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let popup_width = area.width.saturating_sub(4).max(60).min(area.width);
         let popup_height = area.height.saturating_sub(4).max(16).min(area.height);
         let popup = crate::widgets::popup::Popup::new(
@@ -84,7 +85,7 @@ impl App {
         )
         .width(popup_width)
         .height(popup_height)
-        .accent(Color::Cyan);
+        .accent(theme.accent);
         let inner = popup.render(area, buf);
 
         let Some(snapshot) = self.state.dag_snapshot.as_ref() else {
@@ -96,9 +97,9 @@ impl App {
             Paragraph::new(Line::from(Span::styled(
                 message.to_string(),
                 Style::default().fg(if self.state.dag_view_error.is_some() {
-                    Color::Red
+                    theme.error
                 } else {
-                    Color::DarkGray
+                    theme.text_faint
                 }),
             )))
             .render(inner, buf);

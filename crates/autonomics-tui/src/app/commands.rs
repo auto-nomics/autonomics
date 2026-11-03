@@ -185,6 +185,15 @@ impl App {
                     });
                 }
             }
+            CommandAction::CycleTheme => {
+                let name = crate::theme::cycle();
+                // The whole surface re-renders from tokens on the next
+                // frame; force one so the switch is visible immediately.
+                self.dirty = true;
+                self.state
+                    .toasts
+                    .info("Theme", Some(format!("Switched to the {name} theme")));
+            }
         }
     }
 }

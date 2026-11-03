@@ -556,7 +556,7 @@ pub struct AgentProfilePicker {
 impl AgentProfilePicker {
     pub fn new() -> Self {
         Self {
-            accent: Color::Cyan,
+            accent: crate::theme::current().accent,
             popup_width: 0,
             list_width: 28,
         }
@@ -586,6 +586,8 @@ impl StatefulWidget for AgentProfilePicker {
         if !state.visible {
             return;
         }
+
+        let theme = crate::theme::current();
 
         let layout = render_chrome(area, buf, " Agents ", self.accent, self.popup_width);
         render_search(layout.search, buf, self.accent, &state.query, "agents");
@@ -683,17 +685,17 @@ impl StatefulWidget for AgentProfilePicker {
             };
             let block = Block::default()
                 .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::Red));
+                .border_style(Style::default().fg(theme.error));
             let inner_confirm = block.inner(confirm_area);
             block.render(confirm_area, buf);
 
             let line = Line::from(vec![
-                Span::styled("  Confirm delete? ", Style::default().fg(Color::Red)),
+                Span::styled("  Confirm delete? ", Style::default().fg(theme.error)),
                 Span::styled(
                     state.delete_confirm_input.clone(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme.text),
                 ),
-                Span::styled("▏", Style::default().fg(Color::Red)),
+                Span::styled("▏", Style::default().fg(theme.error)),
             ]);
             Widget::render(Paragraph::new(line), inner_confirm, buf);
         }
@@ -708,26 +710,26 @@ impl StatefulWidget for AgentProfilePicker {
             };
             let block = Block::default()
                 .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::Cyan));
+                .border_style(Style::default().fg(theme.accent));
             let inner_rename = block.inner(rename_area);
             block.render(rename_area, buf);
 
             let error_or_cursor = if let Some(ref err) = state.rename_error {
                 Line::from(vec![
-                    Span::styled("  ✗ ", Style::default().fg(Color::Red)),
-                    Span::styled(err.clone(), Style::default().fg(Color::Red)),
+                    Span::styled("  ✗ ", Style::default().fg(theme.error)),
+                    Span::styled(err.clone(), Style::default().fg(theme.error)),
                 ])
             } else {
                 Line::from(vec![
-                    Span::styled("  New name: ", Style::default().fg(Color::Cyan)),
+                    Span::styled("  New name: ", Style::default().fg(theme.accent)),
                     Span::styled(
                         state.rename_input.clone(),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.text),
                     ),
                     Span::styled(
                         "▏",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(theme.accent)
                             .add_modifier(Modifier::SLOW_BLINK),
                     ),
                 ])

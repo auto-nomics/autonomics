@@ -167,6 +167,11 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
         label: "Tasks popup",
         action: CommandAction::OpenTasksPopup,
     },
+    LeaderNode::Leaf {
+        key: 'u',
+        label: "Toggle theme",
+        action: CommandAction::CycleTheme,
+    },
 ];
 
 /// Outcome of feeding one key to a pending leader prefix.

@@ -4,7 +4,7 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::{
     layout::Rect,
     prelude::{StatefulWidget, Widget},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::Block,
 };
@@ -224,8 +224,9 @@ impl<'a> InputWidget<'a> {
         // Paint the shared band first; everything below draws over it.
         buf.set_style(area, self.bg);
 
+        let theme = crate::theme::current();
         let prompt_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
             .patch(self.bg);
         buf.set_string(area.x, area.y, "❯", prompt_style);
@@ -252,7 +253,7 @@ impl<'a> InputWidget<'a> {
         // first cell.
         if state.input.is_empty() && !self.placeholder.is_empty() {
             let placeholder_style = Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(ratatui::style::Modifier::ITALIC)
                 .patch(self.bg);
             let truncated = truncate_to_width(self.placeholder, inner.width as usize);

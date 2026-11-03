@@ -12,10 +12,12 @@ impl App {
     ) {
         use ratatui::{
             layout::{Alignment, Rect},
-            style::{Color, Modifier, Style},
+            style::{Modifier, Style},
             text::{Line, Span},
             widgets::{Clear, Paragraph, Widget},
         };
+
+        let theme = crate::theme::current();
 
         let agent_name = self
             .state
@@ -37,39 +39,41 @@ impl App {
             .borders(ratatui::widgets::Borders::ALL)
             .title(Span::styled(
                 " ⚠ Delete Agent ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.error).add_modifier(Modifier::BOLD),
             ))
-            .border_style(Style::default().fg(Color::Red));
+            .border_style(Style::default().fg(theme.error));
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
         let lines = vec![
             Line::from(vec![
-                Span::styled(" Permanently delete ", Style::default().fg(Color::Gray)),
+                Span::styled(" Permanently delete ", Style::default().fg(theme.text_dim)),
                 Span::styled(
                     agent_name.to_string(),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(theme.text)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("?", Style::default().fg(Color::Gray)),
+                Span::styled("?", Style::default().fg(theme.text_dim)),
             ]),
             Line::from(Span::styled(
                 " All conversation history will be erased.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" Press ", Style::default().fg(Color::Gray)),
+                Span::styled(" Press ", Style::default().fg(theme.text_dim)),
                 Span::styled(
                     "y",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.error)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" to confirm, ", Style::default().fg(Color::Gray)),
-                Span::styled("n", Style::default().fg(Color::Green)),
-                Span::styled(" or ", Style::default().fg(Color::Gray)),
-                Span::styled("Esc", Style::default().fg(Color::Green)),
-                Span::styled(" to cancel", Style::default().fg(Color::Gray)),
+                Span::styled(" to confirm, ", Style::default().fg(theme.text_dim)),
+                Span::styled("n", Style::default().fg(theme.success)),
+                Span::styled(" or ", Style::default().fg(theme.text_dim)),
+                Span::styled("Esc", Style::default().fg(theme.success)),
+                Span::styled(" to cancel", Style::default().fg(theme.text_dim)),
             ]),
         ];
 
@@ -87,10 +91,12 @@ impl App {
     ) {
         use ratatui::{
             layout::{Alignment, Rect},
-            style::{Color, Modifier, Style},
+            style::{Modifier, Style},
             text::{Line, Span},
             widgets::{Clear, Paragraph, Widget},
         };
+
+        let theme = crate::theme::current();
         let Some(confirm) = &self.state.bulk_confirm else {
             return;
         };
@@ -108,32 +114,32 @@ impl App {
             .title(Span::styled(
                 format!(" {} ", confirm.title),
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme.warning)
                     .add_modifier(Modifier::BOLD),
             ))
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(theme.warning));
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
 
         let lines = vec![
             Line::from(Span::styled(
                 format!(" {}", confirm.detail),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" Press ", Style::default().fg(Color::Gray)),
+                Span::styled(" Press ", Style::default().fg(theme.text_dim)),
                 Span::styled(
                     "y",
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(theme.warning)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" to apply, ", Style::default().fg(Color::Gray)),
-                Span::styled("n", Style::default().fg(Color::Green)),
-                Span::styled(" or ", Style::default().fg(Color::Gray)),
-                Span::styled("Esc", Style::default().fg(Color::Green)),
-                Span::styled(" to cancel", Style::default().fg(Color::Gray)),
+                Span::styled(" to apply, ", Style::default().fg(theme.text_dim)),
+                Span::styled("n", Style::default().fg(theme.success)),
+                Span::styled(" or ", Style::default().fg(theme.text_dim)),
+                Span::styled("Esc", Style::default().fg(theme.success)),
+                Span::styled(" to cancel", Style::default().fg(theme.text_dim)),
             ]),
         ];
 
@@ -154,11 +160,13 @@ impl App {
     ) {
         use ratatui::{
             layout::Rect,
-            style::{Color, Modifier, Style},
+            style::{Modifier, Style},
             text::{Line, Span},
             widgets::{Block, Borders, Clear, Paragraph, Widget},
         };
         use unicode_width::UnicodeWidthStr;
+
+        let theme = crate::theme::current();
 
         let rows = super::leader::whichkey_rows(prefix);
         let at_root = prefix.is_empty();
@@ -204,22 +212,22 @@ impl App {
             .title(Span::styled(
                 " leader ",
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(theme.on_accent)
+                    .bg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ))
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(theme.accent));
         let inner = block.inner(panel);
         block.render(panel, buf);
 
         let key_style = Style::default()
-            .fg(Color::Cyan)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
-        let arrow_style = Style::default().fg(Color::DarkGray);
+        let arrow_style = Style::default().fg(theme.text_faint);
         let group_style = Style::default()
-            .fg(Color::Green)
+            .fg(theme.success)
             .add_modifier(Modifier::BOLD);
-        let leaf_style = Style::default().fg(Color::Gray);
+        let leaf_style = Style::default().fg(theme.text_dim);
 
         // Rows stop one row above the footer; overflow is clipped (the
         // binding trees are small enough to fit at any sane terminal size).
@@ -256,11 +264,11 @@ impl App {
         // Footer: close always; away from the root, the back key.
         let mut footer = vec![Span::styled(
             "Esc close",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         )];
         if !at_root {
-            footer.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
-            footer.push(Span::styled("⌫ back", Style::default().fg(Color::Yellow)));
+            footer.push(Span::styled(" · ", Style::default().fg(theme.text_faint)));
+            footer.push(Span::styled("⌫ back", Style::default().fg(theme.warning)));
         }
         Paragraph::new(Line::from(footer)).render(
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
@@ -378,7 +386,7 @@ impl App {
                 )
                 .width(popup_width)
                 .height(popup_height)
-                .accent(ratatui::style::Color::Magenta);
+                .accent(crate::theme::current().accent_alt);
                 let inner = popup.render(frame.area(), frame.buffer_mut());
                 let widget = crate::widgets::model_config_widget::ModelConfigWidget;
                 widget.render_ref(
@@ -400,7 +408,7 @@ impl App {
                 )
                 .width(popup_width)
                 .height(popup_height)
-                .accent(ratatui::style::Color::Magenta);
+                .accent(crate::theme::current().accent_alt);
                 let inner = popup.render(frame.area(), frame.buffer_mut());
                 crate::widgets::embedding_config_widget::EmbeddingConfigWidget.render_ref(
                     inner,

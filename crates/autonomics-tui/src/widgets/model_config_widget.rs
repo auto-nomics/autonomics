@@ -30,7 +30,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::{StatefulWidget, Widget},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph,
@@ -769,7 +769,7 @@ impl StatefulWidgetRef for ModelConfigWidget {
         // Separator line.
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(crate::theme::current().text_faint))
             .render(v_chunks[1], buf);
 
         // Content area: tree (left) + detail/config (right).
@@ -837,11 +837,12 @@ impl StatefulWidgetRef for ModelConfigWidget {
 const SEARCH_PROMPT_GUTTER: u16 = 2;
 
 fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState) {
+    let theme = crate::theme::current();
     let prompt_style = if state.search_textarea.is_empty() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     } else {
         Style::default()
-            .fg(Color::Magenta)
+            .fg(theme.accent_alt)
             .add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, ">", prompt_style);
@@ -858,7 +859,7 @@ fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState)
 
     if state.search_textarea.is_empty() {
         let placeholder_style = Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
         let placeholder = "search…  Ctrl+A add  Ctrl+O edit  Ctrl+X delete";
         let truncated = placeholder.chars().take(textarea_area.width as usize);
@@ -877,6 +878,7 @@ fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState)
 // ── Tree list ──────────────────────────────────────────
 
 fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
+    let theme = crate::theme::current();
     let flat = state.flat_items();
 
     let items: Vec<ListItem> = flat
@@ -885,17 +887,17 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
             FlatItem::Provider(pi) => {
                 let p = &state.providers[pi];
                 let (arrow, style) = if !p.configured {
-                    ("──", Style::default().fg(Color::DarkGray))
+                    ("──", Style::default().fg(theme.text_faint))
                 } else if p.expanded {
-                    ("▼", Style::default().fg(Color::Yellow))
+                    ("▼", Style::default().fg(theme.warning))
                 } else {
-                    ("▶", Style::default().fg(Color::Yellow))
+                    ("▶", Style::default().fg(theme.warning))
                 };
                 let check = if p.configured { "✓" } else { "✗" };
                 let check_color = if p.configured {
-                    Color::Green
+                    theme.success
                 } else {
-                    Color::DarkGray
+                    theme.text_faint
                 };
 
                 ListItem::new(Line::from(vec![
@@ -904,10 +906,10 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                         p.name.clone(),
                         if p.configured {
                             Style::default()
-                                .fg(Color::White)
+                                .fg(theme.text)
                                 .add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::DarkGray)
+                            Style::default().fg(theme.text_faint)
                         },
                     ),
                     Span::styled(format!(" {check}"), Style::default().fg(check_color)),
@@ -920,16 +922,16 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     == Some(&format!("{}:{}", p.name, m.model_name));
                 let icon = if active { "●" } else { " " };
                 let icon_color = if active {
-                    Color::Green
+                    theme.success
                 } else {
-                    Color::DarkGray
+                    theme.text_faint
                 };
                 let indent = "    "; // 4 spaces under provider
                 let origin = if m.custom { "[custom]" } else { "[built-in]" };
                 let origin_color = if m.custom {
-                    Color::Cyan
+                    theme.accent
                 } else {
-                    Color::DarkGray
+                    theme.text_faint
                 };
 
                 ListItem::new(Line::from(vec![
@@ -937,7 +939,7 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     Span::styled(format!("{icon} "), Style::default().fg(icon_color)),
                     Span::styled(
                         m.model_name.clone(),
-                        Style::default().fg(if active { Color::White } else { Color::Gray }),
+                        Style::default().fg(if active { theme.text } else { theme.text_dim }),
                     ),
                     Span::raw("  "),
                     Span::styled(origin, Style::default().fg(origin_color)),
@@ -952,19 +954,19 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(Line::from(vec![
-                    Span::styled(" Providers ", Style::default().fg(Color::Yellow)),
+                    Span::styled(" Providers ", Style::default().fg(theme.warning)),
                     Span::styled(
                         format!(
                             "({} configured) ",
                             state.providers.iter().filter(|p| p.configured).count()
                         ),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.text_faint),
                     ),
                 ])),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(theme.text_faint)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -981,19 +983,20 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 // ── Detail panel ───────────────────────────────────────
 
 fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(Span::styled(
             " Details ",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
 
     let flat = state.flat_items();
     let Some(&item) = flat.get(state.cursor) else {
-        let p = Paragraph::new("  (nothing selected)").style(Style::default().fg(Color::DarkGray));
+        let p = Paragraph::new("  (nothing selected)").style(Style::default().fg(theme.text_faint));
         ratatui::widgets::Widget::render(p, inner, buf);
         return;
     };
@@ -1002,11 +1005,11 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
         FlatItem::Provider(pi) => {
             let p = &state.providers[pi];
             let label =
-                |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(Color::Cyan));
-            let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
-            let dim = |v: String| Span::styled(v, Style::default().fg(Color::DarkGray));
-            let green = |v: String| Span::styled(v, Style::default().fg(Color::Green));
-            let red = |v: String| Span::styled(v, Style::default().fg(Color::Red));
+                |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(theme.accent));
+            let val = |v: String| Span::styled(v, Style::default().fg(theme.text));
+            let dim = |v: String| Span::styled(v, Style::default().fg(theme.text_faint));
+            let green = |v: String| Span::styled(v, Style::default().fg(theme.success));
+            let red = |v: String| Span::styled(v, Style::default().fg(theme.error));
 
             vec![
                 Line::from(vec![label("Provider"), val(p.name.clone())]),
@@ -1060,16 +1063,16 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
             let active =
                 state.active_model_spec.as_deref() == Some(&format!("{}:{}", p.name, m.model_name));
             let label =
-                |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(Color::Cyan));
-            let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
-            let dim = |v: String| Span::styled(v, Style::default().fg(Color::DarkGray));
+                |k: &str| Span::styled(format!(" {:<14}: ", k), Style::default().fg(theme.accent));
+            let val = |v: String| Span::styled(v, Style::default().fg(theme.text));
+            let dim = |v: String| Span::styled(v, Style::default().fg(theme.text_faint));
 
             vec![
                 Line::from(vec![
                     label("Model"),
                     val(m.model_name.clone()),
                     if active {
-                        Span::styled("  ● active", Style::default().fg(Color::Green))
+                        Span::styled("  ● active", Style::default().fg(theme.success))
                     } else {
                         Span::raw("")
                     },
@@ -1128,14 +1131,15 @@ fn render_chatgpt_panel(
     providers: &[CatalogProvider],
     provider_name: &str,
 ) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(theme.warning))
         .title(Line::from(vec![
-            Span::styled(" ChatGPT login ", Style::default().fg(Color::Yellow)),
+            Span::styled(" ChatGPT login ", Style::default().fg(theme.warning)),
             Span::raw(" "),
-            Span::styled(provider_name, Style::default().fg(Color::White)),
+            Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
             Line::from("[L] log in / log in again  [Esc] close").alignment(Alignment::Center),
@@ -1144,10 +1148,10 @@ fn render_chatgpt_panel(
     block.render(area, buf);
 
     let provider = providers.iter().find(|p| p.name == provider_name);
-    let label = |k: &str| Span::styled(format!(" {:<10}: ", k), Style::default().fg(Color::Cyan));
-    let val = |v: String| Span::styled(v, Style::default().fg(Color::White));
-    let dim = |v: String| Span::styled(v, Style::default().fg(Color::DarkGray));
-    let green = |v: String| Span::styled(v, Style::default().fg(Color::Green));
+    let label = |k: &str| Span::styled(format!(" {:<10}: ", k), Style::default().fg(theme.accent));
+    let val = |v: String| Span::styled(v, Style::default().fg(theme.text));
+    let dim = |v: String| Span::styled(v, Style::default().fg(theme.text_faint));
+    let green = |v: String| Span::styled(v, Style::default().fg(theme.success));
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
@@ -1201,7 +1205,7 @@ fn render_chatgpt_panel(
         None => {
             lines.push(Line::from(vec![
                 label("Status"),
-                Span::styled("Not signed in", Style::default().fg(Color::Red)),
+                Span::styled("Not signed in", Style::default().fg(theme.error)),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(dim(
@@ -1227,14 +1231,15 @@ fn render_config_panel(
     focused_field: ConfigField,
     cursor_pos: &mut Option<(u16, u16)>,
 ) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(theme.warning))
         .title(Line::from(vec![
-            Span::styled(" Configure ", Style::default().fg(Color::Yellow)),
+            Span::styled(" Configure ", Style::default().fg(theme.warning)),
             Span::raw(" "),
-            Span::styled(provider_name, Style::default().fg(Color::White)),
+            Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
             Line::from("[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel")
@@ -1245,12 +1250,12 @@ fn render_config_panel(
 
     let provider = providers.iter().find(|p| p.name == provider_name);
 
-    let label_style = Style::default().fg(Color::Cyan);
+    let label_style = Style::default().fg(theme.accent);
     let focused_label_style = Style::default()
-        .fg(Color::Yellow)
+        .fg(theme.warning)
         .add_modifier(Modifier::BOLD);
-    let value_style = Style::default().fg(Color::White);
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let value_style = Style::default().fg(theme.text);
+    let dim_style = Style::default().fg(theme.text_faint);
 
     // Rows: Provider + Type + blank + API Key label + api_key textarea +
     //       blank + Base URL label + base_url textarea + spacer.
@@ -1301,9 +1306,9 @@ fn render_config_panel(
         .borders(Borders::ALL)
         .border_style(
             Style::default().fg(if focused_field == ConfigField::ApiKey {
-                Color::Yellow
+                theme.warning
             } else {
-                Color::DarkGray
+                theme.text_faint
             }),
         );
     let api_inner = api_block.inner(rows[4]);
@@ -1339,9 +1344,9 @@ fn render_config_panel(
         .borders(Borders::ALL)
         .border_style(
             Style::default().fg(if focused_field == ConfigField::BaseUrl {
-                Color::Yellow
+                theme.warning
             } else {
-                Color::DarkGray
+                theme.text_faint
             }),
         );
     let url_inner = url_block.inner(rows[7]);
@@ -1375,14 +1380,15 @@ fn render_delete_confirm(
     provider_name: &str,
     model_name: &str,
 ) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .border_style(Style::default().fg(Color::Red))
+        .border_style(Style::default().fg(theme.error))
         .title(Line::from(vec![
-            Span::styled(" Delete Custom Model ", Style::default().fg(Color::Red)),
+            Span::styled(" Delete Custom Model ", Style::default().fg(theme.error)),
             Span::raw(" "),
-            Span::styled(provider_name, Style::default().fg(Color::White)),
+            Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
             Line::from("[Ctrl+X] confirm  [any other key] cancel").alignment(Alignment::Center),
@@ -1390,10 +1396,10 @@ fn render_delete_confirm(
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let warn = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(Color::DarkGray);
-    let white = Style::default().fg(Color::White);
-    let label = |k: &str| Span::styled(format!(" {:<12}: ", k), Style::default().fg(Color::Cyan));
+    let warn = Style::default().fg(theme.error).add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(theme.text_faint);
+    let white = Style::default().fg(theme.text);
+    let label = |k: &str| Span::styled(format!(" {:<12}: ", k), Style::default().fg(theme.accent));
 
     let lines = vec![
         Line::from(""),

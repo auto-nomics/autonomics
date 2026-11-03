@@ -6,7 +6,7 @@ use gateway::proto::{EmbeddingConfigView, SaveEmbeddingConfigRequest};
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     prelude::{Buffer, Widget},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, StatefulWidgetRef},
 };
@@ -255,7 +255,7 @@ impl StatefulWidgetRef for EmbeddingConfigWidget {
 fn focused_style(active: bool) -> Style {
     if active {
         Style::default()
-            .fg(Color::Magenta)
+            .fg(crate::theme::current().accent_alt)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()

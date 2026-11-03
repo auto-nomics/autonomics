@@ -14,7 +14,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidgetRef, Widget},
 };
@@ -24,7 +24,6 @@ use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
-const ACCENT: Color = Color::Cyan;
 /// Prompt gutter width for the search input: `❯ ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
@@ -271,9 +270,10 @@ pub fn render_agent_model_picker(
         return;
     }
 
+    let theme = crate::theme::current();
     let popup_w = (frame_area.width * 6 / 10).max(44);
     let popup = Popup::new(" Switch Model ", PopupControls::default())
-        .accent(ACCENT)
+        .accent(theme.accent)
         .width(popup_w);
     let inner = popup.render(frame_area, buf);
 
@@ -296,11 +296,11 @@ pub fn render_agent_model_picker(
         .unwrap_or_default();
     Widget::render(
         Paragraph::new(Line::from(vec![
-            Span::styled(" Apply to ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Apply to ", Style::default().fg(theme.text_faint)),
             Span::styled(
                 target_label,
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.text)
                     .add_modifier(Modifier::BOLD),
             ),
         ])),
@@ -315,7 +315,7 @@ pub fn render_agent_model_picker(
     Widget::render(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(theme.text_faint)),
         v_regions[2],
         buf,
     );
@@ -327,28 +327,29 @@ pub fn render_agent_model_picker(
     let footer = Line::from(vec![
         Span::styled(
             " Enter",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" select  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        Span::styled(" cancel", Style::default().fg(theme.text_faint)),
     ]);
     Widget::render(Paragraph::new(footer), v_regions[4], buf);
 }
 
 fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) {
+    let theme = crate::theme::current();
     let prompt_style = if state.textarea.is_empty() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, "❯", prompt_style);
 
@@ -368,7 +369,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPicke
             ta_area.x,
             ta_area.y,
             hint,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         );
         state.cursor_pos = Some((ta_area.x, ta_area.y));
         return;
@@ -381,6 +382,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPicke
 }
 
 fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) {
+    let theme = crate::theme::current();
     if state.picker.items.is_empty() {
         let hint = if state.picker.query.is_empty() {
             " No configured providers with models — add one in Model Config (Ctrl+M)"
@@ -388,7 +390,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) 
             " No matching models"
         };
         Paragraph::new(hint)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(area, buf);
         return;
@@ -405,10 +407,10 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) 
         let item = &state.picker.items[*item_index];
         let row_style = if index == selected {
             Style::default()
-                .fg(Color::White)
+                .fg(theme.text)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme.text_dim)
         };
         let current = state
             .current_spec
@@ -420,17 +422,21 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) 
         let line = Line::from(vec![
             Span::styled(
                 prefix,
-                Style::default().fg(if current { ACCENT } else { Color::DarkGray }),
+                Style::default().fg(if current {
+                    theme.accent
+                } else {
+                    theme.text_faint
+                }),
             ),
             Span::styled(title, row_style),
             Span::styled(
                 format!("  {}", item.tag),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ),
         ]);
         Widget::render(
             Paragraph::new(line).style(if index == selected {
-                Style::default().bg(Color::Rgb(35, 55, 70))
+                Style::default().bg(theme.selected_bg)
             } else {
                 Style::default()
             }),

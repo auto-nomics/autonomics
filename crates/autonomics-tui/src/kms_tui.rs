@@ -16,7 +16,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Terminal,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
@@ -69,31 +69,6 @@ impl TreeNode {
     }
 }
 
-#[derive(Default)]
-struct Theme {
-    focus: Color,
-    muted: Color,
-    selected: Color,
-    group: Color,
-    knowledge: Color,
-    error: Color,
-    warning: Color,
-}
-
-impl Theme {
-    fn new() -> Self {
-        Self {
-            focus: Color::Cyan,
-            muted: Color::DarkGray,
-            selected: Color::LightYellow,
-            group: Color::Blue,
-            knowledge: Color::Green,
-            error: Color::Red,
-            warning: Color::Yellow,
-        }
-    }
-}
-
 pub struct KmsTui {
     service: Arc<KmsService>,
     root: Option<TreeNode>,
@@ -110,7 +85,6 @@ pub struct KmsTui {
     diagnostics_scroll: usize,
     panel: Panel,
     status: String,
-    theme: Theme,
 }
 
 impl KmsTui {
@@ -139,7 +113,6 @@ impl KmsTui {
             diagnostics_scroll: 0,
             panel: Panel::Tree,
             status: String::new(),
-            theme: Theme::new(),
         };
         app.reload().await?;
         let root_id = app.service.find_root().await.map_err(kms_err)?.id;
@@ -387,11 +360,12 @@ impl KmsTui {
     }
 
     fn details_lines(&self) -> Vec<Line<'static>> {
+        let theme = crate::theme::current();
         let index = self.selected_index();
         let mut lines = Vec::new();
         if let Some(index) = index {
             lines.push(Line::from(vec![
-                Span::styled("Index: ", Style::default().fg(self.theme.muted)),
+                Span::styled("Index: ", Style::default().fg(theme.text_faint)),
                 Span::raw(
                     index
                         .title
@@ -400,14 +374,14 @@ impl KmsTui {
                 ),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Type: ", Style::default().fg(self.theme.muted)),
+                Span::styled("Type: ", Style::default().fg(theme.text_faint)),
                 Span::raw(match index.target_type {
                     TargetType::Group => "group",
                     TargetType::Knowledge => "knowledge",
                 }),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("ID: ", Style::default().fg(self.theme.muted)),
+                Span::styled("ID: ", Style::default().fg(theme.text_faint)),
                 Span::raw(index.id.to_string()),
             ]));
             lines.push(Line::from(""));
@@ -419,7 +393,7 @@ impl KmsTui {
                     lines.push(Line::from(Span::styled(
                         knowledge.title.clone(),
                         Style::default()
-                            .fg(self.theme.knowledge)
+                            .fg(theme.success)
                             .add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(""));
@@ -429,7 +403,7 @@ impl KmsTui {
                 } else {
                     lines.push(Line::from(Span::styled(
                         "Select a knowledge leaf to inspect its content.",
-                        Style::default().fg(self.theme.muted),
+                        Style::default().fg(theme.text_faint),
                     )));
                 }
             }
@@ -438,7 +412,7 @@ impl KmsTui {
                 if entities.is_empty() {
                     lines.push(Line::from(Span::styled(
                         "No linked entities for this node.",
-                        Style::default().fg(self.theme.muted),
+                        Style::default().fg(theme.text_faint),
                     )));
                 }
                 for entity in entities {
@@ -451,7 +425,7 @@ impl KmsTui {
                     lines.push(Line::from(Span::styled(
                         names,
                         Style::default()
-                            .fg(self.theme.focus)
+                            .fg(theme.accent)
                             .add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(entity.definition.clone()));
@@ -464,13 +438,14 @@ impl KmsTui {
     }
 
     fn diagnostics_lines(&self) -> Vec<Line<'static>> {
+        let theme = crate::theme::current();
         self.diagnostics
             .iter()
             .map(|diagnostic| {
                 let color = match diagnostic.severity {
-                    Severity::Error => self.theme.error,
-                    Severity::Warning => self.theme.warning,
-                    Severity::Information | Severity::Hint => self.theme.muted,
+                    Severity::Error => theme.error,
+                    Severity::Warning => theme.warning,
+                    Severity::Information | Severity::Hint => theme.text_faint,
                 };
                 Line::from(vec![
                     Span::styled(
@@ -479,7 +454,7 @@ impl KmsTui {
                     ),
                     Span::styled(
                         format!("{} ", diagnostic.code),
-                        Style::default().fg(self.theme.muted),
+                        Style::default().fg(theme.text_faint),
                     ),
                     Span::raw(diagnostic.message.clone()),
                 ])
@@ -509,6 +484,7 @@ impl KmsTui {
     }
 
     fn render_tree(&mut self, frame: &mut Frame, area: Rect) {
+        let theme = crate::theme::current();
         let items = self
             .visible
             .iter()
@@ -528,9 +504,9 @@ impl KmsTui {
                     Span::styled(
                         prefix,
                         Style::default().fg(if index.target_type == TargetType::Knowledge {
-                            self.theme.knowledge
+                            theme.success
                         } else {
-                            self.theme.group
+                            theme.info
                         }),
                     ),
                     Span::raw(
@@ -551,8 +527,8 @@ impl KmsTui {
             )
             .highlight_style(
                 Style::default()
-                    .bg(self.theme.selected)
-                    .fg(Color::Black)
+                    .bg(theme.highlight)
+                    .fg(theme.on_accent)
                     .add_modifier(Modifier::BOLD),
             )
             .scroll_padding(2);
@@ -560,14 +536,15 @@ impl KmsTui {
     }
 
     fn render_details(&mut self, frame: &mut Frame, area: Rect) {
+        let theme = crate::theme::current();
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
             .split(area);
         let active = Style::default()
-            .fg(self.theme.focus)
+            .fg(theme.accent)
             .add_modifier(Modifier::BOLD);
-        let inactive = Style::default().fg(self.theme.muted);
+        let inactive = Style::default().fg(theme.text_faint);
         let (knowledge_style, entity_style) = match self.details_tab {
             DetailsTab::Knowledge => (active, inactive),
             DetailsTab::Entity => (inactive, active),
@@ -619,24 +596,26 @@ impl KmsTui {
     }
 
     fn render_status(&self, frame: &mut Frame, area: Rect) {
+        let theme = crate::theme::current();
         let help = "Tab panel | j/k move | Space expand | t detail tab | r refresh | q quit";
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
                     format!(" {} ", self.status),
-                    Style::default().fg(self.theme.focus),
+                    Style::default().fg(theme.accent),
                 ),
-                Span::styled(help, Style::default().fg(self.theme.muted)),
+                Span::styled(help, Style::default().fg(theme.text_faint)),
             ])),
             area,
         );
     }
 
     fn border_style(&self, panel: Panel) -> Style {
+        let theme = crate::theme::current();
         if self.panel == panel {
-            Style::default().fg(self.theme.focus)
+            Style::default().fg(theme.accent)
         } else {
-            Style::default().fg(self.theme.muted)
+            Style::default().fg(theme.text_faint)
         }
     }
 }

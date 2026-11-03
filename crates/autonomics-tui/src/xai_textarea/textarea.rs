@@ -422,8 +422,8 @@ impl TextArea {
             clipboard: None,
             keep_selection_after_mouseup: true,
             selection_style: Style::default()
-                .bg(Color::Rgb(49, 62, 115))
-                .fg(Color::Rgb(192, 202, 245)),
+                .bg(crate::theme::current().selection_bg)
+                .fg(crate::theme::current().selection_fg),
             mouse_down_pos: None,
             drag_anchor: None,
             drag_active: false,
@@ -433,10 +433,10 @@ impl TextArea {
             click_tracker: ClickTracker::default(),
             scroll_override: None,
             show_scrollbar: true,
-            scrollbar_track_style: Style::default().bg(Color::Rgb(32, 35, 53)),
+            scrollbar_track_style: Style::default().bg(crate::theme::current().scroll_track),
             scrollbar_thumb_style: Style::default()
-                .fg(Color::Rgb(42, 46, 65))
-                .bg(Color::Rgb(32, 35, 53)),
+                .fg(crate::theme::current().scroll_thumb)
+                .bg(crate::theme::current().scroll_track),
             scrollbar_padding: 0,
             scrollbar_dragging: false,
             hovered_element: None,
@@ -3349,7 +3349,7 @@ impl TextArea {
                 } else {
                     // No custom display: render buffer text with default element style.
                     let styled = &self.text[overlap_start..overlap_end];
-                    let style = Style::default().fg(Color::Cyan);
+                    let style = Style::default().fg(crate::theme::current().accent);
                     let (paint, paint_w) = paint_plain_for_display(styled, avail, self.tab_width);
                     buf.set_string(area.x + display_x, y, paint.as_ref(), style);
                     display_x += paint_w as u16;

@@ -174,7 +174,7 @@ pub struct SearchablePicker<'a> {
 impl<'a> SearchablePicker<'a> {
     pub fn new(_title: &'a str) -> Self {
         Self {
-            accent: Color::Cyan,
+            accent: crate::theme::current().accent,
             footer_hint: " Enter select  ↑↓ navigate  Esc cancel",
         }
     }
@@ -196,11 +196,12 @@ impl<'a> SearchablePicker<'a> {
         buf: &mut Buffer,
         state: &mut PickerState<T>,
     ) {
+        let theme = crate::theme::current();
         // ── List ──
         if state.filtered.is_empty() {
             let line = Line::from(Span::styled(
                 "  No matches.",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme.text_faint),
             ));
             let area = Rect {
                 x: list_area.x,
@@ -219,11 +220,11 @@ impl<'a> SearchablePicker<'a> {
                     let is_selected = sel_i == state.selected;
                     let style = if is_selected {
                         Style::default()
-                            .fg(Color::Black)
+                            .fg(theme.on_accent)
                             .bg(self.accent)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::Gray)
+                        Style::default().fg(theme.text_dim)
                     };
 
                     let mut spans = vec![
@@ -233,7 +234,7 @@ impl<'a> SearchablePicker<'a> {
 
                     if let Some(cat) = item.category() {
                         spans.push(Span::raw("  "));
-                        spans.push(Span::styled(cat, Style::default().fg(Color::DarkGray)));
+                        spans.push(Span::styled(cat, Style::default().fg(theme.text_faint)));
                     }
 
                     let mut lines = vec![Line::from(spans)];
@@ -243,7 +244,7 @@ impl<'a> SearchablePicker<'a> {
                             if !desc.is_empty() {
                                 lines.push(Line::from(Span::styled(
                                     format!("    {}", desc),
-                                    Style::default().fg(Color::DarkGray),
+                                    Style::default().fg(theme.text_faint),
                                 )));
                             }
                         }
@@ -255,7 +256,7 @@ impl<'a> SearchablePicker<'a> {
 
             let list = List::new(items).highlight_style(
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme.on_accent)
                     .bg(self.accent)
                     .add_modifier(Modifier::BOLD),
             );
@@ -266,7 +267,7 @@ impl<'a> SearchablePicker<'a> {
         // ── Footer ──
         let p = ratatui::widgets::Paragraph::new(self.footer_hint).style(
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
         );
         Widget::render(p, footer_area, buf);

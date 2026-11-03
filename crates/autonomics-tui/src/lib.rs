@@ -16,6 +16,7 @@ pub mod app_event_sender;
 pub mod clipboard_copy;
 pub mod kms_tui;
 pub mod state;
+pub mod theme;
 pub mod widgets;
 pub mod xai_textarea;
 

@@ -193,7 +193,7 @@ pub struct SkillLibraryWidget {
 impl SkillLibraryWidget {
     pub fn new() -> Self {
         Self {
-            accent: Color::Cyan,
+            accent: crate::theme::current().accent,
             popup_width: 0,
             popup_height: 0,
         }
@@ -246,7 +246,7 @@ impl StatefulWidget for SkillLibraryWidget {
             Paragraph::new(Line::raw(
                 "←→ panel · ↑↓ move/scroll · g refresh · Esc close",
             ))
-            .style(Style::new().fg(Color::DarkGray)),
+            .style(Style::new().fg(crate::theme::current().text_faint)),
             regions[1],
             buf,
         );
@@ -267,12 +267,13 @@ impl SkillBrowserWidget {
     /// (see the message picker). Left — scrolling list of name +
     /// tier summaries; right — the selected skill's detail document.
     fn render_browser(&self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
-        let dim = Style::new().fg(Color::DarkGray);
+        let theme = crate::theme::current();
+        let dim = Style::new().fg(theme.text_faint);
 
         if let Some(error) = &state.error {
             Widget::render(
                 Paragraph::new(format!("skills unavailable: {error}; press g to retry"))
-                    .style(Style::new().fg(Color::Yellow))
+                    .style(Style::new().fg(theme.warning))
                     .wrap(Wrap { trim: false }),
                 area,
                 buf,
@@ -308,15 +309,16 @@ impl SkillBrowserWidget {
     /// ratatui scrolls it into view. The title dims when the detail
     /// pane holds focus.
     fn render_list_column(&self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
+        let theme = crate::theme::current();
         let focused = state.focus == PanelFocus::List;
         let title_style = if focused {
             Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(Color::DarkGray)
+            Style::new().fg(theme.text_faint)
         };
         let block = Block::default()
             .borders(Borders::RIGHT)
-            .border_style(Style::new().fg(Color::DarkGray))
+            .border_style(Style::new().fg(theme.text_faint))
             .title(Span::styled(
                 format!(" Skills ({}) ", state.library.len()),
                 title_style,
@@ -343,11 +345,12 @@ impl SkillBrowserWidget {
     /// document (the offset lives in the state and is clamped to the
     /// document height here, where the height is known).
     fn render_detail_column(&self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
+        let theme = crate::theme::current();
         let focused = state.focus == PanelFocus::Detail;
         let title_style = if focused {
             Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(Color::DarkGray)
+            Style::new().fg(theme.text_faint)
         };
         let block = Block::default().title(Span::styled(" Skill ", title_style));
         let inner = block.inner(area);
@@ -357,7 +360,7 @@ impl SkillBrowserWidget {
             Widget::render(
                 Paragraph::new(Line::styled(
                     "select a skill to inspect",
-                    Style::new().fg(Color::DarkGray),
+                    Style::new().fg(theme.text_faint),
                 )),
                 inner,
                 buf,
@@ -372,7 +375,7 @@ impl SkillBrowserWidget {
             Widget::render(
                 Paragraph::new(Line::styled(
                     format!("detail unavailable: {error}"),
-                    Style::new().fg(Color::Yellow),
+                    Style::new().fg(theme.warning),
                 )),
                 inner,
                 buf,
@@ -383,7 +386,7 @@ impl SkillBrowserWidget {
             Widget::render(
                 Paragraph::new(Line::styled(
                     "loading detail…",
-                    Style::new().fg(Color::DarkGray),
+                    Style::new().fg(theme.text_faint),
                 )),
                 inner,
                 buf,
@@ -405,7 +408,8 @@ impl SkillBrowserWidget {
 /// truncated to the column width — the right pane carries the full
 /// detail, the list row only has to be scannable.
 fn skill_row(skill: &SkillLibraryView, selected: bool, width: u16) -> Line<'static> {
-    let dim = Style::new().fg(Color::DarkGray);
+    let theme = crate::theme::current();
+    let dim = Style::new().fg(theme.text_faint);
     let normal = Style::new();
     let bold = Style::new().add_modifier(Modifier::BOLD);
 
@@ -420,7 +424,7 @@ fn skill_row(skill: &SkillLibraryView, selected: bool, width: u16) -> Line<'stat
     // name budget: width − marker(2) − tier(3)
     let name_budget = (width as usize).saturating_sub(5).max(8);
     Line::from(vec![
-        Span::styled(marker, Style::new().fg(Color::Cyan)),
+        Span::styled(marker, Style::new().fg(theme.accent)),
         Span::styled(
             truncate(&skill.name, name_budget),
             if selected { bold } else { normal },
@@ -433,10 +437,11 @@ fn skill_row(skill: &SkillLibraryView, selected: bool, width: u16) -> Line<'stat
 /// SKILL.md body under a section header. Assembled as one `Vec<Line>`
 /// so it scrolls as a single document.
 fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
-    let label = Style::new().fg(Color::DarkGray);
+    let theme = crate::theme::current();
+    let label = Style::new().fg(theme.text_faint);
     let value = Style::new();
     let bold = Style::new().add_modifier(Modifier::BOLD);
-    let dim = Style::new().fg(Color::DarkGray);
+    let dim = Style::new().fg(theme.text_faint);
 
     let field = |name: &str, val: String, style: Style| {
         Line::from(vec![

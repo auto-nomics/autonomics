@@ -49,9 +49,10 @@ impl MessageRole {
 
     /// Color used for the badge background and the message title.
     pub fn color(self) -> Color {
+        let theme = crate::theme::current();
         match self {
-            Self::User => Color::Cyan,
-            Self::Assistant => Color::Green,
+            Self::User => theme.accent,
+            Self::Assistant => theme.success,
         }
     }
 
@@ -294,7 +295,6 @@ pub fn collect_text_messages(messages: &[ChatLine]) -> Vec<MessageItem> {
         .collect()
 }
 
-const ACCENT: Color = Color::Magenta;
 /// Prompt gutter width for the search input: `❯ ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
@@ -321,11 +321,12 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
     if !state.picker.visible {
         return;
     }
+    let theme = crate::theme::current();
 
     // Wide popup: 80% of frame width, auto height.
     let popup_w = (frame_area.width * 8 / 10).max(60);
     let popup = Popup::new(" Copy Message ", PopupControls::default())
-        .accent(ACCENT)
+        .accent(theme.accent_alt)
         .width(popup_w);
     let inner = popup.render(frame_area, buf);
 
@@ -347,7 +348,7 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
     Widget::render(
         Block::default()
             .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)),
+            .border_style(Style::default().fg(theme.text_faint)),
         v_regions[1],
         buf,
     );
@@ -367,19 +368,19 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
     let footer = Line::from(vec![
         Span::styled(
             " Enter",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" copy  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" copy  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        Span::styled(" cancel", Style::default().fg(theme.text_faint)),
     ]);
     Widget::render(Paragraph::new(footer), v_regions[3], buf);
 }
@@ -388,10 +389,11 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
 
 /// Render the TextArea-backed search input in the top row.
 fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerState) {
+    let theme = crate::theme::current();
     let prompt_style = if state.textarea.is_empty() {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, "❯", prompt_style);
 
@@ -407,7 +409,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
 
     if state.textarea.is_empty() {
         let placeholder_style = Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
         let placeholder = "filter messages…";
         let truncated = if placeholder.len() > ta_area.width as usize {
@@ -431,12 +433,13 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
 
 /// Render the left column — a compact list of messages with role badges.
 fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerState) {
+    let theme = crate::theme::current();
     let block = Block::default()
         .borders(Borders::RIGHT)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(theme.text_faint))
         .title(Span::styled(
             format!(" Messages ({}) ", state.picker.filtered.len()),
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -444,7 +447,7 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
     if state.picker.filtered.is_empty() {
         let line = Line::from(Span::styled(
             "  No messages found.",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         ));
         let area = Rect {
             x: inner.x,
@@ -468,8 +471,8 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 
             let title_style = if is_selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(ACCENT)
+                    .fg(theme.on_accent)
+                    .bg(theme.accent_alt)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(item.role.color())
@@ -477,12 +480,12 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 
             let badge_style = if is_selected {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(ACCENT)
+                    .fg(theme.on_accent)
+                    .bg(theme.accent_alt)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(theme.on_accent)
                     .bg(item.role.color())
                     .add_modifier(Modifier::BOLD)
             };
@@ -506,8 +509,8 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 
     let list = List::new(list_items).highlight_style(
         Style::default()
-            .fg(Color::Black)
-            .bg(ACCENT)
+            .fg(theme.on_accent)
+            .bg(theme.accent_alt)
             .add_modifier(Modifier::BOLD),
     );
 
@@ -520,9 +523,10 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 /// showing metadata (role, index, character count) followed by the full
 /// text wrapped to the available width.
 fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState) {
+    let theme = crate::theme::current();
     let block = Block::default().borders(Borders::NONE).title(Span::styled(
         " Preview ",
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
     ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -531,7 +535,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
         let line = Line::from(Span::styled(
             "  Select a message to preview.",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
         ));
         let area = Rect {
@@ -552,32 +556,32 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     // ── Metadata header ──
     let badge_bg = item.role.color();
     lines.push(Line::from(vec![
-        Span::styled("  Role     ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Role     ", Style::default().fg(theme.text_faint)),
         Span::styled(format!(" {} ", item.role.badge()), {
             Style::default()
-                .fg(Color::Black)
+                .fg(theme.on_accent)
                 .bg(badge_bg)
                 .add_modifier(Modifier::BOLD)
         }),
         Span::styled(
             format!("  ({})", item.role.tag()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         ),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Index    ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Index    ", Style::default().fg(theme.text_faint)),
         Span::styled(
             format!("#{}", item.index),
-            Style::default().fg(Color::White),
+            Style::default().fg(theme.text),
         ),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Length   ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Length   ", Style::default().fg(theme.text_faint)),
         Span::styled(
             format!("{char_count} chars, {line_count} lines"),
-            Style::default().fg(Color::Gray),
+            Style::default().fg(theme.text_dim),
         ),
     ]));
 
@@ -586,7 +590,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     lines.push(Line::from(Span::styled(
         "  Content:",
         Style::default()
-            .fg(Color::DarkGray)
+            .fg(theme.text_faint)
             .add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(""));
@@ -605,7 +609,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
             // Not enough width — just show raw line.
             lines.push(Line::from(Span::styled(
                 format!("{content_indent}{trimmed}"),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme.text_dim),
             )));
             continue;
         }
@@ -613,7 +617,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
         for wl in &wrapped {
             lines.push(Line::from(Span::styled(
                 format!("{content_indent}{wl}"),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(theme.text_dim),
             )));
         }
     }
@@ -624,7 +628,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     if item.full_text.trim().is_empty() {
         lines.push(Line::from(Span::styled(
             format!("{content_indent}(empty message)"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         )));
     }
 
@@ -634,7 +638,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
         lines.truncate(max_lines.saturating_sub(1));
         lines.push(Line::from(Span::styled(
             format!("{content_indent}…"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         )));
     }
 
@@ -762,8 +766,11 @@ mod tests {
     fn role_badge_and_color_are_stable() {
         assert_eq!(MessageRole::User.badge(), "YOU");
         assert_eq!(MessageRole::Assistant.badge(), "AI");
-        assert_eq!(MessageRole::User.color(), Color::Cyan);
-        assert_eq!(MessageRole::Assistant.color(), Color::Green);
+        assert_eq!(MessageRole::User.color(), crate::theme::current().accent);
+        assert_eq!(
+            MessageRole::Assistant.color(),
+            crate::theme::current().success
+        );
         assert_eq!(MessageRole::User.tag(), "user");
         assert_eq!(MessageRole::Assistant.tag(), "assistant");
     }

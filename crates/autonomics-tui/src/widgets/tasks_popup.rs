@@ -8,14 +8,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
 
 use crate::state::ToolTaskInfo;
-
-const ACCENT: Color = Color::Yellow;
 
 /// Result of forwarding a key event to the tasks popup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +95,7 @@ pub fn render_tasks_popup(
         return;
     }
 
+    let theme = crate::theme::current();
     let rows = tasks.len().max(1) as u16;
     let height = (rows + 2).min(frame_area.height.saturating_sub(2)).max(3);
     let width = (frame_area.width * 7 / 10).max(40).min(frame_area.width);
@@ -109,15 +108,17 @@ pub fn render_tasks_popup(
         .borders(ratatui::widgets::Borders::ALL)
         .title(Span::styled(
             " Tasks ",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ))
-        .border_style(Style::default().fg(ACCENT));
+        .border_style(Style::default().fg(theme.accent));
     let inner = block.inner(popup);
     block.render(popup, buf);
 
     if tasks.is_empty() {
         Paragraph::new("(no background tasks)")
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(inner, buf);
         return;
@@ -130,9 +131,9 @@ pub fn render_tasks_popup(
         }
         let selected = index == state.selected.min(tasks.len() - 1);
         let (icon, color) = match task.status {
-            crate::state::ToolTaskStatus::Running => ("⏳", Color::Yellow),
-            crate::state::ToolTaskStatus::Done { ok: true } => ("✓", Color::Green),
-            crate::state::ToolTaskStatus::Done { ok: false } => ("✗", Color::Red),
+            crate::state::ToolTaskStatus::Running => ("⏳", theme.warning),
+            crate::state::ToolTaskStatus::Done { ok: true } => ("✓", theme.success),
+            crate::state::ToolTaskStatus::Done { ok: false } => ("✗", theme.error),
         };
         let label = match &task.target_agent {
             Some(target) if task.name == "delegate_to" => format!("#{} → {}", task.seq, target),
@@ -146,12 +147,12 @@ pub fn render_tasks_popup(
             Span::styled(
                 text,
                 Style::default()
-                    .fg(Color::Rgb(200, 200, 200))
+                    .fg(theme.selected_fg)
                     .add_modifier(Modifier::BOLD),
             ),
         ]))
         .style(if selected {
-            Style::default().bg(Color::Rgb(35, 55, 70))
+            Style::default().bg(theme.selected_bg)
         } else {
             Style::default()
         })

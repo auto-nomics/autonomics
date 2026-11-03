@@ -17,15 +17,16 @@ pub(super) struct StatusBar<'a> {
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        let theme = crate::theme::current();
         let right = self.error.unwrap_or(if self.status.is_empty() {
             "ready"
         } else {
             self.status
         });
         let right_style = if self.error.is_some() {
-            Style::new().fg(Color::Red)
+            Style::new().fg(theme.error)
         } else {
-            Style::new().fg(Color::DarkGray)
+            Style::new().fg(theme.text_faint)
         };
 
         let selected = self.selected_id.unwrap_or("none");

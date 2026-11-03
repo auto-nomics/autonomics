@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
@@ -153,21 +153,22 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
         return;
     }
 
+    let theme = crate::theme::current();
     let popup = Popup::new(" Agent Config ", PopupControls::default())
         .width(64.min(frame_area.width))
         .height(15.min(frame_area.height))
         .vertically_centered(true)
-        .accent(Color::Cyan);
+        .accent(theme.accent);
     let inner = popup.render(frame_area, buf);
     Clear.render(inner, buf);
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled(" Agent  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Agent  ", Style::default().fg(theme.text_faint)),
             Span::styled(
                 state.agent_path.clone(),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(theme.text)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
@@ -177,7 +178,7 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     if state.loading {
         lines.push(Line::from(Span::styled(
             " Loading runtime config...",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         )));
     } else {
         lines.push(setting_line(
@@ -203,12 +204,12 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     if state.saving {
         lines.push(Line::from(Span::styled(
             " Saving...",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(theme.warning),
         )));
     } else {
         lines.push(Line::from(Span::styled(
             " Up/Down select  Space cycle  Enter save  Esc cancel",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.text_faint),
         )));
     }
 
@@ -232,18 +233,23 @@ fn setting_line(
         None => String::new(),
     };
     let marker = if selected { ">" } else { " " };
+    let theme = crate::theme::current();
     let value_color = match value {
-        Some(true) => Color::Green,
-        Some(false) => Color::DarkGray,
-        None => Color::Cyan,
+        Some(true) => theme.success,
+        Some(false) => theme.text_faint,
+        None => theme.accent,
     };
 
     Line::from(vec![
-        Span::styled(marker, Style::default().fg(Color::Cyan)),
+        Span::styled(marker, Style::default().fg(theme.accent)),
         Span::raw(" "),
         Span::styled(
             name.to_string(),
-            Style::default().fg(if selected { Color::White } else { Color::Gray }),
+            Style::default().fg(if selected {
+                theme.text
+            } else {
+                theme.text_dim
+            }),
         ),
         Span::raw("  "),
         Span::styled(
@@ -253,7 +259,7 @@ fn setting_line(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(effective_text, Style::default().fg(Color::DarkGray)),
+        Span::styled(effective_text, Style::default().fg(theme.text_faint)),
     ])
 }
 
@@ -270,19 +276,24 @@ fn effort_line(
         None => "effective model default".to_string(),
     };
     let marker = if selected { ">" } else { " " };
+    let theme = crate::theme::current();
     let value_color = match value {
         Some(agentik_types::ReasoningEffort::None)
-        | Some(agentik_types::ReasoningEffort::Minimal) => Color::DarkGray,
-        Some(_) => Color::Green,
-        None => Color::Cyan,
+        | Some(agentik_types::ReasoningEffort::Minimal) => theme.text_faint,
+        Some(_) => theme.success,
+        None => theme.accent,
     };
 
     Line::from(vec![
-        Span::styled(marker, Style::default().fg(Color::Cyan)),
+        Span::styled(marker, Style::default().fg(theme.accent)),
         Span::raw(" "),
         Span::styled(
             "Reasoning effort".to_string(),
-            Style::default().fg(if selected { Color::White } else { Color::Gray }),
+            Style::default().fg(if selected {
+                theme.text
+            } else {
+                theme.text_dim
+            }),
         ),
         Span::raw("  "),
         Span::styled(
@@ -292,7 +303,7 @@ fn effort_line(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(effective_text, Style::default().fg(Color::DarkGray)),
+        Span::styled(effective_text, Style::default().fg(theme.text_faint)),
     ])
 }
 

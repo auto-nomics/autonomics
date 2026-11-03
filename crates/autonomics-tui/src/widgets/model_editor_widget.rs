@@ -8,7 +8,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::{StatefulWidget, Widget},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
@@ -332,6 +332,7 @@ impl StatefulWidget for ModelEditorWidget {
     type State = ModelEditorState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        let theme = crate::theme::current();
         let title = if state.original_model_name.is_some() {
             " Edit Custom Model "
         } else {
@@ -340,12 +341,12 @@ impl StatefulWidget for ModelEditorWidget {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(theme.warning))
             .title(Line::from(vec![
-                Span::styled(title, Style::default().fg(Color::Yellow)),
+                Span::styled(title, Style::default().fg(theme.warning)),
                 Span::styled(
                     format!(" {} ", state.provider_name),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(theme.text),
                 ),
             ]))
             .title_bottom(
@@ -358,7 +359,7 @@ impl StatefulWidget for ModelEditorWidget {
 
         if inner.width < 36 || inner.height < 14 {
             Paragraph::new("  Increase terminal height to edit models.")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(theme.text_faint))
                 .render(inner, buf);
             state.cursor_pos = None;
             return;
@@ -384,11 +385,11 @@ impl StatefulWidget for ModelEditorWidget {
             ])
             .split(inner);
 
-        let label_style = Style::default().fg(Color::Cyan);
+        let label_style = Style::default().fg(theme.accent);
         let focused_label_style = Style::default()
-            .fg(Color::Yellow)
+            .fg(theme.warning)
             .add_modifier(Modifier::BOLD);
-        let dim_style = Style::default().fg(Color::DarkGray);
+        let dim_style = Style::default().fg(theme.text_faint);
         let label = |name: &str| format!(" {name:<18}: ");
         let input_area = |row: Rect| Rect {
             x: inner.x + 20,
@@ -399,11 +400,11 @@ impl StatefulWidget for ModelEditorWidget {
         let text_style = |field: ModelField| {
             if focused(field) {
                 Style::default()
-                    .fg(Color::White)
-                    .bg(Color::DarkGray)
+                    .fg(theme.text)
+                    .bg(theme.text_faint)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(theme.text)
             }
         };
 
@@ -411,7 +412,7 @@ impl StatefulWidget for ModelEditorWidget {
             Span::styled(label("Provider"), label_style),
             Span::styled(
                 state.provider_name.clone(),
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.text),
             ),
         ]))
         .render(rows[0], buf);
@@ -491,7 +492,7 @@ impl StatefulWidget for ModelEditorWidget {
             .render(rows[row], buf);
             let mark = if value { "[yes]" } else { "[no ]" };
             let style = if value {
-                Style::default().fg(Color::Green)
+                Style::default().fg(theme.success)
             } else {
                 dim_style
             };
@@ -531,7 +532,7 @@ impl StatefulWidget for ModelEditorWidget {
             Some(error) => {
                 Paragraph::new(Line::from(Span::styled(
                     format!(" {error}"),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(theme.error),
                 )))
                 .render(rows[12], buf);
             }

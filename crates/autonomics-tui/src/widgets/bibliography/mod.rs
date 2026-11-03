@@ -508,7 +508,7 @@ pub struct BibliographyWidget {
 impl Default for BibliographyWidget {
     fn default() -> Self {
         Self {
-            accent: Color::Cyan,
+            accent: crate::theme::current().accent,
         }
     }
 }
@@ -522,7 +522,7 @@ impl StatefulWidget for BibliographyWidget {
                 "bibliography needs 48x12 (have {}x{})",
                 area.width, area.height
             ))
-            .style(ratatui::style::Style::new().fg(Color::Yellow));
+            .style(ratatui::style::Style::new().fg(crate::theme::current().warning));
             ratatui::prelude::Widget::render(compact, area, buf);
             return;
         }

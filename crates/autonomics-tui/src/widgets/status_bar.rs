@@ -1,7 +1,7 @@
 use ratatui::{
     layout::Rect,
     prelude::Widget,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -43,18 +43,19 @@ const COMPACT_SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        let theme = crate::theme::current();
         // Compaction takes over the status display so the user can see the
         // agent is summarizing context, not idle/requesting.
         let (base_indicator, indicator_color, base_text) = match self.status {
-            AgentStatus::Idle | AgentStatus::Aborted => ("○", Color::Gray, "idle"),
-            AgentStatus::Requesting => ("◐", Color::Yellow, "requesting"),
-            AgentStatus::Streaming => ("●", Color::Green, "streaming"),
-            AgentStatus::ToolRunning => ("⚙", Color::Cyan, "tool running"),
-            AgentStatus::Retrying => ("↻", Color::Yellow, "retrying"),
-            AgentStatus::Error => ("✗", Color::Red, "error"),
-            AgentStatus::Cancelled => ("⊘", Color::DarkGray, "cancelled"),
-            AgentStatus::Compacting => ("◐", Color::Magenta, "compacting"),
-            AgentStatus::Waiting => ("☐", Color::Blue, "waiting"),
+            AgentStatus::Idle | AgentStatus::Aborted => ("○", theme.text_dim, "idle"),
+            AgentStatus::Requesting => ("◐", theme.warning, "requesting"),
+            AgentStatus::Streaming => ("●", theme.success, "streaming"),
+            AgentStatus::ToolRunning => ("⚙", theme.accent, "tool running"),
+            AgentStatus::Retrying => ("↻", theme.warning, "retrying"),
+            AgentStatus::Error => ("✗", theme.error, "error"),
+            AgentStatus::Cancelled => ("⊘", theme.text_faint, "cancelled"),
+            AgentStatus::Compacting => ("◐", theme.accent_alt, "compacting"),
+            AgentStatus::Waiting => ("☐", theme.info, "waiting"),
         };
 
         // While compacting, replace the static label with a spinning
@@ -74,14 +75,14 @@ impl Widget for StatusBar<'_> {
 
         // Dark-navy strip behind the whole row; every span (and the gap
         // filler) carries it so the bar reads as one solid band.
-        let bg = Style::default().bg(Color::Rgb(24, 34, 46));
+        let bg = Style::default().bg(theme.band_bg);
         let base = |style: Style| style.patch(bg);
 
         let mut spans = Vec::new();
 
         // Agent path — the leaf's identity, since there is no tab strip.
         if let Some(path) = self.agent_path {
-            spans.push(Span::styled(path, base(Style::default().fg(Color::Gray))));
+            spans.push(Span::styled(path, base(Style::default().fg(theme.text_dim))));
             spans.push(Span::styled("  ", bg));
         }
 
@@ -108,9 +109,9 @@ impl Widget for StatusBar<'_> {
                     let pct_clamped = pct.min(100);
                     let bar = context_bar(pct_clamped);
                     let color = match pct_clamped {
-                        0..=60 => Color::Green,
-                        61..=85 => Color::Yellow,
-                        _ => Color::Red,
+                        0..=60 => theme.success,
+                        61..=85 => theme.warning,
+                        _ => theme.error,
                     };
                     spans.push(Span::styled(" ", bg));
                     spans.push(Span::styled(
@@ -122,20 +123,20 @@ impl Widget for StatusBar<'_> {
                     spans.push(Span::styled(" ", bg));
                     spans.push(Span::styled(
                         format!("{}/{}k", ctx_used, window / 1_000),
-                        base(Style::default().fg(Color::DarkGray)),
+                        base(Style::default().fg(theme.text_faint)),
                     ));
                 } else {
                     spans.push(Span::styled(" ", bg));
                     spans.push(Span::styled(
                         ctx_used,
-                        base(Style::default().fg(Color::Gray)),
+                        base(Style::default().fg(theme.text_dim)),
                     ));
                 }
             } else {
                 spans.push(Span::styled(" ", bg));
                 spans.push(Span::styled(
                     ctx_used,
-                    base(Style::default().fg(Color::Gray)),
+                    base(Style::default().fg(theme.text_dim)),
                 ));
             }
         }
@@ -169,12 +170,12 @@ impl Widget for StatusBar<'_> {
             if total_w < area.width as usize {
                 let x = area.x + area.width - total_w as u16;
                 let y = area.y;
-                buf.set_string(x as u16, y, name, base(Style::default().fg(Color::Gray)));
+                buf.set_string(x as u16, y, name, base(Style::default().fg(theme.text_dim)));
                 buf.set_string(
                     x + (name.width()) as u16,
                     y,
                     effort_str,
-                    base(Style::default().fg(Color::Cyan)),
+                    base(Style::default().fg(theme.accent)),
                 );
             }
         }

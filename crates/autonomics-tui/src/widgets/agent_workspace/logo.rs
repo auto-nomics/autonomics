@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use ratatui::{
     layout::{Alignment, Rect},
     prelude::{Buffer, Widget},
-    style::{Color, Style},
+    style::Style,
     widgets::Paragraph,
 };
 use unicode_width::UnicodeWidthStr;
@@ -53,7 +53,7 @@ impl Widget for Logo {
 
         Paragraph::new(lines)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Cyan))
+            .style(Style::default().fg(crate::theme::current().accent))
             .render(logo_area, buf);
     }
 }
