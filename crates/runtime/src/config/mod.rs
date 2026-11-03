@@ -45,6 +45,7 @@ mod defaults;
 mod prompt;
 mod rsi;
 mod runtime;
+mod slurm;
 
 pub use builder::RuntimeConfigBuilder;
 pub use defaults::{
@@ -56,6 +57,7 @@ pub use defaults::{
 pub use prompt::{PromptCapabilities, build_system_prompt, default_system_prompt};
 pub use rsi::{EnvironmentDevConfig, PluginRsiConfig};
 pub use runtime::RuntimeConfig;
+pub use slurm::SlurmConfig;
 
 #[cfg(test)]
 mod tests;

@@ -327,6 +327,9 @@ impl Context {
                 let _ = self.inject_message(content, origin);
                 true
             }
+            // Handled inline by the agent loop before reaching session
+            // state; arriving here means no owning turn consumed it.
+            InternalEvent::ExternalJobCompleted { .. } => true,
             InternalEvent::Compact => {
                 self.do_manual_compact().await;
                 // Compact doesn't start a new LLM turn by itself — the

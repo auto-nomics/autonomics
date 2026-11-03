@@ -12,11 +12,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 
 use crate::error::ContainerRuntimeError;
-use crate::types::{ContainerRunRequest, ContainerRunResult, WorkspaceRef};
+use crate::types::{ContainerRunRequest, ContainerRunResult, PrivateEnvironment, WorkspaceRef};
 
 pub const DEFAULT_CONTAINER_WORKDIR: &str = "/work";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 3600 * 24;
 pub const MAX_CAPTURED_OUTPUT_BYTES: usize = 64 * 1024;
+
+/// The mapping held by a resident runtime. This does not rehash remote SIF bytes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ContainerImageResolution {
+    pub requested_reference: String,
+    pub matched_reference: String,
+    pub sif_path: std::path::PathBuf,
+    pub sif_sha256: String,
+}
 
 /// One connection to a Podman runtime on the local host.
 ///
@@ -26,12 +35,44 @@ pub const MAX_CAPTURED_OUTPUT_BYTES: usize = 64 * 1024;
 /// agree on.
 #[async_trait]
 pub trait PodmanConnection: Send + Sync {
+    fn image_resolution(&self, _reference: &str) -> Result<ContainerImageResolution, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid("resident OCI to SIF mapping unavailable for this runtime".into()))
+    }
+    /// Optional observation entry for existing runtimes. Implementations that
+    /// cannot probe a worker continue to report unknown rather than inventing
+    /// liveness from the control process's heartbeat.
+    async fn run_observed(
+        &self,
+        request: ContainerRunRequest,
+        private_env: Option<PrivateEnvironment>,
+        observer: crate::observation::RunObserver,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        observer.phase(
+            "executing",
+            "waiting for runtime result; worker probe unavailable",
+        );
+        match private_env {
+            Some(private) => self.run_with_private_env(request, private).await,
+            None => self.run(request).await,
+        }
+    }
+
     /// Run one ephemeral container: create it, attach to its start, and
     /// force-remove it after success, failure, or timeout.
     async fn run(
         &self,
         request: ContainerRunRequest,
     ) -> Result<ContainerRunResult, ContainerRuntimeError>;
+
+    async fn run_with_private_env(
+        &self,
+        _request: ContainerRunRequest,
+        _private_env: PrivateEnvironment,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "runtime does not support private credential forwarding".into(),
+        ))
+    }
 
     /// Root of the shared workspace directory tree as seen by this control
     /// process. Container workspaces are created below it and bind-mounted
@@ -55,9 +96,7 @@ pub fn unique_container_name() -> String {
     )
 }
 
-pub(crate) fn validate_run_request(
-    request: &ContainerRunRequest,
-) -> Result<(), ContainerRuntimeError> {
+pub fn validate_run_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
     if request.image.trim().is_empty() {
         return Err(ContainerRuntimeError::Invalid(
             "`image` cannot be empty".into(),
@@ -281,6 +320,62 @@ pub(crate) fn truncate_captured_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct BackendWithoutPrivateEnvironment;
+
+    #[async_trait]
+    impl PodmanConnection for BackendWithoutPrivateEnvironment {
+        async fn run(
+            &self,
+            _request: ContainerRunRequest,
+        ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+            panic!("private forwarding must not fall back to ordinary run")
+        }
+
+        fn workspace_root(&self) -> &Path {
+            Path::new("/unused-private-environment-test")
+        }
+    }
+
+    #[tokio::test]
+    async fn private_environment_default_backend_refuses_without_ordinary_fallback() {
+        let request = ContainerRunRequest {
+            image: "synthetic-unused-image".into(),
+            command: vec!["unused".into()],
+            workspace: WorkspaceRef {
+                host_path: "/unused-private-environment-test".into(),
+                container_workdir: "/work".into(),
+            },
+            env: Vec::new(),
+            panels: Vec::new(),
+            input_mounts: Vec::new(),
+            network: crate::types::ContainerNetwork::Isolated,
+            read_only_rootfs: true,
+            pull_policy: crate::types::PullPolicy::Never,
+            cpus: None,
+            memory: None,
+            pids_limit: None,
+            shm_size: None,
+            gpus: crate::types::GpuRequest::None,
+            user: None,
+            timeout_secs: 1,
+            name: "unused-private-environment-test".into(),
+        };
+        let private_env = PrivateEnvironment::new(vec![(
+            "OPENGWAS_JWT".into(),
+            "synthetic-private-credential".into(),
+        )])
+        .unwrap();
+        let error = BackendWithoutPrivateEnvironment
+            .run_with_private_env(request, private_env)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid container request: runtime does not support private credential forwarding"
+        );
+        assert!(!format!("{error:?}").contains("synthetic-private-credential"));
+    }
 
     #[test]
     fn workspace_must_be_inside_configured_root() {

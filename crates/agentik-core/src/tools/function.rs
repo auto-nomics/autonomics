@@ -95,6 +95,14 @@ pub const MAX_PROGRESS_RECORDS: usize = 1000;
 pub struct ProgressLog {
     records: Vec<ProgressRecord>,
     dropped: usize,
+    /// Last time real work advanced (new node state or a forward counter);
+    /// drives the ProgressInactivity execution-deadline policy. Logs,
+    /// resource telemetry and repeated unchanged states do not renew it.
+    last_work_progress: Option<tokio::time::Instant>,
+    /// Highest observed byte/item counter per work label.
+    work_current: std::collections::HashMap<String, u64>,
+    /// Node states already observed per label; only a NEW state extends work.
+    work_states: std::collections::HashSet<(String, String)>,
 }
 
 impl ProgressLog {
@@ -102,11 +110,45 @@ impl ProgressLog {
         Self {
             records: Vec::new(),
             dropped: 0,
+            last_work_progress: None,
+            work_current: Default::default(),
+            work_states: Default::default(),
         }
     }
 
     /// Append a record, evicting the oldest if at the cap.
     pub fn push(&mut self, record: ProgressRecord) {
+        let now = tokio::time::Instant::now();
+        let label = record.label.clone().unwrap_or_default();
+        let known_state = record.status.as_deref().is_some_and(|status| {
+            matches!(
+                status,
+                "pending" | "ready" | "running" | "success" | "failed" | "skipped" | "cancelled"
+            )
+        });
+        // Counter kinds renew the deadline only when they ADVANCE; a
+        // repeated or regressing counter is a poll, not new work.
+        let advanced = matches!(
+            record.kind.as_str(),
+            "progress" | "channel_item" | "channel_closed" | "execution"
+        ) && record.current.is_some_and(|current| {
+            let previous = self.work_current.entry(label.clone()).or_default();
+            if current > *previous {
+                *previous = current;
+                true
+            } else {
+                false
+            }
+        });
+        let new_state = matches!(record.kind.as_str(), "status" | "finished")
+            && known_state
+            && record
+                .status
+                .as_ref()
+                .is_some_and(|status| self.work_states.insert((label.clone(), status.clone())));
+        if advanced || new_state {
+            self.last_work_progress = Some(now);
+        }
         if self.records.len() >= MAX_PROGRESS_RECORDS {
             // O(n) shift, but n ≤ MAX_PROGRESS_RECORDS (1000) — negligible,
             // and only once the log is saturated.
@@ -114,6 +156,11 @@ impl ProgressLog {
             self.dropped += 1;
         }
         self.records.push(record);
+    }
+
+    /// Liveness evidence for the ProgressInactivity deadline policy.
+    pub fn last_work_progress(&self) -> Option<tokio::time::Instant> {
+        self.last_work_progress
     }
 
     /// Clone of all retained records, oldest-first.
@@ -340,6 +387,14 @@ pub trait ToolFunction: Send + Sync {
         300
     }
 
+    /// How `timeout_seconds` is interpreted. The default is a wall limit for
+    /// both Sync and Async tools. Tools that opt into ProgressInactivity
+    /// retain the same limit without new work; ExternallyManaged waiters
+    /// defer execution limits to their work owner.
+    fn execution_deadline(&self) -> super::ExecutionDeadline {
+        super::ExecutionDeadline::WallTime
+    }
+
     fn definition(&self) -> ToolDefinition {
         Self::Input::definition()
     }
@@ -391,8 +446,12 @@ pub trait DynToolFunction: Send + Sync {
     fn validate_input(&self, input: &Value) -> Result<(), ToolError>;
 
     fn execution_mode(&self) -> ExecutionMode;
-    fn finish_on_cancel(&self) -> bool;
+    fn finish_on_cancel(&self) -> bool {
+        false
+    }
     fn timeout_seconds(&self) -> u64;
+
+    fn execution_deadline(&self) -> super::ExecutionDeadline;
 
     fn definition(&self) -> ToolDefinition;
 }
@@ -425,6 +484,10 @@ impl<T: ToolFunction + ?Sized> DynToolFunction for T {
 
     fn timeout_seconds(&self) -> u64 {
         ToolFunction::timeout_seconds(self)
+    }
+
+    fn execution_deadline(&self) -> super::ExecutionDeadline {
+        ToolFunction::execution_deadline(self)
     }
 
     fn definition(&self) -> ToolDefinition {

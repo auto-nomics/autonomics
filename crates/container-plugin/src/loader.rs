@@ -251,6 +251,7 @@ mod tests {
                 program: "podman".into(),
                 workspace_root: state.path().join("workspace"),
                 panel_cache_root: state.path().join("panels"),
+                ..Default::default()
             }),
         );
         let cache = Arc::new(PanelCache::new(state.path().join("panels")));

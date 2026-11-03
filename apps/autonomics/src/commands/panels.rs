@@ -64,6 +64,7 @@ pub(crate) fn load_installed_plugins(
             program: "podman".into(),
             workspace_root: root.join("workspace"),
             panel_cache_root: root.join("panels"),
+            ..Default::default()
         }),
     );
     let panel_cache = std::sync::Arc::new(container_runtime::PanelCache::new(root.join("panels")));

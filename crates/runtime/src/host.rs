@@ -45,9 +45,10 @@ mod commands;
 mod delegation;
 mod events;
 mod gc;
+pub(crate) mod hpc_placement;
 mod persistence;
 mod relay;
-mod shared_infra;
+pub(crate) mod shared_infra;
 mod status;
 mod vfs_setup;
 

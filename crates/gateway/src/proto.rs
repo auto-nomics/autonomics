@@ -86,6 +86,15 @@ impl From<runtime::HostEvent> for HostEventView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GatewayNotice {
+    /// The operator changed the ordinary compute catalog — a target/data
+    /// source was saved or the selection policy moved. Live agents receive
+    /// the refreshed policy through the compute context provider; runs in
+    /// flight keep their original pinned target.
+    ComputeChanged {
+        catalog_revision: u64,
+        target_id: String,
+        target_revision: u64,
+    },
     /// The daemon-wide default model slot changed (set-default, ChatGPT
     /// login/refresh rebuilding an openai model). `spec` is the new
     /// `provider:model` string; `reason` names the trigger.

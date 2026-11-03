@@ -34,6 +34,7 @@ schemars.workspace = true
 
 [dev-dependencies]
 dotenvy = "0.15"
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Enables `MessageStream::from_events` for mock-backed streaming tests.
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }

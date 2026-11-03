@@ -13,14 +13,25 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, context, events, gui, hydration, lifecycle, model_config, plugin_environments, plugins,
-    settings, skills, storage,
+    agents, compute, context, events, gui, hpc_jobs, hydration, lifecycle, model_config,
+    plugin_environments, plugins, settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
 /// caller under `/api/v1` (see [`router_with_bib`]).
 pub fn api_router(state: GatewayState) -> Router {
     Router::new()
+        // ── compute targets and HPC jobs ──
+        .route("/compute", get(compute::status))
+        .route("/compute/readiness", post(compute::readiness))
+        .route("/compute/targets", put(compute::target))
+        .route("/compute/targets/{id}/check", post(compute::check))
+        .route("/compute/policy", put(compute::select))
+        .route("/compute/data-sources", post(compute::source))
+        .route("/compute/image-evidence", get(compute::image_evidence))
+        .route("/hpc/jobs", get(hpc_jobs::list))
+        .route("/hpc/jobs/watch", post(hpc_jobs::watch))
+        .route("/hpc/jobs/{id}/stop-monitor", post(hpc_jobs::stop_monitor))
         // ── daemon lifecycle ──
         .route("/gateway/status", get(lifecycle::gateway_status))
         .route("/gateway/shutdown", post(lifecycle::gateway_shutdown))

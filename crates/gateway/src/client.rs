@@ -633,6 +633,79 @@ impl GatewayClient {
         self.get(&format!("/skills/library/{}", encode_segment(name)))
             .await
     }
+
+    // ── compute targets and HPC jobs ─────────────────────────────
+
+    /// Operator compute catalog status: targets, data sources, selection.
+    pub async fn compute_status(&self) -> Result<runtime::compute::ComputeStatus> {
+        self.get("/compute").await
+    }
+
+    /// Read-only readiness blockers for an explicit workflow requirement set.
+    pub async fn compute_readiness(
+        &self,
+        request: &runtime::compute::ReadinessRequest,
+    ) -> Result<serde_json::Value> {
+        self.request(reqwest::Method::POST, "/compute/readiness", Some(request))
+            .await
+    }
+
+    /// Image evidence for one target's admitted container mapping.
+    pub async fn compute_image_evidence(
+        &self,
+        target_id: &str,
+        target_revision: u64,
+        reference: &str,
+    ) -> Result<runtime::compute::ComputeImageEvidence> {
+        self.get(&format!(
+            "/compute/image-evidence?target_id={}&target_revision={target_revision}&reference={}",
+            encode_segment(target_id),
+            encode_segment(reference)
+        ))
+        .await
+    }
+
+    /// Save a compute target revision (optimistic `expected_revision`).
+    pub async fn save_compute_target(
+        &self,
+        request: &runtime::compute::SaveTarget,
+    ) -> Result<runtime::compute::ComputeCatalog> {
+        self.request(reqwest::Method::PUT, "/compute/targets", Some(request))
+            .await
+    }
+
+    /// Select a target revision for subsequent runs.
+    pub async fn select_compute_target(
+        &self,
+        request: &runtime::compute::SelectTarget,
+    ) -> Result<runtime::compute::ComputeCatalog> {
+        self.request(reqwest::Method::PUT, "/compute/policy", Some(request))
+            .await
+    }
+
+    /// Enroll a data source mount.
+    pub async fn add_data_source(
+        &self,
+        request: &runtime::compute::SaveDataSource,
+    ) -> Result<runtime::compute::ComputeCatalog> {
+        self.request(reqwest::Method::POST, "/compute/data-sources", Some(request))
+            .await
+    }
+
+    /// Read-only connectivity/configuration check; never submits a job.
+    pub async fn check_compute_target(&self, id: &str) -> Result<serde_json::Value> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/compute/targets/{}/check", encode_segment(id)),
+            None::<&()>,
+        )
+        .await
+    }
+
+    /// Durable HPC monitor inventory (owned jobs and their terminal evidence).
+    pub async fn hpc_jobs(&self) -> Result<serde_json::Value> {
+        self.get("/hpc/jobs").await
+    }
 }
 
 /// Percent-encode a path segment so agent paths containing `/` survive

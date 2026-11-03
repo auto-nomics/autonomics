@@ -5,18 +5,27 @@
 //! Object storage is authoritative, while shared workspace and panel
 //! directories provide the POSIX data plane required by analysis tools.
 
+pub mod apptainer;
 pub mod config;
 pub mod connection;
+mod container_intent;
 pub mod error;
 pub mod execution;
 pub mod gc;
 pub mod image;
 pub mod image_build;
+pub mod image_evidence;
 pub mod images;
+pub mod observation;
+mod oci_import;
 pub mod panel;
 pub mod podman;
+mod podman_worker;
+pub mod resources;
+pub mod slurm_allocation;
 pub mod types;
 
+pub use apptainer::{ApptainerRuntime, SifCatalogEntry};
 pub use config::{
     KEEP_WORKSPACE_ENV, REMOVED_BACKEND_ENV, WORK_DIR_GC_AGE_ENV, WORKSPACE_GC_AGE_ENV,
     WORKSPACE_GC_INTERVAL_ENV, canonicalize_workspace_root, ensure_backend_env_removed,
@@ -24,6 +33,7 @@ pub use config::{
     workspace_gc_interval,
 };
 pub use connection::{
+    ContainerImageResolution,
     DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
     trusted_workspace_ref, unique_container_name, workspace_ref,
 };
@@ -41,8 +51,12 @@ pub use image_build::{
     DEFAULT_PUSH_TIMEOUT_SECS, ImageBuildConnection, ImageBuildRequest, ImageBuildResult,
     ImagePushRequest, ImagePushResult,
 };
+pub use oci_import::{OciImageImportReceipt, OciImageImportRequest};
 pub use panel::{PanelCache, PanelFile, PanelManifest};
-pub use podman::{PodmanConfig, PodmanRuntime};
+pub use podman::{PodmanConfig, PodmanRuntime, PrivateStorageDriver};
+pub use podman_worker::{PodmanWorkerResourceControl, PodmanWorkerUserNamespace};
+pub use resources::memory_quantity_bytes;
+pub use slurm_allocation::SlurmSwapPolicy;
 pub use types::{
     CachedPanel, ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, InputMount,
     PanelRef, PullPolicy, WorkspaceRef,

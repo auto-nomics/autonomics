@@ -34,6 +34,8 @@ anyhow = "1"
 libc = "0.2"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
+hpc-tools = { path = "../hpc-tools" }
+sha2.workspace = true
 text-embedding = { path = "../text-embedding" }
 skills = { path = "../skills" }
 bib-base = { path = "../bib-base" }

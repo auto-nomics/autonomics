@@ -52,6 +52,13 @@ impl Default for AgentConfig {
     }
 }
 
+/// Busy leaves the durable outbox pending; only Handled acknowledges review.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExternalNotificationAck {
+    Handled,
+    Busy,
+}
+
 /// Internal events that wake the agent's outer [`Agent::run`] loop.
 ///
 /// External callers (e.g. the TUI runtime) send these through
@@ -68,6 +75,16 @@ pub enum InternalEvent {
         content: Vec<ContentBlock>,
         origin: agentik_types::MessageOrigin,
         delegation_id: Option<Uuid>,
+    },
+    /// Durable external-work notice (e.g. HPC job completion). Delivered as
+    /// a System-origin message to the exact owning context; the sender keeps
+    /// its outbox entry pending until `Handled`.
+    ExternalJobCompleted {
+        session_id: Uuid,
+        event_id: String,
+        message: String,
+        acknowledged:
+            tokio::sync::oneshot::Sender<std::result::Result<ExternalNotificationAck, String>>,
     },
     /// A background tool task finished.
     /// `id` is the `tool_use_id`, `seq` is the short task number.
@@ -407,6 +424,48 @@ impl Agent {
                     title: Some(title),
                 });
                 tracing::info!("auto-created session on first message");
+            }
+
+            // Durable external-work notices deliver into the owning context
+            // as a System-origin message. The normal injection path (queue +
+            // run_context) serializes with any active turn; the sender's
+            // outbox keeps the entry pending until acknowledged here.
+            if let InternalEvent::ExternalJobCompleted {
+                session_id,
+                event_id: _,
+                message,
+                acknowledged,
+            } = event
+            {
+                let result = if self.recovery_notice.is_some()
+                    || self.cancel_token.is_cancelled()
+                {
+                    Err("agent context is suspended or requires recovery".to_owned())
+                } else {
+                    match self.context.as_ref() {
+                        None => Err("original context is not loaded".to_owned()),
+                        Some(session) if session.id != session_id => {
+                            Err("original context is unavailable".to_owned())
+                        }
+                        Some(_) => {
+                            let queued = self
+                                .internal_event_tx
+                                .send(InternalEvent::MessageInject {
+                                    content: vec![ContentBlock::Text { text: message }],
+                                    origin: agentik_types::MessageOrigin::System,
+                                    delegation_id: None,
+                                })
+                                .is_ok();
+                            if queued {
+                                Ok(ExternalNotificationAck::Handled)
+                            } else {
+                                Ok(ExternalNotificationAck::Busy)
+                            }
+                        }
+                    }
+                };
+                let _ = acknowledged.send(result);
+                continue;
             }
 
             // Context management events are handled inline before delegation.

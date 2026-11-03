@@ -6,12 +6,14 @@
 
 pub mod builtins;
 pub mod error;
+pub mod execution_deadline;
 pub mod function;
 pub mod task_runtime;
 pub mod toolset;
 pub mod truncation;
 
 pub use error::{ToolError, ToolOperationResult};
+pub use execution_deadline::ExecutionDeadline;
 pub use function::{
     ContextToolCtx, DynToolFunction, ExecutionMode, MAX_PROGRESS_RECORDS, ProgressBuffer,
     ProgressLog, ProgressRecord, TaskMetadata, ToolContext, ToolFunction,

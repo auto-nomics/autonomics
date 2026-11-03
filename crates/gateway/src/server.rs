@@ -2,12 +2,14 @@
 //! storage access, model-config API, and the SSE event stream.
 
 mod agents;
+mod compute;
 mod auth;
 mod context;
 mod docs;
 mod error;
 mod events;
 mod gui;
+mod hpc_jobs;
 mod hydration;
 mod lifecycle;
 mod model_config;

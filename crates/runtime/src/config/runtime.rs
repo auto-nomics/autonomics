@@ -179,6 +179,9 @@ pub struct RuntimeConfig {
     /// profiles. Defaults to deny-all network sources.
     #[serde(default)]
     pub downloader: resource_downloader::DownloaderConfig,
+    /// Slurm (HPC) integration settings. Defaults to disabled.
+    #[serde(default)]
+    pub slurm: super::slurm::SlurmConfig,
 }
 
 impl Default for RuntimeConfig {
@@ -232,6 +235,19 @@ fn default_knowledge_db_path() -> PathBuf {
 }
 
 impl RuntimeConfig {
+    /// Whether this deployment admits local containers. A validated ordinary
+    /// remote-only placement profile uses a rejecting local runtime instead of
+    /// requiring a local Podman installation. No remote readiness is inferred.
+    pub fn local_container_execution_required(&self) -> crate::Result<bool> {
+        let mode = std::env::var("AUTONOMICS_EXECUTION_MODE").unwrap_or_default();
+        let resolved = if mode.trim() == "formal" {
+            self.clone()
+        } else {
+            crate::compute::startup_config(self).map_err(crate::error::Error::Other)?
+        };
+        crate::host::hpc_placement::requires_local_containers(&resolved, &mode, false)
+    }
+
     /// Create a new [`RuntimeConfigBuilder`].
     pub fn builder() -> RuntimeConfigBuilder {
         RuntimeConfigBuilder::new()
@@ -379,6 +395,7 @@ impl RuntimeConfig {
             bib_http: resolve_bib_http(base),
             plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
             downloader: base.and_then(|b| b.downloader.clone()).unwrap_or_default(),
+            slurm: base.and_then(|b| b.slurm.clone()).unwrap_or_default(),
         }
     }
 }

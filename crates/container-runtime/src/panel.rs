@@ -71,6 +71,8 @@ impl PanelManifest {
 #[derive(Debug, Clone)]
 pub struct PanelCache {
     pub root: PathBuf,
+    content_required: bool,
+    manifest_hashes: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for PanelCache {
@@ -81,7 +83,137 @@ impl Default for PanelCache {
 
 impl PanelCache {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            content_required: false,
+            manifest_hashes: Default::default(),
+        }
+    }
+    pub fn content_required(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            content_required: true,
+            manifest_hashes: Default::default(),
+        }
+    }
+    pub fn requires_content_verification(&self) -> bool {
+        self.content_required
+    }
+    /// Byte identities admitted in the signed method contract. A panel's
+    /// opaque catalog label alone cannot bind the manifest's file checksums.
+    pub fn with_manifest_hashes(
+        mut self,
+        hashes: std::collections::BTreeMap<String, String>,
+    ) -> Result<Self, String> {
+        if !self.content_required {
+            return Err("manifest identities require strict panel mode".into());
+        }
+        for (source, hash) in hashes {
+            let source = normalize_virtual_prefix(&source)?;
+            if hash.len() != 64
+                || !hash
+                    .bytes()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            {
+                return Err("invalid admitted panel manifest hash".into());
+            }
+            if self.manifest_hashes.insert(source, hash).is_some() {
+                return Err("duplicate admitted panel manifest source".into());
+            }
+        }
+        Ok(self)
+    }
+    pub fn expected_manifest_hash(&self, source: &str) -> Option<&str> {
+        let source = normalize_virtual_prefix(source).ok()?;
+        self.manifest_hashes.get(&source).map(String::as_str)
+    }
+    async fn verify_cache_files(
+        &self,
+        destination: &Path,
+        manifest: &PanelManifest,
+    ) -> Result<(), ContainerRuntimeError> {
+        use tokio::io::AsyncReadExt;
+        if !self.content_required {
+            return Ok(());
+        }
+        if manifest.files.is_empty()
+            || tokio::fs::symlink_metadata(destination)
+                .await?
+                .file_type()
+                .is_symlink()
+        {
+            return Err(ContainerRuntimeError::ObjectStorage(
+                "strict panel cache is empty or symlinked".into(),
+            ));
+        }
+        let root = destination.canonicalize()?;
+        let expected: std::collections::BTreeSet<_> = manifest
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let mut discovered = std::collections::BTreeSet::new();
+        let mut directories = vec![destination.to_path_buf()];
+        while let Some(directory) = directories.pop() {
+            let mut entries = tokio::fs::read_dir(directory).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let ty = entry.file_type().await?;
+                if ty.is_symlink() {
+                    return Err(ContainerRuntimeError::ObjectStorage(
+                        "strict panel contains a symlink".into(),
+                    ));
+                }
+                if ty.is_dir() {
+                    directories.push(entry.path());
+                } else if ty.is_file() {
+                    let relative = entry
+                        .path()
+                        .strip_prefix(destination)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    if relative != PANEL_CACHE_COMPLETE_MARKER {
+                        discovered.insert(relative);
+                    }
+                } else {
+                    return Err(ContainerRuntimeError::ObjectStorage(
+                        "strict panel contains a special file".into(),
+                    ));
+                }
+            }
+        }
+        if discovered != expected {
+            return Err(ContainerRuntimeError::ObjectStorage(
+                "strict panel file universe changed".into(),
+            ));
+        }
+        for file in &manifest.files {
+            let path = destination.join(&file.path).canonicalize()?;
+            if !path.starts_with(&root) {
+                return Err(ContainerRuntimeError::ObjectStorage(
+                    "strict panel escaped cache root".into(),
+                ));
+            }
+            let mut input = tokio::fs::File::open(&path).await?;
+            let mut hasher = Sha256::new();
+            let mut count = 0u64;
+            let mut buffer = vec![0u8; 1024 * 1024];
+            loop {
+                let read = input.read(&mut buffer).await?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+                count += read as u64;
+            }
+            if count != file.size || sha256_digest(&hasher.finalize()) != file.sha256 {
+                return Err(ContainerRuntimeError::ObjectStorage(format!(
+                    "strict cached panel object {} content changed",
+                    file.path
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub async fn ensure(
@@ -92,8 +224,11 @@ impl PanelCache {
         panel.validate().map_err(ContainerRuntimeError::Invalid)?;
         let prefix =
             normalize_virtual_prefix(&panel.source).map_err(ContainerRuntimeError::Invalid)?;
-        let manifest = self.load_manifest(storage, &prefix).await?;
-        if manifest.id != panel.id {
+        let (manifest, manifest_bytes) = self.load_manifest(storage, &prefix).await?;
+        // A frozen runtime binding may use a logical alias for the catalog
+        // repository. Strict mode has already verified the admitted original
+        // manifest bytes; the signed binding and digest identify that content.
+        if manifest.id != panel.id && !self.content_required {
             return Err(ContainerRuntimeError::PanelManifest {
                 path: panel.source.clone(),
                 message: format!("expected id `{}`, found `{}`", panel.id, manifest.id),
@@ -113,10 +248,11 @@ impl PanelCache {
         let destination = self.root.join(&cache_key);
         let marker = destination.join(PANEL_CACHE_COMPLETE_MARKER);
         if marker_is_valid(&marker, &panel.digest).await {
+            self.verify_cache_files(&destination, &manifest).await?;
             // Record the hit so the LRU sweeper removes least-recently-used
             // entries rather than least-recently-downloaded ones.
             crate::gc::touch_dir_mtime(&destination);
-            return Ok(self.cached_panel(panel, destination));
+            return Ok(self.cached_panel(panel, destination, manifest_bytes));
         }
 
         let nanos = std::time::SystemTime::now()
@@ -162,15 +298,22 @@ impl PanelCache {
                 destination.display()
             )));
         }
-        Ok(self.cached_panel(panel, destination))
+        self.verify_cache_files(&destination, &manifest).await?;
+        Ok(self.cached_panel(panel, destination, manifest_bytes))
     }
 
-    fn cached_panel(&self, panel: &PanelRef, host_path: PathBuf) -> CachedPanel {
+    fn cached_panel(
+        &self,
+        panel: &PanelRef,
+        host_path: PathBuf,
+        manifest_bytes: Vec<u8>,
+    ) -> CachedPanel {
         CachedPanel {
             id: panel.id.clone(),
             digest: panel.digest.clone(),
             host_path,
             mount_path: panel.mount_path.clone(),
+            manifest_bytes: Some(manifest_bytes),
         }
     }
 
@@ -178,27 +321,42 @@ impl PanelCache {
         &self,
         storage: &OpendalFileStorage,
         prefix: &str,
-    ) -> Result<PanelManifest, ContainerRuntimeError> {
+    ) -> Result<(PanelManifest, Vec<u8>), ContainerRuntimeError> {
         let path = format!("{prefix}/{PANEL_MANIFEST_OBJECT}");
         let bytes = storage
             .resolve(&path)
             .read(&storage.resolve_path(&path))
             .await
             .map_err(|error| ContainerRuntimeError::ObjectStorage(error.to_string()))?;
-        let manifest: PanelManifest =
-            serde_json::from_slice(&bytes.to_bytes()).map_err(|error| {
+        let bytes = bytes.to_bytes();
+        if self.content_required {
+            let expected = self.expected_manifest_hash(prefix).ok_or_else(|| {
                 ContainerRuntimeError::PanelManifest {
                     path: path.clone(),
-                    message: error.to_string(),
+                    message: "panel manifest has no signed byte identity".into(),
                 }
             })?;
+            let actual = sha256_digest(&Sha256::digest(&bytes));
+            if actual.strip_prefix("sha256:") != Some(expected) {
+                return Err(ContainerRuntimeError::PanelManifest {
+                    path: path.clone(),
+                    message: "panel manifest differs from signed byte identity".into(),
+                });
+            }
+        }
+        let manifest: PanelManifest = serde_json::from_slice(&bytes).map_err(|error| {
+            ContainerRuntimeError::PanelManifest {
+                path: path.clone(),
+                message: error.to_string(),
+            }
+        })?;
         manifest
             .validate()
             .map_err(|message| ContainerRuntimeError::PanelManifest {
                 path: path.clone(),
                 message,
             })?;
-        Ok(manifest)
+        Ok((manifest, bytes.to_vec()))
     }
 
     async fn download_files(
@@ -253,6 +411,8 @@ impl PanelCache {
                     file.sha256
                 )));
             }
+            tokio::io::AsyncWriteExt::flush(&mut output).await?;
+            output.sync_all().await?;
         }
         Ok(())
     }
@@ -369,6 +529,197 @@ mod tests {
             format!("1000g_eur@{}", manifest.digest)
         );
         assert!(cached.host_path.join(PANEL_CACHE_COMPLETE_MARKER).is_file());
+    }
+
+    #[tokio::test]
+    async fn cold_and_warm_panels_keep_original_manifest_bytes_without_changing_cache_files() {
+        let objects = tempfile::tempdir().unwrap();
+        let cached = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::new(objects.path());
+        let content = b"reference-panel";
+        let manifest = PanelManifest {
+            schema_version: 1,
+            id: "original-bytes".into(),
+            version: "v1".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            files: vec![PanelFile {
+                path: "data.txt".into(),
+                size: content.len() as u64,
+                sha256: content_digest(content),
+            }],
+        };
+        // Whitespace distinguishes the authoritative bytes from reserialization.
+        let raw = format!("\n{}\n", serde_json::to_string_pretty(&manifest).unwrap()).into_bytes();
+        storage
+            .write_bytes("/panel/manifest.json", raw.clone())
+            .await
+            .unwrap();
+        storage
+            .write_bytes("/panel/data.txt", content.to_vec())
+            .await
+            .unwrap();
+        let panel = PanelRef {
+            id: manifest.id.clone(),
+            digest: manifest.digest.clone(),
+            source: "/panel".into(),
+            mount_path: "/panels/reference".into(),
+        };
+        let cache = PanelCache::content_required(cached.path())
+            .with_manifest_hashes(std::collections::BTreeMap::from([(
+                "/panel".into(),
+                hex(&Sha256::digest(&raw)),
+            )]))
+            .unwrap();
+        for _ in 0..2 {
+            let result = cache.ensure(&storage, &panel).await.unwrap();
+            assert_eq!(result.manifest_bytes.as_deref(), Some(raw.as_slice()));
+            assert!(!result.host_path.join(PANEL_MANIFEST_OBJECT).exists());
+            let mut files = std::fs::read_dir(&result.host_path)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            files.sort();
+            assert_eq!(files, vec![PANEL_CACHE_COMPLETE_MARKER, "data.txt"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn strict_warm_cache_rejects_content_and_file_universe_changes() {
+        let objects = tempfile::tempdir().unwrap();
+        let cached = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::new(objects.path());
+        let content = b"reference-panel";
+        let manifest = PanelManifest {
+            schema_version: 1,
+            id: "strict-panel".into(),
+            version: "v1".into(),
+            digest: format!("sha256:{}", "d".repeat(64)),
+            files: vec![PanelFile {
+                path: "nested/data.txt".into(),
+                size: content.len() as u64,
+                sha256: content_digest(content),
+            }],
+        };
+        tokio::fs::create_dir_all(objects.path().join("panel/nested"))
+            .await
+            .unwrap();
+        tokio::fs::write(objects.path().join("panel/nested/data.txt"), content)
+            .await
+            .unwrap();
+        storage
+            .write_bytes(
+                "/panel/manifest.json",
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .await
+            .unwrap();
+        let panel = PanelRef {
+            id: manifest.id.clone(),
+            digest: manifest.digest.clone(),
+            source: "/panel".into(),
+            mount_path: "/panel".into(),
+        };
+        let unsigned_cache = PanelCache::content_required(cached.path());
+        assert!(
+            unsigned_cache
+                .ensure(&storage, &panel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no signed byte identity")
+        );
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let cache = PanelCache::content_required(cached.path())
+            .with_manifest_hashes(std::collections::BTreeMap::from([(
+                "/panel".into(),
+                content_digest(&manifest_bytes)
+                    .strip_prefix("sha256:")
+                    .unwrap()
+                    .into(),
+            )]))
+            .unwrap();
+        let ready = cache.ensure(&storage, &panel).await.unwrap();
+        cache.ensure(&storage, &panel).await.unwrap();
+        let alias = PanelRef {
+            id: "runtime-alias".into(),
+            ..panel.clone()
+        };
+        // Only an admitted source-byte identity permits a logical catalog alias.
+        cache.ensure(&storage, &alias).await.unwrap();
+        assert!(
+            PanelCache::new(cached.path())
+                .ensure(&storage, &alias)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("expected id")
+        );
+        let data = ready.host_path.join("nested/data.txt");
+        // Same length: metadata and the completion marker cannot establish identity.
+        tokio::fs::write(&data, b"REFERENCE-PANEL").await.unwrap();
+        assert!(
+            cache
+                .ensure(&storage, &panel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("content changed")
+        );
+        tokio::fs::write(&data, content).await.unwrap();
+        let extra = ready.host_path.join("unregistered.txt");
+        tokio::fs::write(&extra, b"extra").await.unwrap();
+        assert!(
+            cache
+                .ensure(&storage, &panel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("universe changed")
+        );
+        tokio::fs::remove_file(extra).await.unwrap();
+        tokio::fs::remove_file(&data).await.unwrap();
+        assert!(
+            cache
+                .ensure(&storage, &panel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("universe changed")
+        );
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(objects.path().join("panel/nested/data.txt"), &data)
+                .unwrap();
+            assert!(
+                cache
+                    .ensure(&storage, &panel)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("symlink")
+            );
+            tokio::fs::remove_file(&data).await.unwrap();
+        }
+        tokio::fs::write(&data, content).await.unwrap();
+        cache.ensure(&storage, &panel).await.unwrap();
+        // A changed manifest with the same opaque digest must also fail.
+        let mut changed = manifest;
+        changed.version = "unadmitted-v2".into();
+        storage
+            .write_bytes(
+                "/panel/manifest.json",
+                serde_json::to_vec(&changed).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            cache
+                .ensure(&storage, &panel)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("differs from signed byte identity")
+        );
     }
 
     #[tokio::test]

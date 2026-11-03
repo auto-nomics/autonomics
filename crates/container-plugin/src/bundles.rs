@@ -308,6 +308,7 @@ script = "true"
                 program: "podman".into(),
                 workspace_root: state.path().join("workspace"),
                 panel_cache_root: state.path().join("panels"),
+                ..Default::default()
             }),
         );
         let panel_cache = Arc::new(container_runtime::PanelCache::new(

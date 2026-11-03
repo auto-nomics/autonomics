@@ -33,6 +33,10 @@ pub fn ensure_backend_env_removed() -> Result<(), String> {
 
 /// Directory for DAG container file flow
 pub fn podman_state_root() -> PathBuf {
+    if let Some(state) = std::env::var_os("AUTONOMICS_STATE_DIR").filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(state).join("containers");
+    }
     if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
         return Path::new(&home).join(".autonomics").join("state");
     }

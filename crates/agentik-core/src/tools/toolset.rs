@@ -408,6 +408,7 @@ impl Toolset {
             // own opt-in is the gate.
             let finish_on_cancel = registration.implementation.finish_on_cancel();
             let timeout_secs = registration.implementation.timeout_seconds();
+            let deadline_policy = registration.implementation.execution_deadline();
 
             let implementation = registration.implementation.clone();
             let task_id = tc.id.clone();
@@ -438,6 +439,10 @@ impl Toolset {
                 use futures::FutureExt;
                 use std::panic::AssertUnwindSafe;
 
+                let deadline_progress = ctx.output.clone().unwrap_or_else(|| {
+                    std::sync::Arc::new(std::sync::Mutex::new(ProgressLog::new()))
+                });
+
                 let exec_fut = implementation.execute_with_context(input, &ctx);
 
                 let result = tokio::select! {
@@ -465,7 +470,11 @@ impl Toolset {
                         }
                     }
                     _ = cancel.cancelled() => Err(ToolError::Cancel),
-                    _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => {
+                    _ = super::execution_deadline::execution_deadline(
+                        deadline_policy,
+                        timeout_secs,
+                        &deadline_progress,
+                    ) => {
                         Err(ToolError::Timeout { seconds: timeout_secs })
                     }
                 };

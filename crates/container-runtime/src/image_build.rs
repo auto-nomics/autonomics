@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use tokio::process::Command;
 
 use crate::error::ContainerRuntimeError;
-use crate::podman::{PodmanRuntime, async_podman_command};
+use crate::podman::PodmanRuntime;
 
 /// Budget for the `podman inspect` that resolves a freshly built image.
 const INSPECT_TIMEOUT_SECS: u64 = 60;
@@ -105,7 +105,8 @@ impl ImageBuildConnection for PodmanRuntime {
         let program = self.config().program.clone();
         let built = tokio::time::timeout(
             Duration::from_secs(request.timeout_secs),
-            async_podman_command(&program)
+            self.config()
+                .async_command()
                 .arg("build")
                 .args(args)
                 .stdin(Stdio::null())
@@ -126,7 +127,8 @@ impl ImageBuildConnection for PodmanRuntime {
 
         let inspected = tokio::time::timeout(
             Duration::from_secs(INSPECT_TIMEOUT_SECS),
-            async_podman_command(&program)
+            self.config()
+                .async_command()
                 .args(["inspect", "--format", "{{.Id}}\n{{.Digest}}"])
                 .arg(&request.tag)
                 .stdin(Stdio::null())
@@ -159,7 +161,8 @@ impl ImageBuildConnection for PodmanRuntime {
         let digest_path = push_digest_path();
         let pushed = tokio::time::timeout(
             Duration::from_secs(request.timeout_secs),
-            async_podman_command(&program)
+            self.config()
+                .async_command()
                 .arg("push")
                 .arg("--digestfile")
                 .arg(&digest_path)
@@ -347,6 +350,83 @@ fn push_digest_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn build_inspect_and_push_use_the_runtime_private_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("podman-probe");
+        let log = dir.path().join("argv.log");
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        std::fs::write(
+            &script,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' "$@" >> '{}'
+printf 'END\n' >> '{}'
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  inspect) printf '%s\n%s\n' '{}' '{}'; exit 0;;
+  --digestfile) shift; printf '%s\n' '{}' > "$1";;
+ esac
+ shift
+done
+"#,
+                log.display(),
+                log.display(),
+                digest,
+                digest,
+                digest
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut config = crate::PodmanConfig::for_state_dir_with_storage_driver(
+            dir.path(),
+            crate::PrivateStorageDriver::Overlay,
+        );
+        config.program = script.to_string_lossy().into_owned();
+        config.cgroup_manager = Some("cgroupfs".into());
+        let runtime = PodmanRuntime::new(config.clone());
+        let request = ImageBuildRequest {
+            context_dir: dir.path().into(),
+            containerfile: "Containerfile".into(),
+            tag: "localhost/test:one".into(),
+            build_args: vec![],
+            timeout_secs: 10,
+        };
+        assert_eq!(runtime.build(request).await.unwrap().digest, digest);
+        assert_eq!(
+            runtime
+                .push(ImagePushRequest {
+                    local_reference: "localhost/test:one".into(),
+                    remote_reference: "example.org/test:one".into(),
+                    timeout_secs: 10
+                })
+                .await
+                .unwrap()
+                .digest,
+            digest
+        );
+        let log = std::fs::read_to_string(log).unwrap();
+        let calls: Vec<_> = log.split("END\n").filter(|s| !s.is_empty()).collect();
+        assert_eq!(calls.len(), 3);
+        let prefix = format!(
+            "--root\n{}\n--runroot\n{}\n--tmpdir\n{}\n--storage-driver\noverlay\n--cgroup-manager\ncgroupfs\n",
+            config.storage_root.unwrap().display(),
+            config.run_root.as_ref().unwrap().display(),
+            config
+                .run_root
+                .as_ref()
+                .unwrap()
+                .join("libpod-tmp")
+                .display()
+        );
+        for (call, command) in calls.iter().zip(["build", "inspect", "push"]) {
+            assert!(call.starts_with(&format!("{prefix}{command}\n")), "{call}");
+        }
+    }
+
     fn request() -> ImageBuildRequest {
         let context = tempfile::tempdir().unwrap();
         ImageBuildRequest {
@@ -461,6 +541,7 @@ mod tests {
             program: "podman".into(),
             workspace_root: root.path().join("workspace"),
             panel_cache_root: root.path().join("panels"),
+            ..crate::podman::PodmanConfig::for_state_dir(root.path())
         });
         let tag = "localhost/auto-nomics/environments/image-build-it:rsi-1".to_string();
         let result = runtime

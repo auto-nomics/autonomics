@@ -19,6 +19,9 @@ pub struct CachedPanel {
     pub digest: String,
     pub host_path: PathBuf,
     pub mount_path: String,
+    /// Original manifest bytes verified by PanelCache, retained in memory.
+    /// Cache directories contain only payload files and their completion marker.
+    pub manifest_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +148,33 @@ impl GpuRequest {
     }
 }
 
+pub struct PrivateEnvironment {
+    values: Vec<(String, String)>,
+}
+
+impl PrivateEnvironment {
+    pub fn new(values: Vec<(String, String)>) -> Result<Self, String> {
+        let mut names = std::collections::BTreeSet::new();
+        if values.is_empty()
+            || values.iter().any(|(name, value)| {
+                name != "OPENGWAS_JWT"
+                    || !names.insert(name.clone())
+                    || value.trim().is_empty()
+                    || value.chars().any(char::is_control)
+            })
+        {
+            return Err("invalid private container environment".into());
+        }
+        Ok(Self { values })
+    }
+
+    /// Sensitive values for trusted execution backends. Never serialize these
+    /// into dispatches, diagnostics, argv, or permanent provenance records.
+    pub fn values(&self) -> &[(String, String)] {
+        &self.values
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ContainerRunRequest {
     pub image: String,
@@ -175,16 +205,38 @@ pub struct ContainerRunResult {
 
 impl PanelRef {
     pub fn validate(&self) -> Result<(), String> {
-        if self.id.trim().is_empty() {
-            return Err("panel `id` cannot be empty".into());
+        if self.id.trim().is_empty()
+            || self.id.starts_with('/')
+            || self.id.contains('\\')
+            || self.id.chars().any(char::is_control)
+            || self
+                .id
+                .split('/')
+                .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        {
+            return Err("panel `id` must be a safe relative catalog identifier".into());
         }
-        if !self.digest.starts_with("sha256:") || self.digest.len() != 71 {
+        if !self.digest.starts_with("sha256:")
+            || self.digest.len() != 71
+            || !self.digest.as_bytes()[7..]
+                .iter()
+                .all(u8::is_ascii_hexdigit)
+        {
             return Err(format!("panel `{}` has invalid digest", self.id));
         }
         if self.source.contains('\0') || self.source.trim() == "/" {
             return Err(format!("panel `{}` has invalid source", self.id));
         }
-        if !Path::new(&self.mount_path).is_absolute() || self.mount_path == "/" {
+        if !Path::new(&self.mount_path).is_absolute()
+            || self.mount_path == "/"
+            || self.mount_path.contains('\\')
+            || self.mount_path.chars().any(char::is_control)
+            || self
+                .mount_path
+                .split('/')
+                .skip(1)
+                .any(|p| p.is_empty() || matches!(p, "." | ".."))
+        {
             return Err(format!("panel `{}` has invalid mount path", self.id));
         }
         Ok(())
@@ -194,6 +246,73 @@ impl PanelRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_environment_accepts_only_one_nonempty_author_jwt() {
+        assert!(
+            PrivateEnvironment::new(vec![("OPENGWAS_JWT".into(), "synthetic-jwt".into())]).is_ok()
+        );
+        for values in [
+            Vec::new(),
+            vec![("OPENGWAS_TOKEN".into(), "synthetic-jwt".into())],
+            vec![("OPENGWAS_JWT".into(), " ".into())],
+            vec![("OPENGWAS_JWT".into(), "synthetic\njwt".into())],
+            vec![
+                ("OPENGWAS_JWT".into(), "synthetic-jwt".into()),
+                ("OPENGWAS_JWT".into(), "synthetic-jwt".into()),
+            ],
+        ] {
+            assert!(PrivateEnvironment::new(values).is_err());
+        }
+    }
+
+    #[test]
+    fn reference_identifiers_and_mounts_cannot_escape_their_namespace() {
+        let panel = PanelRef {
+            id: "publisher/panel".into(),
+            digest: format!("sha256:{}", "a".repeat(64)),
+            source: "/panels/approved".into(),
+            mount_path: "/panels/reference".into(),
+        };
+        panel.validate().unwrap();
+        for id in [
+            "/absolute",
+            "../evidence",
+            "owner/../evidence",
+            "owner//panel",
+            "owner/./panel",
+            "owner\\panel",
+            "owner\nvalue",
+        ] {
+            assert!(
+                PanelRef {
+                    id: id.into(),
+                    ..panel.clone()
+                }
+                .validate()
+                .is_err(),
+                "{id}"
+            );
+        }
+        for mount_path in ["/panels/../data", "/panels//data", "/panels/./data"] {
+            assert!(
+                PanelRef {
+                    mount_path: mount_path.into(),
+                    ..panel.clone()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            PanelRef {
+                digest: format!("sha256:{}", "z".repeat(64)),
+                ..panel
+            }
+            .validate()
+            .is_err()
+        );
+    }
 
     #[test]
     fn legacy_none_parses_as_isolated_and_cluster_is_rejected() {

@@ -113,6 +113,38 @@ impl DataEngine {
         self.dag.set_task_executor(executor);
     }
 
+    /// Configure an explicit ordinary coordinator concurrency limit.
+    /// This replaces both per-run dispatch and the shared host CPU-derived
+    /// dispatch limiter. It does not change task CPU/memory requests, executor
+    /// admission, or Slurm admission.
+    pub fn set_coordinator_concurrency(&mut self, limit: usize) -> Result<()> {
+        if !(1..=dag_core::dag::execution::MAX_REMOTE_TASKS).contains(&limit) {
+            return Err(DagError::Schedule("invalid coordinator concurrency".into()).into());
+        }
+        self.config.max_concurrency = limit;
+        self.engine_ctx.global_sem = Some(Arc::new(tokio::sync::Semaphore::new(limit)));
+        self.refresh_coordinator_factory_context();
+        Ok(())
+    }
+
+    /// Remove both coordinator dispatch gates for ordinary remote execution.
+    /// Ready tasks, including dynamic fanout, have no local CPU-derived or
+    /// fixed concurrency cap. Resource requests and executor/Slurm admission
+    /// remain unchanged. Configure the template before creating sessions.
+    pub fn set_unlimited_coordinator_concurrency(&mut self) {
+        self.config.max_concurrency = 0;
+        self.engine_ctx.global_sem = None;
+        self.refresh_coordinator_factory_context();
+    }
+
+    fn refresh_coordinator_factory_context(&mut self) {
+        let mut factory_ctx = self.node_registry.ctx().clone();
+        factory_ctx.global_sem = self.engine_ctx.global_sem.clone();
+        self.node_registry = Arc::new(self.node_registry.with_node_ctx(factory_ctx));
+        self.dag
+            .set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
+    }
+
     /// Configure the built-in local executor.
     pub fn set_local_task_executor(
         &mut self,

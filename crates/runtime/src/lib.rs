@@ -6,7 +6,9 @@
 //! the host via [`HostControl`] tools.
 
 pub mod catalog_tools;
+pub mod compute;
 pub mod config;
+pub mod hpc_monitor;
 pub mod control;
 pub mod error;
 pub mod host;

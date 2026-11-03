@@ -2533,7 +2533,9 @@ dependencies = [
  "dag-core",
  "data-catalog",
  "datafusion",
+ "fs4",
  "futures",
+ "libc",
  "nodes-io",
  "schemars 1.2.2",
  "serde",
@@ -2551,6 +2553,7 @@ name = "container-runtime"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "libc",
  "schemars 1.2.2",
  "serde",
@@ -12085,6 +12088,7 @@ dependencies = [
  "datafusion",
  "futures",
  "gwascatalog-sdk",
+ "hpc-tools",
  "kegg",
  "kms",
  "kms-tools",
@@ -12098,6 +12102,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "skills",
  "string-sdk",
  "tempfile",

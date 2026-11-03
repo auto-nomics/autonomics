@@ -56,6 +56,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) agent_idle_ttl: Option<std::time::Duration>,
     pub(crate) bib_http: Option<BibHttpOptions>,
     pub(crate) plugin_rsi: Option<PluginRsiConfig>,
+    pub(crate) slurm: Option<super::slurm::SlurmConfig>,
     pub(crate) downloader: Option<resource_downloader::DownloaderConfig>,
 }
 
@@ -278,6 +279,12 @@ impl RuntimeConfigBuilder {
     /// Configure the RSI plugin subsystem.
     pub fn plugin_rsi(mut self, config: PluginRsiConfig) -> Self {
         self.plugin_rsi = Some(config);
+        self
+    }
+
+    /// Configure the Slurm (HPC) integration.
+    pub fn slurm(mut self, config: super::slurm::SlurmConfig) -> Self {
+        self.slurm = Some(config);
         self
     }
 

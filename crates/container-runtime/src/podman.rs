@@ -22,7 +22,8 @@ use crate::connection::{
 };
 use crate::error::ContainerRuntimeError;
 use crate::types::{
-    ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, PullPolicy,
+    ContainerNetwork, ContainerRunRequest, ContainerRunResult, GpuRequest, PrivateEnvironment,
+    PullPolicy,
 };
 
 const CLEANUP_TIMEOUT_SECS: u64 = 30;
@@ -34,11 +35,55 @@ const HOST_CWD: &str = "/";
 /// stays parallel: by then the container already exists.
 static CREATE_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
+/// Explicit operator choice for a private store. No backend auto-detection or
+/// fallback may silently change a frozen formal execution policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateStorageDriver {
+    Vfs,
+    Overlay,
+}
+
+impl PrivateStorageDriver {
+    /// An explicit host setting; never auto-detect or reinterpret an existing store.
+    /// Unset preserves the legacy private VFS store.
+    pub fn parse_operator_setting(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None | Some("vfs") => Ok(Self::Vfs),
+            Some("overlay") => Ok(Self::Overlay),
+            Some(_) => Err("AUTONOMICS_CONTAINER_STORAGE_DRIVER must be vfs or overlay".into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PodmanConfig {
     pub program: String,
     pub workspace_root: std::path::PathBuf,
     pub panel_cache_root: std::path::PathBuf,
+    /// Isolated Podman storage. None preserves legacy embedded CLI behavior.
+    pub storage_root: Option<std::path::PathBuf>,
+    pub run_root: Option<std::path::PathBuf>,
+    pub storage_driver: Option<String>,
+    pub cgroup_manager: Option<String>,
+    pub cgroup_parent: Option<String>,
+    /// Reuse the operator-established subordinate user namespace. This is a
+    /// runtime setting, never a node/agent environment override. Ordinary
+    /// hosts retain keep-id; the formal worker already verifies its mapping.
+    pub inherit_user_namespace: bool,
+    /// Formal workers require an explicit memory cap and set the total
+    /// memory-plus-swap cap equal to it, disabling swap in each OCI leaf.
+    /// This is an execution-infrastructure setting, never a node override.
+    pub disable_swap: bool,
+    /// Ordinary cluster workers can explicitly isolate Podman's runtime,
+    /// HOME/config and connection environment. None preserves daemon/formal
+    /// behavior. This is operator infrastructure, never an agent field.
+    pub worker_runtime_dir: Option<std::path::PathBuf>,
+    /// Explicit ordinary-worker resource owner. None retains legacy behavior.
+    pub worker_resource_control: Option<crate::PodmanWorkerResourceControl>,
+    /// Operator-selected ordinary-worker user mapping; never a node override.
+    pub worker_user_namespace: Option<crate::PodmanWorkerUserNamespace>,
+    /// Explicit byte-pinned OCI runtime for an ordinary worker's private config.
+    pub worker_oci_runtime: Option<(std::path::PathBuf, String)>,
 }
 
 impl Default for PodmanConfig {
@@ -46,6 +91,22 @@ impl Default for PodmanConfig {
         Self::from_env()
     }
 }
+
+const WORKER_BACKEND_ENV_REMOVED: &[&str] = &[
+    "CONTAINER_HOST",
+    "CONTAINER_CONNECTION",
+    "CONTAINER_SSHKEY",
+    "CONTAINERS_CONF",
+    "CONTAINERS_CONF_OVERRIDE",
+    "CONTAINERS_CONF_MODULES",
+    "CONTAINERS_STORAGE_CONF",
+    "CONTAINERS_REGISTRIES_CONF",
+    "CONTAINERS_REGISTRIES_CONF_DIR",
+    "REGISTRY_AUTH_FILE",
+    "CONTAINERS_AUTH_FILE",
+    "PODMAN_CONNECTIONS_CONF",
+    "DOCKER_HOST",
+];
 
 impl PodmanConfig {
     pub fn from_env() -> Self {
@@ -57,7 +118,129 @@ impl PodmanConfig {
                 env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("work")),
             )),
             panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
+            storage_root: None,
+            run_root: None,
+            storage_driver: None,
+            cgroup_manager: None,
+            cgroup_parent: None,
+            inherit_user_namespace: false,
+            disable_swap: false,
+            worker_runtime_dir: None,
+            worker_resource_control: None,
+            worker_user_namespace: None,
+            worker_oci_runtime: None,
         }
+    }
+
+    /// RuntimeHost passes its resolved state directory, including builder
+    /// overrides. No workspace, panel or overlay escapes through ambient HOME.
+    pub fn for_state_dir(state_dir: &Path) -> Self {
+        Self {
+            program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
+            workspace_root: state_dir.join("containers/workspace"),
+            panel_cache_root: state_dir.join("containers/panels"),
+            storage_root: Some(state_dir.join("containers/storage")),
+            run_root: Some(state_dir.join("containers/run")),
+            // Deterministic private storage also works inside the trusted
+            // user namespace without sharing the host overlay store.
+            storage_driver: Some("vfs".into()),
+            cgroup_manager: None,
+            cgroup_parent: None,
+            inherit_user_namespace: false,
+            disable_swap: false,
+            worker_runtime_dir: None,
+            worker_resource_control: None,
+            worker_user_namespace: None,
+            worker_oci_runtime: None,
+        }
+    }
+
+    pub fn for_state_dir_with_storage_driver(
+        state_dir: &Path,
+        driver: PrivateStorageDriver,
+    ) -> Self {
+        let mut config = Self::for_state_dir(state_dir);
+        if driver == PrivateStorageDriver::Overlay {
+            // Never reinterpret an existing VFS store or use host storage.
+            let root = state_dir.join("containers-overlay");
+            config.workspace_root = root.join("workspace");
+            config.panel_cache_root = root.join("panels");
+            config.storage_root = Some(root.join("storage"));
+            config.run_root = Some(root.join("run"));
+            config.storage_driver = Some("overlay".into());
+        }
+        config
+    }
+
+    pub(crate) fn async_command(&self) -> Command {
+        let mut command = async_podman_command(&self.program);
+        if let Some(root) = &self.worker_runtime_dir {
+            command.arg("--remote=false");
+            for key in WORKER_BACKEND_ENV_REMOVED {
+                command.env_remove(key);
+            }
+            command
+                .env("XDG_RUNTIME_DIR", root)
+                .env("HOME", root.join("home"))
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("XDG_DATA_HOME", root.join("data"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("TMPDIR", root.join("tmp"));
+        }
+        if let Some(root) = &self.storage_root {
+            command.arg("--root").arg(root);
+        }
+        if let Some(root) = &self.run_root {
+            command.arg("--runroot").arg(root);
+            // runroot selects storage state, but libpod's runtime temporary
+            // directory otherwise still defaults to /run/libpod in a user
+            // namespace. Keep it explicit even with an empty environment.
+            command.arg("--tmpdir").arg(root.join("libpod-tmp"));
+        }
+        if let Some(driver) = &self.storage_driver {
+            command.arg("--storage-driver").arg(driver);
+        }
+        if let Some(manager) = &self.cgroup_manager {
+            command.arg("--cgroup-manager").arg(manager);
+        }
+        if self.worker_oci_runtime.is_some() {
+            command.arg("--runtime").arg("autonomics-crun");
+        }
+        command
+    }
+
+    pub(crate) fn blocking_command(&self) -> std::process::Command {
+        let mut command = blocking_podman_command(&self.program);
+        if let Some(root) = &self.worker_runtime_dir {
+            command.arg("--remote=false");
+            for key in WORKER_BACKEND_ENV_REMOVED {
+                command.env_remove(key);
+            }
+            command
+                .env("XDG_RUNTIME_DIR", root)
+                .env("HOME", root.join("home"))
+                .env("XDG_CONFIG_HOME", root.join("config"))
+                .env("XDG_DATA_HOME", root.join("data"))
+                .env("XDG_CACHE_HOME", root.join("cache"))
+                .env("TMPDIR", root.join("tmp"));
+        }
+        if let Some(root) = &self.storage_root {
+            command.arg("--root").arg(root);
+        }
+        if let Some(root) = &self.run_root {
+            command.arg("--runroot").arg(root);
+            command.arg("--tmpdir").arg(root.join("libpod-tmp"));
+        }
+        if let Some(driver) = &self.storage_driver {
+            command.arg("--storage-driver").arg(driver);
+        }
+        if let Some(manager) = &self.cgroup_manager {
+            command.arg("--cgroup-manager").arg(manager);
+        }
+        if self.worker_oci_runtime.is_some() {
+            command.arg("--runtime").arg("autonomics-crun");
+        }
+        command
     }
 }
 
@@ -91,6 +274,76 @@ impl PodmanRuntime {
     pub fn config(&self) -> &PodmanConfig {
         &self.config
     }
+
+    /// Read-only exact-name stop observation in this same explicit backend.
+    /// Exit 1 is Podman's documented absence status. Errors/timeouts are unknown,
+    /// never permission to remove an unowned container or declare it stopped.
+    pub async fn verify_container_absent(&self, name: &str) -> Result<(), ContainerRuntimeError> {
+        let result = self.observe_container_absence(name).await?;
+        if result.exit_code != 1 {
+            return Err(ContainerRuntimeError::Invalid(
+                "container absence not proven".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Fixed read-only exact-name observation, including actual returned logs.
+    /// A caller must still require exit1; this API does not infer stoppage.
+    pub async fn observe_container_absence(
+        &self,
+        name: &str,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        if name.is_empty()
+            || name.starts_with('-')
+            || name.len() > 128
+            || matches!(name, "." | "..")
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+        {
+            return Err(ContainerRuntimeError::Invalid(
+                "unsafe exact container name".into(),
+            ));
+        }
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.config
+                .async_command()
+                .args(["container", "exists", name])
+                .stdin(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .map_err(|_| ContainerRuntimeError::Invalid("owned stop observation timed out".into()))?
+        .map_err(|e| ContainerRuntimeError::Invalid(e.to_string()))?;
+        if output.stdout.len() > crate::MAX_CAPTURED_OUTPUT_BYTES
+            || output.stderr.len() > crate::MAX_CAPTURED_OUTPUT_BYTES
+        {
+            return Err(ContainerRuntimeError::Invalid(
+                "exact absence observation output exceeds bound".into(),
+            ));
+        }
+        let exit_code = output.status.code().ok_or_else(|| {
+            ContainerRuntimeError::Invalid("exact absence observation has unknown exit".into())
+        })?;
+        Ok(ContainerRunResult {
+            exit_code,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
+    /// Recover only durable, kernel-fenced owners in this explicit store.
+    /// The caller holds the formal execution lease at worker startup.
+    pub async fn recover_interrupted_containers(
+        &self,
+    ) -> Result<Vec<String>, ContainerRuntimeError> {
+        crate::container_intent::recover(&self.config)
+            .await
+            .map_err(ContainerRuntimeError::Invalid)
+    }
 }
 
 impl Default for PodmanRuntime {
@@ -101,16 +354,150 @@ impl Default for PodmanRuntime {
 
 #[async_trait]
 impl PodmanConnection for PodmanRuntime {
+    async fn run_observed(
+        &self,
+        request: ContainerRunRequest,
+        private_env: Option<PrivateEnvironment>,
+        observer: crate::observation::RunObserver,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        let private = private_env.is_some();
+        let result = self
+            .run_inner(request, private_env.as_ref(), observer)
+            .await;
+        if private {
+            suppress_private_output(result)
+        } else {
+            result
+        }
+    }
+
     async fn run(
         &self,
         request: ContainerRunRequest,
     ) -> Result<ContainerRunResult, ContainerRuntimeError> {
-        validate_run_request(&request)?;
-        let args = build_create_args(&request)?;
-        create_container(&self.config.program, &request, args).await?;
-        let mut guard = ContainerCleanupGuard::new(&self.config.program, &request.name);
+        self.run_inner(request, None, Default::default()).await
+    }
 
-        let mut start = async_podman_command(&self.config.program);
+    async fn run_with_private_env(
+        &self,
+        request: ContainerRunRequest,
+        private_env: PrivateEnvironment,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        suppress_private_output(
+            self.run_inner(request, Some(&private_env), Default::default())
+                .await,
+        )
+    }
+
+    fn name(&self) -> &'static str {
+        "podman"
+    }
+
+    fn workspace_root(&self) -> &Path {
+        self.config.workspace_root.as_path()
+    }
+}
+
+fn suppress_private_output(
+    result: Result<ContainerRunResult, ContainerRuntimeError>,
+) -> Result<ContainerRunResult, ContainerRuntimeError> {
+    match result {
+        Ok(result) => Ok(ContainerRunResult {
+            exit_code: result.exit_code,
+            stdout: String::new(),
+            stderr: String::new(),
+        }),
+        Err(ContainerRuntimeError::ExitStatus { exit_code, .. }) => {
+            Err(ContainerRuntimeError::ExitStatus {
+                exit_code,
+                stdout: String::new(),
+                stderr: "private credential container failed; captured output suppressed".into(),
+            })
+        }
+        Err(ContainerRuntimeError::Timeout { timeout_secs }) => {
+            Err(ContainerRuntimeError::Timeout { timeout_secs })
+        }
+        Err(_) => Err(ContainerRuntimeError::Invalid(
+            "private credential container execution failed; diagnostic output suppressed".into(),
+        )),
+    }
+}
+
+impl PodmanRuntime {
+    async fn run_inner(
+        &self,
+        request: ContainerRunRequest,
+        private_env: Option<&PrivateEnvironment>,
+        observer: crate::observation::RunObserver,
+    ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+        validate_run_request(&request)?;
+        if self.config.worker_runtime_dir.is_some() {
+            crate::podman_worker::validate_worker_resources(&self.config, &request)?;
+        }
+        let slurm_allocation = matches!(
+            self.config.worker_resource_control,
+            Some(crate::PodmanWorkerResourceControl::SlurmAllocation { .. })
+        );
+        let single_uid_root = matches!(
+            self.config.worker_user_namespace,
+            Some(crate::PodmanWorkerUserNamespace::SingleUidRoot)
+        );
+        if (slurm_allocation || single_uid_root) && self.config.worker_runtime_dir.is_none() {
+            return Err(ContainerRuntimeError::Invalid(
+                "Slurm resource control and single-UID mapping require an explicit ordinary worker"
+                    .into(),
+            ));
+        }
+        if single_uid_root {
+            crate::podman_worker::validate_single_uid_request(&request)?;
+            let mapping = crate::podman_worker::verify_single_uid_namespace(
+                &self.config,
+                request.timeout_secs.saturating_mul(1000),
+            )
+            .await?;
+            crate::podman_worker::write_worker_evidence(
+                &self
+                    .config
+                    .workspace_root
+                    .join(format!("{}.uid-map.json", request.name)),
+                &mapping,
+            )?;
+        }
+        validate_private_environment(&request.env, private_env)?;
+        self.recover_interrupted_containers().await?;
+        let mut args = build_create_args_for_policies(
+            &request,
+            self.config.inherit_user_namespace,
+            self.config.disable_swap,
+            slurm_allocation,
+            single_uid_root,
+        )?;
+        let intent = crate::container_intent::OwnedIntent::create(&self.config, &request.name)
+            .map_err(ContainerRuntimeError::Invalid)?;
+        if let Some(intent) = &intent {
+            args.splice(
+                0..0,
+                [
+                    "--label".into(),
+                    format!(
+                        "{}={}",
+                        crate::container_intent::INTENT_LABEL,
+                        intent.digest
+                    ),
+                ],
+            );
+        }
+        if let Some(parent) = &self.config.cgroup_parent {
+            args.splice(0..0, ["--cgroup-parent".into(), parent.clone()]);
+        }
+        // Arm before the cancellable create, so cancellation cannot omit
+        // cleanup merely because the await never returned a container ID.
+        let mut guard = ContainerCleanupGuard::new(&self.config, &request.name);
+        guard.intent = intent;
+        observer.phase("creating_container", "creating the admitted container");
+        create_container(&self.config, args, private_env).await?;
+
+        let mut start = self.config.async_command();
         start
             .arg("start")
             .arg("--attach")
@@ -124,7 +511,7 @@ impl PodmanConnection for PodmanRuntime {
         let child = match start {
             Ok(child) => child,
             Err(error) => {
-                let cleanup = remove_container(&self.config.program, &request.name).await;
+                let cleanup = guard.cleanup().await;
                 guard.disarm();
                 let message = format!("cannot start Podman container: {error}");
                 return Err(match cleanup {
@@ -138,21 +525,22 @@ impl PodmanConnection for PodmanRuntime {
 
         let attached = tokio::time::timeout(
             Duration::from_secs(request.timeout_secs),
-            child.wait_with_output(),
+            crate::observation::child_output(child, &observer, "container_attach"),
         )
         .await;
-        let cleanup_error = remove_container(&self.config.program, &request.name)
-            .await
-            .err();
+        let cleanup_error = guard.cleanup().await.err();
         guard.disarm();
+
+        if let Some(error) = cleanup_error {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "container cleanup failed; evidence incomplete: {error}"
+            )));
+        }
 
         match attached {
             Ok(Ok(output)) => {
                 let stdout = truncate_captured_bytes(&output.stdout);
-                let mut stderr = truncate_captured_bytes(&output.stderr);
-                if let Some(error) = cleanup_error {
-                    append_capture(&mut stderr, format!("container cleanup failed: {error}"));
-                }
+                let stderr = truncate_captured_bytes(&output.stderr);
                 if output.status.success() {
                     Ok(ContainerRunResult {
                         exit_code: 0,
@@ -168,48 +556,45 @@ impl PodmanConnection for PodmanRuntime {
                 }
             }
             Ok(Err(error)) => Err(ContainerRuntimeError::Invalid(format!(
-                "Podman attach stream failed: {error}{}",
-                cleanup_error
-                    .map(|error| format!("; container cleanup failed: {error}"))
-                    .unwrap_or_default()
+                "Podman attach stream failed: {error}"
             ))),
             Err(_) => Err(ContainerRuntimeError::Timeout {
                 timeout_secs: request.timeout_secs,
             }),
         }
     }
+}
 
-    fn name(&self) -> &'static str {
-        "podman"
+fn validate_private_environment(
+    ordinary_env: &[(String, String)],
+    private_env: Option<&PrivateEnvironment>,
+) -> Result<(), ContainerRuntimeError> {
+    if let Some(private_env) = private_env {
+        for (name, _) in private_env.values() {
+            if ordinary_env.iter().any(|(ordinary, _)| ordinary == name) {
+                return Err(ContainerRuntimeError::Invalid(
+                    "private credential conflicts with ordinary environment".into(),
+                ));
+            }
+        }
     }
-
-    fn workspace_root(&self) -> &Path {
-        self.config.workspace_root.as_path()
-    }
+    Ok(())
 }
 
 async fn create_container(
-    program: &str,
-    request: &ContainerRunRequest,
+    config: &PodmanConfig,
     args: Vec<String>,
+    private_env: Option<&PrivateEnvironment>,
 ) -> Result<(), ContainerRuntimeError> {
+    let program = &config.program;
     let timeout_secs = crate::images::pull_timeout_secs();
     // Queue here, before the timeout below: a queued create must not burn its
     // pull budget while another create is pulling multi-GB layers.
     let _create_permit = CREATE_GATE.acquire().await.map_err(|error| {
         ContainerRuntimeError::Invalid(format!("podman create gate closed: {error}"))
     })?;
-    let created = tokio::time::timeout(
-        Duration::from_secs(timeout_secs),
-        async_podman_command(program)
-            .arg("create")
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output(),
-    )
-    .await;
+    let mut command = prepare_create_command(config, args, private_env);
+    let created = tokio::time::timeout(Duration::from_secs(timeout_secs), command.output()).await;
     let output = match created {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => {
@@ -217,16 +602,9 @@ async fn create_container(
                 "cannot spawn `{program} create`: {error}"
             )));
         }
-        Err(_) => {
-            let cleanup = remove_container(program, &request.name).await;
-            return Err(match cleanup {
-                Ok(()) => ContainerRuntimeError::Timeout { timeout_secs },
-                Err(error) => ContainerRuntimeError::Invalid(format!(
-                    "Podman create timed out after {}s and container cleanup failed: {error}",
-                    timeout_secs
-                )),
-            });
-        }
+        // The prearmed guard owns cleanup, including a cancelled create.
+        // A name-only rm here would bypass its container identity fence.
+        Err(_) => return Err(ContainerRuntimeError::Timeout { timeout_secs }),
     };
     if !output.status.success() {
         return Err(ContainerRuntimeError::Invalid(format!(
@@ -238,10 +616,31 @@ async fn create_container(
     Ok(())
 }
 
-async fn remove_container(program: &str, name: &str) -> Result<(), String> {
+fn prepare_create_command(
+    config: &PodmanConfig,
+    args: Vec<String>,
+    private_env: Option<&PrivateEnvironment>,
+) -> Command {
+    let mut command = config.async_command();
+    command.arg("create");
+    if let Some(private_env) = private_env {
+        for (name, value) in private_env.values() {
+            command.arg("--env").arg(name).env(name, value);
+        }
+    }
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    command
+}
+
+async fn remove_container(config: &PodmanConfig, name: &str) -> Result<(), String> {
     let removed = tokio::time::timeout(
         Duration::from_secs(CLEANUP_TIMEOUT_SECS),
-        async_podman_command(program)
+        config
+            .async_command()
             .arg("rm")
             .arg("--force")
             .arg("--time=0")
@@ -261,22 +660,31 @@ async fn remove_container(program: &str, name: &str) -> Result<(), String> {
 }
 
 struct ContainerCleanupGuard {
-    program: String,
+    config: PodmanConfig,
     name: String,
     armed: bool,
+    intent: Option<crate::container_intent::OwnedIntent>,
 }
 
 impl ContainerCleanupGuard {
-    fn new(program: &str, name: &str) -> Self {
+    fn new(config: &PodmanConfig, name: &str) -> Self {
         Self {
-            program: program.to_string(),
+            config: config.clone(),
             name: name.to_string(),
             armed: true,
+            intent: None,
         }
     }
 
     fn disarm(&mut self) {
         self.armed = false;
+    }
+
+    async fn cleanup(&self) -> Result<(), String> {
+        match &self.intent {
+            Some(intent) => intent.cleanup(&self.config).await,
+            None => remove_container(&self.config, &self.name).await,
+        }
     }
 }
 
@@ -285,10 +693,21 @@ impl Drop for ContainerCleanupGuard {
         if !self.armed {
             return;
         }
-        let program = self.program.clone();
+        let config = self.config.clone();
         let name = self.name.clone();
+        let intent = self.intent.take();
         std::thread::spawn(move || {
-            let _ = blocking_podman_command(&program)
+            if let Some(intent) = intent {
+                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    let _ = runtime.block_on(intent.cleanup(&config));
+                }
+                return;
+            }
+            let _ = config
+                .blocking_command()
                 .args(["rm", "--force", "--time=0", &name])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -300,29 +719,56 @@ impl Drop for ContainerCleanupGuard {
 
 pub(crate) fn async_podman_command(program: &str) -> Command {
     let mut command = Command::new(program);
+    command.env_remove("OPENGWAS_JWT");
     command.current_dir(HOST_CWD);
+    command.kill_on_drop(true);
     command
 }
 
 fn blocking_podman_command(program: &str) -> std::process::Command {
     let mut command = std::process::Command::new(program);
+    command.env_remove("OPENGWAS_JWT");
     command.current_dir(HOST_CWD);
     command
 }
 
-fn append_capture(value: &mut String, message: String) {
-    if value.is_empty() {
-        *value = message;
-    } else {
-        value.push('\n');
-        value.push_str(&message);
-    }
-}
-
+#[cfg(test)]
 pub(crate) fn build_create_args(
     request: &ContainerRunRequest,
 ) -> Result<Vec<String>, ContainerRuntimeError> {
+    build_create_args_with_policy(request, false, false)
+}
+
+#[cfg(test)]
+fn build_create_args_with_policy(
+    request: &ContainerRunRequest,
+    inherit_user_namespace: bool,
+    disable_swap: bool,
+) -> Result<Vec<String>, ContainerRuntimeError> {
+    build_create_args_for_policies(request, inherit_user_namespace, disable_swap, false, false)
+}
+
+fn build_create_args_for_policies(
+    request: &ContainerRunRequest,
+    inherit_user_namespace: bool,
+    disable_swap: bool,
+    slurm_allocation: bool,
+    single_uid_root: bool,
+) -> Result<Vec<String>, ContainerRuntimeError> {
     validate_podman_request(request)?;
+    if slurm_allocation && (inherit_user_namespace || disable_swap) {
+        return Err(ContainerRuntimeError::Invalid(
+            "Slurm allocation mode cannot replace formal namespace or no-swap enforcement".into(),
+        ));
+    }
+    if single_uid_root {
+        crate::podman_worker::validate_single_uid_request(request)?;
+    }
+    if disable_swap && request.memory.is_none() {
+        return Err(ContainerRuntimeError::Invalid(
+            "formal container execution requires an explicit memory cap without swap".into(),
+        ));
+    }
     let mut args = vec![
         "--name".into(),
         request.name.clone(),
@@ -335,10 +781,30 @@ pub(crate) fn build_create_args(
         "--pull".into(),
         podman_pull_policy(request.pull_policy).into(),
         "--user".into(),
-        user_value(request),
+        if single_uid_root {
+            "0:0".into()
+        } else {
+            user_value(request)
+        },
         "--userns".into(),
-        "keep-id".into(),
+        if inherit_user_namespace || single_uid_root {
+            "host"
+        } else {
+            "keep-id"
+        }
+        .into(),
     ];
+    if slurm_allocation {
+        args.extend([
+            "--cgroups".into(),
+            "disabled".into(),
+            "--cgroupns".into(),
+            "host".into(),
+        ]);
+    }
+    if slurm_allocation || single_uid_root {
+        args.extend(["--cap-drop".into(), "ALL".into()]);
+    }
     if request.read_only_rootfs {
         args.push("--read-only".into());
     }
@@ -346,15 +812,20 @@ pub(crate) fn build_create_args(
         args.push("--shm-size".into());
         args.push(podman_size(size)?);
     }
-    if let Some(cpus) = request.cpus {
+    if let Some(cpus) = request.cpus.filter(|_| !slurm_allocation) {
         args.push("--cpus".into());
         args.push(cpus.to_string());
     }
-    if let Some(memory) = &request.memory {
+    if let Some(memory) = request.memory.as_ref().filter(|_| !slurm_allocation) {
         args.push("--memory".into());
-        args.push(podman_size(memory)?);
+        let size = podman_size(memory)?;
+        args.push(size.clone());
+        if disable_swap {
+            args.push("--memory-swap".into());
+            args.push(size);
+        }
     }
-    if let Some(pids_limit) = request.pids_limit {
+    if let Some(pids_limit) = request.pids_limit.filter(|_| !slurm_allocation) {
         args.push("--pids-limit".into());
         args.push(pids_limit.to_string());
     }
@@ -407,40 +878,17 @@ fn escape_mount_field(value: &str) -> String {
 }
 
 /// Podman accepts bytes or decimal k/m/g suffixes, while container nodes use
-/// Kubernetes quantities such as `16Gi`. Emit exact bytes so both SI and IEC
-/// quantities keep their requested size.
-fn podman_size(value: &str) -> Result<String, ContainerRuntimeError> {
-    let invalid = || {
-        ContainerRuntimeError::Invalid(format!(
-            "`{value}` is not a supported Podman memory quantity"
-        ))
-    };
-    let split = value
-        .find(|character: char| !(character.is_ascii_digit() || character == '.'))
-        .unwrap_or(value.len());
-    let (number, suffix) = value.split_at(split);
-    let number: f64 = number.parse().map_err(|_| invalid())?;
-    if !number.is_finite() || number <= 0.0 {
-        return Err(invalid());
-    }
+/// Kubernetes quantities such as `16Gi` and explicit IEC quantities such as
+/// `1GiB`. Emit exact bytes so both SI and IEC quantities keep their size.
+pub(crate) fn podman_size(value: &str) -> Result<String, ContainerRuntimeError> {
+    crate::memory_quantity_bytes(value).map(|bytes| bytes.to_string())
+}
 
-    let multiplier = match suffix.trim().to_ascii_lowercase().as_str() {
-        "" | "b" => 1_u64,
-        "k" => 1_000,
-        "m" => 1_000_000,
-        "g" => 1_000_000_000,
-        "t" => 1_000_000_000_000,
-        "ki" => 1 << 10,
-        "mi" => 1 << 20,
-        "gi" => 1 << 30,
-        "ti" => 1 << 40,
-        _ => return Err(invalid()),
-    };
-    let bytes = number * multiplier as f64;
-    if !bytes.is_finite() || bytes <= 0.0 || bytes > u64::MAX as f64 {
-        return Err(invalid());
-    }
-    Ok(format!("{}", bytes as u64))
+/// The same exact quantity interpretation used by both local and Slurm limits.
+pub fn memory_quantity_bytes(value: &str) -> Result<u64, ContainerRuntimeError> {
+    podman_size(value)?.parse().map_err(|_| {
+        ContainerRuntimeError::Invalid("memory quantity is outside the supported range".into())
+    })
 }
 
 fn validate_podman_request(request: &ContainerRunRequest) -> Result<(), ContainerRuntimeError> {
@@ -518,6 +966,309 @@ mod tests {
     use crate::types::{CachedPanel, InputMount, WorkspaceRef};
     use std::path::PathBuf;
 
+    #[test]
+    fn private_create_command_puts_only_the_variable_name_in_argv() {
+        let private_env = PrivateEnvironment::new(vec![(
+            "OPENGWAS_JWT".into(),
+            "synthetic-private-credential".into(),
+        )])
+        .unwrap();
+        let command = prepare_create_command(
+            &PodmanConfig::default(),
+            vec!["example-image".into()],
+            Some(&private_env),
+        );
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(args, ["create", "--env", "OPENGWAS_JWT", "example-image"]);
+        let env = command.as_std().get_envs().collect::<Vec<_>>();
+        assert!(env.iter().any(|(name, value)| {
+            *name == "OPENGWAS_JWT"
+                && *value == Some(std::ffi::OsStr::new("synthetic-private-credential"))
+        }));
+        let ordinary = PodmanConfig::default().async_command();
+        assert!(
+            ordinary
+                .as_std()
+                .get_envs()
+                .any(|(name, value)| { name == "OPENGWAS_JWT" && value.is_none() })
+        );
+        assert!(
+            blocking_podman_command("podman")
+                .get_envs()
+                .any(|(name, value)| { name == "OPENGWAS_JWT" && value.is_none() })
+        );
+    }
+
+    #[test]
+    fn private_environment_refuses_ordinary_env_collision_before_execution() {
+        let private_env = PrivateEnvironment::new(vec![(
+            "OPENGWAS_JWT".into(),
+            "synthetic-private-credential".into(),
+        )])
+        .unwrap();
+        assert!(validate_private_environment(&[], Some(&private_env)).is_ok());
+        assert!(
+            validate_private_environment(
+                &[("OPENGWAS_JWT".into(), "ordinary-value".into())],
+                Some(&private_env),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_environment(
+                &[("ORDINARY".into(), "ordinary-value".into())],
+                Some(&private_env),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn private_run_suppresses_all_captured_output_and_preserves_exit_status() {
+        let result = suppress_private_output(Ok(ContainerRunResult {
+            exit_code: 0,
+            stdout: "raw or encoded synthetic-private-credential".into(),
+            stderr: "credential fragment".into(),
+        }))
+        .unwrap();
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.is_empty() && result.stderr.is_empty());
+        for error in [
+            ContainerRuntimeError::Invalid("synthetic-private-credential".into()),
+            ContainerRuntimeError::ExitStatus {
+                exit_code: 7,
+                stdout: "synthetic-private-credential".into(),
+                stderr: "synthetic-private-credential".into(),
+            },
+        ] {
+            let sanitized = suppress_private_output(Err(error)).unwrap_err();
+            assert!(!format!("{sanitized:?}").contains("synthetic-private-credential"));
+            if let ContainerRuntimeError::ExitStatus { exit_code, .. } = sanitized {
+                assert_eq!(exit_code, 7);
+            }
+        }
+        assert!(matches!(
+            suppress_private_output(Err(ContainerRuntimeError::Timeout { timeout_secs: 17 })),
+            Err(ContainerRuntimeError::Timeout { timeout_secs: 17 })
+        ));
+    }
+
+    #[test]
+    fn protected_namespace_reuse_preserves_every_other_container_constraint() {
+        let request = request(ContainerNetwork::Isolated);
+        let ordinary = build_create_args_with_policy(&request, false, false).unwrap();
+        let protected = build_create_args_with_policy(&request, true, false).unwrap();
+        let index = ordinary.iter().position(|arg| arg == "--userns").unwrap() + 1;
+        assert_eq!(ordinary[index], "keep-id");
+        assert_eq!(protected[index], "host");
+        let mut expected = ordinary;
+        expected[index] = "host".into();
+        assert_eq!(protected, expected);
+        assert!(
+            !PodmanConfig::for_state_dir(Path::new("/tmp/test-ordinary-host"))
+                .inherit_user_namespace
+        );
+    }
+
+    #[test]
+    fn formal_memory_policy_disables_swap_for_the_exact_memory_quantity() {
+        for (memory, bytes) in [
+            ("8Gi", "8589934592"),
+            ("256Mi", "268435456"),
+            ("1GiB", "1073741824"),
+            ("256MiB", "268435456"),
+            ("1GB", "1000000000"),
+        ] {
+            let mut request = request(ContainerNetwork::Isolated);
+            request.memory = Some(memory.into());
+            let args = build_create_args_with_policy(&request, true, true).unwrap();
+            let ram = args.iter().position(|arg| arg == "--memory").unwrap();
+            let total = args.iter().position(|arg| arg == "--memory-swap").unwrap();
+            assert_eq!(args[ram + 1], bytes);
+            assert_eq!(args[total + 1], bytes);
+            assert_eq!(args.iter().filter(|arg| *arg == "--memory-swap").count(), 1);
+            let ordinary = build_create_args_with_policy(&request, false, false).unwrap();
+            assert!(!ordinary.iter().any(|arg| arg == "--memory-swap"));
+        }
+    }
+
+    #[test]
+    fn memory_quantity_aliases_preserve_units_and_reject_invalid_limits() {
+        for (quantity, bytes) in [
+            ("1KiB", "1024"),
+            ("1TiB", "1099511627776"),
+            ("1kB", "1000"),
+            ("1MB", "1000000"),
+            ("1TB", "1000000000000"),
+            ("1.5GiB", "1610612736"),
+            ("512mib", "536870912"),
+        ] {
+            assert_eq!(podman_size(quantity).unwrap(), bytes);
+        }
+        for quantity in ["", "0GiB", "-1GiB", "NaN", "1GiBB", "1PB", "1e999GiB"] {
+            assert!(podman_size(quantity).is_err(), "accepted {quantity}");
+        }
+        // Decimal and binary units must remain distinct.
+        assert_ne!(podman_size("1g").unwrap(), podman_size("1GiB").unwrap());
+    }
+
+    #[test]
+    fn formal_memory_policy_refuses_an_unbounded_container() {
+        let mut request = request(ContainerNetwork::Isolated);
+        request.memory = None;
+        let error = build_create_args_with_policy(&request, true, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("explicit memory cap without swap")
+        );
+        assert!(build_create_args_with_policy(&request, false, false).is_ok());
+        assert!(!PodmanConfig::for_state_dir(Path::new("/tmp/ordinary")).disable_swap);
+    }
+
+    #[tokio::test]
+    #[ignore = "explicit synthetic subordinate-runtime deployment and admitted image required"]
+    async fn protected_namespace_runs_actual_pinned_oci() {
+        let root = PathBuf::from(std::env::var("AUTONOMICS_RESEARCH_VAULT_ROOT").unwrap());
+        let evidence = root.join("evidence");
+        let admitted: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(evidence.join("trusted-authority.json")).unwrap(),
+        )
+        .unwrap();
+        let authority: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                evidence
+                    .join("artifacts")
+                    .join(admitted["sha256"].as_str().unwrap()),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            authority["allowed_studies"],
+            serde_json::json!(["SYNTHETIC-RUNTIME-IO-TEST"])
+        );
+        let infra =
+            crate::ContainerExecutionInfra::for_formal_worker_state_dir(&root.join("state"))
+                .unwrap();
+        assert!(infra.config.inherit_user_namespace);
+        assert!(infra.config.disable_swap);
+        let workspace = root.join("runtime").join(unique_container_name());
+        std::fs::create_dir(&workspace).unwrap();
+        let mut request = request(ContainerNetwork::Isolated);
+        request.name = unique_container_name();
+        request.workspace.host_path = workspace.clone();
+        request.image = "ghcr.io/zj-2002/biotools-py@sha256:7ad6aeafa87672699d28b61b6bed12fc81fcdbfc43222a0abf17e2d56fb806f5".into();
+        request.command = vec!["python3".into(), "-c".into(), "import pathlib; pathlib.Path('/work/SYNTHETIC.txt').write_text('SYNTHETIC RUNTIME LIBRARY ONLY'); print('SYNTHETIC_PROTECTED_RUNTIME_LIBRARY_OK')".into()];
+        request.user = None;
+        request.cpus = Some(1.0);
+        request.memory = Some("256Mi".into());
+        request.pids_limit = Some(64);
+        let result = PodmanRuntime::new(infra.config.clone())
+            .run(request)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert!(
+            result
+                .stdout
+                .contains("SYNTHETIC_PROTECTED_RUNTIME_LIBRARY_OK")
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("SYNTHETIC.txt")).unwrap(),
+            "SYNTHETIC RUNTIME LIBRARY ONLY"
+        );
+    }
+
+    #[test]
+    fn instance_paths_and_every_command_use_isolated_container_storage() {
+        let a = PodmanConfig::for_state_dir(Path::new("/tmp/test-instance-a"));
+        let b = PodmanConfig::for_state_dir(Path::new("/tmp/test-instance-b"));
+        assert!(a.workspace_root.starts_with("/tmp/test-instance-a"));
+        assert!(a.panel_cache_root.starts_with("/tmp/test-instance-a"));
+        assert_ne!(a.storage_root, b.storage_root);
+        assert_ne!(a.run_root, b.run_root);
+        let asynchronous = a.async_command();
+        let synchronous = a.blocking_command();
+        let expected = [
+            "--root",
+            "/tmp/test-instance-a/containers/storage",
+            "--runroot",
+            "/tmp/test-instance-a/containers/run",
+            "--tmpdir",
+            "/tmp/test-instance-a/containers/run/libpod-tmp",
+            "--storage-driver",
+            "vfs",
+        ];
+        assert_eq!(
+            asynchronous
+                .as_std()
+                .get_args()
+                .map(|s| s.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            synchronous
+                .get_args()
+                .map(|s| s.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn explicit_overlay_uses_a_separate_private_store_in_every_command() {
+        let state = Path::new("/tmp/test-signed-overlay");
+        let legacy = PodmanConfig::for_state_dir(state);
+        let unchanged =
+            PodmanConfig::for_state_dir_with_storage_driver(state, PrivateStorageDriver::Vfs);
+        assert_eq!(legacy.storage_root, unchanged.storage_root);
+        assert_eq!(legacy.storage_driver, unchanged.storage_driver);
+        let overlay =
+            PodmanConfig::for_state_dir_with_storage_driver(state, PrivateStorageDriver::Overlay);
+        assert_ne!(overlay.storage_root, legacy.storage_root);
+        for root in [
+            &overlay.workspace_root,
+            &overlay.panel_cache_root,
+            overlay.storage_root.as_ref().unwrap(),
+            overlay.run_root.as_ref().unwrap(),
+        ] {
+            assert!(root.starts_with(state.join("containers-overlay")));
+        }
+        let expected = [
+            "--root",
+            "/tmp/test-signed-overlay/containers-overlay/storage",
+            "--runroot",
+            "/tmp/test-signed-overlay/containers-overlay/run",
+            "--tmpdir",
+            "/tmp/test-signed-overlay/containers-overlay/run/libpod-tmp",
+            "--storage-driver",
+            "overlay",
+        ];
+        assert_eq!(
+            overlay
+                .async_command()
+                .as_std()
+                .get_args()
+                .map(|v| v.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            overlay
+                .blocking_command()
+                .get_args()
+                .map(|v| v.to_str().unwrap())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
     fn request(network: ContainerNetwork) -> ContainerRunRequest {
         let workspace = tempfile::tempdir().unwrap();
         let workspace_path = workspace.keep();
@@ -548,6 +1299,46 @@ mod tests {
             timeout_secs: 60,
             name: "podman-test".into(),
         }
+    }
+
+    #[test]
+    fn slurm_policy_uses_inherited_limits_and_keeps_container_isolation() {
+        let mut request = request(ContainerNetwork::Isolated);
+        let workspace_cleanup = request.workspace.host_path.clone();
+        request.user = None;
+        let args = build_create_args_for_policies(&request, false, false, true, true).unwrap();
+        for flag in [
+            "--cpus",
+            "--memory",
+            "--memory-swap",
+            "--pids-limit",
+            "--cgroup-parent",
+        ] {
+            assert!(!args.iter().any(|arg| arg == flag), "unexpected {flag}");
+        }
+        for (flag, value) in [
+            ("--cgroups", "disabled"),
+            ("--userns", "host"),
+            ("--user", "0:0"),
+            ("--network", "none"),
+            ("--cap-drop", "ALL"),
+            ("--security-opt", "no-new-privileges"),
+            ("--pull", "never"),
+        ] {
+            let position = args.iter().position(|arg| arg == flag).unwrap();
+            assert_eq!(args[position + 1], value);
+        }
+        assert!(args.iter().any(|arg| arg == "--read-only"));
+        assert!(args.iter().any(|arg| arg == "--mount"));
+        assert!(args.iter().any(|arg| arg == "--shm-size"));
+        for user in ["1000", "1000:1000", "root", "0:1000"] {
+            request.user = Some(user.into());
+            assert!(build_create_args_for_policies(&request, false, false, true, true).is_err());
+        }
+        request.user = None;
+        assert!(build_create_args_for_policies(&request, true, false, true, false).is_err());
+        assert!(build_create_args_for_policies(&request, false, true, true, false).is_err());
+        std::fs::remove_dir_all(workspace_cleanup).unwrap();
     }
 
     #[test]
@@ -705,6 +1496,7 @@ mod tests {
             digest: format!("sha256:{}", "1".repeat(64)),
             host_path: cache_path,
             mount_path: "/panels/test".into(),
+            manifest_bytes: None,
         });
         let args = build_create_args(&valid).unwrap();
         assert!(!args.iter().any(|arg| arg == "--volume"));
@@ -742,6 +1534,17 @@ mod tests {
             program: program.to_string_lossy().into_owned(),
             workspace_root: workspace,
             panel_cache_root: root.path().join("panels"),
+            storage_root: None,
+            run_root: None,
+            storage_driver: None,
+            cgroup_manager: None,
+            cgroup_parent: None,
+            inherit_user_namespace: false,
+            disable_swap: false,
+            worker_runtime_dir: None,
+            worker_resource_control: None,
+            worker_user_namespace: None,
+            worker_oci_runtime: None,
         });
         let error = runtime.run(request).await;
 
@@ -757,6 +1560,256 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn private_intent_covers_success_cleanup_failure_and_cancelled_create() {
+        for mode in ["success", "remove-fails", "cancel-create"] {
+            let root = tempfile::tempdir().unwrap();
+            let program = root.path().join("fake-private-podman");
+            std::fs::write(&program, r#"#!/usr/bin/python3
+import json,os,pathlib,sys,time
+a=sys.argv[1:];p=pathlib.Path(a[a.index('--root')+1]).parent.parent
+s=p/'TEST-state.json';mode=(p/'TEST-mode').read_text()
+if 'create' in a:
+ label=a[a.index('--label')+1].split('=',1)[1]
+ s.write_text(json.dumps({'label':label,'pid':os.getpid()}))
+ if mode=='cancel-create':time.sleep(60)
+elif 'container' in a:sys.exit(0 if s.exists() else 1)
+elif 'inspect' in a:
+ state=json.loads(s.read_text())
+ print(json.dumps([{'Id':'a'*64,'Config':{'Labels':{'io.autonomics.container-intent':state['label']}}}]))
+elif 'rm' in a:
+ if mode=='remove-fails':sys.exit(125)
+ assert a[-1]=='a'*64
+ s.unlink();(p/'TEST-removed').write_text(a[-1])
+elif 'start' in a:print('TEST only')
+else:sys.exit(125)
+"#).unwrap();
+            make_executable(&program);
+            std::fs::write(root.path().join("TEST-mode"), mode).unwrap();
+            let mut config = PodmanConfig::for_state_dir(root.path());
+            config.program = program.to_string_lossy().into();
+            std::fs::create_dir_all(&config.workspace_root).unwrap();
+            let mut request = request(ContainerNetwork::Isolated);
+            request.workspace.host_path = config.workspace_root.clone();
+            request.name = "TEST-owned".into();
+            let journal = config
+                .run_root
+                .as_ref()
+                .unwrap()
+                .join("autonomics-container-intents/TEST-owned.json");
+            let runtime = PodmanRuntime::new(config.clone());
+            if mode == "cancel-create" {
+                let job = tokio::spawn(async move { runtime.run(request).await });
+                let pid = tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if let Ok(bytes) = std::fs::read(root.path().join("TEST-state.json")) {
+                            if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                                break state["pid"].as_u64().unwrap();
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(journal.is_file());
+                job.abort();
+                assert!(job.await.unwrap_err().is_cancelled());
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while journal.exists() || Path::new(&format!("/proc/{pid}")).exists() {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    std::fs::read_to_string(root.path().join("TEST-removed")).unwrap(),
+                    "a".repeat(64)
+                );
+            } else {
+                let result = runtime.run(request).await;
+                if mode == "success" {
+                    assert_eq!(result.unwrap().stdout.trim(), "TEST only");
+                    assert!(!journal.exists());
+                } else {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("evidence incomplete")
+                    );
+                    assert!(journal.is_file());
+                    assert!(!root.path().join("TEST-removed").exists());
+                    std::fs::write(root.path().join("TEST-mode"), "success").unwrap();
+                    // The still-live PID is retained even after its lock is released.
+                    assert!(
+                        PodmanRuntime::new(config)
+                            .recover_interrupted_containers()
+                            .await
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_owned_absence_uses_same_backend_and_only_status_one() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("fake-podman");
+        std::fs::write(&program,"#!/usr/bin/python3\nimport json,pathlib,sys\np=pathlib.Path(sys.argv[0])\np.with_suffix('.argv').write_text(json.dumps(sys.argv[1:]))\nname=sys.argv[-1]\nsys.exit(1 if name=='owned-absent' else 0 if name=='owned-present' else 2)\n").unwrap();
+        make_executable(&program);
+        let mut config = PodmanConfig::for_state_dir_with_storage_driver(
+            root.path(),
+            PrivateStorageDriver::Overlay,
+        );
+        config.program = program.to_str().unwrap().into();
+        config.cgroup_manager = Some("cgroupfs".into());
+        let runtime = PodmanRuntime::new(config.clone());
+        runtime
+            .verify_container_absent("owned-absent")
+            .await
+            .unwrap();
+        let argv: Vec<String> =
+            serde_json::from_slice(&std::fs::read(program.with_extension("argv")).unwrap())
+                .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "--root".to_string(),
+                config.storage_root.unwrap().display().to_string(),
+                "--runroot".into(),
+                config.run_root.as_ref().unwrap().display().to_string(),
+                "--tmpdir".into(),
+                config
+                    .run_root
+                    .unwrap()
+                    .join("libpod-tmp")
+                    .display()
+                    .to_string(),
+                "--storage-driver".into(),
+                "overlay".into(),
+                "--cgroup-manager".into(),
+                "cgroupfs".into(),
+                "container".into(),
+                "exists".into(),
+                "owned-absent".into()
+            ]
+        );
+        assert!(
+            runtime
+                .verify_container_absent("owned-present")
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime
+                .verify_container_absent("owned-error")
+                .await
+                .is_err()
+        );
+        std::fs::remove_file(program.with_extension("argv")).unwrap();
+        for name in ["--all", "owned/other", "", ".."] {
+            assert!(runtime.verify_container_absent(name).await.is_err());
+            assert!(!program.with_extension("argv").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn absence_observation_retains_actual_return_and_both_logs_without_claiming_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("fake-podman");
+        std::fs::write(&program,"#!/usr/bin/python3\nimport sys\nprint('actual stdout')\nprint('actual stderr',file=sys.stderr)\nsys.exit(1 if sys.argv[-1]=='absent' else 0)\n").unwrap();
+        make_executable(&program);
+        let mut config = PodmanConfig::for_state_dir(root.path());
+        config.program = program.to_str().unwrap().into();
+        let runtime = PodmanRuntime::new(config);
+        for (name, code) in [("absent", 1), ("present", 0)] {
+            let observed = runtime.observe_container_absence(name).await.unwrap();
+            assert_eq!(observed.exit_code, code);
+            assert_eq!(observed.stdout, "actual stdout\n");
+            assert_eq!(observed.stderr, "actual stderr\n");
+        }
+        assert!(runtime.verify_container_absent("present").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn absence_observation_oversized_logs_refuse_without_silent_truncation() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("fake-podman");
+        std::fs::write(
+            &program,
+            "#!/usr/bin/python3\nimport sys\nsys.stdout.write('x'*65537)\nsys.exit(1)\n",
+        )
+        .unwrap();
+        make_executable(&program);
+        let mut config = PodmanConfig::for_state_dir(root.path());
+        config.program = program.to_str().unwrap().into();
+        let runtime = PodmanRuntime::new(config);
+        assert!(runtime.observe_container_absence("absent").await.is_err());
+        assert!(runtime.verify_container_absent("absent").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelled_create_stops_the_cli_and_runs_already_armed_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("fake-podman");
+        std::fs::write(&program,
+            "#!/usr/bin/python3\nimport pathlib,sys,time,os\np=pathlib.Path(sys.argv[0])\nif sys.argv[1]=='create':\n p.with_suffix('.started').write_text(str(os.getpid()))\n time.sleep(60)\nelif sys.argv[1]=='rm':\n p.with_suffix('.removed').write_text(' '.join(sys.argv[1:]))\nelse:\n sys.exit(2)\n").unwrap();
+        make_executable(&program);
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let runtime = PodmanRuntime::new(PodmanConfig {
+            program: program.to_string_lossy().into_owned(),
+            workspace_root: workspace.clone(),
+            panel_cache_root: root.path().join("panels"),
+            storage_root: None,
+            run_root: None,
+            storage_driver: None,
+            cgroup_manager: None,
+            cgroup_parent: None,
+            inherit_user_namespace: false,
+            disable_swap: false,
+            worker_runtime_dir: None,
+            worker_resource_control: None,
+            worker_user_namespace: None,
+            worker_oci_runtime: None,
+        });
+        let mut request = request(ContainerNetwork::Isolated);
+        request.workspace.host_path = workspace;
+        request.name = unique_container_name();
+        let job = tokio::spawn(async move { runtime.run(request).await });
+        let pid: u32 = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(text) = std::fs::read_to_string(program.with_extension("started")) {
+                    if let Ok(pid) = text.parse::<u32>() {
+                        break pid;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        job.abort();
+        assert!(job.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !program.with_extension("removed").is_file()
+                || Path::new(&format!("/proc/{pid}")).exists()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(program.with_extension("removed"))
+                .unwrap()
+                .starts_with("rm --force --time=0 autonomics-container-command-")
+        );
+    }
+
+    #[tokio::test]
     #[ignore = "requires a working rootless Podman runtime and may pull an OCI image"]
     async fn real_podman_copies_workspace_file() {
         let root = tempfile::tempdir().unwrap();
@@ -767,6 +1820,17 @@ mod tests {
             program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
             workspace_root: workspace.clone(),
             panel_cache_root: root.path().join("panels"),
+            storage_root: None,
+            run_root: None,
+            storage_driver: None,
+            cgroup_manager: None,
+            cgroup_parent: None,
+            inherit_user_namespace: false,
+            disable_swap: false,
+            worker_runtime_dir: None,
+            worker_resource_control: None,
+            worker_user_namespace: None,
+            worker_oci_runtime: None,
         });
         let request = ContainerRunRequest {
             image: std::env::var("AUTONOMICS_CONTAINER_IT_IMAGE")
@@ -817,15 +1881,18 @@ mod tests {
         // Storage-migration layout: a symlinked state dir must yield the
         // canonical target so containment checks and identity mounts agree
         // with canonicalized workdirs.
-        let real = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
-        let home = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        // Frozen acceptance source is read-only. Self-cleaning fixtures
+        // belong to TMPDIR, which may itself use a symlinked path.
+        let real = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let real_path = real.path().canonicalize().unwrap();
         let alias = home.path().join("state");
         std::os::unix::fs::symlink(real.path(), &alias).unwrap();
         let canonical = crate::config::canonicalize_workspace_root(alias.join("work"));
-        assert_eq!(canonical, real.path().join("work"));
+        assert_eq!(canonical, real_path.join("work"));
         // Nonexistent deep paths are created on demand and canonicalized.
         let nested = crate::config::canonicalize_workspace_root(alias.join("a/b/c"));
-        assert_eq!(nested, real.path().join("a/b/c"));
+        assert_eq!(nested, real_path.join("a/b/c"));
         assert!(nested.is_dir());
     }
 
@@ -869,6 +1936,7 @@ mod tests {
             digest: "sha256:x".into(),
             host_path: panel_dir.clone(),
             mount_path: "/data/panel".into(),
+            manifest_bytes: None,
         }];
         req.input_mounts = vec![InputMount {
             host_dir: PathBuf::from("/data"),
@@ -921,7 +1989,20 @@ mod tests {
         // in production (agent workspace dirs included) — FakeRuntime tests
         // never exercised validate_run_request. Ordinary data locations on
         // real disks must be accepted.
-        let source_dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        // Prefer the managed TMPDIR without writing into frozen source.
+        // A default /tmp (or /run) is deliberately forbidden as an input
+        // mount, so use the ordinary Unix /var/tmp in that case. Both are
+        // owned self-cleaning toy fixtures; the production policy is intact.
+        let temporary = std::env::temp_dir();
+        let mount_safe_temporary = if ["/tmp", "/dev", "/proc", "/sys", "/run"]
+            .iter()
+            .any(|root| temporary.starts_with(root))
+        {
+            Path::new("/var/tmp")
+        } else {
+            temporary.as_path()
+        };
+        let source_dir = tempfile::tempdir_in(mount_safe_temporary).unwrap();
         let mut req = request(ContainerNetwork::Isolated);
         req.input_mounts = vec![InputMount {
             host_dir: source_dir.path().to_path_buf(),
