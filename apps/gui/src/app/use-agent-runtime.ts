@@ -28,6 +28,55 @@ type PromptHistoryMap = Record<string, string[]>;
 type PlanMap = Record<string, { revision: number; update: any }>;
 type UsageMap = Record<string, { input: number; output: number; cache: number }>;
 
+/** One row of the workbench panel's 事件流: a gateway frame summary.
+ *  Text/Thinking deltas are elided (they are per-token noise; the
+ *  transcript shows the same content). */
+export type FrameLogEntry = { seq: number; kind: string; summary: string; time: number };
+
+/** A gateway notice frame (model_changed, chatgpt_login, catalog_fetched)
+ *  — surfaced in the panel's 通知 tab and the unread badge. */
+export type NoticeEntry = { seq: number; data: unknown; time: number };
+
+const FRAME_LOG_LIMIT = 200;
+const NOTICE_LIMIT = 100;
+
+/** Text/Thinking deltas never land in the event log. */
+function isDeltaOnlyFrame(frame: GatewayFrame): boolean {
+  if (frame.kind !== "agent") return false;
+  const event = frame.data?.event;
+  return event !== null && typeof event === "object"
+    && (event.TextDelta !== undefined || event.ThinkingDelta !== undefined);
+}
+
+function frameSummary(frame: GatewayFrame): string {
+  if (frame.kind === "agent") {
+    const event = frame.data?.event ?? {};
+    const key = Object.keys(event)[0] ?? "event";
+    const value = event[key];
+    // Transcript-echoed payloads (the user's own prompt, error text) are
+    // rendered verbatim in the transcript — the event log records the
+    // fact, not the content.
+    const detail = value !== null && typeof value === "object"
+      || key === "UserMessageAcknowledged"
+      || key === "Error"
+      ? ""
+      : ` ${String(value).slice(0, 60)}`;
+    return `${key}${detail} · ${frame.data?.agent ?? ""}`;
+  }
+  if (frame.kind === "host") {
+    const data = frame.data ?? {};
+    return `${data.kind ?? "host"} ${data.path ?? data.info?.path ?? ""}`;
+  }
+  if (frame.kind === "notice") {
+    const data = frame.data ?? {};
+    return Object.keys(data).join(",") || "notice";
+  }
+  return "events lag — resuming";
+}
+
+/** localStorage key for the open-tab (view-window) list. */
+const OPEN_TABS_KEY = "autonomics.openTabs";
+
 let itemSequence = 0;
 function makeItem(role: ChatItem["role"], text: string, kind?: ChatItem["kind"]): ChatItem {
   itemSequence += 1;
@@ -67,8 +116,14 @@ function convertMessage(message: any): ChatItem[] {
 function statusLabel(status?: unknown) {
   // The daemon's status is `AgentLifecycleStatus` (the unified enum, no
   // coarse host projection anymore), serialized as an UPPERCASE tag
-  // string — "IDLE", "TOOLRUNNING", "RETRYING", …
-  return (typeof status === "string" ? status : "idle").toLowerCase().replace(/^.*\./, "");
+  // string — "IDLE", "TOOLRUNNING", "RETRYING", … Host projection frames
+  // may carry the tagged object form `{ kind: "running" }`.
+  const raw = typeof status === "string"
+    ? status
+    : status !== null && typeof status === "object" && "kind" in (status as Record<string, unknown>)
+      ? String((status as Record<string, unknown>).kind)
+      : "idle";
+  return raw.toLowerCase().replace(/^.*\./, "");
 }
 
 export function useAgentRuntime() {
@@ -82,6 +137,17 @@ export function useAgentRuntime() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  // Open tabs are view windows over identities, NOT the live agent list:
+  // a tab opens only by user action (spawn, resume, picker select) and
+  // survives its agent's idle-TTL passivation — the tab just goes
+  // dormant (identity stored, instance evicted) until a message
+  // re-activates it. Persisted so a reload reopens the same views.
+  const [openTabs, setOpenTabs] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(OPEN_TABS_KEY) ?? "[]");
+      return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
+    } catch { return []; }
+  });
   // Persisted identities (GET /storage/agents) for the merged agent
   // picker: resume targets whether or not the instance is live.
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
@@ -106,9 +172,14 @@ export function useAgentRuntime() {
   // Model catalog for the composer switcher; fetched lazily on first open.
   const [modelCatalog, setModelCatalog] = useState<ModelRow[]>([]);
   const modelCatalogLoaded = useRef(false);
+  // Bottom-panel feeds: the frame log (delta frames elided) and notices.
+  const [frameLog, setFrameLog] = useState<FrameLogEntry[]>([]);
+  const [notices, setNotices] = useState<NoticeEntry[]>([]);
 
   const stateRef = useRef({ agents, contexts, activeAgent, activeContexts });
   stateRef.current = { agents, contexts, activeAgent, activeContexts };
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
   const historyLoadSeq = useRef<Record<string, number>>({});
   // Events received while a transcript is being fetched must be applied
@@ -170,6 +241,18 @@ export function useAgentRuntime() {
       void loadHistory(activeAgent, selectedContextId);
     }
   }, [activeAgent, selectedAgentId, selectedContextId, loadHistory]);
+
+  /** Records a live frame into the bottom-panel feeds. Called only on
+   *  arrival — buffered events replay straight into handleFrame so the
+   *  log shows each frame exactly once. */
+  const recordFrame = useCallback((frame: GatewayFrame) => {
+    if (isDeltaOnlyFrame(frame)) return;
+    const entry: FrameLogEntry = { seq: frame.seq, kind: frame.kind, summary: frameSummary(frame), time: Date.now() };
+    setFrameLog((current) => [...current.slice(-(FRAME_LOG_LIMIT - 1)), entry]);
+    if (frame.kind === "notice") {
+      setNotices((current) => [...current.slice(-(NOTICE_LIMIT - 1)), { seq: frame.seq, data: frame.data, time: Date.now() }]);
+    }
+  }, []);
 
   const handleFrame = useCallback((frame: GatewayFrame) => {
     if (frame.kind === "lag") {
@@ -299,20 +382,25 @@ export function useAgentRuntime() {
           ? { ...agent, model: event.spec, context_length: event.context_length }
           : agent));
       } else if (event.kind === "agent_unregistered") {
+        // The live instance went away — under virtual-actor mode this is
+        // usually idle-TTL passivation, not death. Drop it from the live
+        // registry only: open tabs survive as dormant views and the
+        // identity re-activates from storage on the next message.
         setAgents((current) => current.filter((agent) => agent.path !== event.path));
-        const snapshot = stateRef.current;
-        if (snapshot.activeAgent === event.path) {
-          const index = snapshot.agents.findIndex((agent) => agent.path === event.path);
-          const rest = snapshot.agents.filter((agent) => agent.path !== event.path);
-          const fallback = rest[Math.max(0, index - 1)]?.path ?? "";
-          setActiveAgent(fallback);
-          if (fallback) void loadHistoryRef.current(fallback);
-        }
+        setStatuses((current) => ({ ...current, [event.path]: "dormant" }));
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
+        // The host projection collapses Retrying into Running; the retry
+        // detail survives only in last_event — keep the UI on "retrying"
+        // so an in-flight retry is not masked as a plain run. Its "failed"
+        // projection is the unified enum's Error variant.
+        const label0 = statusLabel(event.status);
+        const label = label0 === "failed" ? "error" : label0;
+        const lastEvent = typeof event.last_event === "string" ? event.last_event : "";
+        const merged = label === "running" && /retry/i.test(lastEvent) ? "retrying" : label;
         setStatuses((current) => ({
           ...current,
-          [event.path]: statusLabel(event.status),
+          [event.path]: merged,
         }));
       }
     }
@@ -320,6 +408,8 @@ export function useAgentRuntime() {
 
   const handleFrameRef = useRef(handleFrame);
   handleFrameRef.current = handleFrame;
+  const recordFrameRef = useRef(recordFrame);
+  recordFrameRef.current = recordFrame;
 
   /** Searches the persisted identity list for the agent picker — one
    *  bounded page (server-side `q` + `limit`, newest first), never the
@@ -331,7 +421,11 @@ export function useAgentRuntime() {
       const suffix = needle
         ? `?q=${encodeURIComponent(needle)}&limit=100`
         : "?limit=100";
-      setStoredAgents(await gatewayRequest("GET", `/storage/agents${suffix}`));
+      const page = await gatewayRequest("GET", `/storage/agents${suffix}`);
+      // Guard the shape: a non-array reply (proxy error page parsed as
+      // an object, a future envelope) must not crash every consumer of
+      // `storedAgents.filter`.
+      setStoredAgents(Array.isArray(page) ? page : []);
     } catch {
       // The picker degrades to live-only; a transient storage failure
       // should not surface as a modal error.
@@ -342,35 +436,57 @@ export function useAgentRuntime() {
       const probe = await probeGateway();
       if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
       const snapshot: StateSnapshot = await gatewayRequest("GET", "/state");
+      // Tolerate a snapshot without the contexts map (mock gateways,
+      // degraded backends) instead of failing the whole hydration.
+      const snapshotContexts: Record<string, ContextInfo> = snapshot.contexts ?? {};
       const nextActiveContexts: Record<string, string | null> = {};
-      for (const agent of Object.keys(snapshot.contexts)) {
-        nextActiveContexts[agent] = snapshot.contexts[agent]?.id ?? null;
+      for (const agent of Object.keys(snapshotContexts)) {
+        nextActiveContexts[agent] = snapshotContexts[agent]?.id ?? null;
       }
-      const nextAgents = snapshot.agents;
+      const nextAgents = snapshot.agents ?? [];
       // Reconnects re-run hydrate; keep the agent the user selected if it
-      // still exists instead of snapping back to the first one.
+      // is still an open tab instead of snapping back to the first one.
       const previous = stateRef.current.activeAgent;
-      const nextAgent = nextAgents.some((agent) => agent.path === previous)
+      const livePaths = new Set(nextAgents.map((agent) => agent.path));
+      // Tabs whose agent is no longer live stay open (dormant views);
+      // a fresh session with no persisted tabs opens the first live
+      // agent so the workbench never starts blank.
+      const nextTabs = openTabsRef.current.length
+        ? openTabsRef.current
+        : nextAgents[0] ? [nextAgents[0].path] : [];
+      const nextAgent = nextTabs.includes(previous)
         ? previous
-        : nextAgents[0]?.path ?? "";
+        : nextTabs[0] ?? nextAgents[0]?.path ?? "";
       stateRef.current = {
         agents: nextAgents,
-        contexts: snapshot.contexts,
+        contexts: snapshotContexts,
         activeAgent: nextAgent,
         activeContexts: nextActiveContexts,
       };
       setAgents(nextAgents);
-      setContexts(snapshot.contexts);
+      setOpenTabs(nextTabs);
+      setContexts(snapshotContexts);
       setActiveContexts(nextActiveContexts);
-      setDisplay(snapshot.display_settings);
+      setDisplay(snapshot.display_settings ?? {
+        collapse_thinking: false,
+        collapse_tool_calls: false,
+        collapse_tool_results: false,
+      });
       setActiveAgent(nextAgent);
-      setStatuses(Object.fromEntries(nextAgents.map((agent) => [agent.path, statusLabel(agent.status)])));
+      setStatuses(() => ({
+        ...Object.fromEntries(nextAgents.map((agent) => [agent.path, statusLabel(agent.status)])),
+        // Dormant tabs keep their dormant marker across reconnects.
+        ...Object.fromEntries(nextTabs.filter((path) => !livePaths.has(path)).map((path) => [path, "dormant"])),
+      }));
       setConnected(true);
       setConnectionError(null);
       setBooting(false);
       void refreshStoredAgents();
       await startGatewayEvents(snapshot.last_seq, {
-        onFrame: (frame) => handleFrameRef.current(frame),
+        onFrame: (frame) => {
+          recordFrameRef.current(frame);
+          handleFrameRef.current(frame);
+        },
         onStatus: (status) => {
           setConnected(status !== "disconnected");
           if (status === "reconnected") void hydrateRef.current?.();
@@ -421,12 +537,62 @@ export function useAgentRuntime() {
     void hydrate();
   }, [hydrate]);
 
+  // Persist the open-view list; failures (private mode, quota) degrade
+  // to session-only tabs.
+  useEffect(() => {
+    try { localStorage.setItem(OPEN_TABS_KEY, JSON.stringify(openTabs)); } catch { /* storage unavailable */ }
+  }, [openTabs]);
+
+  /** Look up the stored record behind a path — the cached picker page
+   *  first, then a bounded server search (the page may not cover it). */
+  const findStoredByPath = async (path: string): Promise<StoredAgent | null> => {
+    const cached = storedAgents.find((stored) => stored.name === path);
+    if (cached) return cached;
+    try {
+      const page: StoredAgent[] = await gatewayRequest(
+        "GET",
+        `/storage/agents?q=${encodeURIComponent(path)}&limit=100`,
+      );
+      return page.find((stored) => stored.name === path) ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** Re-activate a dormant identity (no-op when the instance is live).
+   *  Re-spawns from the stored config; the `agent_registered` frame
+   *  refreshes the registry. */
+  const activateAgent = async (path: string) => {
+    if (agents.some((agent) => agent.path === path)) return;
+    const stored = await findStoredByPath(path);
+    if (!stored) throw new Error(`agent \`${path}\` is not live and has no stored identity`);
+    const name = stored.name.split("/").filter(Boolean).pop() ?? "";
+    if (!name) throw new Error("Cannot resume the root placeholder");
+    const segments = stored.name.split("/").filter(Boolean);
+    const result = await gatewayRequest("POST", "/agents", {
+      name,
+      parent_path: segments.length <= 1 ? "/root" : `/${segments.slice(0, -1).join("/")}`,
+      profile: stored.config_json.kind ?? "researcher",
+      runtime: stored.config_json.runtime ?? {},
+      model_spec: stored.config_json.preferred_model ?? null,
+    });
+    setAgents((current) => current.some((agent) => agent.path === result.path) ? current : [
+      ...current,
+      { path: result.path, agent_id: stored.id, status: "Idle" },
+    ]);
+    setStatuses((current) => ({ ...current, [result.path]: "idle" }));
+  };
+
   const sendMessage = async (context = "") => {
     const text = draft.trim();
     if (!text || !activeAgent || busy === "send") return;
     setBusy("send");
     setDraft("");
     try {
+      // A dormant tab's instance was passivated (idle TTL); the daemon
+      // rejects deliveries to unregistered paths, so re-activate the
+      // identity from storage first — the virtual-actor wake-up path.
+      await activateAgent(activeAgent);
       await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text: text + context });
       // The transcript entry and prompt-history entry both arrive via the
       // UserMessageAcknowledged event; echoing them here rendered the
@@ -439,16 +605,21 @@ export function useAgentRuntime() {
     }
   };
 
+  /** Selecting a tab is a view operation: it both focuses the tab and
+   *  opens it (spawn stubs and dormant identities included). */
   const selectAgent = (path: string) => {
+    setOpenTabs((current) => current.includes(path) ? current : [...current, path]);
     setActiveAgent(path);
   };
 
-  const forgetAgent = (path: string) => {
-    const index = agents.findIndex((agent) => agent.path === path);
-    const next = agents.filter((agent) => agent.path !== path);
-    setAgents(next);
+  /** Closing a tab is a pure view operation: the live registry and the
+   *  persisted identity are untouched. The daemon owns lifecycle. */
+  const closeTab = (path: string) => {
+    const index = openTabs.indexOf(path);
+    const next = openTabs.filter((tab) => tab !== path);
+    setOpenTabs(next);
     if (activeAgent === path) {
-      const fallback = next[Math.max(0, index - 1)]?.path ?? "";
+      const fallback = next[Math.max(0, index - 1)] ?? "";
       setActiveAgent(fallback);
       if (fallback) void loadHistory(fallback);
     }
@@ -456,18 +627,21 @@ export function useAgentRuntime() {
 
   /** Admin op: passivate a live instance now (fire-and-forget reply).
    *  Used by the delete-agent flow so a deleted identity leaves no live
-   *  zombie behind. Tabs never call this — the daemon owns lifecycle. */
+   *  zombie behind. Also closes the tab — a deleted identity has no
+   *  view to keep. */
   const shutdownAgent = useCallback(async (path: string) => {
     setBusy(`shutdown:${path}`);
     try {
       await gatewayRequest("POST", `/agents/${path}/shutdown`);
-      forgetAgent(path);
+      setAgents((current) => current.filter((agent) => agent.path !== path));
+      closeTab(path);
+      void refreshStoredAgents();
     } catch (cause) {
       window.alert(String(cause));
     } finally {
       setBusy(null);
     }
-  }, [forgetAgent]);
+  }, [closeTab, refreshStoredAgents]);
 
   const spawnAgent = async (input: { name: string; parentPath: string; profile: string }) => {
     setBusy("spawn");
@@ -499,21 +673,8 @@ export function useAgentRuntime() {
       selectAgent(running.path);
       return;
     }
-    const name = stored.name.split("/").filter(Boolean).pop() ?? "";
-    if (!name) throw new Error("Cannot resume the root placeholder");
-    const segments = stored.name.split("/").filter(Boolean);
-    const result = await gatewayRequest("POST", "/agents", {
-      name,
-      parent_path: segments.length <= 1 ? "/root" : `/${segments.slice(0, -1).join("/")}`,
-      profile: stored.config_json.kind ?? "researcher",
-      runtime: stored.config_json.runtime ?? {},
-      model_spec: stored.config_json.preferred_model ?? null,
-    });
-    setAgents((current) => current.some((agent) => agent.path === result.path) ? current : [
-      ...current,
-      { path: result.path, agent_id: stored.id, status: "Idle" },
-    ]);
-    selectAgent(result.path);
+    await activateAgent(stored.name);
+    selectAgent(stored.name);
   };
 
   /** Model catalog for the composer switcher; fetched once, on first open. */
@@ -597,8 +758,9 @@ export function useAgentRuntime() {
     loginBusy,
     submitLogin,
     logout,
-    // agent registry
+    // agent registry + view windows (tabs)
     agents,
+    openTabs,
     activeAgent,
     statuses,
     selectAgent,
@@ -607,7 +769,7 @@ export function useAgentRuntime() {
     resumeAgent,
     storedAgents,
     refreshStoredAgents,
-    forgetAgent,
+    closeTab,
     // contexts (the agent's sole working context)
     contexts,
     activeContexts,
@@ -636,5 +798,8 @@ export function useAgentRuntime() {
     agentEfforts,
     refreshAgentEffort,
     setAgentEffort,
+    // workbench panel feeds
+    frameLog,
+    notices,
   };
 }

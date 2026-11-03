@@ -28,7 +28,6 @@
     "test:bib-semantic-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-semantic.mjs",
     "test:bib-discovery": "node tests/discovery-workflow.mjs",
     "test:bib-discovery-native": "cargo build -p autonomics-gui --example discovery_native_smoke --locked && node tests/native-discovery.mjs",
-    "test:workspace": "node tests/floating-workspace.mjs",
     "test:agent-trace": "node tests/agent-trace.mjs",
     "test:agent-composer": "node tests/agent-composer-states.mjs",
     "test:agent-retry-status": "node tests/agent-retry-status.mjs",

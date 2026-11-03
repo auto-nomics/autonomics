@@ -20,7 +20,7 @@ try {
   }
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());
@@ -35,10 +35,10 @@ try {
       agentState('/root/beta', 'a2', 'Streaming'),
       agentState('/root/gamma', 'a3', 'Idle'),
     ],
-    sessions: {
-      '/root/alpha': [{ id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 }],
-      '/root/beta': [{ id: 's2', title: 'Beta main', created_at: 1, last_active: 3 }],
-      '/root/gamma': [{ id: 's3', title: 'Gamma main', created_at: 1, last_active: 4 }],
+    contexts: {
+      '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 },
+      '/root/beta': { id: 's2', title: 'Beta main', created_at: 1, last_active: 3 },
+      '/root/gamma': { id: 's3', title: 'Gamma main', created_at: 1, last_active: 4 },
     },
     display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false },
   } }));
@@ -47,11 +47,18 @@ try {
       { id: `m-${id}`, role: 'assistant', content: [{ type: 'text', text: answer }] },
     ] } }));
   }
+  await page.route('**/api/v1/storage/agents**', route => route.fulfill({ json: [] }));
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
 
   await page.goto(origin);
   await page.getByPlaceholder('输入消息…').waitFor({ state: 'visible' });
   await page.getByText('alpha answer').waitFor({ state: 'visible' });
+
+  // Viewport tabs: only the initially opened agent renders as a tab —
+  // live-but-unopened agents (beta, gamma) do NOT auto-open tabs.
+  const tab = (name) => page.locator('[data-tab-strip] button[title="/root/' + name + '"]');
+  await tab('alpha').waitFor({ state: 'visible' });
+  assert.equal(await tab('beta').count(), 0, 'live agent without an open view has no tab');
 
   const search = page.getByRole('button', { name: 'Search agents' });
   assert.equal(await search.getAttribute('aria-expanded'), 'false', 'picker starts closed');
@@ -61,19 +68,23 @@ try {
   const pickerInput = page.locator('[data-slot="command-input"]');
   await pickerInput.waitFor({ state: 'visible' });
   assert.equal(await search.getAttribute('aria-expanded'), 'true', 'search button reports expanded');
-  assert.equal(await page.getByRole('button', { name: 'alpha', exact: true }).count(), 0, 'tab strip leaves the bar while picking');
+  assert.equal(await tab('alpha').count(), 0, 'tab strip leaves the bar while picking');
   const items = page.locator('[data-slot="command-item"]');
-  assert.equal(await items.count(), 3, 'one item per agent');
+  // One new-agent entry + the open tab (alpha) + the two live-unopened
+  // agents (beta, gamma); no stored identities (page mocked empty).
+  assert.equal(await items.count(), 4, 'new-agent + open + live-unopened rows');
 
   // The active agent carries a check marker.
   assert.equal(await items.filter({ hasText: 'alpha' }).getAttribute('data-checked'), 'true', 'active agent is marked');
 
-  // Filtering narrows the list; Enter switches to the match and closes.
+  // Filtering narrows the list; Enter switches to the match, opens its
+  // tab, and closes the picker.
   await pickerInput.fill('bet');
   assert.equal(await items.count(), 1, 'filter narrows to beta');
   await pickerInput.press('Enter');
   await page.getByText('beta answer').waitFor({ state: 'visible' });
   await pickerInput.waitFor({ state: 'detached' });
+  await tab('beta').waitFor({ state: 'visible' });
   assert.equal(await page.getByRole('button', { name: 'beta', exact: true }).count(), 1, 'tab strip returns after picking');
 
   // Reopen: clicking an item directly also switches and closes.

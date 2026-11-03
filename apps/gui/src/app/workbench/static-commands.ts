@@ -1,0 +1,54 @@
+/**
+ * Static shell commands: depend only on the workbench store and the theme
+ * module, so they register once at module load. Runtime-dependent commands
+ * are registered by the shell (owner "shell-runtime") instead.
+ */
+
+import { cycleThemeMode } from "@/lib/theme";
+import { registerCommands } from "./command-registry";
+import {
+  closeEditor,
+  closeSplit,
+  getWorkbenchState,
+  openEditor,
+  setContainer,
+  setContainerView,
+  setPanelTab,
+  splitEditor,
+  toggleAux,
+  togglePanel,
+  toggleSidebar,
+} from "./workbench-store";
+
+registerCommands("shell", [
+  { id: "workbench.toggle-sidebar", title: "Toggle side bar", category: "view", keywords: "ctrl b sidebar visibility", run: toggleSidebar },
+  { id: "workbench.toggle-aux", title: "Toggle agent auxiliary bar", category: "view", keywords: "chat assistant panel right", run: toggleAux },
+  { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", run: togglePanel },
+  { id: "workbench.panel-events", title: "Show event stream panel", category: "view", keywords: "events log frames", run: () => { setPanelTab("events"); } },
+  { id: "workbench.panel-notices", title: "Show notices panel", category: "view", keywords: "notifications notices", run: () => { setPanelTab("notices"); } },
+  { id: "workbench.split-editor", title: "Split editor", category: "view", keywords: "split right group", run: splitEditor },
+  { id: "workbench.close-split", title: "Close editor split", category: "view", keywords: "close split group", run: closeSplit },
+  // Palette close is a plain close; tab-strip close enforces confirmLeave.
+  { id: "workbench.close-editor", title: "Close editor", category: "view", keywords: "close tab", run: () => {
+    const current = getWorkbenchState();
+    const group = current.groups.active === "secondary" ? current.groups.secondary : current.groups.main;
+    const id = group?.activeId;
+    if (id) closeEditor(id);
+  } },
+  { id: "workbench.open-bibliography", title: "Open bibliography", category: "go", keywords: "papers library collections literature", run: openBibliographyEditor },
+  { id: "workbench.open-wiki", title: "Open knowledge base", category: "go", keywords: "wiki knowledge entries", run: () => {
+    setContainer("wiki");
+    openEditor({ kind: "wiki" });
+  } },
+  { id: "workbench.open-config", title: "Open settings", category: "go", keywords: "config model provider preferences", run: () => openEditor({ kind: "config" }) },
+  { id: "workbench.cycle-theme", title: "Cycle color theme", category: "view", keywords: "light dark system theme", run: () => { cycleThemeMode(); } },
+]);
+
+/** Reveals the bibliography container and opens (or refocuses) its editor
+ *  on the given workspace view. Used by the sidebar views and commands. */
+export function openBibliographyEditor(workspace?: string): void {
+  const view = workspace ?? getWorkbenchState().containerViews.bibliography ?? "library";
+  setContainer("bibliography");
+  setContainerView("bibliography", view);
+  openEditor({ kind: "bibliography", params: { workspace: view } });
+}

@@ -10,6 +10,9 @@ try {
   for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 120) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000);
+  // Pre-open both agents as view tabs (the persisted open-tab list) so the
+  // tab strip exposes /root/beta for switching below.
+  await page.addInitScript(() => localStorage.setItem('autonomics.openTabs', JSON.stringify(['/root/alpha', '/root/beta'])));
   const errors = [], sends = []; let failNextSend = false;
   page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR', e.stack); });
   const article = { id: 'paper-1', title: 'Paper Alpha', abstract_text: 'Measured evidence from paper alpha.', authors: [], year: 2025, identifiers: [{ kind: 'doi', value: '10.test/alpha' }] };
@@ -17,7 +20,7 @@ try {
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     if (path === '/events') return;
-    if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }, { path: '/root/beta', agent_id: 'a2', status: 'Idle' }], sessions: { '/root/alpha': [{ id: 's1', title: 'Alpha main', created_at: 2, last_active: 3 }], '/root/beta': [{ id: 's2', title: 'Beta main', created_at: 1, last_active: 1 }] }, display_settings: { collapse_thinking: true, collapse_tool_calls: true, collapse_tool_results: true } } });
+    if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }, { path: '/root/beta', agent_id: 'a2', status: 'Idle' }], contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 2, last_active: 3 }, '/root/beta': { id: 's2', title: 'Beta main', created_at: 1, last_active: 1 } }, display_settings: { collapse_thinking: true, collapse_tool_calls: true, collapse_tool_results: true } } });
     if (path.endsWith('/raw')) return route.fulfill({contentType:'text/plain; charset=utf-8',body:'Selected passage from the full text.'});
     if (path.endsWith('/annotations')) return route.fulfill({json:{annotations:[]}});
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [{ id: 'm1', role: 'assistant', content: [{ type: 'text', text: path.includes('s0') ? 'Older conversation' : 'Ready to research' }] }, ...(path.includes('/s1/') && sends.length ? [{id:'sent-1',role:'user',content:[{type:'text',text:sends[0].text}]}] : [])] } });
@@ -62,9 +65,10 @@ try {
   await reader.locator('[data-action=add-context]').click();
   await ref('证据 Paper Alpha · 选中文本').waitFor(); await ref('清空引用').click();
   await goAgent('alpha'); await ref('文献 Paper Alpha').waitFor();
-  await go('CONFIG'); await reader.waitFor({state:'hidden'}); await go('Bibliography'); await reader.waitFor();
+  const bibTab = page.getByRole('tab', { name: '文献与证据' });
+  await go('CONFIG'); await reader.waitFor({state:'hidden'}); await bibTab.click(); await reader.waitFor();
   await reader.getByRole('button',{name:'Close reader',exact:true}).click();
-  await go('CONFIG'); await go('Bibliography');
+  await go('CONFIG'); await bibTab.click();
   await composer.fill('Compare all selected resources'); await go('发送');
   await page.waitForFunction(() => document.querySelector('textarea')?.value === '');
   assert.equal(sends.length, 1); assert.ok(decodeURIComponent(sends[0].path).includes('/root/alpha/messages'));
@@ -73,18 +77,22 @@ try {
   assert.ok(attached[0].content.includes(article.abstract_text)); assert.equal(attached[1].content, 'Selected passage from the full text.');
   failNextSend = true; await composer.fill('Retry this question'); await go('发送'); await page.getByText('Send failed for test', { exact: false }).waitFor();
   assert.equal(await composer.inputValue(), 'Retry this question'); await ref('文献 Paper Alpha').waitFor();
-  await go('Agent');
   await go('CONFIG');
-  await page.getByLabel('Agent 浮窗模式').click(); await page.locator('[data-floating-shell] textarea').waitFor();
-  await page.getByLabel('Agent 浮窗模式').click(); await page.getByRole('complementary', { name: 'Agent 辅助区' }).locator('textarea').waitFor();
+  // The aux bar toggle hides/shows the docked chat (panel collapse, the
+  // retired floating shell is gone).
+  await page.getByLabel('Agent 副窗').click();
+  await composer.waitFor({ state: 'hidden' });
+  await page.getByLabel('Agent 副窗').click();
+  await composer.waitFor();
   await page.waitForTimeout(250); // settle the workspace entrance animation before visual inspection
   await page.screenshot({ path: '/tmp/autonomics-workbench-desktop.png' });
   const handle = page.getByRole('separator', { name: '调整 Agent 辅助区宽度' }), b = await handle.boundingBox();
   await page.mouse.move(b.x, b.y + b.height / 2); await page.mouse.down(); await page.mouse.move(b.x - 60, b.y + b.height / 2, { steps: 6 }); await page.mouse.up();
-  assert.ok(Number(await page.evaluate(() => localStorage.getItem('autonomics.workbench.agent.width'))) > 34);
+  const auxWidth = Number(await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('autonomics.workbench.v2') ?? '{}')?.aux?.widthPercent ?? 0; } catch { return 0; } }));
+  assert.ok(auxWidth > 34, 'aux width must persist into the v2 layout key');
   await ref('清空引用').click(); await composer.fill('No resources attached'); await go('发送'); await page.waitForTimeout(100);
   assert.equal(sends.at(-1).text, 'No resources attached');
-  await page.setViewportSize({ width: 390, height: 844 }); await page.locator('[data-floating-shell] textarea').waitFor();
+  await page.setViewportSize({ width: 390, height: 844 }); await page.locator('[data-drawer-shell] textarea').waitFor();
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.
   await page.evaluate(() => {
@@ -92,7 +100,7 @@ try {
     const fire = (type, x, y) => document.dispatchEvent(new TouchEvent(type, { touches: [touch(x, y)], bubbles: true, cancelable: true }));
     fire('touchstart', 10, 420); fire('touchmove', 180, 420);
   });
-  await go('Agent'); await composer.waitFor(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
+  await page.getByRole('button', { name: 'Bibliography library' }).waitFor(); await composer.waitFor(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
   await page.waitForTimeout(250); // settle the workspace entrance animation
   await page.screenshot({ path: '/tmp/autonomics-workbench-mobile.png' }); assert.deepEqual(errors, []);
   console.log('workbench-context: all assertions passed');

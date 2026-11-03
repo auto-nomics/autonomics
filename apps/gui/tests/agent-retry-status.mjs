@@ -21,7 +21,7 @@ const origin = 'http://127.0.0.1:1427';
 const snapshot = {
   last_seq: 0,
   agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }],
-  sessions: { '/root/alpha': [{ id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 }] },
+  contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 } },
   display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false },
 };
 let pushFrame = null;
@@ -64,7 +64,7 @@ try {
   }
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());
@@ -87,8 +87,9 @@ try {
   // The retry notice renders as an error-class transcript item…
   await assert.doesNotReject(() => page.getByText('第 2/5 次重试: rate limited').waitFor({ state: 'visible' }));
   // …and the status keeps "retrying" although the host frame said running
-  // (workspace status row + inspector overview row both show it).
-  assert.equal(await page.getByText('retrying', { exact: true }).count(), 2, 'status must read retrying');
+  // (workspace status row + inspector overview row + workbench status bar
+  // all show it).
+  assert.equal(await page.getByText('retrying', { exact: true }).count(), 3, 'status must read retrying');
 
   // Stage 2: the request ultimately fails for good.
   sendFrame({ id: 4, event: 'agent', data: { agent: '/root/alpha', event: { Error: 'fatal boom' } } });
@@ -101,7 +102,7 @@ try {
   // The fatal error renders and the status flips to error (both rows).
   await assert.doesNotReject(() => page.getByText('fatal boom').waitFor({ state: 'visible' }));
   await page.waitForTimeout(300);
-  assert.equal(await page.getByText('error', { exact: true }).count(), 2, 'status must read error');
+  assert.equal(await page.getByText('error', { exact: true }).count(), 3, 'status must read error');
   assert.equal(await page.getByText('retrying', { exact: true }).count(), 0, 'retrying must not survive the fatal error');
   assert.equal(await page.locator('pre', { hasText: 'fatal boom' }).count(), 1, 'exactly one fatal error item');
 

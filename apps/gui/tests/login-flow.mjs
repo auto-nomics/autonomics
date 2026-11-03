@@ -22,7 +22,7 @@ const state = {
   active_model_spec: null,
   profiles: [],
   agents: [],
-  sessions: {},
+  contexts: {},
   display_settings: {
     collapse_thinking: false,
     collapse_tool_calls: false,
@@ -49,7 +49,7 @@ try {
   }
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const consoleLines = [];
   page.on('console', (message) => consoleLines.push(`${message.type()}: ${message.text()}`));
   const errors = [];

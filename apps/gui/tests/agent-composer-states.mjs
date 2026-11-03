@@ -23,7 +23,7 @@ const origin = 'http://127.0.0.1:1427';
 const snapshot = {
   last_seq: 0,
   agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }],
-  sessions: { '/root/alpha': [{ id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 }] },
+  contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 } },
   display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false },
 };
 let pushFrame = null;
@@ -75,7 +75,7 @@ try {
   }
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());

@@ -30,9 +30,9 @@ try {
         { path: '/root/alpha', agent_id: 'a1', status: 'Idle' },
         { path: '/root/beta', agent_id: 'a2', status: 'Streaming' },
       ],
-      sessions: {
-        '/root/alpha': [{ id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 }],
-        '/root/beta': [{ id: 's2', title: 'Beta main', created_at: 1, last_active: 3 }],
+      contexts: {
+        '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 },
+        '/root/beta': { id: 's2', title: 'Beta main', created_at: 1, last_active: 3 },
       },
       display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false },
     } }));
@@ -47,7 +47,10 @@ try {
 
   // ── Desktop: workspace + inspector, one resizable boundary ───────────
   {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    // 1440 (like workbench-context): at 1280 the aux bar (40% ≈ 405px)
+    // cannot fit a 280px inspector plus a usable chat column, so the
+    // 60px drag would crush the composer below its minimum width.
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
@@ -56,8 +59,9 @@ try {
     await page.goto(origin);
     const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('[data-group]').count(), 2, 'desktop renders workbench and inspector groups');
-    assert.equal(await page.locator('[data-separator]').count(), 1, 'desktop renders one handle');
+    // Three panel groups: outer (editor|aux), center vertical (editor|panel),
+    // aux inner (workspace|inspector).
+    assert.equal(await page.locator('[data-group]').count(), 3, 'desktop renders outer, center and aux panel groups');
     assert.equal(await page.locator('[data-panel]#agents').count(), 0, 'agents sidebar is retired');
     const dockedInFloat = await composer.evaluate(node => Boolean(node.closest('.fixed')));
     assert.equal(dockedInFloat, false, 'workspace must stay docked on desktop');
@@ -66,9 +70,9 @@ try {
     const right0 = await inspectorWidth();
     assert.ok(Math.abs(right0 - 280) <= 12, `inspector panel should default near 280px, got ${right0}`);
 
-    // Drag the handle leftwards: the inspector panel follows the pointer
-    // (right side grows as the boundary moves left).
-    const handle = page.locator('[data-separator]').first();
+    // Drag the inspector handle leftwards: the inspector panel follows the
+    // pointer (right side grows as the boundary moves left).
+    const handle = page.getByRole('separator', { name: 'Resize inspector sidebar' });
     const hb = await handle.boundingBox();
     await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
     await page.mouse.down();
@@ -98,34 +102,35 @@ try {
     await page.close();
   }
 
-  // ── Mobile: inspector drawer + tab-bar agent switching ───────────────
+  // ── Mobile: the chat lives in the drawer shell + tab-bar switching ──
   {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('dialog', dialog => dialog.accept());
     await mockApi(page);
+    // Pre-open both agents as view tabs (the persisted open-tab list).
+    await page.addInitScript(() => localStorage.setItem('autonomics.openTabs', JSON.stringify(['/root/alpha', '/root/beta'])));
 
     await page.goto(origin);
     const composer = page.getByPlaceholder('输入消息…');
     await composer.waitFor({ state: 'visible' });
-    assert.equal(await page.locator('[data-group]').count(), 1, 'mobile renders only the outer workbench group');
-    assert.equal(await page.locator('[data-slot=sheet-content]').count(), 0, 'no drawer initially');
+    // The workspace renders in the drawer shell on mobile (no aux bar below md).
+    const inDrawer = await composer.evaluate(node => Boolean(node.closest('[data-drawer-shell]')));
+    assert.ok(inDrawer, 'mobile composer renders inside the drawer shell');
 
-    // Agents switch through the tab bar now; no drawer involved.
+    // Agents switch through the tab bar; the drawer stays put.
     await page.getByTitle('/root/beta').click();
     await assert.doesNotReject(() => page.getByText('beta prompt').waitFor({ state: 'visible' }));
 
-    // The right toggle opens the inspector drawer; Escape closes it.
-    await page.getByRole('button', { name: 'Toggle right sidebar' }).click();
-    const inspector = page.locator('[data-slot=sheet-content]').first();
-    await inspector.waitFor({ state: 'visible' });
-    await assert.doesNotReject(() => inspector.getByText('Actions').waitFor({ state: 'visible' }));
-    await page.keyboard.press('Escape');
-    await inspector.waitFor({ state: 'detached' });
+    // Collapse to the FAB and reopen.
+    await page.getByRole('button', { name: '收起 Agent 抽屉' }).click();
+    const fab = page.getByRole('button', { name: '打开 Agent 副窗' });
+    await fab.waitFor({ state: 'visible' });
+    await composer.waitFor({ state: 'hidden' });
+    await fab.click();
+    await composer.waitFor({ state: 'visible' });
 
-    const dockedInFloat = await composer.evaluate(node => Boolean(node.closest('.fixed')));
-    assert.equal(dockedInFloat, false, 'workspace must stay docked on mobile');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 0, `page must not scroll horizontally, overflow ${overflow}px`);
 
