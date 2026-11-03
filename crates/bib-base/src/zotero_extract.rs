@@ -2,17 +2,27 @@
 //! The JavaScript host and models live in `tools/zotero-extractor`, separately
 //! licensed and pinned to upstream commits. PDF bytes travel over stdin; no
 //! uploaded path or filename is interpreted as a command argument.
+//!
+//! Besides the plain-text projection and the SDT structure, the host exports
+//! every non-excluded image block as a PNG (named `z-<content hash>.png` and
+//! linked from the node via `imageRef`) so figures live in the VFS next to
+//! the MinerU ones and are served by the same route.
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
 use bib_types::{FileFormat, TextFormat};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
+use crate::extract::{ExtractedImage, MAX_EXTRACTED_IMAGES, MAX_IMAGE_BYTES};
+use crate::stored_files::{
+    attachment_figure_object_path, figure_object_path, sanitize_figure_name,
+};
 use crate::{Error, ExtractedText, Result, TextExtractor};
 
 const MAX_OUTPUT: u64 = 128 * 1024 * 1024;
@@ -25,6 +35,59 @@ pub struct ZoteroExtractor;
 struct Output {
     text: String,
     structure: Value,
+    /// Host-extension figure payloads (base64 PNG). Absent in older hosts.
+    #[serde(default)]
+    images: Vec<OutputImage>,
+}
+
+#[derive(Deserialize)]
+struct OutputImage {
+    name: String,
+    /// Base64-encoded PNG bytes.
+    data: String,
+}
+
+/// Decode and bound-check the host's figure payloads against the shared
+/// extractor limits. Invalid or oversized entries are skipped with a warning
+/// rather than failing the whole extraction.
+fn decode_output_images(images: Vec<OutputImage>) -> Vec<ExtractedImage> {
+    let mut decoded = Vec::with_capacity(images.len().min(MAX_EXTRACTED_IMAGES));
+    for image in &images {
+        if decoded.len() >= MAX_EXTRACTED_IMAGES {
+            tracing::warn!(
+                count = images.len(),
+                "Zotero host returned more than {MAX_EXTRACTED_IMAGES} figures; keeping the first ones"
+            );
+            break;
+        }
+        // Strict: the host only produces already-sanitized names, so accept
+        // nothing that normalization would rewrite (e.g. `../escape.png`).
+        let Some(name) = sanitize_figure_name(&image.name).filter(|name| name == &image.name)
+        else {
+            tracing::warn!(name = %image.name, "Zotero figure has unsafe name; skipping");
+            continue;
+        };
+        let data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+            Ok(data) => data,
+            Err(error) => {
+                tracing::warn!(name = %name, error = %error, "Zotero figure is not valid base64; skipping");
+                continue;
+            }
+        };
+        if data.len() > MAX_IMAGE_BYTES {
+            tracing::warn!(
+                name = %name,
+                bytes = data.len(),
+                "Zotero figure exceeds {MAX_IMAGE_BYTES} bytes; skipping"
+            );
+            continue;
+        }
+        if decoded.iter().any(|existing: &ExtractedImage| existing.name == name) {
+            continue;
+        }
+        decoded.push(ExtractedImage { name, data });
+    }
+    decoded
 }
 
 impl ZoteroExtractor {
@@ -150,9 +213,45 @@ impl TextExtractor for ZoteroExtractor {
             text: result.text,
             format: TextFormat::Plain,
             extractor: self.name(),
-            images: Vec::new(),
+            images: decode_output_images(result.images),
             structure: Some(result.structure),
         })
+    }
+}
+
+/// Collect the `imageRef` names a Zotero SDT structure carries, deduplicated,
+/// in document order. These are the figure objects an extraction wrote next
+/// to the sidecar; the entry-point cleanup paths use this as the Zotero-row
+/// counterpart of `scan_image_refs` on MinerU markdown.
+pub fn scan_structure_image_refs(structure: &Value) -> Vec<String> {
+    let mut refs: Vec<String> = Vec::new();
+    collect_image_refs(structure, &mut refs);
+    refs
+}
+
+fn collect_image_refs(node: &Value, refs: &mut Vec<String>) {
+    match node {
+        Value::Array(items) => {
+            for item in items {
+                collect_image_refs(item, refs);
+            }
+        }
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("image")
+                && let Some(name) = map.get("imageRef").and_then(Value::as_str)
+                // Strict match, as in `decode_output_images`: a name that
+                // normalization would rewrite is not one the host wrote.
+                && let Some(sanitized) = sanitize_figure_name(name)
+                && sanitized == name
+                && !refs.contains(&sanitized)
+            {
+                refs.push(sanitized);
+            }
+            for (_, child) in map {
+                collect_image_refs(child, refs);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -209,11 +308,42 @@ pub async fn store_structure(
             .await
             .map_err(|error| format!("storing Zotero structure: {error}"))
     } else {
-        // An OCR/cloud fallback must not leave a previous run's source map live.
+        // An OCR/cloud fallback must not leave a previous run's source map
+        // live — nor the Zotero-rendered figures only it still referenced.
+        delete_structure_figures(storage, article_id, attachment_key, &path).await;
         storage
             .delete_object(&path)
             .await
             .map_err(|error| format!("removing stale Zotero structure: {error}"))
+    }
+}
+
+/// Best-effort removal of the figure objects an existing SDT sidecar
+/// references. Called right before the sidecar itself goes away, when no
+/// other artifact can still name those files.
+async fn delete_structure_figures(
+    storage: &vfs::OpendalFileStorage,
+    article_id: &str,
+    attachment_key: Option<&str>,
+    sidecar_virtual_path: &str,
+) {
+    let Ok(bytes) = crate::extraction::read_full(storage, sidecar_virtual_path).await else {
+        return;
+    };
+    let Ok(cache) = serde_json::from_slice::<StructuredCache>(&bytes) else {
+        return;
+    };
+    for name in scan_structure_image_refs(&cache.structure) {
+        let object = match attachment_key {
+            Some(key) => attachment_figure_object_path(article_id, key, &name),
+            None => figure_object_path(article_id, &name),
+        };
+        let Some(path) = crate::stored_files::vfs_virtual_path(&object) else {
+            continue;
+        };
+        if let Err(error) = storage.delete_object(&path).await {
+            tracing::warn!(path = %path, error = %error, "failed to remove Zotero figure");
+        }
     }
 }
 
@@ -307,6 +437,15 @@ pub async fn structured_fulltext(
     )
     .await
     .map_err(Error::Unknown)?;
+    // The sidecar's imageRef nodes point at VFS figure objects — persist the
+    // rendered PNGs next to it (best-effort, same as the pipeline worker).
+    match key.as_deref() {
+        Some(key) => {
+            crate::extraction::store_attachment_figures(storage, article_id, key, &mut extracted)
+                .await
+        }
+        None => crate::extraction::store_figures(storage, article_id, &mut extracted).await,
+    }
     // Upgrade the old flattened fulltext projection without clearing it first.
     // A background extraction already in flight owns its own status transition.
     if current.extract_status != Some(bib_types::ExtractStatus::Running)
@@ -380,11 +519,106 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires Node >=22 and npm ci in tools/zotero-extractor"]
+    async fn zotero_process_exports_figure_images_for_image_blocks() {
+        let bytes = include_bytes!(
+            "../../../tools/zotero-extractor/test/fixtures/paint-scene-pathologies.pdf"
+        );
+        let result = ZoteroExtractor
+            .extract(bytes, FileFormat::Pdf)
+            .await
+            .unwrap();
+        assert!(!result.images.is_empty());
+        assert!(result.images.len() <= crate::extract::MAX_EXTRACTED_IMAGES);
+        let structure = result.structure.unwrap();
+        let image_blocks: Vec<&str> = structure["content"]
+            .as_array()
+            .expect("content array")
+            .iter()
+            .filter(|block| block["type"] == "image")
+            .filter_map(|block| block["imageRef"].as_str())
+            .collect();
+        assert!(!image_blocks.is_empty(), "image blocks carry imageRef");
+        for name in &image_blocks {
+            assert!(name.starts_with("z-"), "host names figures z-<hash>.png");
+            assert!(
+                result.images.iter().any(|image| &image.name == name),
+                "imageRef {name} resolves to a returned payload"
+            );
+        }
+        for image in &result.images {
+            assert!(image.name.ends_with(".png"));
+            assert_eq!(
+                &image.data[..8],
+                &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+                "PNG magic"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires Node >=22 and npm ci in tools/zotero-extractor"]
     async fn zotero_process_reports_malformed_pdf_without_hanging_on_stdin() {
         let error = ZoteroExtractor
             .extract(b"not a PDF", FileFormat::Pdf)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Zotero extraction failed"));
+    }
+
+    fn output_image(name: &str, data: &[u8]) -> OutputImage {
+        OutputImage {
+            name: name.to_owned(),
+            data: base64::engine::general_purpose::STANDARD.encode(data),
+        }
+    }
+
+    #[test]
+    fn decode_output_images_validates_names_and_base64() {
+        let png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        let images = decode_output_images(vec![
+            output_image("z-abc123.png", &png),
+            output_image("z-abc123.png", &png), // duplicate: deduped
+            output_image("../escape.png", &png), // traversal: skipped
+            OutputImage {
+                name: "z-bad.png".into(),
+                data: "not base64!!".into(),     // invalid: skipped
+            },
+        ]);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].name, "z-abc123.png");
+        assert_eq!(images[0].data, png.to_vec());
+    }
+
+    #[test]
+    fn decode_output_images_enforces_count_cap() {
+        let png = vec![1u8, 2, 3];
+        let images = decode_output_images(
+            (0..(crate::extract::MAX_EXTRACTED_IMAGES + 5))
+                .map(|i| output_image(&format!("z-{i:03}.png"), &png))
+                .collect(),
+        );
+        assert_eq!(images.len(), crate::extract::MAX_EXTRACTED_IMAGES);
+    }
+
+    #[test]
+    fn scan_structure_image_refs_walks_dedupes_and_filters() {
+        let structure = serde_json::json!({
+            "content": [
+                { "type": "image", "imageRef": "z-one.png", "content": [
+                    { "type": "caption", "imageRef": "z-nested.png" }
+                ]},
+                { "type": "image", "imageRef": "z-one.png" },
+                { "type": "paragraph", "imageRef": "z-not-an-image.png" },
+                { "type": "image", "imageRef": "../traversal.png" },
+                { "type": "table", "content": [
+                    { "type": "image", "imageRef": "z-two.png" }
+                ]}
+            ]
+        });
+        assert_eq!(
+            scan_structure_image_refs(&structure),
+            ["z-one.png".to_owned(), "z-two.png".to_owned()]
+        );
+        assert_eq!(scan_structure_image_refs(&serde_json::json!({})), Vec::<String>::new());
     }
 }

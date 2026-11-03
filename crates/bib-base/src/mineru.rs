@@ -48,8 +48,8 @@ const OVERALL_DEADLINE: Duration = Duration::from_secs(600);
 
 /// Defensive caps on the figures kept from a result zip (a paper is far
 /// below both; these exist so a pathological zip cannot balloon memory).
-const MAX_FIGURE_IMAGES: usize = 64;
-const MAX_FIGURE_BYTES: usize = 15 * 1024 * 1024;
+/// Shared with the other extractors via [`crate::extract`].
+use crate::extract::{MAX_EXTRACTED_IMAGES as MAX_FIGURE_IMAGES, MAX_IMAGE_BYTES as MAX_FIGURE_BYTES};
 
 // --- MinerU v4 API wire types (private) -------------------------------------
 

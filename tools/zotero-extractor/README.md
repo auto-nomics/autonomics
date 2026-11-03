@@ -23,9 +23,26 @@ node tools/zotero-extractor/extract.mjs < paper.pdf > result.json
 ```
 
 Input is PDF bytes on stdin. Stdout is one JSON response with `text`,
-`extractor: "zotero-sdt"`, and the complete `structure`. Paragraph separators are
-preserved by Zotero's own `getFulltextFromStructuredText`. Diagnostics and progress
-are written to stderr. No uploaded filename becomes a shell command.
+`extractor: "zotero-sdt"`, the complete `structure`, and `images`. Paragraph
+separators are preserved by Zotero's own `getFulltextFromStructuredText`.
+Diagnostics and progress are written to stderr. No uploaded filename becomes a
+shell command.
+
+## Figure image export
+
+After SDT assembly, every image block that is not `flowClass: "excluded"` is
+rendered from its `anchor.pageRects` region through the vendored pdf.js at
+scale 4 (clamped to 16 megapixels) and encoded as PNG via `@napi-rs/canvas`.
+Figures are named `z-<sha256[:16]>.png` — content-addressed, so re-extraction
+of the same PDF overwrites in place — and each rendered block carries the
+resulting file name as a host-extension `imageRef` field on its structure
+node. The Rust host persists them next to MinerU's markdown figures and serves
+them through the same route; golden-structure tests strip `imageRef` before
+comparing. Payloads are base64 in `images: [{ name, data }]`, capped at 64
+figures, 15 MiB each and 32 MiB total (the JSON stays well under the host's
+128 MiB stdout bound). A failed render downgrades to a stderr warning and
+leaves the block without an `imageRef`; `ZOTERO_EXTRACT_IMAGES=0` disables the
+whole pass.
 
 Rust enforces a 180-second subprocess timeout, cancels the child if the request
 is dropped, bounds response/diagnostic sizes, and drains both pipes while

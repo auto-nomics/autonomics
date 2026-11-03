@@ -2777,6 +2777,7 @@ async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
         &fulltext.article_id,
         fulltext.attachment_key.as_deref(),
     );
+    let structure_refs = read_structure_figure_refs(storage, &object).await;
     if let Some(path) = vfs_virtual_path(&object) {
         if let Err(failure) = storage.delete_object(&path).await {
             tracing::warn!(path = %path, error = %failure, "failed to remove Zotero structure");
@@ -2794,26 +2795,31 @@ async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
         }
     }
 
-    if fulltext.text_format != Some(TextFormat::Markdown) {
-        return;
+    // Figures are discoverable from two sources: markdown references (MinerU
+    // rows) and the SDT sidecar's imageRef nodes (Zotero rows). The sidecar
+    // is gone by now, so its refs were collected above.
+    let mut names = structure_refs;
+    if fulltext.text_format == Some(TextFormat::Markdown) {
+        // Scan the markdown for figure references: the canonical file is the
+        // source of truth, with the row's inline copy as the fallback for
+        // legacy rows the startup backfill has not materialized yet.
+        let markdown = match vfs_virtual_path(&extracted_object_path(
+            &fulltext.article_id,
+            TextFormat::Markdown,
+        )) {
+            Some(path) => match read_full(storage, &path).await {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(_) => fulltext.text_content.clone().unwrap_or_default(),
+            },
+            None => fulltext.text_content.clone().unwrap_or_default(),
+        };
+        for name in scan_image_refs(&markdown) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
     }
-    // Scan the markdown for figure references: the canonical file is the
-    // source of truth, with the row's inline copy as the fallback for
-    // legacy rows the startup backfill has not materialized yet.
-    let markdown = match vfs_virtual_path(&extracted_object_path(
-        &fulltext.article_id,
-        TextFormat::Markdown,
-    )) {
-        Some(path) => match read_full(storage, &path).await {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            Err(_) => fulltext.text_content.clone().unwrap_or_default(),
-        },
-        None => fulltext.text_content.clone().unwrap_or_default(),
-    };
-    if markdown.is_empty() {
-        return;
-    }
-    for name in scan_image_refs(&markdown) {
+    for name in names {
         let Some(path) = vfs_virtual_path(&figure_object_path(&fulltext.article_id, &name)) else {
             continue;
         };
@@ -2821,6 +2827,33 @@ async fn delete_article_figures(shared: &BibShared, fulltext: &FullText) {
             tracing::warn!(path = %path, error = %failure, "failed to remove figure object");
         }
     }
+}
+
+/// Collect the figure names an SDT sidecar references, before it is deleted.
+/// MinerU's markdown keeps naming its figures after the sidecar is gone; the
+/// Zotero structure is the only place `z-*.png` objects are named from.
+async fn read_structure_figure_refs(
+    storage: &vfs::OpendalFileStorage,
+    structure_object: &str,
+) -> Vec<String> {
+    let Some(path) = vfs_virtual_path(structure_object) else {
+        return Vec::new();
+    };
+    let bytes = match read_full(storage, &path).await {
+        Ok(bytes) => bytes,
+        Err(_) => return Vec::new(),
+    };
+    let cache = match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(cache) => cache,
+        Err(error) => {
+            tracing::warn!(path = %path, error = %error, "ignoring unparsable Zotero structure");
+            return Vec::new();
+        }
+    };
+    cache
+        .pointer("/structure")
+        .map(bib_base::zotero_extract::scan_structure_image_refs)
+        .unwrap_or_default()
 }
 
 /// Best-effort cleanup of one attachment's derived text and figures.
@@ -2834,6 +2867,7 @@ async fn delete_attachment_figures(
         return;
     };
     let object = bib_base::stored_files::structured_object_path(article_id, Some(attachment_key));
+    let structure_refs = read_structure_figure_refs(storage, &object).await;
     if let Some(path) = vfs_virtual_path(&object) {
         if let Err(failure) = storage.delete_object(&path).await {
             tracing::warn!(path = %path, error = %failure, "failed to remove attachment Zotero structure");
@@ -2846,10 +2880,15 @@ async fn delete_attachment_figures(
             tracing::warn!(path = %path, error = %failure, "failed to remove attachment extracted text");
         }
     }
-    if fulltext.text_format != Some(TextFormat::Markdown) {
-        return;
+    let mut names = structure_refs;
+    if fulltext.text_format == Some(TextFormat::Markdown) {
+        for name in scan_image_refs(fulltext.text_content.as_deref().unwrap_or_default()) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
     }
-    for name in scan_image_refs(fulltext.text_content.as_deref().unwrap_or_default()) {
+    for name in names {
         let object = attachment_figure_object_path(article_id, attachment_key, &name);
         let Some(path) = vfs_virtual_path(&object) else {
             continue;

@@ -4,8 +4,10 @@
 //! module owns everything that happens afterwards:
 //!
 //! - [`FallbackChainExtractor`] — Zotero SDT first, then MinerU cloud.
-//!   Zotero preserves semantic paragraphs and source maps. HTML/TXT use the
-//!   built-in non-PDF extractor.
+//!   Zotero preserves semantic paragraphs and source maps, and exports the
+//!   image blocks it recognizes as rendered PNG figures; MinerU carries
+//!   markdown plus its own figure images. HTML/TXT use the built-in non-PDF
+//!   extractor.
 //! - [`run_extraction_parts`] / [`run_extraction`] — claim a pending row
 //!   (`pending → running` CAS), read the file back from the VFS, extract,
 //!   and record success/failure. Usable synchronously (CLI backfill,
@@ -372,11 +374,13 @@ pub async fn run_attachment_extraction_parts(
 
 /// Write extracted figure images into the VFS under their stable names.
 ///
-/// Best-effort by design: the markdown text is the primary product, so a
+/// Best-effort by design: the extracted text is the primary product, so a
 /// failed image write downgrades to a warning instead of failing the
 /// extraction. Image buffers are consumed as they are written to keep the
-/// peak memory of a figure-heavy paper bounded.
-async fn store_figures(
+/// peak memory of a figure-heavy paper bounded. Shared by the pipeline
+/// worker and the on-demand Reading Mode generation in
+/// [`crate::zotero_extract::structured_fulltext`].
+pub(crate) async fn store_figures(
     storage: &vfs::OpendalFileStorage,
     article_id: &str,
     extracted: &mut ExtractedText,
@@ -399,7 +403,7 @@ async fn store_figures(
     }
 }
 
-async fn store_attachment_figures(
+pub(crate) async fn store_attachment_figures(
     storage: &vfs::OpendalFileStorage,
     article_id: &str,
     attachment_key: &str,
@@ -1387,6 +1391,23 @@ mod structured_tests {
             .restart_attachment_extraction(&attachment.key)
             .await
             .unwrap();
+        // The Zotero-rendered figures the sidecar references go away with it.
+        cache.structure["content"][0]["type"] = "image".into();
+        cache.structure["content"][0]["imageRef"] = "z-figure.png".into();
+        storage
+            .write_bytes(&path, serde_json::to_vec(&cache).unwrap())
+            .await
+            .unwrap();
+        let figure_path = vfs_virtual_path(&crate::stored_files::attachment_figure_object_path(
+            id,
+            &attachment.key,
+            "z-figure.png",
+        ))
+        .unwrap();
+        storage
+            .write_bytes(&figure_path, b"png bytes".to_vec())
+            .await
+            .unwrap();
         struct PlainExtractor;
         #[async_trait::async_trait]
         impl TextExtractor for PlainExtractor {
@@ -1401,5 +1422,9 @@ mod structured_tests {
             .await
             .unwrap();
         assert!(storage.content_length(&path).await.is_err());
+        assert!(
+            storage.content_length(&figure_path).await.is_err(),
+            "the Zotero figure the stale sidecar referenced is deleted with it"
+        );
     }
 }

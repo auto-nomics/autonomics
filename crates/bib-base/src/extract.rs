@@ -32,6 +32,18 @@ use bib_types::{FileFormat, TextFormat};
 use crate::error::{Error, Result};
 
 // ---------------------------------------------------------------------------
+// Limits shared by every extractor backend
+// ---------------------------------------------------------------------------
+
+/// Defensive cap on the figure images one extraction may carry (a paper is
+/// far below this; it exists so a pathological document cannot balloon the
+/// extraction output or the VFS).
+pub const MAX_EXTRACTED_IMAGES: usize = 64;
+
+/// Defensive cap on a single figure image's byte size.
+pub const MAX_IMAGE_BYTES: usize = 15 * 1024 * 1024;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -56,8 +68,9 @@ pub struct ExtractedText {
     pub format: TextFormat,
     /// Which extractor produced this text (for provenance columns).
     pub extractor: &'static str,
-    /// Figure images carried by layout-aware extractors. Empty for the
-    /// plain-text extractors.
+    /// Figure images carried by layout-aware extractors (MinerU markdown
+    /// figures; Zotero's rendered image blocks). Empty for the plain-text
+    /// extractor.
     pub images: Vec<ExtractedImage>,
     /// Zotero SDT document, including semantic blocks and source anchors.
     /// Kept separately from the fulltext projection so paragraph boundaries,
