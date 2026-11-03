@@ -88,7 +88,7 @@ Data-engine actor（每会话一个）
 - **Researcher**（默认）——生物医学科研助手。它拥有科学问题、分析设计、DAG 构建、执行与解释，并持有文献库、写作与科研 API 能力。系统提示词明确告诉它：插件与节点生态是*动态的*，缺失或不完善的节点是正常发现，不是死路。
 - **Developer**——DAG 节点与插件开发者。它通过宿主拥有的生命周期构建、校验、安装与卸载插件，选择运行环境，并做聚焦的容器验证。它会明确拒绝科研或数据分析请求：交接内容只包含接口契约、schema、失败场景与小型合成样例——绝不包含生产或科研数据集。
 
-编排被刻意约束。智能体间通信只有委派一种，且严格限定父 → 直接子；一个智能体只能看到自己、父代理和子代理。委派是一等记录，带状态（pending/running/completed/interrupted/failed）并跨守护进程重启持久化。九个宿主工具为 `spawn_agent`、`delegate_to`、`route_task`、`get_agent_info`、`list_agents`、`list_delegations`、`get_agent_history`、`shutdown_agent`、`interrupt_agent`。
+编排被刻意约束。智能体间通信只有委派一种，且严格限定父 → 直接子；一个智能体只能看到自己、父代理和子代理。委派是一等记录，带状态（pending/running/completed/interrupted/failed）并跨守护进程重启持久化。七个宿主工具为 `spawn_agent`、`delegate_to`、`get_agent_info`、`list_agents`、`list_delegations`、`get_agent_history`、`interrupt_agent`。
 
 Developer 交付时，交接物包含插件名、完整 `plugin/node` 地址、节点文档、spec schema、端口布局、安装状态、最小 DAG 用法示例与验证证据。`plugin_install` 通过 `reload_plugin` 把不可变快照激活进实时注册表，Researcher 在同一会话内即可使用新节点。
 

@@ -1047,7 +1047,7 @@ impl Context {
              You can see and interact only with your direct children \
              (spawned under your path) and your direct parent. \
              When spawning child agents, their path is derived from yours. \
-             Discover visible agents with `list_agents` or `route_task`, \
+             Discover visible agents with `list_agents`, \
              delegate to your children with `delegate_to`, and never \
              delegate tasks to yourself.",
             path = self.core.path.as_str(),

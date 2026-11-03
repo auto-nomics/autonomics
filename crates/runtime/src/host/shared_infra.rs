@@ -541,7 +541,7 @@ impl SharedInfra {
         }
 
         // Host control tools (spawn_agent, delegate_to, list_agents, etc.)
-        // Pass the agent's own path so list_agents / route_task can exclude self.
+        // Pass the agent's own path to scope visibility and child paths.
         tools.extend(crate::host_tools::host_tools(
             self.host_control.clone(),
             agent_path,
