@@ -9,9 +9,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use evolution_core::ObservationInput;
-use evolution_core::ObservationKind;
-use evolution_core::ObservationSource;
 use skills::SkillManager;
 
 #[derive(Parser)]
@@ -59,28 +56,6 @@ enum Command {
     /// Show the in-process usage telemetry (empty for a fresh process;
     /// meaningful inside the daemon, exposed here for smoke tests).
     Usage,
-    /// Record one observation feeding the skill evolution loop.
-    Observe {
-        /// One line a future search would find.
-        #[arg(short, long)]
-        summary: String,
-        /// The reusable pattern, fix, or condition.
-        #[arg(short, long)]
-        body: String,
-        /// failure | recipe | caveat (default failure).
-        #[arg(short, long)]
-        kind: Option<String>,
-        /// Node kind anchor, when applicable.
-        #[arg(long)]
-        node_kind: Option<String>,
-        /// Error text anchor, when applicable.
-        #[arg(long)]
-        error: Option<String>,
-    },
-    /// List proposals, optionally filtered by status. Read-only —
-    /// cycles run automatically in the daemon (see
-    /// the gateway integration tests for the unified channel path).
-    Proposals { status: Option<String> },
 }
 
 fn main() -> ExitCode {
@@ -111,14 +86,6 @@ fn main() -> ExitCode {
         Command::Workflows { name } => workflows_cmd(&manager, &name),
         Command::Validate { path } => validate_cmd(&path),
         Command::Usage => usage_cmd(&manager),
-        Command::Observe {
-            summary,
-            body,
-            kind,
-            node_kind,
-            error,
-        } => observe_cmd(&manager, &summary, &body, kind, node_kind, error),
-        Command::Proposals { status } => proposals_cmd(&manager, status.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -368,74 +335,5 @@ fn usage_cmd(manager: &SkillManager) -> Result<(), String> {
         );
     }
     println!("generation: {}", manager.generation());
-    Ok(())
-}
-
-fn observe_cmd(
-    manager: &SkillManager,
-    summary: &str,
-    body: &str,
-    kind: Option<String>,
-    node_kind: Option<String>,
-    error: Option<String>,
-) -> Result<(), String> {
-    let kind = match kind.as_deref() {
-        None => ObservationKind::Failure,
-        Some("failure") => ObservationKind::Failure,
-        Some("recipe") => ObservationKind::Recipe,
-        Some("caveat") => ObservationKind::Caveat,
-        Some(other) => return Err(format!("unknown kind {other:?} (failure|recipe|caveat)")),
-    };
-    let observation = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .map_err(|e| e.to_string())?
-        .block_on(manager.observation_hub().record(ObservationInput {
-            kind,
-            source: ObservationSource::Cli,
-            summary: summary.into(),
-            body: body.into(),
-            node_kind,
-            error,
-        }))
-        .map_err(|e| e.to_string())?;
-    println!("recorded {}", observation.id);
-    Ok(())
-}
-
-fn proposals_cmd(manager: &SkillManager, status: Option<&str>) -> Result<(), String> {
-    let proposals = manager.proposals().list();
-    let filtered: Vec<_> = proposals
-        .iter()
-        .filter(|p| status.is_none_or(|s| p.status.as_str() == s))
-        .collect();
-    if filtered.is_empty() {
-        println!(
-            "No proposals{}.",
-            status.map(|s| format!(" ({s})")).unwrap_or_default()
-        );
-        return Ok(());
-    }
-    for proposal in &filtered {
-        println!(
-            "{} [{}] — {}",
-            proposal.name,
-            proposal.status.as_str(),
-            if proposal.rationale.is_empty() {
-                "(no rationale)".to_string()
-            } else {
-                proposal.rationale.clone()
-            }
-        );
-        println!(
-            "  cluster {} from {} observation(s)",
-            proposal.cluster_hash,
-            proposal.source_observation_ids.len()
-        );
-    }
-    println!(
-        "\nThe evolution cycle installs proposals automatically; `pending` \
-         entries are past the per-cycle install cap and land on the next \
-         cycle. Trigger one from the daemon's skill evolution dashboard."
-    );
     Ok(())
 }

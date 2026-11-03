@@ -1,4 +1,4 @@
-//! Wiki 服务:tokio worker 模式(与 evolution-core 的 worker/handle
+//! Wiki 服务:tokio worker 模式(与 model_actor 的 worker/handle
 //! 同款)。
 //!
 //! [`start`] 起一个 worker 任务串行消费 [`WikiCommand`];调用方持
@@ -120,7 +120,7 @@ pub enum WikiCommand {
 }
 
 /// 启动 wiki worker 并返回其控制句柄。须在 tokio runtime 上下文调用
-/// (内部 `tokio::spawn`)。容量 128 与 evolution worker 一致:命令突发
+/// (内部 `tokio::spawn`)。容量 128:命令突发
 /// 时进缓冲,不把调用方顶出局。
 pub fn start<T: WikiStorage + ?Sized + 'static>(store: Arc<T>) -> WikiHandle {
     let (tx, rx) = mpsc::channel::<WikiCommand>(128);

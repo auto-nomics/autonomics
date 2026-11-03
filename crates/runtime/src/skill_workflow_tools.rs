@@ -158,10 +158,6 @@ impl ToolFunction for SkillRunWorkflowTool {
 pub struct SkillEvalTool {
     pub manager: Arc<SkillManager>,
     pub client: Arc<DataEngineClient>,
-    /// The skill-evolution control handle, when the service runs:
-    /// captured eval-failure observations nudge the worker so the
-    /// evidence distills promptly instead of waiting for the sweep.
-    pub control: Option<skills::evolution::SkillControlHandle>,
 }
 
 #[async_trait]
@@ -201,8 +197,6 @@ impl ToolFunction for SkillEvalTool {
         };
 
         let mut pairs: Vec<(skills::EvalCase, Vec<serde_json::Value>)> = Vec::new();
-        // Node id→kind maps per case, parallel to `pairs`.
-        let mut kinds: Vec<Vec<(String, String)>> = Vec::new();
         let mut build_errors: Vec<String> = Vec::new();
         for stem in &stems {
             let cases = match skills::eval::load_cases(&dir, stem) {
@@ -215,10 +209,7 @@ impl ToolFunction for SkillEvalTool {
             for case in cases {
                 let outcome = self.run_case(skill, &dir, &case).await;
                 match outcome {
-                    Ok((nodes, node_kinds)) => {
-                        pairs.push((case, nodes));
-                        kinds.push(node_kinds);
-                    }
+                    Ok(nodes) => pairs.push((case, nodes)),
                     Err(e) => build_errors.push(format!("case {:?}: {e}", case.name)),
                 }
             }
@@ -231,15 +222,6 @@ impl ToolFunction for SkillEvalTool {
             )));
         }
         let report = skills::eval::evaluate_all(&pairs);
-        // Auto-capture: every failed case becomes an anchored
-        // observation, so repeated eval failures feed the
-        // distillation loop without anyone remembering to record
-        // them — the anchor is the first failed check's node kind.
-        for (index, case) in report.cases.iter().enumerate() {
-            if !case.passed {
-                self.record_eval_failure(skill, case, &kinds[index]).await;
-            }
-        }
         let mut out = format!(
             "Eval report for {skill:?}: {}\n",
             if report.passed { "PASS" } else { "FAIL" }
@@ -292,22 +274,15 @@ impl SkillEvalTool {
 
     /// Run one eval case end-to-end: build (prefixed), run, strip the
     /// prefix from node reports, then remove the nodes.
-    /// Run one eval case, returning its stripped node reports plus the
-    /// template's id→kind map (for anchoring failure observations).
     async fn run_case(
         &self,
         skill: &str,
         dir: &std::path::Path,
         case: &skills::EvalCase,
-    ) -> Result<(Vec<serde_json::Value>, Vec<(String, String)>), String> {
+    ) -> Result<Vec<serde_json::Value>, String> {
         let template = skills::workflow::WorkflowTemplate::load(dir, &case.workflow)
             .map_err(|e| e.to_string())?;
         let rendered = template.render(&case.params).map_err(|e| e.to_string())?;
-        let node_kinds: Vec<(String, String)> = rendered
-            .nodes
-            .iter()
-            .map(|n| (n.id.clone(), n.kind.clone()))
-            .collect();
         let prefix = format!("{}__", case.name);
         build_dag(&self.client, &rendered, &prefix)
             .await
@@ -357,60 +332,7 @@ impl SkillEvalTool {
                 .remove_node(format!("{prefix}{}", node.id))
                 .await;
         }
-        Ok((nodes, node_kinds))
-    }
-
-    /// Record one failed eval case as an anchored observation:
-    /// summary carries the case identity, the body lists the failed
-    /// checks, and the anchor is the first failed check's node kind
-    /// plus its failure reason. Repeated eval failures therefore
-    /// cluster in distillation exactly like manual observations.
-    async fn record_eval_failure(
-        &self,
-        skill: &str,
-        case: &skills::eval::CaseResult,
-        node_kinds: &[(String, String)],
-    ) {
-        let failed: Vec<&skills::eval::CheckResult> =
-            case.checks.iter().filter(|c| !c.passed).collect();
-        let Some(first) = failed.first() else {
-            return;
-        };
-        let anchor_kind = node_kinds
-            .iter()
-            .find(|(id, _)| id == &first.node)
-            .map(|(_, kind)| kind.clone());
-        let mut body = format!("Eval case {} of skill {skill:?} failed:\n", case.name);
-        for check in &failed {
-            body.push_str(&format!("- {}: {}\n", check.node, check.reason));
-        }
-        body.push_str(
-            "Inspect the eval inputs and the workflow template; a fix here \
-             should update the template or its fixtures.",
-        );
-        let input = evolution_core::ObservationInput {
-            kind: evolution_core::ObservationKind::Failure,
-            source: evolution_core::ObservationSource::Eval,
-            summary: format!("eval case {} fails for skill {skill}", case.name),
-            body,
-            node_kind: anchor_kind,
-            error: Some(first.reason.clone()),
-        };
-        if let Err(e) = self.manager.observation_hub().record(input).await {
-            tracing::warn!(skill = skill, error = %e, "cannot record eval-failure observation");
-            return;
-        }
-        // Event-driven evolution: the failure just landed in the
-        // skill-eligible pool (un-routed observations are eligible by
-        // compatibility), so nudge the worker. Best-effort by
-        // contract — see EvolutionTrigger.
-        if let Some(handle) = self.control.as_ref()
-            && !handle.trigger(skills::evolution::EvolutionTrigger::Observation)
-        {
-            tracing::debug!(
-                "skill_eval: evolution channel full or worker gone; the timer sweep will catch up"
-            );
-        }
+        Ok(nodes)
     }
 }
 
@@ -444,24 +366,17 @@ async fn build_dag(
     Ok(())
 }
 
-/// Build the engine-bound skill tool registrations. `control` is the
-/// skill-evolution handle, when the service runs — captured eval
-/// failures nudge the worker through it.
+/// Build the engine-bound skill tool registrations.
 pub fn skill_workflow_registrations(
     manager: Arc<SkillManager>,
     client: Arc<DataEngineClient>,
-    control: Option<skills::evolution::SkillControlHandle>,
 ) -> Vec<ToolRegistration> {
     vec![
         ToolRegistration::from(SkillRunWorkflowTool {
             manager: manager.clone(),
             client: client.clone(),
         }),
-        ToolRegistration::from(SkillEvalTool {
-            manager,
-            client,
-            control,
-        }),
+        ToolRegistration::from(SkillEvalTool { manager, client }),
     ]
 }
 
@@ -581,7 +496,6 @@ node = "b"
         let tool = SkillEvalTool {
             manager: Arc::new(skills::SkillManager::new(tmp.path())),
             client: client.clone(),
-            control: None,
         };
         let out = tool
             .run(SkillEvalInput {
@@ -638,126 +552,5 @@ node = "b"
             .await
             .unwrap();
         assert!(bad_params.is_error.unwrap_or(false));
-    }
-
-    /// A failing eval records an anchored observation through the
-    /// manager; the same failure three times clusters and distills
-    /// into a pending proposal — the RSI loop's smallest full turn.
-    #[tokio::test]
-    async fn failing_evals_feed_the_distillation_loop() {
-        let tmp = tempfile::tempdir().unwrap();
-        // A skill whose check can never pass.
-        let dir = tmp.path().join("skills").join("broken-flow");
-        std::fs::create_dir_all(dir.join("evals")).unwrap();
-        std::fs::write(
-            dir.join("SKILL.md"),
-            "---\nname: broken-flow\ndescription: A skill whose eval always fails.\n---\nb\n",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("evals").join("always.toml"),
-            r#"
-[[case]]
-name = "always"
-workflow = "main"
-[[case.checks]]
-node = "a"
-rows_min = 99
-"#,
-        )
-        .unwrap();
-        write_skill(&tmp.path().join("skills"));
-        // Swap the skill identity: reuse the echo workflow, but under
-        // the broken-flow name.
-        std::fs::create_dir_all(dir.join("workflow")).unwrap();
-        std::fs::write(
-            dir.join("workflow").join("main.toml"),
-            r#"
-description = "Echo chain."
-[[node]]
-id = "a"
-kind = "echo"
-spec = {}
-"#,
-        )
-        .unwrap();
-
-        let manager = Arc::new(skills::SkillManager::new(tmp.path()));
-        let tool = SkillEvalTool {
-            manager: manager.clone(),
-            client: make_client(),
-            control: None,
-        };
-        for _ in 0..3 {
-            let out = tool
-                .run(SkillEvalInput {
-                    skill: "broken-flow".into(),
-                    eval: None,
-                })
-                .await
-                .unwrap();
-            assert!(out.is_error.unwrap_or(false));
-        }
-
-        // Three identical failures → one content-hashed observation
-        // (idempotent), so the cluster threshold needs a hand: record
-        // two more variants of the same anchor. The texts mirror the
-        // anchor's shape (same summary, same boilerplate body, a
-        // slightly different reason) the way real repeated eval
-        // failures look — under BM25 weighting, shorthand
-        // near-duplicates that share only the error line fall below
-        // SIMILARITY_THRESHOLD and legitimately stay apart.
-        assert_eq!(
-            manager.observations().await.len(),
-            1,
-            "identical failures dedupe"
-        );
-        for reason in [
-            "output_rows is 1, expected >= 99",
-            "output_rows is missing from the result, expected >= 99",
-        ] {
-            let body = format!(
-                "Eval case always of skill \"broken-flow\" failed:\n- a: {reason}\n\
-                 Inspect the eval inputs and the workflow template; a fix here \
-                 should update the template or its fixtures."
-            );
-            manager
-                .observation_hub()
-                .record(evolution_core::ObservationInput {
-                    kind: evolution_core::ObservationKind::Failure,
-                    source: evolution_core::ObservationSource::Eval,
-                    summary: "eval case always fails for skill broken-flow".into(),
-                    body,
-                    node_kind: Some("echo".into()),
-                    error: Some(reason.into()),
-                })
-                .await
-                .unwrap();
-        }
-
-        let report = manager.distill().await.unwrap();
-        assert_eq!(report.proposals_written.len(), 1, "{report:?}");
-        let name = &report.proposals_written[0];
-        let proposals = manager.proposals();
-        assert_eq!(proposals.list()[0].status, skills::ProposalStatus::Pending);
-        assert!(proposals.validate_dir(name).is_empty());
-
-        // Apply: the skill lands in the global tier and the
-        // generation advances — the loop closed.
-        let generation = manager.generation();
-        let outcome = manager.apply_proposal(name).unwrap();
-        assert!(outcome.destination.ends_with(name.as_str()));
-        assert_eq!(manager.generation(), generation + 1);
-        let names: Vec<String> = manager
-            .registry()
-            .list()
-            .into_iter()
-            .map(|e| e.meta.name)
-            .collect();
-        assert!(names.contains(name));
-
-        // And a second distill pass is a no-op.
-        let again = manager.distill().await.unwrap();
-        assert!(again.proposals_written.is_empty());
     }
 }

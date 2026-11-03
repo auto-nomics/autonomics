@@ -41,7 +41,7 @@ mod naming;
 mod overlays;
 mod render;
 mod runtime_events;
-mod skill_evolution;
+mod skill_library;
 mod terminal;
 mod workspace;
 

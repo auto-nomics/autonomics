@@ -324,22 +324,6 @@ fn system_prompt_requires_dedicated_node_priority() {
 }
 
 #[test]
-fn skill_evolution_defaults_and_overrides() {
-    // Defaults: service on, automatic installs, 6h sweep.
-    let cfg = RuntimeConfig::default();
-    assert!(cfg.enable_skill_evolution);
-    assert_eq!(cfg.skill_evolution_interval_secs, 6 * 60 * 60);
-
-    // Builder overrides flow through resolve.
-    let cfg = RuntimeConfig::builder()
-        .enable_skill_evolution(false)
-        .skill_evolution_interval_secs(600)
-        .build();
-    assert!(!cfg.enable_skill_evolution);
-    assert_eq!(cfg.skill_evolution_interval_secs, 600);
-}
-
-#[test]
 fn plugin_rsi_defaults_builder_and_backward_compatibility() {
     let config = RuntimeConfig::default();
     assert!(config.plugin_rsi.environments.list().len() >= 32);

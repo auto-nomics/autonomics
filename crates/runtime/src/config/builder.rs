@@ -54,8 +54,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) enable_kms: Option<bool>,
     pub(crate) embedding: Option<text_embedding::EmbeddingConfig>,
     pub(crate) agent_idle_ttl: Option<std::time::Duration>,
-    pub(crate) enable_skill_evolution: Option<bool>,
-    pub(crate) skill_evolution_interval_secs: Option<u64>,
     pub(crate) bib_http: Option<BibHttpOptions>,
     pub(crate) plugin_rsi: Option<PluginRsiConfig>,
     pub(crate) downloader: Option<resource_downloader::DownloaderConfig>,
@@ -266,16 +264,6 @@ impl RuntimeConfigBuilder {
     /// the next message re-activates them from storage.
     pub fn agent_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
         self.agent_idle_ttl = Some(ttl);
-        self
-    }
-
-    pub fn enable_skill_evolution(mut self, enabled: bool) -> Self {
-        self.enable_skill_evolution = Some(enabled);
-        self
-    }
-
-    pub fn skill_evolution_interval_secs(mut self, secs: u64) -> Self {
-        self.skill_evolution_interval_secs = Some(secs);
         self
     }
 

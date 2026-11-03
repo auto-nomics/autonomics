@@ -1,10 +1,10 @@
-//! Skill evolution and proposal handlers.
+//! Skill library handlers.
 
-use std::time::Duration;
-
-use axum::Json;
-use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::{
+    Json,
+    extract::{Path, State},
+};
 use runtime::SharedInfra;
 
 use super::error::{GatewayError, GatewayResult};
@@ -13,10 +13,9 @@ use crate::proto::*;
 
 // ── skill library ─────────────────────────────────────────────────────
 
-/// The unified library view: every installed skill (all tiers) plus
-/// every proposed-but-not-installed name, with the proposal pipeline
-/// as one attribute among others. Pure [`SharedInfra`] reads — the
-/// manager's always-fresh scans are the source of truth.
+/// The unified library view: every installed skill (all tiers) with
+/// its usage telemetry. Pure [`SharedInfra`] reads — the manager's
+/// always-fresh scans are the source of truth.
 #[utoipa::path(
     get,
     path = "/api/v1/skills/library",
@@ -29,14 +28,13 @@ pub(crate) async fn list_skill_library(
     Json(skill_library(&state.infra))
 }
 
-/// Listing sort order: builtin → global → workspace → proposed, then
-/// name — grouped so tier boundaries are visible while scanning.
+/// Listing sort order: builtin → global → workspace, then name —
+/// grouped so tier boundaries are visible while scanning.
 fn tier_rank(tier: &str) -> u8 {
     match tier {
         "builtin" => 0,
         "global" => 1,
-        "workspace" => 2,
-        _ => 3,
+        _ => 2,
     }
 }
 
@@ -44,53 +42,16 @@ fn skill_library(infra: &SharedInfra) -> Vec<SkillLibraryView> {
     let manager = &infra.skills;
     let usage: std::collections::HashMap<String, skills::UsageRecord> =
         manager.usage_snapshot().into_iter().collect();
-    let proposals = manager.proposals().list();
 
     let mut rows = Vec::new();
     for entry in manager.registry().list() {
-        let name = &entry.meta.name;
-        let proposal = proposals.iter().find(|p| &p.name == name);
-        let record = usage.get(name);
+        let record = usage.get(&entry.meta.name);
         rows.push(SkillLibraryView {
-            name: name.clone(),
+            name: entry.meta.name.clone(),
             tier: entry.tier.as_str().to_string(),
             tags: entry.meta.tags.clone(),
             description: entry.meta.description.clone(),
             installed: true,
-            proposal_status: proposal.map(|p| p.status.as_str().to_string()),
-            proposal_update: proposal.is_some_and(|p| p.update),
-            usage_gets: record.map(|r| r.gets).unwrap_or(0),
-            usage_search_hits: record.map(|r| r.search_hits).unwrap_or(0),
-            usage_runs: record.map(|r| r.runs).unwrap_or(0),
-            usage_evals: record.map(|r| r.evals).unwrap_or(0),
-            usage_last_used: record.map(|r| r.last_used).unwrap_or(0),
-        });
-    }
-    // Proposed-but-not-installed names surface as their own rows — a
-    // pending create has no installed skill to attach to yet.
-    let installed: std::collections::HashSet<String> =
-        rows.iter().map(|r| r.name.clone()).collect();
-    for proposal in &proposals {
-        if installed.contains(&proposal.name) || proposal.status != skills::ProposalStatus::Pending
-        {
-            continue;
-        }
-        // Metadata comes from the proposal's own SKILL.md draft; a
-        // missing/unparsable draft falls back to the manifest.
-        let meta = manager.proposals().meta(&proposal.name);
-        let (tags, description) = match meta {
-            Some(m) => (m.tags, m.description),
-            None => (Vec::new(), proposal.rationale.clone()),
-        };
-        let record = usage.get(&proposal.name);
-        rows.push(SkillLibraryView {
-            name: proposal.name.clone(),
-            tier: "proposed".to_string(),
-            tags,
-            description,
-            installed: false,
-            proposal_status: Some(proposal.status.as_str().to_string()),
-            proposal_update: proposal.update,
             usage_gets: record.map(|r| r.gets).unwrap_or(0),
             usage_search_hits: record.map(|r| r.search_hits).unwrap_or(0),
             usage_runs: record.map(|r| r.runs).unwrap_or(0),
@@ -106,17 +67,15 @@ fn skill_library(infra: &SharedInfra) -> Vec<SkillLibraryView> {
     rows
 }
 
-/// One skill's full detail: metadata, usage telemetry, the pipeline
-/// record (with evidence), and the complete SKILL.md body. Serves
-/// installed skills from the registry and proposed ones from the
-/// proposal area.
+/// One skill's full detail: metadata, usage telemetry, and the
+/// complete SKILL.md body, served from the registry.
 #[utoipa::path(
     get,
     path = "/api/v1/skills/library/{name}",
     tag = "skills",
     responses(
         (status = 200, body = SkillLibraryDetail),
-        (status = 404, description = "No installed skill or proposal with that name")
+        (status = 404, description = "No installed skill with that name")
     )
 )]
 pub(crate) async fn get_skill_library_detail(
@@ -129,20 +88,6 @@ pub(crate) async fn get_skill_library_detail(
         .into_iter()
         .find(|(n, _)| n == &name)
         .map(|(_, r)| r);
-    let proposal = manager.proposals().find(&name);
-    let proposal_view = proposal.as_ref().map(|p| SkillProposalView {
-        name: p.name.clone(),
-        status: p.status.as_str().to_string(),
-        authored_by: p.authored_by.clone(),
-        update: p.update,
-        rationale: p.rationale.clone(),
-        cluster_hash: p.cluster_hash.clone(),
-        observation_count: p.source_observation_ids.len(),
-        created_at: p.created_at,
-    });
-    let evidence_count = proposal
-        .map(|p| p.source_observation_ids.len())
-        .unwrap_or(0);
     let usage_fields = |record: Option<skills::UsageRecord>| {
         (
             record.map(|r| r.gets).unwrap_or(0),
@@ -153,238 +98,26 @@ pub(crate) async fn get_skill_library_detail(
         )
     };
 
-    // Installed skills come from the registry (shadowing-resolved).
-    if let Ok(Some(doc)) = manager.registry().get(&name) {
-        let (gets, hits, runs, evals, last_used) = usage_fields(usage);
-        return Ok(Json(SkillLibraryDetail {
-            name: doc.meta.name.clone(),
-            tier: doc.tier.as_str().to_string(),
-            tags: doc.meta.tags.clone(),
-            description: doc.meta.description.clone(),
-            installed: true,
-            body: doc.body,
-            workflows: doc.workflows.clone(),
-            evals: doc.evals.clone(),
-            proposal: proposal_view,
-            evidence_count,
-            usage_gets: gets,
-            usage_search_hits: hits,
-            usage_runs: runs,
-            usage_evals: evals,
-            usage_last_used: last_used,
-        }));
-    }
-    // Proposed-but-not-installed: read the draft from the proposal
-    // area (the document approval would promote).
-    if let Some((meta, body)) = manager.proposals().read_skill_md(&name) {
-        let (gets, hits, runs, evals, last_used) = usage_fields(usage);
-        return Ok(Json(SkillLibraryDetail {
-            name: meta.name.clone(),
-            tier: "proposed".to_string(),
-            tags: meta.tags.clone(),
-            description: meta.description.clone(),
-            installed: false,
-            body,
-            workflows: Vec::new(),
-            evals: Vec::new(),
-            proposal: proposal_view,
-            evidence_count,
-            usage_gets: gets,
-            usage_search_hits: hits,
-            usage_runs: runs,
-            usage_evals: evals,
-            usage_last_used: last_used,
-        }));
-    }
-    Err(GatewayError::Status(
-        StatusCode::NOT_FOUND,
-        format!("no skill or proposal named {name:?}"),
-    ))
-}
-
-// ── skill evolution ───────────────────────────────────────────────────
-
-/// All pure [`SharedInfra`] operations: no host lock, no agent state —
-/// the manager's always-fresh scans are the source of truth.
-#[utoipa::path(
-    get,
-    path = "/api/v1/skills/evolution",
-    tag = "skills",
-    responses((status = 200, body = SkillEvolutionStatus))
-)]
-pub(crate) async fn get_skill_evolution_status(
-    State(state): State<GatewayState>,
-) -> Json<SkillEvolutionStatus> {
-    Json(skill_evolution_status(&state.infra).await)
-}
-
-async fn skill_evolution_status(infra: &SharedInfra) -> SkillEvolutionStatus {
-    let manager = &infra.skills;
-    let (max_installs_per_cycle, sweep_interval_secs, cycle) = match &infra.skill_evolution {
-        Some(handle) => (
-            handle.policy().max_installs_per_cycle,
-            handle.timer().map(|d| d.as_secs()),
-            handle.cycle_status(),
-        ),
-        // Service off: the loop still runs on demand (CLI,
-        // skill_evolve tool); a zeroed monitor reflects that.
-        None => (5, None, skills::CycleStatus::default()),
+    let Some(doc) = manager.registry().get(&name).unwrap_or(None) else {
+        return Err(GatewayError::Status(
+            StatusCode::NOT_FOUND,
+            format!("no skill named {name:?}"),
+        ));
     };
-    // Flatten the typed phase into DTO-friendly fields.
-    let (phase, phase_queued, phase_triggers) = match &cycle.phase {
-        skills::CyclePhase::Idle => ("idle".to_string(), 0, Vec::new()),
-        skills::CyclePhase::Coalescing { queued } => {
-            ("coalescing".to_string(), *queued, Vec::new())
-        }
-        skills::CyclePhase::Distilling { triggers } => {
-            ("distilling".to_string(), 0, triggers.clone())
-        }
-    };
-    let mut skills_workspace = 0;
-    let mut skills_global = 0;
-    let mut skills_builtin = 0;
-    let mut skills_auto = 0;
-    for entry in manager.registry().list() {
-        match entry.tier {
-            skills::SkillTier::Workspace => skills_workspace += 1,
-            skills::SkillTier::Global => skills_global += 1,
-            skills::SkillTier::Builtin => skills_builtin += 1,
-        }
-        if entry.meta.tags.iter().any(|t| t == "auto") {
-            skills_auto += 1;
-        }
-    }
-    let mut proposals_pending = 0;
-    let mut proposals_applied = 0;
-    for proposal in manager.proposals().list() {
-        match proposal.status {
-            skills::ProposalStatus::Pending => proposals_pending += 1,
-            skills::ProposalStatus::Applied => proposals_applied += 1,
-            // Legacy review-era rejections: consumed, not counted.
-            skills::ProposalStatus::Rejected => {}
-        }
-    }
-    SkillEvolutionStatus {
-        service_enabled: infra.skill_evolution.is_some(),
-        generation: manager.generation(),
-        max_installs_per_cycle,
-        sweep_interval_secs,
-        observations: manager.observations().await.len(),
-        skills_workspace,
-        skills_global,
-        skills_builtin,
-        skills_auto,
-        proposals_pending,
-        proposals_applied,
-        phase,
-        phase_queued,
-        phase_triggers,
-        phase_elapsed_ms: cycle.phase_elapsed_ms,
-        cycles_completed: cycle.cycles_completed,
-        last_cycle_at: cycle.last_cycle_at,
-        last_cycle_duration_ms: cycle.last_cycle_duration_ms,
-        last_triggers: cycle.last_triggers,
-        last_error: cycle.last_error,
-        dropped_commands: cycle.dropped_commands,
-        cycle_skipped_empty: cycle.cycle_skipped_empty,
-        last_skipped_reason: cycle.last_skipped_reason,
-    }
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/v1/skills/evolution/trigger",
-    tag = "skills",
-    responses(
-        (status = 200, body = SkillEvolutionReport),
-        (status = 503, description = "Skill evolution service is disabled")
-    )
-)]
-pub(crate) async fn trigger_skill_evolution(
-    State(state): State<GatewayState>,
-) -> GatewayResult<Json<SkillEvolutionReport>> {
-    // Channel-only path: the worker is the sole executor. We send a
-    // `RunCycle` command with the daemon's policy and await the
-    // oneshot reply (10 s timeout for the whole cycle; the worker
-    // runs it synchronously on its task so this is generous
-    // headroom, not a stall budget). The cycle installs what it
-    // writes — there is no review gate to lift.
-    let handle = state.infra.skill_evolution.as_ref().ok_or_else(|| {
-        GatewayError::Status(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "skill evolution service is disabled".to_string(),
-        )
-    })?;
-    let policy = handle.policy().clone();
-    let outcome = tokio::time::timeout(Duration::from_secs(10), handle.call_run_cycle(policy))
-        .await
-        .map_err(|_| {
-            GatewayError::Message("skill evolution cycle timed out after 10 s".to_string())
-        })?;
-    let report = match outcome {
-        skills::SkillCommandOutcome::Ok(report) => report,
-        skills::SkillCommandOutcome::Err(e) => {
-            return Err(GatewayError::Message(format!(
-                "evolution cycle failed: {e}"
-            )));
-        }
-        skills::SkillCommandOutcome::WorkerGone => {
-            return Err(GatewayError::Status(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "skill evolution worker is gone".to_string(),
-            ));
-        }
-    };
-    Ok(Json(SkillEvolutionReport {
-        triggers: report.triggers.iter().map(|t| t.to_string()).collect(),
-        clusters_considered: report.clusters_considered,
-        proposals_written: report.proposals_written,
-        updated_existing: report.updated_existing,
-        installed: report.installed,
-        deferred: report.deferred,
-        skipped: report
-            .skipped
-            .into_iter()
-            .map(|(cluster_hash, reason)| SkippedCluster {
-                cluster_hash,
-                reason,
-            })
-            .collect(),
+    let (gets, hits, runs, evals, last_used) = usage_fields(usage);
+    Ok(Json(SkillLibraryDetail {
+        name: doc.meta.name.clone(),
+        tier: doc.tier.as_str().to_string(),
+        tags: doc.meta.tags.clone(),
+        description: doc.meta.description.clone(),
+        installed: true,
+        body: doc.body,
+        workflows: doc.workflows.clone(),
+        evals: doc.evals.clone(),
+        usage_gets: gets,
+        usage_search_hits: hits,
+        usage_runs: runs,
+        usage_evals: evals,
+        usage_last_used: last_used,
     }))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/v1/skills/evolution/proposals",
-    tag = "skills",
-    responses((status = 200, body = [SkillProposalView]))
-)]
-pub(crate) async fn list_skill_proposals(
-    State(state): State<GatewayState>,
-) -> Json<Vec<SkillProposalView>> {
-    let manager = &state.infra.skills;
-    let mut rows: Vec<SkillProposalView> = manager
-        .proposals()
-        .list()
-        .into_iter()
-        .map(|p| SkillProposalView {
-            name: p.name.clone(),
-            status: p.status.as_str().to_string(),
-            authored_by: p.authored_by.clone(),
-            update: p.update,
-            rationale: p.rationale.clone(),
-            cluster_hash: p.cluster_hash.clone(),
-            observation_count: p.source_observation_ids.len(),
-            created_at: p.created_at,
-        })
-        .collect();
-    // Pending first (actionable), then newest first.
-    rows.sort_by(|a, b| {
-        let pending = |s: &str| if s == "pending" { 0 } else { 1 };
-        pending(&a.status)
-            .cmp(&pending(&b.status))
-            .then(b.created_at.cmp(&a.created_at))
-            .then(a.name.cmp(&b.name))
-    });
-    Json(rows)
 }

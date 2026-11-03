@@ -79,7 +79,7 @@
         <mxCell id="sub" value="Self-improvement substrate — agents draft · gates validate · humans promote" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
           <mxGeometry x="770" y="556" width="390" height="282" as="geometry" />
         </mxCell>
-        <mxCell id="s1" value="Skills&#10;evo_observe → deterministic distill → proposal&#10;→ human approve · usage telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="s1" value="Skills&#10;tiered library (builtin/global/workspace)&#10;· memory_note lessons · usage telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="795" y="600" width="340" height="66" as="geometry" />
         </mxCell>
         <mxCell id="s2" value="Plugin RSI&#10;requests → /plugins/dev git workspaces&#10;→ validation gates → install + publish" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">

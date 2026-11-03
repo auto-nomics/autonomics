@@ -147,7 +147,10 @@ pub struct RuntimeConfig {
     /// Expose KMS entity/knowledge/index tools backed by Turso.
     #[serde(default)]
     pub enable_kms: bool,
-    /// Text-embedding provider used by observation clustering.
+    /// Default text-embedding provider configuration, persisted via
+    /// the gateway's embedding-config endpoints; per-feature consumers
+    /// (bibliography semantic search) construct their own embedders
+    /// from it.
     #[serde(default)]
     pub embedding: text_embedding::EmbeddingConfig,
 
@@ -160,17 +163,6 @@ pub struct RuntimeConfig {
     /// in-flight background work.
     #[serde(default = "default_agent_idle_ttl")]
     pub agent_idle_ttl: Option<std::time::Duration>,
-    /// Run the skill-evolution service: background worker that
-    /// distills observations into skill changes (creating or revising
-    /// auto-skills) on observation events and a periodic sweep.
-    /// Changes apply automatically, bounded per cycle.
-    #[serde(default = "default_true")]
-    pub enable_skill_evolution: bool,
-    /// Periodic evolution sweep cadence in seconds (default 6h). The
-    /// event-driven path (observation recorded) runs independently of
-    /// this timer.
-    #[serde(default = "default_skill_evolution_interval_secs")]
-    pub skill_evolution_interval_secs: u64,
 
     // ── HTTP client (shared via `BibShared`) ─────────────────────────
     /// Configuration for the process-wide `reqwest::Client` used by
@@ -237,14 +229,6 @@ fn default_knowledge_db_path() -> PathBuf {
                 .join(DEFAULT_KNOWLEDGE_DB)
         })
         .unwrap_or_else(|| PathBuf::from(DEFAULT_KNOWLEDGE_DB))
-}
-
-/// Six hours: frequent enough that overnight accumulation is dealt
-/// with, rare enough that the sweep is noise on any metric.
-const DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS: u64 = 6 * 60 * 60;
-
-fn default_skill_evolution_interval_secs() -> u64 {
-    DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS
 }
 
 impl RuntimeConfig {
@@ -392,10 +376,6 @@ impl RuntimeConfig {
             agent_idle_ttl: base
                 .and_then(|b| b.agent_idle_ttl)
                 .or_else(default_agent_idle_ttl),
-            enable_skill_evolution: resolve_flag(base, |b| b.enable_skill_evolution, true),
-            skill_evolution_interval_secs: base
-                .and_then(|b| b.skill_evolution_interval_secs)
-                .unwrap_or(DEFAULT_SKILL_EVOLUTION_INTERVAL_SECS),
             bib_http: resolve_bib_http(base),
             plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
             downloader: base.and_then(|b| b.downloader.clone()).unwrap_or_default(),

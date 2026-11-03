@@ -27,8 +27,7 @@ Development is agent-initiated. An agent either creates a greenfield workspace
 with `plugin_create` or derives one from an installed reference with
 `plugin_fork`; both paths record a concise host-owned purpose in the workspace
 lifecycle metadata. There is no demand queue or observation-to-plugin request
-path. `evo_observe` remains a runtime/skill concern and does not drive plugin
-development. Existing `request_ids` remain accepted for immutable-manifest
+path. Existing `request_ids` remain accepted for immutable-manifest
 compatibility, while fresh plugin/environment manifests omit them; retired
 request files on disk are ignored.
 

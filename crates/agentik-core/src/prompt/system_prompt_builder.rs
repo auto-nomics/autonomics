@@ -42,11 +42,12 @@ impl SystemPromptBuilder {
     }
 
     /// Append the skill-library guidance section: how to consume
-    /// skills (search/get/workflows), how to feed the evolution loop
-    /// (observe/propose/evolve), and the judgement boundaries. Static
-    /// behavioral guidance, so it belongs in the system prompt (the
-    /// per-session skill *index* is injected separately by the runtime
-    /// and stays snapshot-stable for prompt-cache friendliness).
+    /// skills (search/get/workflows), how to record lessons and gap
+    /// candidates through the memory tools, and the judgement
+    /// boundaries. Static behavioral guidance, so it belongs in the
+    /// system prompt (the per-session skill *index* is injected
+    /// separately by the runtime and stays snapshot-stable for
+    /// prompt-cache friendliness).
     pub fn build_skill_guidance(mut self) -> Self {
         self.skill_guidance = concat!("\n", include_str!("skill_guidance.md"),).to_string();
         self
@@ -94,7 +95,8 @@ mod tests {
             .build_tooluse_guidance()
             .parse();
         assert!(with_skills.contains("## Skill library"));
-        assert!(with_skills.contains("evo_observe"));
+        assert!(with_skills.contains("memory_note"));
+        assert!(!with_skills.contains("evo_observe"));
         // Render order: identity → extras → skill guidance → tool-use
         // guidance, mirroring parse().
         let skill_at = with_skills.find("## Skill library").unwrap();

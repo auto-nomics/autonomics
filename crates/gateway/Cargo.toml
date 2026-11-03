@@ -13,7 +13,6 @@ agentik-types = { path = "../agentik-types", features = ["schema"] }
 runtime = { path = "../runtime" }
 text-embedding = { path = "../text-embedding" }
 plugin-rsi = { path = "../plugin-rsi" }
-evolution-core = { path = "../evolution-core" }
 skills = { path = "../skills" }
 api-server = { path = "../api-server" }
 wiki = { path = "../wiki", features = ["vfs"] }

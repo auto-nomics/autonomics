@@ -252,7 +252,7 @@ impl App {
                 Overlay::MessagePicker => self.handle_message_picker_key(key),
                 Overlay::DagView => self.handle_dag_view_key(key),
                 Overlay::Bibliography => self.handle_bibliography_key(key),
-                Overlay::SkillEvolution => self.handle_skill_evolution_key(key),
+                Overlay::SkillLibrary => self.handle_skill_library_key(key),
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
                 Overlay::ModelConfig => self.handle_model_config_key(key),
                 Overlay::AgentConfig => self.handle_agent_config_key(key),

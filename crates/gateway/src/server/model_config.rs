@@ -198,10 +198,5 @@ pub(crate) async fn put_embedding_config(
         .save_embedding_config(config)
         .await
         .map_err(GatewayError::Message)?;
-    state
-        .infra
-        .configure_embedding(&saved.0)
-        .await
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
     Ok(Json(saved.0.into()))
 }

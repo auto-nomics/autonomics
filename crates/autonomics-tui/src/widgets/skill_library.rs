@@ -1,4 +1,6 @@
-//! Two-column skill library browser.
+//! Skill library dashboard: a centered popup browser over the
+//! installed skill tiers. Two columns — the scannable list and the
+//! selected skill's full document.
 
 use gateway::proto::{SkillLibraryDetail, SkillLibraryView};
 use ratatui::{
@@ -8,6 +10,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget, Wrap},
 };
+
+use crate::widgets::popup::{Popup, PopupControls};
 
 /// Which pane owns the vertical keys (j/k, ↑/↓).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -19,13 +23,42 @@ pub enum PanelFocus {
     Detail,
 }
 
-/// Library snapshot, selection, and scrolling state for the Skills tab.
+/// Dashboard state: visibility plus the browser snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct SkillLibraryState {
+    pub visible: bool,
+    pub browser: SkillBrowserState,
+}
+
+impl SkillLibraryState {
+    pub fn open(&mut self) {
+        self.visible = true;
+    }
+    pub fn close(&mut self) {
+        self.visible = false;
+    }
+    /// True when the skill selection changed and needs a detail fetch.
+    pub fn navigate(&mut self, down: bool) -> bool {
+        if self.browser.focus == PanelFocus::Detail {
+            self.browser.scroll_detail(if down { 1 } else { -1 });
+            false
+        } else {
+            let previous = self.browser.selected;
+            if down {
+                self.browser.select_next();
+            } else {
+                self.browser.select_prev();
+            }
+            previous != self.browser.selected
+        }
+    }
+}
+
+/// Library snapshot, selection, and scrolling state for the browser.
 #[derive(Debug, Clone, Default)]
 pub struct SkillBrowserState {
     pub error: Option<String>,
-    /// The unified library: installed skills (all tiers) plus
-    /// proposed-but-not-installed rows, sorted builtin → global →
-    /// workspace → proposed.
+    /// The installed library, sorted builtin → global → workspace.
     pub library: Vec<SkillLibraryView>,
     pub selected: usize,
     /// Which pane the vertical keys act on; ←/→ (h/l) switch it.
@@ -62,17 +95,12 @@ impl SkillBrowserState {
             }
         }
     }
-    /// Keep the selected skill across refreshes, falling back to a pending row.
+    /// Keep the selected skill across refreshes.
     pub fn set_library(&mut self, library: Vec<SkillLibraryView>) {
         let name = self.selected_skill().map(|row| row.name.clone());
         self.selected = name
             .as_ref()
             .and_then(|name| library.iter().position(|row| &row.name == name))
-            .or_else(|| {
-                library
-                    .iter()
-                    .position(|row| row.proposal_status.as_deref() == Some("pending"))
-            })
             .unwrap_or(0);
         if library.get(self.selected).map(|row| &row.name) != name.as_ref() {
             self.detail_scroll = 0;
@@ -151,20 +179,93 @@ impl SkillBrowserState {
     }
 }
 
+/// The dashboard as a centered popup. Stateless beyond the chrome —
+/// all mutable data lives in [`SkillLibraryState`].
+pub struct SkillLibraryWidget {
+    /// Popup accent color (title/border).
+    pub accent: Color,
+    /// Popup outer width in cells.
+    pub popup_width: u16,
+    /// Popup outer height in cells.
+    pub popup_height: u16,
+}
+
+impl SkillLibraryWidget {
+    pub fn new() -> Self {
+        Self {
+            accent: Color::Cyan,
+            popup_width: 0,
+            popup_height: 0,
+        }
+    }
+
+    pub fn popup_width(mut self, w: u16) -> Self {
+        self.popup_width = w;
+        self
+    }
+
+    pub fn popup_height(mut self, h: u16) -> Self {
+        self.popup_height = h;
+        self
+    }
+}
+
+impl Default for SkillLibraryWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatefulWidget for SkillLibraryWidget {
+    type State = SkillLibraryState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut SkillLibraryState) {
+        if !state.visible {
+            return;
+        }
+
+        let popup = Popup::new(" Skill Library ", PopupControls::default())
+            .width(self.popup_width)
+            .height(self.popup_height)
+            .accent(self.accent);
+        let inner = popup.render(area, buf);
+
+        let regions = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+        StatefulWidget::render(
+            SkillBrowserWidget {
+                accent: self.accent,
+            },
+            regions[0],
+            buf,
+            &mut state.browser,
+        );
+        Widget::render(
+            Paragraph::new(Line::raw(
+                "←→ panel · ↑↓ move/scroll · g refresh · Esc close",
+            ))
+            .style(Style::new().fg(Color::DarkGray)),
+            regions[1],
+            buf,
+        );
+    }
+}
+
 pub struct SkillBrowserWidget {
     pub accent: Color,
 }
 impl StatefulWidget for SkillBrowserWidget {
     type State = SkillBrowserState;
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
         self.render_browser(area, buf, state);
     }
 }
 impl SkillBrowserWidget {
     /// The skill browser: two columns, matching the picker convention
     /// (see the message picker). Left — scrolling list of name +
-    /// tier + proposal-status summaries; right — the selected skill's
-    /// detail document.
+    /// tier summaries; right — the selected skill's detail document.
     fn render_browser(&self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
         let dim = Style::new().fg(Color::DarkGray);
 
@@ -183,7 +284,7 @@ impl SkillBrowserWidget {
             let lines = vec![
                 Line::styled("no skills in the library", dim),
                 Line::styled(
-                    "install packs (autonomics-skills install) or let the loop distill one",
+                    "install packs with `autonomics-skills install <source>`",
                     dim,
                 ),
             ];
@@ -237,11 +338,10 @@ impl SkillBrowserWidget {
     }
 
     /// Right column: the selected skill's detail as ONE scrollable
-    /// document — metadata fields (tier, tags, usage, proposal status
-    /// with evidence), then the full SKILL.md body. When this pane
-    /// holds focus, j/k/↑/↓ scroll the document (the offset lives in
-    /// the state and is clamped to the document height here, where
-    /// the height is known).
+    /// document — metadata fields (tier, tags, usage), then the full
+    /// SKILL.md body. When this pane holds focus, j/k/↑/↓ scroll the
+    /// document (the offset lives in the state and is clamped to the
+    /// document height here, where the height is known).
     fn render_detail_column(&self, area: Rect, buf: &mut Buffer, state: &mut SkillBrowserState) {
         let focused = state.focus == PanelFocus::Detail;
         let title_style = if focused {
@@ -301,53 +401,32 @@ impl SkillBrowserWidget {
     }
 }
 
-/// One summary row for the left column: marker + name + tier +
-/// proposal status, truncated to the column width — the right pane
-/// carries the full detail, the list row only has to be scannable.
+/// One summary row for the left column: marker + name + tier,
+/// truncated to the column width — the right pane carries the full
+/// detail, the list row only has to be scannable.
 fn skill_row(skill: &SkillLibraryView, selected: bool, width: u16) -> Line<'static> {
     let dim = Style::new().fg(Color::DarkGray);
     let normal = Style::new();
     let bold = Style::new().add_modifier(Modifier::BOLD);
 
-    let status_style = match skill.proposal_status.as_deref() {
-        Some("pending") => Style::new().fg(Color::Yellow),
-        Some("approved") => Style::new().fg(Color::Green),
-        _ => Style::new().fg(Color::DarkGray),
-    };
     let marker = if selected { "▶ " } else { "  " };
     // Tier glyph: one scannable character per tier.
     let tier_tag = match skill.tier.as_str() {
         "builtin" => "b",
         "workspace" => "w",
-        "proposed" => "p",
         _ => "g",
     };
 
-    // name budget: width − marker(2) − tier(3) − status tag(~12)
-    let name_budget = (width as usize).saturating_sub(17).max(8);
-    let mut spans = vec![
+    // name budget: width − marker(2) − tier(3)
+    let name_budget = (width as usize).saturating_sub(5).max(8);
+    Line::from(vec![
         Span::styled(marker, Style::new().fg(Color::Cyan)),
         Span::styled(
             truncate(&skill.name, name_budget),
             if selected { bold } else { normal },
         ),
         Span::styled(format!(" [{tier_tag}]"), dim),
-    ];
-    if let Some(status) = &skill.proposal_status {
-        // An update proposal revises an installed skill rather than
-        // adding a new one — the ↑ marks it in the narrow list column
-        // (the detail pane spells out what approving it does).
-        let status_text = if skill.proposal_update {
-            format!(" {status}↑")
-        } else {
-            format!(" {status}")
-        };
-        spans.push(Span::styled(
-            status_text,
-            if selected { status_style } else { dim },
-        ));
-    }
-    Line::from(spans)
+    ])
 }
 
 /// The detail document: metadata fields with dim labels, then the
@@ -368,19 +447,7 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
 
     let mut lines = vec![
         field("Name", detail.name.clone(), bold),
-        field(
-            "Tier",
-            if detail.installed {
-                format!("{} · installed", detail.tier)
-            } else {
-                format!("{} — not installed yet", detail.tier)
-            },
-            if detail.installed {
-                value
-            } else {
-                Style::new().fg(Color::Yellow)
-            },
-        ),
+        field("Tier", detail.tier.clone(), value),
     ];
     if !detail.description.is_empty() {
         lines.push(field("Summary", detail.description.clone(), value));
@@ -388,7 +455,7 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
     if !detail.tags.is_empty() {
         lines.push(field("Tags", detail.tags.join(", "), dim));
     }
-    // Usage telemetry — the fitness signal.
+    // Usage telemetry.
     let usage = if detail.usage_gets == 0
         && detail.usage_search_hits == 0
         && detail.usage_runs == 0
@@ -420,48 +487,6 @@ fn detail_document(detail: &SkillLibraryDetail) -> Vec<Line<'static>> {
             bundles.push(format!("{} eval(s)", detail.evals.len()));
         }
         lines.push(field("Bundles", bundles.join(" · "), dim));
-    }
-    // The proposal attribute: status line + a dim continuation with
-    // author, evidence size, and the rationale.
-    match &detail.proposal {
-        Some(proposal) => {
-            let status_style = match proposal.status.as_str() {
-                "pending" => Style::new().fg(Color::Yellow),
-                "approved" => Style::new().fg(Color::Green),
-                _ => Style::new().fg(Color::DarkGray),
-            };
-            // Update proposals revise an installed skill (the previous
-            // version archives to .history/ on approve); creates add a
-            // new one. The status line says which.
-            let kind_note = if proposal.update {
-                "update of installed skill — previous version archives on approve"
-            } else {
-                ""
-            };
-            let status_note = match proposal.status.as_str() {
-                "pending" => " — past install cap, next cycle applies it",
-                "approved" => " — promoted to the library",
-                _ => " — cluster consumed, will not re-propose",
-            };
-            let status_line = if proposal.update {
-                format!("update {status_note} · {kind_note}")
-            } else {
-                format!("{}{status_note}", proposal.status)
-            };
-            lines.push(field("Proposal", status_line, status_style));
-            let mut meta = format!(
-                "by {} · {} obs evidence",
-                proposal.authored_by, proposal.observation_count
-            );
-            if !proposal.rationale.is_empty() {
-                meta.push_str(&format!(" — {}", proposal.rationale));
-            }
-            lines.push(Line::from(vec![
-                Span::styled("           ", label),
-                Span::styled(meta, dim),
-            ]));
-        }
-        None => lines.push(field("Proposal", "— (outside the pipeline)".into(), dim)),
     }
     // Body section: the full SKILL.md content.
     lines.push(Line::styled(
@@ -505,5 +530,244 @@ pub(super) fn truncate(text: &str, max_chars: usize) -> String {
         let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    fn skill(name: &str, tier: &str) -> SkillLibraryView {
+        SkillLibraryView {
+            name: name.into(),
+            tier: tier.into(),
+            tags: vec!["meta".into()],
+            description: "does the thing".into(),
+            installed: true,
+            usage_gets: 1,
+            usage_search_hits: 0,
+            usage_runs: 0,
+            usage_evals: 0,
+            usage_last_used: 0,
+        }
+    }
+
+    fn detail_for(name: &str) -> SkillLibraryDetail {
+        SkillLibraryDetail {
+            name: name.into(),
+            tier: "global".into(),
+            tags: vec!["meta".into()],
+            description: "does the thing".into(),
+            installed: true,
+            body: "# Guide\n\nStep one.\n".into(),
+            workflows: vec![],
+            evals: vec![],
+            usage_gets: 0,
+            usage_search_hits: 0,
+            usage_runs: 0,
+            usage_evals: 0,
+            usage_last_used: 0,
+        }
+    }
+
+    fn draw(state: &mut SkillLibraryState, width: u16, height: u16) -> String {
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| {
+                SkillLibraryWidget::new()
+                    .popup_width(frame.area().width * 9 / 10)
+                    .popup_height((frame.area().height * 3 / 4).max(12))
+                    .render(frame.area(), frame.buffer_mut(), state)
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn selection_moves_across_all_rows_with_wrap() {
+        let mut state = SkillLibraryState {
+            browser: SkillBrowserState {
+                library: vec![
+                    skill("a", "global"),
+                    skill("b", "builtin"),
+                    skill("c", "workspace"),
+                    skill("d", "global"),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(state.browser.selected, 0);
+        state.browser.select_next();
+        assert_eq!(state.browser.selected, 1, "visits every row");
+        state.browser.select_next();
+        state.browser.select_next();
+        state.browser.select_next();
+        assert_eq!(state.browser.selected, 0, "wraps forward");
+        state.browser.select_prev();
+        assert_eq!(state.browser.selected, 3, "wraps backwards");
+        assert_eq!(
+            state.browser.selected_skill().map(|s| s.name.clone()),
+            Some("d".into())
+        );
+    }
+
+    #[test]
+    fn render_shows_library_and_detail_document() {
+        let mut state = SkillLibraryState {
+            visible: true,
+            browser: SkillBrowserState {
+                library: vec![skill("sql-syntax", "global")],
+                detail: Some(("sql-syntax".into(), detail_for("sql-syntax"))),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = draw(&mut state, 100, 32);
+        assert!(text.contains("Skills (1)"), "{text}");
+        assert!(text.contains("sql-syntax"), "{text}");
+        // Detail document: metadata + usage + body.
+        assert!(text.contains("Tier"));
+        assert!(
+            text.contains("never used"),
+            "zero telemetry reads as unused"
+        );
+        assert!(text.contains("Body — SKILL.md"));
+        assert!(text.contains("Step one."));
+    }
+
+    #[test]
+    fn stale_detail_for_another_row_shows_loading() {
+        let mut state = SkillLibraryState {
+            visible: true,
+            browser: SkillBrowserState {
+                library: vec![skill("a", "global"), skill("b", "global")],
+                selected: 1,
+                // Detail fetched for row "a" while the selection has since
+                // moved to "b" — must not render as b's detail.
+                detail: Some(("a".into(), detail_for("a"))),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = draw(&mut state, 100, 24);
+        assert!(text.contains("loading detail"), "{text}");
+        assert!(!text.contains("Step one"), "stale body must not show");
+    }
+
+    #[test]
+    fn detail_fetch_failure_renders_the_error() {
+        let mut state = SkillLibraryState {
+            visible: true,
+            browser: SkillBrowserState {
+                library: vec![skill("gone", "global")],
+                detail_error: Some(("gone".into(), "404 no skill".into())),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = draw(&mut state, 100, 24);
+        assert!(text.contains("detail unavailable"), "{text}");
+        assert!(text.contains("404"));
+    }
+
+    #[test]
+    fn library_error_state_renders_without_panicking() {
+        let mut state = SkillLibraryState {
+            visible: true,
+            browser: SkillBrowserState {
+                error: Some("daemon unreachable".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = draw(&mut state, 80, 10);
+        assert!(text.contains("daemon unreachable"));
+    }
+
+    #[test]
+    fn empty_library_renders_the_install_hint() {
+        let mut state = SkillLibraryState {
+            visible: true,
+            ..Default::default()
+        };
+        let text = draw(&mut state, 80, 12);
+        assert!(text.contains("no skills in the library"), "{text}");
+        assert!(text.contains("autonomics-skills install"));
+    }
+
+    #[test]
+    fn hidden_state_renders_nothing() {
+        let mut state = SkillLibraryState {
+            visible: false,
+            ..Default::default()
+        };
+        let text = draw(&mut state, 80, 10);
+        assert!(
+            text.trim().is_empty(),
+            "expected a blank frame, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn selection_scrolls_into_view_when_queue_overflows() {
+        // 80×24 → popup 18 rows → ~15 visible list rows; 20 skills
+        // force the list to scroll.
+        let mut state = SkillLibraryState {
+            visible: true,
+            browser: SkillBrowserState {
+                library: (0..20)
+                    .map(|i| skill(&format!("skill-{i:02}"), "global"))
+                    .collect(),
+                selected: 19,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let text = draw(&mut state, 80, 24);
+        assert!(text.contains("skill-19"), "selected row must be visible");
+        assert!(
+            !text.contains("skill-00"),
+            "first row must have scrolled out: {text}"
+        );
+    }
+
+    #[test]
+    fn focus_switches_between_panes_and_vertical_keys_follow() {
+        let mut state = SkillLibraryState {
+            browser: SkillBrowserState {
+                library: vec![skill("a", "global")],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert_eq!(state.browser.focus, PanelFocus::List, "starts on the list");
+        state.browser.focus_detail();
+        assert_eq!(state.browser.focus, PanelFocus::Detail);
+        state.browser.scroll_detail(3);
+        state.browser.scroll_detail(-1);
+        state.browser.focus_list();
+        assert_eq!(state.browser.focus, PanelFocus::List);
+    }
+
+    #[test]
+    fn navigate_reports_selection_changes() {
+        let mut state = SkillLibraryState {
+            browser: SkillBrowserState {
+                library: vec![skill("a", "global"), skill("b", "global")],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(state.navigate(true), "selection moved → detail fetch");
+        state.browser.focus_detail();
+        assert!(!state.navigate(true), "scrolling the detail pane");
     }
 }

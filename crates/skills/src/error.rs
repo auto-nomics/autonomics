@@ -46,9 +46,6 @@ pub enum SkillError {
 
     #[error(transparent)]
     Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Evolution(#[from] evolution_core::Error),
 }
 
 impl SkillError {

@@ -103,7 +103,6 @@ members = [
   "stat_crates/dl",
   "crates/node-bundles/nodes-dl",
   "crates/container-plugin",
-  "crates/evolution-core",
   "crates/skills",
   "crates/plugin-rsi",
   "crates/text-embedding", "crates/browser-use", "crates/wiki",

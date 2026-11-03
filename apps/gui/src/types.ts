@@ -304,8 +304,6 @@ export type SkillLibraryRow = {
   tags: string[];
   description: string;
   installed: boolean;
-  proposal_status: string | null;
-  proposal_update: boolean;
   usage_gets: number;
   usage_search_hits: number;
   usage_runs: number;
@@ -317,7 +315,6 @@ export type SkillLibraryDetail = SkillLibraryRow & {
   body: string;
   workflows: string[];
   evals: string[];
-  evidence_count: number;
 };
 
 export type AgentRuntimeOverrides = {

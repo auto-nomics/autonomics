@@ -12,22 +12,10 @@
 //!   name-based shadowing; always fresh, never cached
 //! - [`manager`] — the central process-wide manager: generation
 //!   counter, change broadcast on every mutation, usage telemetry
-//!   (the evolution fitness signal)
-//! - [`evolution`] — the unified control loop: every skill mutation
-//!   (evolution triggers, explicit cycles)
-//!   travels through one `mpsc::Sender<SkillCommand>` into a single
-//!   worker task; the worker coalesces trigger bursts in a quiet
-//!   window and replies to inline mutations via oneshot. The cycle
-//!   body itself stays `pub(crate)` and the worker calls it directly.
-//! - [`observation`] — the distillation feedstock: durable
-//!   content-hashed records of failures/fixes/recipes
-//! - [`distill`] — deterministic clustering and proposal synthesis
-//!   (the RSI loop's no-LLM core)
-//! - [`proposals`] — the change records the loop writes and applies
-//!   between distillation and the live library
 //! - [`inject`] — the one-line-per-skill system-prompt index
-//! - [`tools`] — skill discovery and authoring tools; the runtime layers the
-//!   unified `evo_observe` entry over this crate's shared observation store
+//! - [`tools`] — skill discovery tools; agent-facing lesson
+//!   recording lives in the memory tools instead (runtime
+//!   `memory_note`)
 //! - [`workflow`] — parameterized DAG templates (`workflow/*.toml`):
 //!   parse, validate, render with checked params
 //! - [`eval`] — eval cases (`evals/*.toml`): run a workflow with fixed
@@ -41,33 +29,21 @@
 //! access point for future usage telemetry.
 
 pub mod builtin;
-pub mod distill;
 pub mod error;
 pub mod eval;
-pub mod evolution;
 pub mod format;
 pub mod inject;
 pub mod install;
 pub mod manager;
-pub mod proposals;
 pub mod registry;
 pub mod tools;
 pub mod workflow;
 
-pub use distill::{DistillReport, distill};
 pub use error::SkillError;
-// The cluster type proposals are distilled from — owned by
-// evolution-core, re-exported for the crate's public surface.
 pub use eval::{Check, EvalCase, EvalReport};
-pub use evolution::{
-    CyclePhase, CycleStatus, EvolutionOptions, EvolutionPolicy, EvolutionReport, EvolutionTrigger,
-    SkillCommand, SkillCommandOutcome, SkillControlHandle, start,
-};
-pub use evolution_core::cluster::Cluster;
 pub use format::SkillMeta;
 pub use inject::prompt_section;
 pub use manager::{SkillManager, UsageKind, UsageRecord};
-pub use proposals::{ApplyOutcome, Proposal, ProposalStatus, Proposals};
 pub use registry::{SkillDocument, SkillEntry, SkillRegistry, SkillTier};
 pub use tools::skill_registrations;
 pub use workflow::{RenderedWorkflow, WorkflowTemplate};

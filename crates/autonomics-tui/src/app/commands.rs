@@ -136,12 +136,8 @@ impl App {
             CommandAction::BibliographyPanel => {
                 self.open_bibliography();
             }
-            CommandAction::SkillEvolutionPanel => {
-                self.open_skill_evolution();
-            }
-            CommandAction::SkillEvolve => {
-                // The cycle installs what it writes; no gate to pick.
-                self.trigger_skill_evolution();
+            CommandAction::SkillLibraryPanel => {
+                self.open_skill_library();
             }
             CommandAction::ToggleCollapseThinking => {
                 self.state.display_settings.toggle_thinking();
