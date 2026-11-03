@@ -124,7 +124,7 @@ export type StateSnapshot = {
   active_model_spec: string | null;
   profiles: any[];
   agents: AgentInfo[];
-  contexts: Record<string, ContextInfo[]>;
+  contexts: Record<string, ContextInfo>;
   display_settings: {
     collapse_thinking: boolean;
     collapse_tool_calls: boolean;

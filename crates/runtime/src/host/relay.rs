@@ -66,6 +66,11 @@ pub(super) struct AgentEntry {
     /// passivation sweep waits for these to drain — a fire-and-forget
     /// download outlives its turn, and evicting the instance would kill it.
     pub(super) background_pending: usize,
+    /// Final status of this agent's most recent `TurnCompleted`, awaiting
+    /// the trailing `Done` event. Written on `TurnCompleted`, consumed by
+    /// the `Done` arm to resolve delegations with the correct terminal
+    /// status. `None` when no turn completed since the last `Done`.
+    pub(super) turn_outcome: Option<agentik_types::TurnExecutionStatus>,
 }
 
 impl RuntimeHost {
@@ -118,6 +123,7 @@ impl RuntimeHost {
                 inbound_pending: Arc::new(AtomicBool::new(false)),
                 idle_since: Some(std::time::Instant::now()),
                 background_pending: 0,
+                turn_outcome: None,
             },
         );
 

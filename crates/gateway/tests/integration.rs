@@ -104,17 +104,14 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     };
     assert!(completed_seq > registered_seq);
 
-    // /state now lists the live agent, and the driver's session cache has
-    // the agent's sessions (requested at registration, refreshed when the
-    // turn started on a session the cache hadn't seen).
+    // /state now lists the live agent, and the driver's context cache has
+    // the agent's sole context (requested at registration, refreshed after
+    // each completed turn).
     let refreshed = tokio::time::timeout(TEST_TIMEOUT, async {
         loop {
             let snapshot = client.state().await.unwrap();
             if snapshot.agents.iter().any(|a| a.path == path)
-                && snapshot
-                    .contexts
-                    .get(&path)
-                    .is_some_and(|list| !list.is_empty())
+                && snapshot.contexts.contains_key(&path)
             {
                 return snapshot;
             }
@@ -123,7 +120,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     })
     .await
     .expect("agent + contexts visible in /state");
-    assert!(!refreshed.contexts[&path].is_empty());
+    assert!(refreshed.contexts.contains_key(&path));
     let state_agent = refreshed
         .agents
         .iter()

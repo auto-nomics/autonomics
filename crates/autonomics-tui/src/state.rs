@@ -742,12 +742,12 @@ pub fn apply_context_event(state: &mut AppState, event: AgentEvent, agent_idx: u
         None => return,
     };
     match event {
-        AgentEvent::ContextList { contexts } => {
-            // At most one entry: the agent's sole context. Preserve the
-            // existing tab_state when the id matches so hydration never
-            // wipes a loaded transcript.
+        AgentEvent::ContextList { context } => {
+            // The agent's sole context. Preserve the existing tab_state
+            // when the id matches so hydration never wipes a loaded
+            // transcript.
             let old = session.context.take();
-            session.context = match contexts.into_iter().next() {
+            session.context = match context {
                 Some(info) => match old {
                     Some(old) if old.id == info.id => Some(AgentContext::from_info(info, old)),
                     _ => Some(AgentContext::new(info)),

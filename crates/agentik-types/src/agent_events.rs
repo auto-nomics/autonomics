@@ -160,8 +160,9 @@ pub enum AgentEvent {
     // ── Context lifecycle ──
     /// The agent's sole context was activated (created or restored).
     ContextActivated { id: Uuid, title: Option<String> },
-    /// Response to `ListContexts` — the agent's sole context.
-    ContextList { contexts: Vec<ContextInfo> },
+    /// Response to `ListContexts` — the agent's sole context, or `None`
+    /// when it has none yet (spawned but no first message).
+    ContextList { context: Option<ContextInfo> },
 }
 
 /// Lightweight info about the working context, for listing / display.

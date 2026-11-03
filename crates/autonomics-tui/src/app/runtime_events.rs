@@ -600,8 +600,8 @@ impl App {
                     self.refresh_agent_model_info(&info.path);
                 }
             }
-            crate::app_event::AppEvent::ContextListKnown { agent, contexts } => {
-                self.apply_context_list(&agent, contexts);
+            crate::app_event::AppEvent::ContextListKnown { agent, context } => {
+                self.apply_context_list(&agent, context);
                 if let Some(idx) = self.state.sessions.iter().position(|s| s.name == agent) {
                     self.spawn_history_loads_for(idx);
                 }
@@ -751,9 +751,13 @@ impl App {
         tracing::info!(%session_id, count = context.tab_state.messages.len(), "history replayed");
     }
 
-    /// Fold a session list (from hydration or a `ContextList` event that
-    /// arrived before the agent's sub-sessions existed) into the UI.
-    pub(super) fn apply_context_list(&mut self, agent_path: &str, contexts: Vec<ContextInfo>) {
+    /// Fold the agent's sole context (from hydration or a `ContextList`
+    /// event that arrived before the agent's context existed) into the UI.
+    pub(super) fn apply_context_list(
+        &mut self,
+        agent_path: &str,
+        context: Option<ContextInfo>,
+    ) {
         let Some(agent) = self
             .state
             .sessions
@@ -763,10 +767,10 @@ impl App {
             return;
         };
 
-        // At most one context per agent; keep a loaded transcript when the
-        // id matches.
+        // One context per agent; keep a loaded transcript when the id
+        // matches.
         let old = agent.context.take();
-        agent.context = match contexts.into_iter().next() {
+        agent.context = match context {
             Some(info) => match old {
                 Some(old) if old.id == info.id => Some(state::AgentContext::from_info(info, old)),
                 _ => Some(state::AgentContext::new(info)),
@@ -895,10 +899,10 @@ impl App {
                     for info in &snapshot.agents {
                         tx.send(crate::app_event::AppEvent::AgentUpserted(info.clone()));
                     }
-                    for (agent_path, contexts) in snapshot.contexts {
+                    for (agent_path, context) in snapshot.contexts {
                         tx.send(crate::app_event::AppEvent::ContextListKnown {
                             agent: agent_path,
-                            contexts,
+                            context: Some(context),
                         });
                     }
                 }

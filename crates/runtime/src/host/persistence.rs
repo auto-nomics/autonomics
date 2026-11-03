@@ -290,17 +290,15 @@ mod agent_persistence_tests {
             matches!(injected, AgentEvent::MessageInjected(text) if text == "persist child message")
         );
 
-        // Keep pumping host events until the delegated turn completes; the
-        // delegation reply resolves inside the same event-processing pass
-        // (process_tagged resolves reply_tx on TurnCompleted), so awaiting
-        // the delivery task afterwards only needs a scheduler tick.
+        // Keep pumping host events until the delegated turn's trailing
+        // `Done`: delegation resolution keys on Done (TurnCompleted only
+        // records the outcome), so the reply fires in that same pass.
         timeout(Duration::from_secs(10), async {
             loop {
                 let Some((event_path, event)) = host.recv_any().await else {
                     panic!("agent event channel closed");
                 };
-                if event_path == path.as_str() && matches!(event, AgentEvent::TurnCompleted { .. })
-                {
+                if event_path == path.as_str() && matches!(event, AgentEvent::Done) {
                     return;
                 }
             }
@@ -436,9 +434,9 @@ mod agent_persistence_tests {
                     panic!("host agent event channel closed");
                 };
                 if event_path == path.as_str()
-                    && let AgentEvent::ContextList { contexts } = event
+                    && let AgentEvent::ContextList { context } = event
                 {
-                    return contexts;
+                    return context;
                 }
                 seen.push(format!("{event_path}::{event:?}"));
                 if seen.len() > 40 {
@@ -483,7 +481,7 @@ mod agent_persistence_tests {
                 );
             }
         };
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, session_id);
+        let sole = sessions.expect("one sole context restored");
+        assert_eq!(sole.id, session_id);
     }
 }

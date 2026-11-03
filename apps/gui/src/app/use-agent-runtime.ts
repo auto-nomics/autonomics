@@ -34,11 +34,6 @@ function makeItem(role: ChatItem["role"], text: string, kind?: ChatItem["kind"])
   return { id: itemSequence, role, text, kind, time: Date.now() };
 }
 
-function latestContext(contexts: ContextInfo[], activeId?: string | null) {
-  if (activeId && contexts.some((context) => context.id === activeId)) return activeId;
-  return [...contexts].sort((left, right) => right.last_active - left.last_active)[0]?.id ?? null;
-}
-
 function convertMessage(message: any): ChatItem[] {
   const output: ChatItem[] = [];
   let text = "";
@@ -90,7 +85,7 @@ export function useAgentRuntime() {
   // Persisted identities (GET /storage/agents) for the merged agent
   // picker: resume targets whether or not the instance is live.
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
-  const [contexts, setContexts] = useState<Record<string, ContextInfo[]>>({});
+  const [contexts, setContexts] = useState<Record<string, ContextInfo>>({});
   const [activeContexts, setActiveContexts] = useState<Record<string, string | null>>({});
   const [activeAgent, setActiveAgent] = useState("");
   const [statuses, setStatuses] = useState<Record<string, string>>({});
@@ -124,7 +119,7 @@ export function useAgentRuntime() {
   const loadHistory = useCallback(async (agentPath: string, explicitContextId?: string) => {
     const info = stateRef.current.agents.find((agent) => agent.path === agentPath);
     const contextId = explicitContextId ?? stateRef.current.activeContexts[agentPath]
-      ?? latestContext(stateRef.current.contexts[agentPath] ?? []);
+      ?? stateRef.current.contexts[agentPath]?.id ?? null;
     if (!info?.agent_id || !contextId) return;
     // Only the latest in-flight load per agent may clear the flag, so a
     // superseded fetch (fast context double-switch) cannot hide the
@@ -212,9 +207,16 @@ export function useAgentRuntime() {
       } else if (event.Error !== undefined) {
         appendMessage(agent, makeItem("error", event.Error));
       } else if (event.ContextList !== undefined) {
-        const nextContexts: ContextInfo[] = event.ContextList.contexts;
-        setContexts((current) => ({ ...current, [agent]: nextContexts }));
-        setActiveContexts((current) => ({ ...current, [agent]: latestContext(nextContexts, current[agent]) }));
+        // One agent, one context: the reply is the context itself (or
+        // null when the agent has none yet).
+        const next: ContextInfo | null = event.ContextList.context;
+        setContexts((current) => {
+          const copy = { ...current };
+          if (next) copy[agent] = next;
+          else delete copy[agent];
+          return copy;
+        });
+        setActiveContexts((current) => ({ ...current, [agent]: next?.id ?? null }));
       } else if (event.ContextActivated !== undefined) {
         setActiveContexts((current) => ({ ...current, [agent]: event.ContextActivated.id }));
         setMessages((current) => ({ ...current, [agent]: [] }));
@@ -305,8 +307,8 @@ export function useAgentRuntime() {
       if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
       const snapshot: StateSnapshot = await gatewayRequest("GET", "/state");
       const nextActiveContexts: Record<string, string | null> = {};
-      for (const [agent, agentContexts] of Object.entries(snapshot.contexts)) {
-        nextActiveContexts[agent] = latestContext(agentContexts);
+      for (const agent of Object.keys(snapshot.contexts)) {
+        nextActiveContexts[agent] = snapshot.contexts[agent]?.id ?? null;
       }
       const nextAgents = snapshot.agents;
       // Reconnects re-run hydrate; keep the agent the user selected if it
@@ -546,7 +548,7 @@ export function useAgentRuntime() {
     }
   };
 
-  const activeContextId = activeContexts[activeAgent] ?? latestContext(contexts[activeAgent] ?? []);
+  const activeContextId = activeContexts[activeAgent] ?? contexts[activeAgent]?.id ?? null;
 
   return {
     // connection & login

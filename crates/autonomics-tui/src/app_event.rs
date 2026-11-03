@@ -158,9 +158,9 @@ pub(crate) enum AppEvent {
     /// A live agent seen in a `/state` snapshot that the UI doesn't know
     /// yet (reconcile after lag / reconnect).
     AgentUpserted(gateway::AgentInfo),
-    /// Known context list for an agent (from a `/state` snapshot).
+    /// Known sole context for an agent (from a `/state` snapshot).
     ContextListKnown {
         agent: String,
-        contexts: Vec<agentik_types::ContextInfo>,
+        context: Option<agentik_types::ContextInfo>,
     },
 }

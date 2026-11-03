@@ -233,12 +233,8 @@ impl Agent {
 
     /// Context metadata for `ListContexts` replies: the sole context, or an
     /// empty list while recovery is pending.
-    pub fn context_infos(&self) -> Vec<ContextInfo> {
-        self.context
-            .as_ref()
-            .map(ContextInfo::from)
-            .into_iter()
-            .collect()
+    pub fn context_info(&self) -> Option<ContextInfo> {
+        self.context.as_ref().map(ContextInfo::from)
     }
 
     // ── Snapshot ──────────────────────────────────────────
@@ -416,9 +412,9 @@ impl Agent {
             // Context management events are handled inline before delegation.
             let should_run = match &event {
                 InternalEvent::ListContexts => {
-                    let infos: Vec<ContextInfo> = self.context_infos();
-                    self.shared
-                        .send_event(AgentEvent::ContextList { contexts: infos });
+                    self.shared.send_event(AgentEvent::ContextList {
+                        context: self.context_info(),
+                    });
                     false
                 }
                 InternalEvent::MessageInject { .. } | InternalEvent::BgTaskComplete { .. } => true,
@@ -900,7 +896,7 @@ mod tests {
         let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx2.recv().await {
-                    Some(AgentEvent::ContextList { contexts }) => break contexts,
+                    Some(AgentEvent::ContextList { context }) => break context,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -914,8 +910,8 @@ mod tests {
             .expect("agent shutdown timed out")
             .unwrap();
 
-        assert_eq!(listed.len(), 1, "exactly one context is restored");
-        assert_eq!(listed[0].id, activated_id);
+        let listed = listed.expect("exactly one context is restored");
+        assert_eq!(listed.id, activated_id);
     }
 
     /// Legacy multi-session agents bind their most recently active record
@@ -954,7 +950,7 @@ mod tests {
         let listed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
             loop {
                 match event_rx.recv().await {
-                    Some(AgentEvent::ContextList { contexts }) => break contexts,
+                    Some(AgentEvent::ContextList { context }) => break context,
                     Some(_) => continue,
                     None => panic!("agent event channel closed"),
                 }
@@ -969,9 +965,9 @@ mod tests {
             .unwrap();
 
         // The most recently active legacy record became the sole context.
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, newer);
-        assert_eq!(listed[0].title.as_deref(), Some("newer"));
+        let listed = listed.expect("one legacy record bound as sole context");
+        assert_eq!(listed.id, newer);
+        assert_eq!(listed.title.as_deref(), Some("newer"));
         assert_eq!(
             storage.agent_context_id(agent_id).await.unwrap(),
             Some(newer)

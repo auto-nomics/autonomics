@@ -74,7 +74,11 @@ pub(super) fn derive_agent_status(
                 Some("waiting for background task".into()),
             ),
         },
-        AgentEvent::Done => (Some(AgentLifecycleStatus::Idle), Some("done".into())),
+        // `Done` closes a turn for observers but pins no status: the
+        // preceding `TurnCompleted` already pinned the terminal lifecycle
+        // (Idle/Cancelled/Error/Waiting), and Done now also follows failed
+        // and interrupted turns — forcing Idle here would clobber those.
+        AgentEvent::Done => (None, Some("done".into())),
 
         // ── Tool-level signals ──
         // Tool dispatch moves the status to `ToolRunning` (the session's
@@ -458,9 +462,11 @@ mod status_derivation_tests {
     // ── Turn boundaries ──
 
     #[test]
-    fn done_lands_on_idle() {
+    fn done_pins_no_status() {
+        // Done now also follows failed/interrupted turns — the preceding
+        // TurnCompleted owns the terminal status, Done must not clobber it.
         let (s, ev) = derive_agent_status(&AgentEvent::Done);
-        assert_eq!(s, Some(AgentLifecycleStatus::Idle));
+        assert_eq!(s, None);
         assert_eq!(ev.as_deref(), Some("done"));
     }
 
@@ -590,7 +596,7 @@ mod status_tests {
     fn context_events_are_status_bookkeeping() {
         let id = uuid::Uuid::new_v4();
         assert!(is_context_bookkeeping(&AgentEvent::ContextList {
-            contexts: vec![],
+            context: None,
         }));
         assert!(is_context_bookkeeping(&AgentEvent::ContextActivated {
             id,

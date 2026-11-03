@@ -189,11 +189,11 @@ impl App {
             dirty: true,
         };
 
-        // Fold known context lists into the UI and load transcripts for
+        // Fold known sole contexts into the UI and load transcripts for
         // empty tabs (agents already running in the daemon).
         let known_contexts = snapshot.contexts.clone();
-        for (agent_path, contexts) in known_contexts {
-            app.apply_context_list(&agent_path, contexts);
+        for (agent_path, context) in known_contexts {
+            app.apply_context_list(&agent_path, Some(context));
         }
         app.spawn_all_history_loads();
         Ok(app)

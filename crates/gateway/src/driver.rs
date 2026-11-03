@@ -21,12 +21,12 @@ use tokio_util::sync::CancellationToken;
 use crate::hub::{EventHub, EventKind};
 use crate::proto::HostEventView;
 
-/// Driver-maintained cache of per-agent context lists, folded from
+/// Driver-maintained cache of each agent's sole context, folded from
 /// `AgentEvent::ContextList` so `GET /state` can answer synchronously
 /// (the runtime's `list_contexts` is fire-and-forget with an event reply).
 #[derive(Default, Clone)]
 pub struct ContextCache {
-    contexts: Arc<Mutex<HashMap<String, Vec<ContextInfo>>>>,
+    contexts: Arc<Mutex<HashMap<String, ContextInfo>>>,
 }
 
 impl ContextCache {
@@ -35,11 +35,19 @@ impl ContextCache {
     }
 
     /// Fold one tagged agent event into the cache. Pure state transition,
-    /// testable without a host.
+    /// testable without a host. A `None` context reply drops the agent's
+    /// entry (spawned, no first message yet).
     pub fn observe(&self, agent: &str, event: &AgentEvent) {
         let mut map = self.contexts.lock().expect("context cache mutex poisoned");
-        if let AgentEvent::ContextList { contexts } = event {
-            map.insert(agent.to_string(), contexts.clone());
+        if let AgentEvent::ContextList { context } = event {
+            match context {
+                Some(info) => {
+                    map.insert(agent.to_string(), info.clone());
+                }
+                None => {
+                    map.remove(agent);
+                }
+            }
         }
     }
 
@@ -51,17 +59,17 @@ impl ContextCache {
             .remove(agent);
     }
 
-    /// Whether the agent's cached list already contains this context.
+    /// Whether the agent's cached context is this one.
     pub fn contains_context(&self, agent: &str, context_id: uuid::Uuid) -> bool {
         self.contexts
             .lock()
             .expect("context cache mutex poisoned")
             .get(agent)
-            .is_some_and(|list| list.iter().any(|s| s.id == context_id))
+            .is_some_and(|info| info.id == context_id)
     }
 
     /// Snapshot for `GET /state`.
-    pub fn snapshot(&self) -> HashMap<String, Vec<ContextInfo>> {
+    pub fn snapshot(&self) -> HashMap<String, ContextInfo> {
         self.contexts
             .lock()
             .expect("context cache mutex poisoned")
@@ -154,11 +162,25 @@ mod tests {
         cache.observe(
             "/root/a",
             &AgentEvent::ContextList {
-                contexts: vec![context(id1, "one"), context(id2, "two")],
+                context: Some(context(id1, "one")),
             },
         );
-        assert_eq!(cache.snapshot().get("/root/a").map(Vec::len), Some(2));
+        assert_eq!(cache.snapshot().get("/root/a").map(|info| info.id), Some(id1));
+        // A newer reply replaces the entry wholesale.
+        cache.observe(
+            "/root/a",
+            &AgentEvent::ContextList {
+                context: Some(context(id2, "two")),
+            },
+        );
         assert!(cache.contains_context("/root/a", id2));
+        assert!(!cache.contains_context("/root/a", id1));
+        // A `None` reply (no context yet) drops the entry.
+        cache.observe(
+            "/root/a",
+            &AgentEvent::ContextList { context: None },
+        );
+        assert!(!cache.snapshot().contains_key("/root/a"));
         cache.remove_agent("/root/a");
         assert!(!cache.snapshot().contains_key("/root/a"));
     }

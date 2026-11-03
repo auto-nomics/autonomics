@@ -154,11 +154,11 @@ pub struct StateSnapshot {
     /// Live registered agents (from `HostControl::get_status`).
     #[schema(schema_with = opaque_object)]
     pub agents: Vec<AgentInfo>,
-    /// Known per-agent context lists, folded by the driver from
+    /// Known per-agent sole contexts, folded by the driver from
     /// `AgentEvent::ContextList`. Absent until an agent has been asked
     /// (`GET /agents/{name}/context`) or emitted a list.
     #[schema(schema_with = opaque_object)]
-    pub contexts: HashMap<String, Vec<ContextInfo>>,
+    pub contexts: HashMap<String, ContextInfo>,
     pub display_settings: DisplaySettings,
     /// Daemon-wide defaults resolved from the runtime configuration.
     #[schema(schema_with = opaque_object)]

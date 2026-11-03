@@ -112,56 +112,56 @@ impl DelegationLedger {
         true
     }
 
-    /// Resolve a delegation whose turn reached a terminal state: final
-    /// status, the full response text, and exactly one reply delivery.
-    /// Returns whether an entry was resolved — the caller persists on
-    /// `true`. An unknown id (or one already removed) resolves nothing.
+    /// Resolve every `Running` delegation aimed at a target whose turn
+    /// just reached a TRUE terminal state (the trailing `Done`): final
+    /// status, the full response text, and exactly one reply delivery
+    /// each. Returns the resolved delegation ids — the caller persists
+    /// each.
     ///
-    /// [`TurnExecutionStatus::Pause`] is deliberately NOT a resolution: the
-    /// target parked on a background task and its watcher will open a new
-    /// turn; the entry stays `Running` and no reply is delivered. Returns
-    /// `false` — the record is unchanged, so there is nothing to persist.
-    pub(super) fn complete_turn(
+    /// Keyed by target path (the `Done` event carries no id); with
+    /// delegated turns serialized per agent, at most one entry is
+    /// `Running` per target.
+    ///
+    /// [`TurnExecutionStatus::Pause`] never reaches here — a parked turn
+    /// emits no `Done` — but is treated defensively as a no-op.
+    pub(super) fn resolve_target(
         &mut self,
-        delegation_id: &uuid::Uuid,
-        turn_id: uuid::Uuid,
+        target: &AgentPath,
         status: TurnExecutionStatus,
         response: &str,
-    ) -> bool {
-        let Some(record) = self.entries.get_mut(delegation_id) else {
-            return false;
-        };
+    ) -> Vec<uuid::Uuid> {
         if matches!(status, TurnExecutionStatus::Pause) {
+            return Vec::new();
+        }
+        let mut resolved = Vec::new();
+        for record in self.entries.values_mut() {
+            if record.snapshot.target_path != *target
+                || record.snapshot.status != DelegationStatus::Running
+            {
+                continue;
+            }
+            record.snapshot.status = match status {
+                TurnExecutionStatus::Completed => DelegationStatus::Completed,
+                TurnExecutionStatus::Interrupted => DelegationStatus::Interrupted,
+                TurnExecutionStatus::Failed => DelegationStatus::Failed,
+                TurnExecutionStatus::Pause => unreachable!("guarded above"),
+            };
+            record.snapshot.response = Some(response.to_string());
+            record.snapshot.updated_at = super::unix_epoch_ms();
             let progress = record.progress.clone();
+            let completion_status = record.snapshot.status;
+            if let Some(reply_tx) = record.reply_tx.take() {
+                let _ = reply_tx.send(response.to_string());
+            }
             push_delegation_progress(
                 &progress,
-                "turn_paused",
-                "running",
+                "turn_completed",
+                completion_status.as_str(),
                 &super::status::truncate_preview(response, 240),
             );
-            return false;
+            resolved.push(record.snapshot.delegation_id);
         }
-        record.snapshot.status = match status {
-            TurnExecutionStatus::Completed => DelegationStatus::Completed,
-            TurnExecutionStatus::Interrupted => DelegationStatus::Interrupted,
-            TurnExecutionStatus::Failed => DelegationStatus::Failed,
-            TurnExecutionStatus::Pause => unreachable!("handled above"),
-        };
-        record.snapshot.turn_id = Some(turn_id);
-        record.snapshot.response = Some(response.to_string());
-        record.snapshot.updated_at = super::unix_epoch_ms();
-        let progress = record.progress.clone();
-        let completion_status = record.snapshot.status;
-        if let Some(reply_tx) = record.reply_tx.take() {
-            let _ = reply_tx.send(response.to_string());
-        }
-        push_delegation_progress(
-            &progress,
-            "turn_completed",
-            completion_status.as_str(),
-            &super::status::truncate_preview(response, 240),
-        );
-        true
+        resolved
     }
 
     /// Fail every `Pending`/`Running` delegation aimed at a target that
@@ -342,48 +342,69 @@ mod tests {
     }
 
     #[test]
-    fn complete_turn_delivers_reply_exactly_once() {
+    fn resolve_target_delivers_reply_exactly_once() {
         let mut ledger = DelegationLedger::new();
         let id = uuid::Uuid::new_v4();
         let (reply_tx, reply_rx) = oneshot::channel();
         ledger.open(snapshot(id, "/root/caller/worker"), Some(reply_tx), None);
         ledger.mark_running(&id, uuid::Uuid::new_v4());
 
-        assert!(ledger.complete_turn(
-            &id,
-            uuid::Uuid::new_v4(),
+        let resolved = ledger.resolve_target(
+            &path("/root/caller/worker"),
             TurnExecutionStatus::Completed,
             "full response",
-        ));
+        );
+        assert_eq!(resolved, vec![id]);
         assert_eq!(reply_rx.blocking_recv().unwrap(), "full response");
         let snap = ledger.get(&id).unwrap();
         assert_eq!(snap.status, DelegationStatus::Completed);
         assert_eq!(snap.response.as_deref(), Some("full response"));
 
-        // A second completion on the same entry must not attempt a second
-        // reply delivery — the oneshot sender is gone.
-        assert!(ledger.complete_turn(
-            &id,
-            uuid::Uuid::new_v4(),
+        // A second Done for the same target must not attempt a second
+        // reply delivery — the entry is terminal and the oneshot is gone.
+        let resolved_again = ledger.resolve_target(
+            &path("/root/caller/worker"),
             TurnExecutionStatus::Completed,
             "late duplicate",
-        ));
+        );
+        assert!(resolved_again.is_empty(), "terminal entries are skipped");
         assert_eq!(
             ledger.get(&id).unwrap().response.as_deref(),
-            Some("late duplicate"),
-            "snapshot still updates; the reply channel does not",
+            Some("full response"),
+            "a late duplicate Done does not rewrite the resolved entry",
         );
     }
 
     #[test]
-    fn complete_turn_is_noop_for_unknown_id() {
+    fn resolve_target_is_noop_for_unknown_target() {
         let mut ledger = DelegationLedger::new();
-        assert!(!ledger.complete_turn(
-            &uuid::Uuid::new_v4(),
-            uuid::Uuid::new_v4(),
-            TurnExecutionStatus::Completed,
-            "orphan",
-        ));
+        assert!(ledger
+            .resolve_target(
+                &path("/root/caller/worker"),
+                TurnExecutionStatus::Completed,
+                "orphan",
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn resolve_target_skips_parked_status() {
+        // Defensive: a Pause never reaches the Done arm, but if it did it
+        // must not resolve anything — the entry stays Running.
+        let mut ledger = DelegationLedger::new();
+        let id = uuid::Uuid::new_v4();
+        let (reply_tx, _reply_rx) = oneshot::channel();
+        ledger.open(snapshot(id, "/root/caller/worker"), Some(reply_tx), None);
+        ledger.mark_running(&id, uuid::Uuid::new_v4());
+
+        assert!(ledger
+            .resolve_target(
+                &path("/root/caller/worker"),
+                TurnExecutionStatus::Pause,
+                "parked",
+            )
+            .is_empty());
+        assert_eq!(ledger.get(&id).unwrap().status, DelegationStatus::Running);
     }
 
     #[test]
@@ -395,9 +416,9 @@ mod tests {
         let (live_tx, live_rx) = oneshot::channel();
         ledger.open(snapshot(live, "/root/caller/worker"), Some(live_tx), None);
         ledger.open(snapshot(done, "/root/caller/worker"), None, None);
-        ledger.complete_turn(
-            &done,
-            uuid::Uuid::new_v4(),
+        ledger.mark_running(&done, uuid::Uuid::new_v4());
+        ledger.resolve_target(
+            &path("/root/caller/worker"),
             TurnExecutionStatus::Completed,
             "already finished",
         );

@@ -92,8 +92,10 @@ pub struct ContextState {
 /// the follow-up request are all *within* one turn.
 ///
 /// Owned by [`Context`] as `Option<Turn>`: `None` means no turn is open.
-/// A turn stays open across a `Waiting` pause (background `wait_task`), so
-/// a watcher resuming the session reuses it rather than starting a new one.
+/// A `Waiting` pause (background `wait_task`) CLOSES the turn with
+/// [`TurnExecutionStatus::Pause`] — no `Done` is emitted — and the
+/// watcher's wake message opens a new turn that re-adopts the paused
+/// turn's `delegation_id` (see [`Context::resume_delegation_id`]).
 ///
 /// Deliberately does **not** own the lifecycle: that describes the agent's
 /// state, is consumed far outside this crate (TUI, gateway), and outlives
@@ -192,7 +194,12 @@ pub struct Context {
     /// child cancel token for the spawned watcher. Before spawning a new
     /// watcher for the same task, the old one is cancelled to prevent
     /// duplicate message injection.
-    pub(crate) active_wait_watchers: HashMap<u64, CancellationToken>,
+    pub(crate) active_wait_watchers:
+        HashMap<u64, (CancellationToken, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
+    /// Delegation id stashed when a turn closed with
+    /// [`TurnExecutionStatus::Pause`]; the next `begin_turn` re-adopts it so
+    /// the wake turn stays attributable to the pending delegation.
+    pub(crate) resume_delegation_id: Option<Uuid>,
 
     /// System prompt set by `build_context` and consumed by `request`.
     /// Kept separate from `messages` so the sanitizer never sees it
@@ -254,6 +261,7 @@ impl Context {
             token_budget: TokenBudget::default(),
             cancel_token: CancellationToken::new(),
             active_wait_watchers: HashMap::new(),
+            resume_delegation_id: None,
             pending_system_prompt: None,
             plan,
             turn: None,

@@ -3,6 +3,7 @@
 //! non-blocking `wait_task` background watchers.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use agentik_sdk::model::sanitize::sanitize_messages;
@@ -50,8 +51,11 @@ impl Context {
     /// Open a turn, reusing an open turn after a background-task wait.
     ///
     /// # Auguments
-    /// * `delegation_id` - ID of parent agent if existed.
+    /// * `delegation_id` - ID of parent agent if existed. `None` (e.g. the
+    ///   wait_watcher's wake message) falls back to the id stashed by a
+    ///   `Pause`-closed turn, keeping the wake turn attributable.
     pub(crate) fn begin_turn(&mut self, delegation_id: Option<Uuid>) {
+        let delegation_id = delegation_id.or(self.resume_delegation_id.take());
         let turn = match self.turn.as_mut() {
             // Still inside the turn that a `Waiting` pause interrupted.
             Some(turn) => {
@@ -137,7 +141,11 @@ impl Context {
                     // Resting on a background task. This *is* the end of
                     // the turn: the agent is no longer moving, and the
                     // watcher will inject a message that opens a new turn.
-                    self.finish_turn(TurnExecutionStatus::Completed);
+                    // No `Done` — the turn is parked, not terminal. The
+                    // delegation id rides along to the wake turn so
+                    // observers can attribute it.
+                    self.resume_delegation_id = self.turn.as_ref().and_then(|turn| turn.delegation_id);
+                    self.finish_turn(TurnExecutionStatus::Pause);
                     break;
                 }
             }
@@ -154,6 +162,9 @@ impl Context {
             ));
             self.core.send_event(AgentEvent::TurnAborted);
             self.finish_turn(TurnExecutionStatus::Interrupted);
+            // Terminal turn — close it with `Done` like every other
+            // terminal outcome (the delegation reply path keys on Done).
+            self.core.send_event(AgentEvent::Done);
         } else if self.lifecycle.is_running() {
             self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
         }
@@ -239,6 +250,9 @@ impl Context {
                 self.persist_snapshot().await;
                 self.set_lifecycle(agentik_types::AgentLifecycleStatus::Error);
                 self.finish_turn(TurnExecutionStatus::Failed);
+                // Terminal turn — `Done` closes it for observers (the
+                // delegation reply path keys on Done, not TurnCompleted).
+                self.core.send_event(AgentEvent::Done);
                 true
             }
         };
@@ -256,6 +270,7 @@ impl Context {
 
         if terminal_during_drain {
             self.finish_turn(TurnExecutionStatus::Completed);
+            self.core.send_event(AgentEvent::Done);
             return TurnOutcome::Finished;
         }
 
@@ -278,10 +293,12 @@ impl Context {
             self.pause_telemetry();
             self.stop();
             self.finish_turn(TurnExecutionStatus::Completed);
+            self.core.send_event(AgentEvent::Done);
             return TurnOutcome::Finished;
         }
         if terminal {
             self.finish_turn(TurnExecutionStatus::Completed);
+            self.core.send_event(AgentEvent::Done);
             return TurnOutcome::Finished;
         }
 
@@ -365,13 +382,24 @@ impl Context {
                 // If we were Waiting, the cancel interrupted the wait —
                 // transition to Cancelled so the agent is ready for new work.
                 // Background watchers have a child token tied to the old
-                // (now-cancelled) token, so they exit silently.
-                self.active_wait_watchers.clear();
+                // (now-cancelled) token. Retire them FIRST so their cancel
+                // branch exits silently instead of injecting a wake-up —
+                // this handler closes the parked turn itself below.
+                for (_, (_, retired)) in self.active_wait_watchers.drain() {
+                    retired.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
                 if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Waiting {
+                    // The session loop is parked; it will not emit the
+                    // terminal events itself. Close the turn here, with
+                    // the same TurnAborted → Interrupted → Done sequence
+                    // the post-loop cancel path produces.
                     self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
                     self.core.send_event(AgentEvent::TurnAborted);
+                    self.finish_turn(TurnExecutionStatus::Interrupted);
+                    self.core.send_event(AgentEvent::Done);
+                } else {
+                    self.finish_turn(TurnExecutionStatus::Interrupted);
                 }
-                self.finish_turn(TurnExecutionStatus::Interrupted);
                 self.cancel_token = token.clone();
                 self.toolset.cancel_all_tasks().await;
                 // Wire the fresh cancel token into the toolset so that
@@ -504,29 +532,34 @@ impl Context {
                     .unwrap_or(600)
                     .max(300); // floor: 别让模型传小值反复空醒烧 turn
 
-                // Cancel any existing watcher for this task before spawning a
-                // new one. This prevents duplicate message injection when the
-                // LLM calls wait_task on the same still-running task multiple
-                // times (either across turns or as parallel tool calls).
-                if let Some(old) = self.active_wait_watchers.remove(&task_seq) {
+                // Retire any existing watcher for this task before spawning
+                // a new one. Retiring (flag BEFORE cancel) tells the old
+                // watcher this is a replacement, not a user interrupt — it
+                // exits silently instead of injecting a wake message.
+                if let Some((old, retired)) = self.active_wait_watchers.remove(&task_seq) {
+                    retired.store(true, Ordering::SeqCst);
                     old.cancel();
                     tracing::debug!(
                         task_seq,
-                        "cancelled previous watcher before spawning new one"
+                        "retired previous watcher before spawning new one"
                     );
                 }
 
                 // Spawn a background watcher that will inject a message when
-                // the task completes or the timeout expires. A child cancel
-                // token ensures the watcher exits silently if the user
-                // interrupts (Ctrl+C) while Waiting.
+                // the task completes or the timeout expires. On a USER
+                // cancel (Ctrl+C while Waiting) it injects a wake-up so the
+                // session loop re-enters, observes the cancelled token, and
+                // closes the turn as Interrupted (+ Done) — without the
+                // wake, a delegated turn would park forever.
                 let tasks = self.core.tasks.clone();
                 let tx = internal_event_tx.clone();
                 let cancel = self.cancel_token.child_token();
-                self.active_wait_watchers.insert(task_seq, cancel.clone());
+                let retired = Arc::new(AtomicBool::new(false));
+                self.active_wait_watchers
+                    .insert(task_seq, (cancel.clone(), Arc::clone(&retired)));
                 crate::supervise::spawn_safe_drop(
                     "wait_watcher",
-                    Self::wait_watcher(tasks, task_seq, timeout_secs, tx, cancel),
+                    Self::wait_watcher(tasks, task_seq, timeout_secs, tx, cancel, retired),
                 );
                 registered_waits = true;
                 tracing::info!(
@@ -845,12 +878,18 @@ impl Context {
     /// The agent's session loop has already exited (lifecycle = `Waiting`),
     /// so the injected message re-enters `run_context` and the LLM receives
     /// the result as a new user message.
+    ///
+    /// On cancellation the behavior depends on `retired`: a RETIRED watcher
+    /// (replaced by a newer `wait_task` on the same task) exits silently;
+    /// a USER cancellation injects a wake-up so the session loop re-enters,
+    /// observes the cancelled token, and closes the turn as Interrupted.
     async fn wait_watcher(
         tasks: Arc<tokio::sync::RwLock<TaskStore>>,
         task_seq: u64,
         timeout_secs: u64,
         tx: tokio::sync::mpsc::UnboundedSender<InternalEvent>,
         cancel: CancellationToken,
+        retired: Arc<AtomicBool>,
     ) {
         use std::time::Duration;
 
@@ -897,13 +936,29 @@ impl Context {
             return;
         };
 
-        // Race task completion against timeout and user cancellation.
+        // Race task completion against timeout and cancellation.
         let completed = tokio::select! {
             result = status_rx.changed() => result.is_ok(),
             _ = tokio::time::sleep(Duration::from_secs(timeout_secs)) => false,
             _ = cancel.cancelled() => {
-                tracing::info!(task_seq, "wait_watcher cancelled by user");
-                return; // Silent exit — don't inject a wakeup message.
+                if retired.load(Ordering::SeqCst) {
+                    tracing::debug!(task_seq, "wait_watcher retired by replacement");
+                    return; // Replaced by a newer watcher — stay silent.
+                }
+                tracing::info!(task_seq, "wait_watcher cancelled by user; waking agent");
+                // Wake the parked session: run_turn observes the cancelled
+                // token at entry and closes the turn as Interrupted + Done.
+                let _ = tx.send(InternalEvent::MessageInject {
+                    content: vec![ContentBlock::Text {
+                        text: format!(
+                            "[interrupted] The wait for background task #{task_seq} was \
+                             cancelled. Any tool calls may have been partially executed."
+                        ),
+                    }],
+                    from_user: false,
+                    delegation_id: None,
+                });
+                return;
             }
         };
 
@@ -1771,12 +1826,13 @@ mod tests {
             .await;
 
         // Waiting is a resting state, so the turn is closed exactly once —
-        // and no `Done` is emitted (the turn is paused, not complete).
+        // with `Pause` (not Completed) and no `Done` (the turn is parked,
+        // not terminal; delegation resolution waits for a real Done).
         let calls = turn_events(&mut rx);
         assert_eq!(
             calls,
-            vec!["started", "completed:Completed"],
-            "a paused turn closes on reaching the resting state: {calls:?}"
+            vec!["started", "completed:Pause"],
+            "a paused turn closes with Pause and no Done: {calls:?}"
         );
 
         // Cleanup: the watcher we spawned is cancelled with the session.

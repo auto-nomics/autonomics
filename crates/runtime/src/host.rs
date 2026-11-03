@@ -201,9 +201,12 @@ impl RuntimeHost {
     ///
     /// This also handles delegation plumbing:
     /// - `TurnStarted` binds a delegation ID to a target turn/session.
-    /// - `TurnCompleted` captures the accumulated response before the
-    ///   compatibility `Done` event drains it, then resolves exactly the
-    ///   delegation associated with that turn.
+    /// - `TurnCompleted` records the turn's terminal status and persists
+    ///   the turn record — but does NOT resolve delegations.
+    /// - `Done` resolves the target's running delegations with the
+    ///   accumulated response (read before `network.process_event` drains
+    ///   the buffer). A `Pause`-closed turn emits no `Done`, so a parked
+    ///   delegation stays `Running` until its wake turn truly ends.
     ///
     /// The raw event is still returned to the caller for UI rendering.
     pub async fn recv_any(&mut self) -> Option<TaggedEvent> {
@@ -250,15 +253,31 @@ impl RuntimeHost {
                 status,
                 telemetry,
             } => {
-                let response = self.network.accumulated_response(&name).to_string();
-                if let Some(delegation_id) = delegation_id
-                    && self
-                        .ledger
-                        .complete_turn(delegation_id, *turn_id, *status, &response)
-                {
-                    self.persist_delegation(*delegation_id);
+                // Bookkeeping only — delegation resolution waits for the
+                // trailing `Done` (a Pause-closed turn emits no Done and
+                // must not resolve). The status rides in the registry
+                // entry until `Done` consumes it.
+                if let Some(entry) = self.agents.get_mut(&name) {
+                    entry.turn_outcome = Some(*status);
                 }
                 self.persist_turn_finish(&name, *telemetry, *turn_id, *delegation_id, *status);
+            }
+            AgentEvent::Done => {
+                // The true end of a turn (Pause parks emit no Done).
+                // Resolve the target's delegations with the accumulated
+                // response — this read MUST happen before
+                // `network.process_event` below drains the buffer on Done.
+                let status = self
+                    .agents
+                    .get_mut(&name)
+                    .and_then(|entry| entry.turn_outcome.take())
+                    .unwrap_or(agentik_types::TurnExecutionStatus::Completed);
+                let response = self.network.accumulated_response(&name).to_string();
+                if let Ok(target) = agentik_types::AgentPath::try_from(name.as_str()) {
+                    for delegation_id in self.ledger.resolve_target(&target, status, &response) {
+                        self.persist_delegation(delegation_id);
+                    }
+                }
             }
             _ => {}
         }
