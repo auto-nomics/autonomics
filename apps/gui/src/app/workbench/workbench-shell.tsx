@@ -1,7 +1,7 @@
 /**
  * Workbench shell: title bar / activity bar / side bar / editor area /
  * bottom panel / status bar — the VSCode layout skeleton. Every window is
- * an editor tab: agent chat portals into the active agent tab's slot,
+ * an editor tab: each visible agent chat portals into its own tab slot,
  * wiki entries, bibliography, config and DAG are regular tabs.
  *
  * Panel-count stability: the center ResizablePanelGroup always mounts its
@@ -16,7 +16,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { gatewayRequest } from "@/gateway";
-import { AgentWorkspace, AgentDialogs, SpawnAgentDialog } from "@/features/agent";
+import { AgentWorkspace, AgentDialogs, SpawnAgentDialog, leafName } from "@/features/agent";
+import { ContextBasketScope } from "@/features/context/context-basket";
 import { SearchDialog } from "@/features/wiki/search-dialog";
 import { closeWikiSearch, useWikiSearchOpen } from "@/features/wiki/wiki-state";
 import { useMediaQuery } from "@/hooks/use-media-query";
@@ -30,6 +31,8 @@ import "./static-commands";
 import { useWorkbenchKeybindings } from "./keybindings";
 import {
   activateEditorById,
+  allGroups,
+  getGroup,
   agentEditorId,
   bumpUnreadNotices,
   closeEditor,
@@ -70,6 +73,41 @@ function WikiSearchDialog() {
       }}
     />
   );
+}
+
+/** One workspace per visible agent group, with agent-scoped input and context. */
+function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string; visible: boolean; runtime: AgentRuntime; onSpawn: () => void }) {
+  const slot = useAgentSlot(path);
+  const agentId = runtime.agents.find(agent => agent.path === path)?.agent_id;
+  const contextId = runtime.activeContexts[path] ?? runtime.contexts[path]?.id ?? null;
+  const loadedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!visible || !agentId || !contextId) return;
+    const key = `${agentId}:${contextId}`;
+    if (loadedRef.current === key) return;
+    loadedRef.current = key;
+    // The runtime already loads the selected agent; visible background
+    // groups need their own transcript fetch.
+    if (path !== runtime.activeAgent) void runtime.loadAgentHistory(path, contextId);
+  }, [agentId, contextId, path, visible, runtime.activeAgent, runtime.loadAgentHistory]);
+  const refreshEffort = useCallback(() => { void runtime.refreshAgentEffort(path); }, [runtime.refreshAgentEffort, path]);
+  const select = (target: string) => { runtime.selectAgent(target); openAgentEditor(target); };
+  const scope = path && contextId ? JSON.stringify([path, contextId]) : null;
+  return <ContextBasketScope scope={scope} label={leafName(path)}>
+    <AgentWorkspace dockedSlot={slot} agents={runtime.agents} activeAgent={path} statuses={runtime.statuses}
+      messages={runtime.messages[path] ?? []} historyLoading={runtime.historyLoading[path] ?? false}
+      streaming={runtime.streaming[path] ?? null} usage={runtime.usage[path] ?? null} display={runtime.display}
+      draft={runtime.drafts[path] ?? ""} busy={runtime.sendingPaths[path] ? "send" : runtime.busy === "send" ? null : runtime.busy}
+      onDraftChange={value => runtime.setDraftFor(path, value)} onSendMessage={context => void runtime.sendMessageTo(path, context)}
+      onCancel={() => void gatewayRequest("POST", `/agents/${path}/cancel`).catch(cause => window.alert(String(cause)))}
+      onCompact={() => void gatewayRequest("POST", `/agents/${path}/compact`).catch(cause => window.alert(String(cause)))}
+      modelCatalog={runtime.modelCatalog} onLoadModelCatalog={runtime.loadModelCatalog} onChangeModel={runtime.setAgentModel}
+      agentEffort={runtime.agentEfforts[path]} onRefreshEffort={refreshEffort} onChangeEffort={runtime.setAgentEffort}
+      onSelectAgent={select} openTabs={runtime.openTabs} onCloseAgent={runtime.closeTab} onSpawn={onSpawn}
+      storedAgents={runtime.storedAgents} onSearchStoredAgents={query => void runtime.refreshStoredAgents(query)}
+      onResumeAgent={agent => { void runtime.resumeAgent(agent).then(() => openAgentEditor(runtime.agents.find(item => item.agent_id === agent.id)?.path ?? agent.name)).catch(cause => window.alert(String(cause))); }}
+      onOpenDag={() => openEditor({ kind: "dag", params: { agentPath: path } })} />
+  </ContextBasketScope>;
 }
 
 export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
@@ -124,9 +162,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     const activeAgent = runtime.activeAgent;
     const livePaths = new Set<string>();
     const activePaths = new Set<string>();
-    const main = state.groups.main;
-    const secondary = state.groups.secondary;
-    for (const [groupId, group] of [["main", main], ["secondary", secondary]] as const) {
+    for (const [groupId, group] of allGroups(state.groups)) {
       for (const editor of group?.editors ?? []) {
         if (editor.kind !== "agent") continue;
         const path = String(editor.params.path ?? "");
@@ -148,18 +184,13 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     // or nothing is active yet. Opening another kind of editor must not
     // have the sync effect steal focus back to the chat.
     if (activeAgent && openTabs.includes(activeAgent) && !activePaths.has(activeAgent)) {
-      const activeGroup = state.groups.active === "secondary" ? state.groups.secondary : state.groups.main;
+      const activeGroup = getGroup(state.groups, state.groups.active);
       const activeEditor = activeGroup?.editors.find((editor) => editor.id === activeGroup?.activeId);
       if (!activeEditor || activeEditor.kind === "agent") {
         activateEditorById(agentEditorId(activeAgent));
       }
     }
   }, [runtime.openTabs, runtime.activeAgent, state.groups]);
-
-  // Effort refresh keyed to the active agent (workspace composer needs it).
-  const refreshEffort = useCallback(() => {
-    void runtime.refreshAgentEffort(runtime.activeAgent);
-  }, [runtime.refreshAgentEffort, runtime.activeAgent]);
 
   const cancel = useCallback(() => {
     void gatewayRequest("POST", `/agents/${runtime.activeAgent}/cancel`).catch((cause) => window.alert(String(cause)));
@@ -198,7 +229,10 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
   }, [state.panel.visible]);
 
   const activeAgent = runtime.activeAgent;
-  const activeAgentSlot = useAgentSlot(activeAgent);
+  const agentEditors = allGroups(state.groups).flatMap(([, group]) => group.editors
+    .filter(editor => editor.kind === "agent")
+    .map(editor => ({ path: String(editor.params.path ?? ""), visible: editor.id === group.activeId }))
+  ).filter(item => item.path);
 
   return (
     <WorkbenchRuntimeContext.Provider value={runtime}>
@@ -216,7 +250,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
           />
           {!mobile && !state.sidebar.collapsed && (
             <div className="relative min-h-0 shrink-0" style={{ width: state.sidebar.width, maxWidth: "calc(100% - 300px)" }}>
-              <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
+              <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} onSpawn={() => setSpawnOpen(true)} />
               <div
                 role="separator"
                 aria-label="调整侧栏宽度"
@@ -275,43 +309,10 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
         <StatusBar runtime={runtime} />
 
         {mobile && (
-          <SideBar mobile collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} />
+          <SideBar mobile collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} onSpawn={() => setSpawnOpen(true)} />
         )}
 
-        {/* One workspace instance portals into the active agent tab's slot
-            (agent-slot-registry); it parks off-document when no agent tab
-            is active. */}
-        <AgentWorkspace
-          dockedSlot={activeAgentSlot}
-          agents={runtime.agents}
-          activeAgent={activeAgent}
-          statuses={runtime.statuses}
-          messages={runtime.messages[activeAgent] ?? []}
-          historyLoading={runtime.historyLoading[activeAgent] ?? false}
-          streaming={runtime.streaming[activeAgent] ?? null}
-          usage={runtime.usage[activeAgent] ?? null}
-          display={runtime.display}
-          draft={runtime.draft}
-          busy={runtime.busy}
-          onDraftChange={runtime.setDraft}
-          onSendMessage={(context) => void runtime.sendMessage(context)}
-          onCancel={cancel}
-          onCompact={compact}
-          modelCatalog={runtime.modelCatalog}
-          onLoadModelCatalog={runtime.loadModelCatalog}
-          onChangeModel={(path, spec) => runtime.setAgentModel(path, spec)}
-          agentEffort={runtime.agentEfforts[activeAgent]}
-          onRefreshEffort={refreshEffort}
-          onChangeEffort={(path, effort) => runtime.setAgentEffort(path, effort)}
-          onSelectAgent={(path) => runtime.selectAgent(path)}
-          openTabs={runtime.openTabs}
-          onCloseAgent={runtime.closeTab}
-          onSpawn={() => setSpawnOpen(true)}
-          storedAgents={runtime.storedAgents}
-          onSearchStoredAgents={(query) => void runtime.refreshStoredAgents(query)}
-          onResumeAgent={(agent) => void runtime.resumeAgent(agent)}
-          onOpenDag={openDag}
-        />
+        {agentEditors.filter(({ path, visible }) => visible || path === activeAgent).map(({ path, visible }) => <AgentWorkspaceHost key={path} path={path} visible={visible} runtime={runtime} onSpawn={() => setSpawnOpen(true)} />)}
 
         <AgentDialogs
           activeAgent={activeAgent}

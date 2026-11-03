@@ -109,7 +109,7 @@ try {
   // stays in main — both visible, the VSCode split gesture.
   await agentTabOf('alpha').click();
   await page.getByRole('button', { name: '拆分编辑器' }).click();
-  const splitComposer = await composer.evaluate(n => Boolean(n.closest('[data-editor-group="secondary"] [data-editor-zone]')));
+  const splitComposer = await page.locator('[data-editor-group="secondary"] [data-editor-zone]').getByPlaceholder('输入消息…').isVisible();
   assert.ok(splitComposer, 'chat renders in the split group');
   await page.waitForTimeout(250);
   await page.screenshot({ path: '/tmp/autonomics-workbench-desktop.png' });

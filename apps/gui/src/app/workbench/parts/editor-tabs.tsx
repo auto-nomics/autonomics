@@ -7,12 +7,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { editorDrag, setEditorDrag } from "../editor-drag";
-import { ChevronDown, X } from "lucide-react";
+import { ChevronDown, GripVertical, X } from "lucide-react";
 import { SplitSquareHorizontal, Columns2 } from "lucide-react";
 import { useWorkbenchRuntime } from "../runtime-context";
 import { cn } from "@/lib/utils";
 import { editorKind } from "../editor-registry";
-import { activateEditor, moveEditor, closeEditor, closeSplit, splitEditor, useWorkbenchState, type EditorGroup, type GroupId } from "../workbench-store";
+import { activateEditor, moveEditor, closeEditor, closeSplit, splitEditor, getGroup, allGroups, mergeGroup, useWorkbenchState, type EditorGroup, type GroupId } from "../workbench-store";
 
 export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
   const state = useWorkbenchState();
@@ -89,15 +89,16 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
   const drop = (index: number) => {
     if (!editorDrag) return;
     const drag = editorDrag;
-    const dragged = state.groups[drag.groupId]?.editors.find((item) => item.id === drag.id);
-    moveEditor(editorDrag.groupId, editorDrag.id, props.groupId, index);
+    const dragged = getGroup(state.groups, drag.groupId)?.editors.find((item) => item.id === drag.id);
+    if (drag.id) moveEditor(drag.groupId, drag.id, props.groupId, index);
+    else mergeGroup(drag.groupId, props.groupId, index);
     if (dragged?.kind === "agent") runtime.selectAgent(String(dragged.params.path ?? ""));
     setEditorDrag(null);
     stopDragScroll();
     setDropIndex(null);
   };
   const runtime = useWorkbenchRuntime();
-  const split = state.groups.secondary !== null;
+  const split = allGroups(state.groups).length > 1;
   const isMain = props.groupId === "main";
 
   return (
@@ -182,6 +183,7 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
       </div>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 px-1.5">
+        {split && <button type="button" draggable aria-label="拖动编辑器组" title="拖动编辑器组" className="grid size-6 cursor-grab place-items-center rounded-sm text-muted-foreground hover:bg-accent" onDragStart={event => { setEditorDrag({ groupId: props.groupId, id: "" }); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", "editor-group"); }} onDragEnd={() => { setEditorDrag(null); stopDragScroll(); setDropIndex(null); }}><GripVertical className="size-3.5" /></button>}
         {overflow && <details ref={menuRef} className="relative">
           <summary aria-label="显示所有编辑器标签" title="显示所有编辑器标签" className="grid size-6 cursor-pointer list-none place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground [&::-webkit-details-marker]:hidden"><ChevronDown className="size-4" /></summary>
           <div className="absolute right-0 top-full z-50 max-h-80 min-w-48 max-w-72 overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg" role="menu" aria-label="所有编辑器标签">
@@ -197,24 +199,24 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
             })}
           </div>
         </details>}
-        {isMain && !split && (
+        {state.groups.active === props.groupId && (
           <button
             type="button"
             aria-label="拆分编辑器"
             title="拆分编辑器"
-            disabled={!props.group.activeId}
-            onClick={splitEditor}
+            disabled={!props.group.activeId || props.group.editors.length < 2}
+            onClick={() => splitEditor(props.groupId)}
             className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
           >
             <SplitSquareHorizontal className="size-3.5" />
           </button>
         )}
-        {!isMain && (
+        {split && (
           <button
             type="button"
-            aria-label="关闭分屏"
-            title="关闭分屏"
-            onClick={closeSplit}
+            aria-label={props.groupId === "secondary" ? "关闭分屏" : "关闭编辑器组"}
+            title={props.groupId === "secondary" ? "关闭分屏" : "关闭编辑器组"}
+            onClick={() => closeSplit(props.groupId)}
             className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <Columns2 className="size-3.5" />

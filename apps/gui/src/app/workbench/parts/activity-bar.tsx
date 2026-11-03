@@ -9,7 +9,7 @@ import { BookOpen, Bot, Camera, Compass, Library, LogOut, Monitor, Moon, PanelBo
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { setContainer, setSidebarCollapsed, openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
+import { setContainer, setSidebarCollapsed, openEditor, getGroup, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
 import { openPalette } from "../command-registry";
 import { useTheme } from "@/hooks/use-theme";
@@ -67,7 +67,7 @@ export function ActivityBar(props: {
     if (container === "bibliography") openBibliographyEditor();
   };
 
-  const group = state.groups.active === "secondary" ? state.groups.secondary : state.groups.main;
+  const group = getGroup(state.groups, state.groups.active);
   const activeEditor = group?.editors.find((editor) => editor.id === group.activeId);
   const activeWorkspace = activeEditor?.kind === "bibliography" ? (activeEditor.params.workspace ?? "library") : null;
   const bibActive = !collapsed && state.sidebar.container === "bibliography" && (activeWorkspace === "library" || activeWorkspace === null);

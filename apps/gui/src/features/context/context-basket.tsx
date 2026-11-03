@@ -13,6 +13,7 @@ type Basket = {
   add: (resource: ContextResource) => void;
   remove: (resource: ContextResource) => void;
   clear: () => void;
+  forScope: (scope: string | null, label: string) => Basket;
 };
 const BasketContext = createContext<Basket | null>(null);
 export const useContextBasket = () => useContext(BasketContext);
@@ -24,20 +25,29 @@ export function ContextBasketProvider({ scope, contextLabel, onAdd, children }: 
 }) {
   const [revealVersion, setRevealVersion] = useState(0);
   const [baskets, setBaskets] = useState<Record<string, ContextResource[]>>({});
-  const resources = scope ? baskets[scope] ?? [] : [];
-  const update = (transform: (current: ContextResource[]) => ContextResource[]) => {
-    if (scope) setBaskets(current => ({ ...current, [scope]: transform(current[scope] ?? []) }));
+  const forScope = (targetScope: string | null, label: string): Basket => {
+    const resources = targetScope ? baskets[targetScope] ?? [] : [];
+    const update = (transform: (current: ContextResource[]) => ContextResource[]) => {
+      if (targetScope) setBaskets(current => ({ ...current, [targetScope]: transform(current[targetScope] ?? []) }));
+    };
+    return {
+      resources, available: Boolean(targetScope), contextLabel: label, revealVersion, forScope,
+      add: resource => {
+        update(current => [...current.filter(item => resourceKey(item) !== resourceKey(resource)), resource]);
+        setRevealVersion(version => version + 1);
+        onAdd();
+      },
+      remove: resource => update(current => current.filter(item => resourceKey(item) !== resourceKey(resource))),
+      clear: () => update(() => []),
+    };
   };
-  return <BasketContext.Provider value={{
-    resources, available: Boolean(scope), contextLabel, revealVersion,
-    add: resource => {
-      update(current => [...current.filter(item => resourceKey(item) !== resourceKey(resource)), resource]);
-      setRevealVersion(version => version + 1);
-      onAdd();
-    },
-    remove: resource => update(current => current.filter(item => resourceKey(item) !== resourceKey(resource))),
-    clear: () => update(() => []),
-  }}>{children}</BasketContext.Provider>;
+  return <BasketContext.Provider value={forScope(scope, contextLabel)}>{children}</BasketContext.Provider>;
+}
+
+/** Select another agent's basket while sharing the same underlying store. */
+export function ContextBasketScope({ scope, label, children }: { scope: string | null; label: string; children: ReactNode }) {
+  const parent = useContext(BasketContext);
+  return <BasketContext.Provider value={parent?.forScope(scope, label) ?? null}>{children}</BasketContext.Provider>;
 }
 
 export function AddToContext({ resource }: { resource: ContextResource }) {

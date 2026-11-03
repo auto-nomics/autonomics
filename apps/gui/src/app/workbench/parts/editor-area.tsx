@@ -1,18 +1,8 @@
-/**
- * Editor area: one or two editor groups (split), each pane hosting its
- * group's editors.
- *
- * Mounting model — keep-alive editor bodies render as children of their
- * group pane and only toggle `hidden` when inactive, so React state (wiki
- * drafts, virtualized lists, hosted readers) survives tab switches exactly
- * like the old shell's hidden sections. Group restructuring (split, moving
- * an editor across groups) remounts the affected bodies — rare operations,
- * accepted for now. Ephemeral kinds (readers, from M3) mount only while
- * active; their persisted state lives outside React.
- */
+/** Editor grid with stable portal hosts, so moving panes keeps editor state. */
 
-import { useState } from "react";
-import { editorDrag, setEditorDrag } from "../editor-drag";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { editorDrag, setEditorDrag, useEditorDrag } from "../editor-drag";
 import { useWorkbenchRuntime } from "../runtime-context";
 import { BookOpen, Library, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -22,13 +12,21 @@ import { editorKind } from "../editor-registry";
 import {
   openEditor,
   moveEditor,
-  setEditorSplitRatio,
+  setEditorLayoutRatio,
+  setActiveGroup,
+  getGroup,
+  allGroups,
+  getWorkbenchState,
+  splitEditorAt,
+  moveGroupAt,
+  mergeGroup,
   useWorkbenchState,
   type EditorGroup,
   type EditorRef,
   type GroupId,
 } from "../workbench-store";
 import { EditorTabs } from "./editor-tabs";
+import type { EditorLayout, DropDirection } from "../editor-layout";
 
 function EditorBody(props: { editor: EditorRef; active: boolean }) {
   const kind = editorKind(props.editor.kind);
@@ -90,83 +88,120 @@ function EditorEmptyState() {
 
 /** One group pane: tab strip + the zone hosting every keep-alive body of
  *  the group (hidden unless active) plus the active ephemeral body. */
-function EditorGroupPane(props: { groupId: GroupId; group: EditorGroup }) {
-  const [dropZone, setDropZone] = useState<"center" | "right" | null>(null);
+type HostRegistry = { zones: Map<GroupId, HTMLDivElement>; hosts: Map<string, HTMLDivElement> };
+function EditorGroupPane(props: { groupId: GroupId; group: EditorGroup; registry: HostRegistry }) {
+  const dragging = useEditorDrag();
+  const [dropZone, setDropZone] = useState<"center" | DropDirection | null>(null);
   const runtime = useWorkbenchRuntime();
   const workbench = useWorkbenchState();
+  const setZone = useCallback((node: HTMLDivElement | null) => {
+    if (!node) { props.registry.zones.delete(props.groupId); return; }
+    props.registry.zones.set(props.groupId, node);
+    const group = getGroup(getWorkbenchState().groups, props.groupId);
+    for (const editor of group?.editors ?? []) {
+      const host = props.registry.hosts.get(editor.id);
+      if (host) node.appendChild(host);
+    }
+  }, [props.groupId, props.registry]);
   const activeId = props.group.activeId;
   const activeEditor = props.group.editors.find((editor) => editor.id === activeId) ?? null;
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-editor-group={props.groupId}>
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-editor-group={props.groupId} onPointerDownCapture={() => {
+      if (getWorkbenchState().groups.active === props.groupId) return;
+      setActiveGroup(props.groupId);
+      const active = props.group.editors.find(editor => editor.id === props.group.activeId);
+      if (active?.kind === "agent") runtime.selectAgent(String(active.params.path ?? ""));
+    }}>
       <EditorTabs groupId={props.groupId} group={props.group} />
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        ref={setZone}
         data-editor-zone={props.groupId}
         onDragOver={(event) => {
           if (!editorDrag) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = "move";
           const rect = event.currentTarget.getBoundingClientRect();
-          setDropZone(props.groupId === "main" && !workbench.groups.secondary && event.clientX > rect.left + rect.width * 0.75 ? "right" : "center");
+          const x = (event.clientX - rect.left) / rect.width, y = (event.clientY - rect.top) / rect.height;
+          const nearest = Math.min(x, 1 - x, y, 1 - y);
+          setDropZone(nearest >= 0.25 ? "center" : nearest === x ? "left" : nearest === 1 - x ? "right" : nearest === y ? "top" : "bottom");
         }}
         onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropZone(null); }}
         onDrop={(event) => {
           if (!editorDrag) return;
           event.preventDefault();
-          const dragged = workbench.groups[editorDrag.groupId]?.editors.find((item) => item.id === editorDrag!.id);
-          const target = dropZone === "right" ? "secondary" : props.groupId;
-          moveEditor(editorDrag.groupId, editorDrag.id, target, workbench.groups[target]?.editors.length ?? 0);
+          const dragged = getGroup(workbench.groups, editorDrag.groupId)?.editors.find((item) => item.id === editorDrag!.id);
+          if (!editorDrag.id) {
+            if (dropZone && dropZone !== "center") moveGroupAt(editorDrag.groupId, props.groupId, dropZone);
+            else mergeGroup(editorDrag.groupId, props.groupId, props.group.editors.length);
+          } else if (dropZone && dropZone !== "center") splitEditorAt(editorDrag.groupId, editorDrag.id, props.groupId, dropZone);
+          else moveEditor(editorDrag.groupId, editorDrag.id, props.groupId, props.group.editors.length);
           if (dragged?.kind === "agent") runtime.selectAgent(String(dragged.params.path ?? ""));
           setEditorDrag(null);
           setDropZone(null);
         }}
       >
-        {dropZone && <div aria-hidden className={cn("pointer-events-none absolute inset-y-0 z-20 border-2 border-primary bg-primary/15", dropZone === "right" ? "right-0 w-1/2" : "inset-x-0")} />}
+        {dragging && <div aria-hidden className="absolute inset-0 z-10" />}
+        {dropZone && <div aria-hidden className={cn("pointer-events-none absolute z-20 border-2 border-primary bg-primary/15", dropZone === "right" ? "inset-y-0 right-0 w-1/2" : dropZone === "left" ? "inset-y-0 left-0 w-1/2" : dropZone === "top" ? "inset-x-0 top-0 h-1/2" : dropZone === "bottom" ? "inset-x-0 bottom-0 h-1/2" : "inset-0")} />}
         {!activeEditor && <EditorEmptyState />}
-        {props.group.editors.map((editor) => {
-          const kind = editorKind(editor.kind);
-          if (!kind) return null;
-          if (kind.mount === "ephemeral" && editor.id !== activeId) return null;
-          return <EditorBody key={editor.id} editor={editor} active={editor.id === activeId} />;
-        })}
       </div>
     </div>
   );
 }
 
+function LayoutNode({ node, path, registry }: { node: EditorLayout; path: string; registry: HostRegistry }) {
+  const state = useWorkbenchState();
+  if ("group" in node) {
+    const group = getGroup(state.groups, node.group);
+    return group ? <EditorGroupPane groupId={node.group} group={group} registry={registry} /> : null;
+  }
+  const first = `layout-${path || "root"}-first`, second = `layout-${path || "root"}-second`;
+  const initial: Layout = { [first]: node.ratio, [second]: 100 - node.ratio };
+  return <ResizablePanelGroup orientation={node.axis} defaultLayout={initial} onLayoutChanged={layout => {
+    const ratio = layout[first];
+    if (typeof ratio === "number" && Math.abs(ratio - node.ratio) > 0.1) setEditorLayoutRatio(path, ratio);
+  }} className="min-h-0 min-w-0 flex-1">
+    <ResizablePanel id={first} minSize="15%" className="flex min-h-0 min-w-0"><LayoutNode node={node.first} path={`${path}0`} registry={registry} /></ResizablePanel>
+    <ResizableHandle aria-label={node.axis === "horizontal" ? "调整分屏宽度" : "调整分屏高度"} className={node.axis === "vertical" ? "h-px w-full after:-inset-x-2 after:-top-1 after:h-2.5 after:w-auto" : undefined} />
+    <ResizablePanel id={second} minSize="15%" className="flex min-h-0 min-w-0"><LayoutNode node={node.second} path={`${path}1`} registry={registry} /></ResizablePanel>
+  </ResizablePanelGroup>;
+}
+/** The portal target is stable even when its DOM host moves between panes. */
+function EditorHost({ editor, groupId, active, registry }: { editor: EditorRef; groupId: GroupId; active: boolean; registry: HostRegistry }) {
+  const runtime = useWorkbenchRuntime();
+  const [host] = useState(() => {
+    const element = document.createElement("div");
+    element.className = "absolute inset-0 min-h-0 min-w-0";
+    return element;
+  });
+  useLayoutEffect(() => {
+    registry.hosts.set(editor.id, host);
+    registry.zones.get(groupId)?.appendChild(host);
+    host.style.pointerEvents = active ? "" : "none";
+  }, [groupId, host, registry, active]);
+  useLayoutEffect(() => {
+    const focusGroup = () => {
+      if (getWorkbenchState().groups.active === groupId) return;
+      setActiveGroup(groupId);
+      const group = getGroup(getWorkbenchState().groups, groupId);
+      const selected = group?.editors.find(item => item.id === group.activeId);
+      if (selected?.kind === "agent") runtime.selectAgent(String(selected.params.path ?? ""));
+    };
+    host.addEventListener("pointerdown", focusGroup, true);
+    host.addEventListener("focusin", focusGroup, true);
+    return () => { host.removeEventListener("pointerdown", focusGroup, true); host.removeEventListener("focusin", focusGroup, true); };
+  }, [groupId, host, runtime]);
+  useLayoutEffect(() => () => { host.remove(); registry.hosts.delete(editor.id); }, [host, editor.id, registry]);
+  const kind = editorKind(editor.kind);
+  if (!kind || (kind.mount === "ephemeral" && !active)) return null;
+  return createPortal(<EditorBody editor={editor} active={active} />, host);
+}
 export function EditorArea() {
   const state = useWorkbenchState();
-  const split = state.groups.secondary !== null;
-
-  const handleSplitLayout = (layout: Layout) => {
-    const ratio = layout["ed-main"];
-    if (typeof ratio === "number" && ratio >= 25 && ratio <= 75) setEditorSplitRatio(ratio);
-  };
-
-  const defaultSplitLayout: Layout | undefined = split
-    ? { "ed-main": state.splitRatio, "ed-secondary": 100 - state.splitRatio }
-    : undefined;
-
-  return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-      {split ? (
-        <ResizablePanelGroup
-          orientation="horizontal"
-          defaultLayout={defaultSplitLayout}
-          onLayoutChanged={handleSplitLayout}
-          className="min-h-0 min-w-0 flex-1"
-        >
-          <ResizablePanel id="ed-main" minSize="25%" className="flex min-w-0">
-            <EditorGroupPane groupId="main" group={state.groups.main} />
-          </ResizablePanel>
-          <ResizableHandle aria-label="调整分屏宽度" />
-          <ResizablePanel id="ed-secondary" minSize="20%" className="flex min-w-0">
-            <EditorGroupPane groupId="secondary" group={state.groups.secondary!} />
-          </ResizablePanel>
-        </ResizablePanelGroup>
-      ) : (
-        <EditorGroupPane groupId="main" group={state.groups.main} />
-      )}
-    </div>
-  );
+  const registry = useRef<HostRegistry>({ zones: new Map(), hosts: new Map() }).current;
+  const editors = allGroups(state.groups).flatMap(([groupId, group]) => group.editors.map(editor => ({ editor, groupId, active: editor.id === group.activeId })));
+  return <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+    <LayoutNode node={state.editorLayout} path="" registry={registry} />
+    {editors.map(item => <EditorHost key={item.editor.id} {...item} registry={registry} />)}
+  </div>;
 }

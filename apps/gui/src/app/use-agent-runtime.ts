@@ -199,7 +199,16 @@ export function useAgentRuntime() {
     collapse_tool_calls: false,
     collapse_tool_results: false,
   });
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const [sendingPaths, setSendingPaths] = useState<Record<string, boolean>>({});
+  const sendingRef = useRef(new Set<string>());
+  const setDraftFor = useCallback((path: string, value: string) => {
+    setDrafts(current => ({ ...current, [path]: value }));
+  }, []);
+  const draft = drafts[activeAgent] ?? "";
+  const setDraft = (value: string) => setDraftFor(activeAgent, value);
   const [busy, setBusy] = useState<string | null>(null);
   // Model catalog for the composer switcher; fetched lazily on first open.
   const [modelCatalog, setModelCatalog] = useState<ModelRow[]>([]);
@@ -618,27 +627,24 @@ export function useAgentRuntime() {
     setStatuses((current) => ({ ...current, [result.path]: "idle" }));
   };
 
-  const sendMessage = async (context = "") => {
-    const text = draft.trim();
-    if (!text || !activeAgent || busy === "send") return;
-    setBusy("send");
-    setDraft("");
+  const sendMessageTo = async (path: string, context = "") => {
+    const text = (draftsRef.current[path] ?? "").trim();
+    if (!text || !path || sendingRef.current.has(path)) return;
+    sendingRef.current.add(path);
+    setSendingPaths(current => ({ ...current, [path]: true }));
+    setDraftFor(path, "");
     try {
-      // A dormant tab's instance was passivated (idle TTL); the daemon
-      // rejects deliveries to unregistered paths, so re-activate the
-      // identity from storage first — the virtual-actor wake-up path.
-      await activateAgent(activeAgent);
-      await gatewayRequest("POST", `/agents/${activeAgent}/messages`, { text: text + context });
-      // The transcript entry and prompt-history entry both arrive via the
-      // UserMessageAcknowledged event; echoing them here rendered the
-      // message twice.
+      await activateAgent(path);
+      await gatewayRequest("POST", `/agents/${path}/messages`, { text: text + context });
     } catch (cause) {
-      setDraft(text);
-      appendMessage(activeAgent, makeItem("error", String(cause)));
+      setDrafts(current => ({ ...current, [path]: current[path] || text }));
+      appendMessage(path, makeItem("error", String(cause)));
     } finally {
-      setBusy(null);
+      sendingRef.current.delete(path);
+      setSendingPaths(current => ({ ...current, [path]: false }));
     }
   };
+  const sendMessage = (context = "") => sendMessageTo(activeAgent, context);
 
   /** Selecting a tab is a view operation: it both focuses the tab and
    *  opens it (spawn stubs and dormant identities included). */
@@ -820,11 +826,16 @@ export function useAgentRuntime() {
     display,
     toggleDisplay,
     refreshHistory: () => void loadHistory(activeAgent),
+    loadAgentHistory: loadHistory,
     // composer
     draft,
     setDraft,
-    busy,
+    drafts,
+    setDraftFor,
+    busy: sendingPaths[activeAgent] ? "send" : busy,
+    sendingPaths,
     sendMessage,
+    sendMessageTo,
     // model switching
     modelCatalog,
     loadModelCatalog,

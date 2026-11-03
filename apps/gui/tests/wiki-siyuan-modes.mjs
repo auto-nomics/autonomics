@@ -68,7 +68,7 @@ const BACKLINK = {
   tags: [],
   ctime: 1760000000,
   mtime: 1760000000,
-  content: '# 反向引用\n\n参见 [[番茄栽培]]。\n',
+  content: '# 反向引用\n\n参见 [[番茄栽培]] 和 [[番茄栽培]]。\n',
 };
 const summary = (entry) => {
   const { content: _content, ...rest } = entry;
@@ -313,6 +313,24 @@ try {
   assert.equal(await fresh.inputValue(), '', 'the fresh block starts empty');
   await page.keyboard.type('新块内容');
 
+  // Moving a dirty editor between groups must retain its mounted draft.
+  await page.evaluate(async () => {
+    window.testWikiTitleNode = document.querySelector('#wiki-title');
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.openEditor({ kind: 'wiki-graph', activate: false });
+  });
+  const sourceTab = page.getByRole('tab', { name: '番茄栽培' });
+  const mainZone = page.locator('[data-editor-zone="main"]');
+  const box = await mainZone.boundingBox();
+  await sourceTab.dragTo(mainZone, { targetPosition: { x: box.width / 2, y: box.height - 10 } });
+  await page.locator('[data-editor-group="secondary"] [role="tab"]').waitFor();
+  assert.equal(await page.evaluate(() => document.querySelector('#wiki-title') === window.testWikiTitleNode), true, 'split must preserve the editor DOM');
+  assert.ok((await wiki.innerText()).includes('新块内容') || await wiki.locator('textarea').evaluateAll(nodes => nodes.some(node => node.value.includes('新块内容'))));
+  await page.getByRole('button', { name: '关闭分屏' }).click();
+  await sourceTab.click();
+  assert.equal(await page.evaluate(() => document.querySelector('#wiki-title') === window.testWikiTitleNode), true, 'merging must preserve the editor DOM');
+
+
   // Save → PUT carries the re-joined content, view returns to the reader.
   await wiki.getByRole('button', { name: '保存' }).click();
   await wiki.getByRole('heading', { name: '番茄栽培' }).first().waitFor();
@@ -356,9 +374,10 @@ try {
 
   // ── 底部 dock:链接按词条名显示,不再显示裸 id ──
   await wiki.getByRole('heading', { name: '关联提及' }).waitFor();
+  await wiki.getByLabel('反向引用 有 2 处关联提及').waitFor();
   await wiki.getByRole('button', { name: '展开 反向引用 的关联提及' }).click();
-  await wiki.getByRole('button', { name: '参见 [[番茄栽培]]。' }).waitFor();
-  assert.equal(await wiki.locator('mark', { hasText: '[[番茄栽培]]' }).count(), 1);
+  await wiki.getByRole('button', { name: '参见 [[番茄栽培]] 和 [[番茄栽培]]。' }).waitFor();
+  assert.equal(await wiki.locator('mark', { hasText: '[[番茄栽培]]' }).count(), 2);
   await wiki.getByText('反向引用').first().waitFor({ timeout: 10_000 });
   assert.ok((await wiki.getByText('提及者').count()) >= 1, 'mention row shows the title');
   assert.equal(await wiki.getByText('entry-3').count(), 0, 'raw entry ids must not be displayed');

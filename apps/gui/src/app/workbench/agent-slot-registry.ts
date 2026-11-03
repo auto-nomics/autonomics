@@ -1,10 +1,4 @@
-/**
- * Agent slot registry: each agent editor tab body registers its slot DOM
- * node here; the single AgentWorkspace instance (rendered by the shell)
- * portals into the slot of the active agent. Tab switches move the portal
- * target — the workspace's transcript machinery is built to survive the
- * remount, and per-agent state lives in the runtime store.
- */
+/** Agent editor slots host independent per-agent workspaces. */
 
 import { useSyncExternalStore } from "react";
 

@@ -2460,3 +2460,57 @@ async fn search_request_ids_support_early_cancellation_and_safe_reuse() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn wiki_graph_pages_include_live_nodes_and_batched_links() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let app = api_server::api_router(shared, wiki_handle().await);
+    let mut ids = Vec::new();
+    for (title, content) in [
+        ("Graph target", "target"),
+        ("Graph source", "[[Graph target]]"),
+        ("Graph isolated", "alone"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/api/v1/wiki/entries",
+                Some(serde_json::json!({"title": title, "content": content}).to_string()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        ids.push(body["id"].as_str().unwrap().to_owned());
+    }
+    let mut offset = 0;
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    loop {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/api/v1/wiki/graph?limit=2&offset={offset}"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        nodes.extend(page["nodes"].as_array().unwrap().iter().cloned());
+        edges.extend(page["edges"].as_array().unwrap().iter().cloned());
+        match page["next_offset"].as_u64() {
+            Some(next) => offset = next,
+            None => break,
+        }
+    }
+    assert_eq!(nodes.len(), 3);
+    assert!(nodes.iter().any(|node| node["id"] == ids[2]));
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0]["source"], ids[1]);
+    assert_eq!(edges[0]["target"], ids[0]);
+}

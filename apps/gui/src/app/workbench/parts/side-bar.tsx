@@ -11,7 +11,7 @@ import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot
 import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
-import { AgentInspector, openAgentDialog } from "@/features/agent";
+import { AgentSidebar } from "./agent-sidebar";
 import { WikiSidebarView } from "@/features/wiki/wiki-sidebar-view";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
@@ -19,7 +19,6 @@ import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
-import { useWorkbenchRuntime } from "../runtime-context";
 import { openPalette } from "../command-registry";
 import { togglePanel } from "../workbench-store";
 import { isTauri } from "@/lib/is-tauri";
@@ -40,9 +39,8 @@ const CONTAINER_TITLES: Record<ContainerId, string> = {
   agents: "Agent",
 };
 
-function ContainerBody({ container, mobile }: { container: ContainerId; mobile: boolean }) {
+function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
   const state = useWorkbenchState();
-  const runtime = useWorkbenchRuntime();
   if (container === "bibliography") {
     const active = state.containerViews.bibliography ?? "library";
     if (!mobile) return <div ref={setBibliographySidebarSlot} className="flex min-h-0 flex-1 flex-col" />;
@@ -73,29 +71,7 @@ function ContainerBody({ container, mobile }: { container: ContainerId; mobile: 
       </div>
     );
   }
-  // agents container: the inspector lives here now (overview view).
-  return (
-    <div role="group" aria-label="Agent 工作区" className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <AgentInspector
-          activeAgent={runtime.activeAgent}
-          activeInfo={runtime.agents.find((agent) => agent.path === runtime.activeAgent)}
-          status={runtime.statuses[runtime.activeAgent]}
-          plan={runtime.plans[runtime.activeAgent] ?? null}
-          usage={runtime.usage[runtime.activeAgent] ?? null}
-          display={runtime.display}
-          inspectorOpen
-          onToggleDisplay={(key) => void runtime.toggleDisplay(key)}
-          onOpenDag={() => {
-            if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } });
-          }}
-          onOpenCopy={() => openAgentDialog("copy")}
-          onOpenHistory={() => openAgentDialog("history")}
-          onRefreshHistory={runtime.refreshHistory}
-        />
-      </div>
-    </div>
-  );
+  return <AgentSidebar onSpawn={onSpawn} />;
 }
 
 export function SideBar(props: {
@@ -103,6 +79,7 @@ export function SideBar(props: {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onLogout: () => void;
+  onSpawn: () => void;
 }) {
   const state = useWorkbenchState();
   const container = state.sidebar.container ?? "bibliography";
@@ -207,7 +184,7 @@ export function SideBar(props: {
               <span className="truncate text-xs text-muted-foreground">Research workspace</span>
             </div>
           </div>
-          <SideBarContent container={container} mobile={props.mobile} />
+          <SideBarContent container={container} mobile={props.mobile} onSpawn={props.onSpawn} />
           <MobileDrawerFooter onLogout={props.onLogout} />
         </aside>
       </>
@@ -220,16 +197,16 @@ export function SideBar(props: {
       data-slot="workbench-sidebar"
       className="flex h-full min-w-0 w-full flex-col border-r bg-sidebar text-sidebar-foreground"
     >
-      <SideBarContent container={container} mobile={props.mobile} />
+      <SideBarContent container={container} mobile={props.mobile} onSpawn={props.onSpawn} />
     </aside>
   );
 }
 
-function SideBarContent({ container, mobile }: { container: ContainerId; mobile: boolean }) {
+function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
   const state = useWorkbenchState();
   return (
     <>
-      {container !== "wiki" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {container !== "wiki" && container !== "agents" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CONTAINER_TITLES[container]}
         </span>
@@ -238,7 +215,7 @@ function SideBarContent({ container, mobile }: { container: ContainerId; mobile:
         </span>
       </div>}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ContainerBody container={container} mobile={mobile} />
+        <ContainerBody container={container} mobile={mobile} onSpawn={onSpawn} />
       </div>
     </>
   );

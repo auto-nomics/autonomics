@@ -22,7 +22,8 @@ import {
   activateEditor,
   useWorkbenchState,
   type EditorRef,
-  type GroupId,
+  allGroups,
+  getGroup,
 } from "./workbench-store";
 
 type Row = WorkbenchCommand & { section: "editors" | "commands" };
@@ -36,10 +37,7 @@ export function CommandPalette() {
   const editorRows = useMemo<Row[]>(() => {
     if (palette.mode === "commands") return [];
     const rows: Row[] = [];
-    const groups: Array<[GroupId, typeof state.groups.main]> = [
-      ["main", state.groups.main],
-    ];
-    if (state.groups.secondary) groups.push(["secondary", state.groups.secondary]);
+    const groups = allGroups(state.groups);
     for (const [groupId, group] of groups) {
       for (const editor of group.editors) {
         const kind = editorKind(editor.kind);
@@ -60,7 +58,7 @@ export function CommandPalette() {
   const commandRows = useMemo<Row[]>(() => {
     const rows = commands.map((command) => ({ ...command, section: "commands" as const }));
     // Per-active-editor kind commands ride at the end, namespaced.
-    const group = state.groups.active === "secondary" ? state.groups.secondary : state.groups.main;
+    const group = getGroup(state.groups, state.groups.active);
     const active: EditorRef | undefined = group?.editors.find((editor) => editor.id === group?.activeId);
     if (active) {
       const kind = editorKind(active.kind);

@@ -10,6 +10,7 @@ import {
   closeEditor,
   closeSplit,
   getWorkbenchState,
+  getGroup,
   openAgentEditor,
   openEditor,
   setContainer,
@@ -25,12 +26,12 @@ registerCommands("shell", [
   { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", run: togglePanel },
   { id: "workbench.panel-events", title: "Show event stream panel", category: "view", keywords: "events log frames", run: () => { setPanelTab("events"); } },
   { id: "workbench.panel-notices", title: "Show notices panel", category: "view", keywords: "notifications notices", run: () => { setPanelTab("notices"); } },
-  { id: "workbench.split-editor", title: "Split editor", category: "view", keywords: "split right group", run: splitEditor },
-  { id: "workbench.close-split", title: "Close editor split", category: "view", keywords: "close split group", run: closeSplit },
+  { id: "workbench.split-editor", title: "Split editor", category: "view", keywords: "split right group", run: () => splitEditor() },
+  { id: "workbench.close-split", title: "Close editor split", category: "view", keywords: "close split group", run: () => closeSplit() },
   // Palette close is a plain close; tab-strip close enforces confirmLeave.
   { id: "workbench.close-editor", title: "Close editor", category: "view", keywords: "close tab", run: () => {
     const current = getWorkbenchState();
-    const group = current.groups.active === "secondary" ? current.groups.secondary : current.groups.main;
+    const group = getGroup(current.groups, current.groups.active);
     const id = group?.activeId;
     if (id) closeEditor(id);
   } },

@@ -11,9 +11,10 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { layoutGroups, removeLayoutGroup, resizeLayout, splitLayout, validLayout, type DropDirection, type EditorLayout } from "./editor-layout";
 
 export type ContainerId = "bibliography" | "wiki" | "agents";
-export type GroupId = "main" | "secondary";
+export type GroupId = string;
 export type EditorId = string;
 export type PanelTab = "events" | "notices";
 
@@ -35,7 +36,10 @@ export type WorkbenchState = {
   sidebar: { collapsed: boolean; container: ContainerId | null; width: number };
   containerViews: Record<ContainerId, string>;
   panel: { visible: boolean; heightPercent: number; tab: PanelTab; unreadNotices: number };
-  groups: { active: GroupId; main: EditorGroup; secondary: EditorGroup | null };
+  groups: { active: GroupId; main: EditorGroup; secondary: EditorGroup | null; extra: Record<GroupId, EditorGroup> };
+  editorLayout: EditorLayout;
+  /** Last focused wiki editor, retained while its graph tab is active. */
+  lastWikiEditorId: EditorId | null;
   /** Main-group share of the split layout, percent (25–75). */
   splitRatio: number;
 };
@@ -83,9 +87,11 @@ function defaultState(): WorkbenchState {
   return {
     revision: 0,
     sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography", width: 220 },
-    containerViews: { bibliography: "library", wiki: "browse", agents: "overview" },
+    containerViews: { bibliography: "library", wiki: "browse", agents: "list" },
     panel: { visible: false, heightPercent: PANEL_HEIGHT_DEFAULT, tab: "events", unreadNotices: 0 },
-    groups: { active: "main", main: { editors: [], activeId: null }, secondary: null },
+    groups: { active: "main", main: { editors: [], activeId: null }, secondary: null, extra: {} },
+    editorLayout: { group: "main" },
+    lastWikiEditorId: null,
     splitRatio: 50,
   };
 }
@@ -162,7 +168,7 @@ function migrateWikiTabs(): {
 function isEditorGroup(value: unknown): value is EditorGroup {
   return Boolean(value) && typeof value === "object"
     && Array.isArray((value as EditorGroup).editors)
-    && typeof (value as EditorGroup).activeId === "string";
+    && (typeof (value as EditorGroup).activeId === "string" || (value as EditorGroup).activeId === null);
 }
 
 function reviveState(raw: unknown): WorkbenchState | null {
@@ -185,13 +191,18 @@ function reviveState(raw: unknown): WorkbenchState | null {
       unreadNotices: 0,
     },
     groups: {
-      active: source.groups?.active === "secondary" && source.groups.secondary ? "secondary" : "main",
+      active: typeof source.groups?.active === "string" ? source.groups.active : "main",
       main: isEditorGroup(source.groups?.main) ? source.groups.main : base.groups.main,
       secondary: isEditorGroup(source.groups?.secondary) ? source.groups.secondary : null,
+      extra: Object.fromEntries(Object.entries(source.groups?.extra ?? {}).filter(([id, group]) => id !== "main" && id !== "secondary" && isEditorGroup(group))),
     },
+    editorLayout: { group: "main" },
+    lastWikiEditorId: typeof source.lastWikiEditorId === "string" ? source.lastWikiEditorId : null,
     splitRatio: clampPercent(source.splitRatio ?? NaN, 25, 75, 50),
   };
-  if (state.groups.active === "secondary" && !state.groups.secondary) state.groups.active = "main";
+  const ids = new Set(allGroups(state.groups).map(([id]) => id));
+  state.editorLayout = validLayout(source.editorLayout, ids) ? source.editorLayout : [...ids].slice(1).reduce<EditorLayout>((layout, id) => ({ axis: "horizontal", ratio: state.splitRatio, first: layout, second: { group: id } }), { group: "main" });
+  if (!getGroup(state.groups, state.groups.active)) state.groups.active = "main";
   return state;
 }
 
@@ -241,6 +252,8 @@ function persist() {
         tab: state.panel.tab,
       },
       groups: state.groups,
+      editorLayout: state.editorLayout,
+      lastWikiEditorId: state.lastWikiEditorId,
       splitRatio: state.splitRatio,
     }));
   } catch {
@@ -249,7 +262,12 @@ function persist() {
 }
 
 function commit(next: WorkbenchState) {
-  state = { ...next, revision: next.revision + 1 };
+  const activeGroup = getGroup(next.groups, next.groups.active);
+  const activeEditor = activeGroup?.editors.find(editor => editor.id === activeGroup.activeId);
+  const editors = allGroups(next.groups).flatMap(([, group]) => group.editors);
+  const lastWikiEditorId = activeEditor?.kind === "wiki-entry" ? activeEditor.id
+    : editors.some(editor => editor.kind === "wiki-entry" && editor.id === next.lastWikiEditorId) ? next.lastWikiEditorId : null;
+  state = { ...next, lastWikiEditorId, revision: next.revision + 1 };
   persist();
   for (const listener of listeners) listener();
 }
@@ -265,6 +283,19 @@ export function getWorkbenchState(): WorkbenchState {
 
 export function useWorkbenchState(): WorkbenchState {
   return useSyncExternalStore(subscribeWorkbench, getWorkbenchState);
+}
+
+export function allGroups(groups: WorkbenchState["groups"]): Array<[GroupId, EditorGroup]> {
+  return [["main", groups.main], ...(groups.secondary ? [["secondary", groups.secondary] as [string, EditorGroup]] : []), ...Object.entries(groups.extra ?? {})];
+}
+export function getGroup(groups: WorkbenchState["groups"], id: GroupId): EditorGroup | null {
+  return id === "main" ? groups.main : id === "secondary" ? groups.secondary : groups.extra[id] ?? null;
+}
+function putGroup(groups: WorkbenchState["groups"], id: GroupId, group: EditorGroup | null): WorkbenchState["groups"] {
+  if (id === "main") return { ...groups, main: group ?? { editors: [], activeId: null } };
+  if (id === "secondary") return { ...groups, secondary: group };
+  const extra = { ...groups.extra }; if (group) extra[id] = group; else delete extra[id];
+  return { ...groups, extra };
 }
 
 // ---------------------------------------------------------------------------
@@ -286,73 +317,29 @@ const EMPTY_PARAMS: Record<string, unknown> = {};
 export function openEditor(options: OpenEditorOptions): EditorId {
   const params = options.params ?? EMPTY_PARAMS;
   const id = `${options.kind}:${editorKey(params)}`;
-  const group: GroupId = options.group ?? state.groups.active;
-  const base = state;
-
-  // Reuse an existing tab in either group; otherwise append to the target.
-  for (const groupId of ["main", "secondary"] as const) {
-    const groupData = groupId === "main" ? base.groups.main : base.groups.secondary;
-    if (!groupData) continue;
-    const existing = groupData.editors.find((editor) => editor.id === id);
+  for (const [groupId, group] of allGroups(state.groups)) {
+    const existing = group.editors.find(editor => editor.id === id);
     if (!existing) continue;
-    const updated: EditorGroup = {
-      editors: groupData.editors.map((editor) => editor.id === id
-        ? { ...editor, params: { ...editor.params, ...params } }
-        : editor),
-      activeId: options.activate === false ? groupData.activeId : id,
-    };
-    commit({
-      ...base,
-      groups: groupId === "main"
-        ? { ...base.groups, main: updated, active: options.activate === false ? base.groups.active : "main" }
-        : { ...base.groups, secondary: updated, active: options.activate === false ? base.groups.active : "secondary" },
-    });
+    const updated = { ...group, editors: group.editors.map(editor => editor.id === id ? { ...editor, params: { ...editor.params, ...params } } : editor), activeId: options.activate === false ? group.activeId : id };
+    const groups = putGroup(state.groups, groupId, updated);
+    commit({ ...state, groups: { ...groups, active: options.activate === false ? groups.active : groupId } });
     return id;
   }
-
+  const groupId = getGroup(state.groups, options.group ?? state.groups.active) ? options.group ?? state.groups.active : "main";
+  const group = getGroup(state.groups, groupId)!;
   const editor: EditorRef = { id, kind: options.kind, params, state: options.state ?? null, pinned: false };
-  if (group === "secondary" && base.groups.secondary) {
-    commit({
-      ...base,
-      groups: {
-        ...base.groups,
-        secondary: { editors: [...base.groups.secondary.editors, editor], activeId: options.activate === false ? base.groups.secondary.activeId : id },
-        active: options.activate === false ? base.groups.active : "secondary",
-      },
-    });
-  } else {
-    commit({
-      ...base,
-      groups: {
-        ...base.groups,
-        main: { editors: [...base.groups.main.editors, editor], activeId: options.activate === false ? base.groups.main.activeId : id },
-        active: options.activate === false ? base.groups.active : "main",
-      },
-    });
-  }
+  const groups = putGroup(state.groups, groupId, { editors: [...group.editors, editor], activeId: options.activate === false ? group.activeId : id });
+  commit({ ...state, groups: { ...groups, active: options.activate === false ? groups.active : groupId } });
   return id;
 }
-
 export function activateEditor(groupId: GroupId, id: EditorId): void {
-  const groupData = groupId === "main" ? state.groups.main : state.groups.secondary;
-  if (!groupData || !groupData.editors.some((editor) => editor.id === id)) return;
-  commit({
-    ...state,
-    groups: {
-      ...state.groups,
-      active: groupId,
-      [groupId]: { ...groupData, activeId: id },
-    },
-  });
+  const group = getGroup(state.groups, groupId);
+  if (!group?.editors.some(editor => editor.id === id)) return;
+  commit({ ...state, groups: { ...putGroup(state.groups, groupId, { ...group, activeId: id }), active: groupId } });
 }
-
-/** Activates an editor wherever it lives (agent-tab sync and openers). */
 export function activateEditorById(id: EditorId): void {
-  if (state.groups.main.editors.some((editor) => editor.id === id)) {
-    activateEditor("main", id);
-  } else if (state.groups.secondary?.editors.some((editor) => editor.id === id)) {
-    activateEditor("secondary", id);
-  }
+  const found = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
+  if (found) activateEditor(found[0], id);
 }
 
 /** Editor id helpers for the kind-keyed tabs the shell syncs. */
@@ -365,8 +352,7 @@ export function wikiEntryEditorId(entryId: string): EditorId {
 }
 
 export function findEditor(id: EditorId): EditorRef | undefined {
-  return state.groups.main.editors.find((editor) => editor.id === id)
-    ?? state.groups.secondary?.editors.find((editor) => editor.id === id);
+  return allGroups(state.groups).flatMap(([, group]) => group.editors).find(editor => editor.id === id);
 }
 
 export function openAgentEditor(path: string, activate = true): EditorId {
@@ -398,150 +384,115 @@ export function openWikiEntryEditor(entryId: string, options: { title?: string; 
 }
 
 export function setActiveGroup(groupId: GroupId): void {
-  if (state.groups.active === groupId) return;
-  if (groupId === "secondary" && !state.groups.secondary) return;
-  commit({ ...state, groups: { ...state.groups, active: groupId } });
+  if (state.groups.active !== groupId && getGroup(state.groups, groupId)) commit({ ...state, groups: { ...state.groups, active: groupId } });
 }
-
-/** Closes an editor in either group. Returns false when the id is unknown. */
+function removeEmptyGroup(groups: WorkbenchState["groups"], layout: EditorLayout, id: GroupId): { groups: WorkbenchState["groups"]; layout: EditorLayout } {
+  if (allGroups(groups).length <= 1 || getGroup(groups, id)?.editors.length) return { groups, layout };
+  // Keep the stable main group as an empty target; it is removed only by
+  // promoting another group into it when no editor remains in main.
+  if (id === "main") {
+    const other = layoutGroups(layout).find(key => key !== "main");
+    if (!other) return { groups, layout };
+    const promoted = getGroup(groups, other)!;
+    let next = putGroup(putGroup(groups, "main", promoted), other, null);
+    if (next.active === other || next.active === "main") next = { ...next, active: "main" };
+    const withoutMain = removeLayoutGroup(layout, "main")!;
+    const rename = (node: EditorLayout): EditorLayout => "group" in node ? { group: node.group === other ? "main" : node.group } : { ...node, first: rename(node.first), second: rename(node.second) };
+    return { groups: next, layout: rename(withoutMain) };
+  }
+  const nextLayout = removeLayoutGroup(layout, id) ?? { group: "main" };
+  const next = putGroup(groups, id, null);
+  return { groups: { ...next, active: next.active === id ? layoutGroups(nextLayout)[0] : next.active }, layout: nextLayout };
+}
 export function closeEditor(id: EditorId): boolean {
-  const inMain = state.groups.main.editors.some((editor) => editor.id === id);
-  const inSecondary = state.groups.secondary?.editors.some((editor) => editor.id === id);
-  if (!inMain && !inSecondary) return false;
-  const close = (groupData: EditorGroup): EditorGroup => {
-    const index = groupData.editors.findIndex((editor) => editor.id === id);
-    const editors = groupData.editors.filter((editor) => editor.id !== id);
-    const nextActive = groupData.activeId !== id ? groupData.activeId : editors[Math.min(index, editors.length - 1)]?.id ?? null;
-    return { editors, activeId: nextActive };
-  };
-  const main = inMain ? close(state.groups.main) : state.groups.main;
-  const secondary = inSecondary && state.groups.secondary ? close(state.groups.secondary) : state.groups.secondary;
-  const groups = { ...state.groups, main, secondary };
-  if (secondary && !secondary.editors.length) {
-    // Closing the last editor of the split folds it back into main.
-    groups.secondary = null;
-    groups.active = "main";
-  }
-  commit({ ...state, groups });
-  return true;
+  const found = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
+  if (!found) return false;
+  const [groupId, group] = found, index = group.editors.findIndex(editor => editor.id === id);
+  const editors = group.editors.filter(editor => editor.id !== id);
+  const updated = { editors, activeId: group.activeId === id ? editors[Math.min(index, editors.length - 1)]?.id ?? null : group.activeId };
+  const result = removeEmptyGroup(putGroup(state.groups, groupId, updated), state.editorLayout, groupId);
+  commit({ ...state, groups: result.groups, editorLayout: result.layout }); return true;
 }
-
 export function closeOthers(groupId: GroupId, id: EditorId): void {
-  const groupData = groupId === "main" ? state.groups.main : state.groups.secondary;
-  if (!groupData) return;
-  const kept = groupData.editors.find((editor) => editor.id === id);
-  if (!kept) return;
-  commit({
-    ...state,
-    groups: { ...state.groups, [groupId]: { editors: [kept], activeId: id } },
-  });
+  const group = getGroup(state.groups, groupId), kept = group?.editors.find(editor => editor.id === id);
+  if (kept) commit({ ...state, groups: putGroup(state.groups, groupId, { editors: [kept], activeId: id }) });
 }
-
-export function setEditorPinned(id: EditorId, pinned: boolean): void {
-  const patch = (groupData: EditorGroup): EditorGroup => ({
-    ...groupData,
-    editors: groupData.editors.map((editor) => editor.id === id ? { ...editor, pinned } : editor),
-  });
-  if (state.groups.main.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, main: patch(state.groups.main) } });
-  } else if (state.groups.secondary?.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, secondary: patch(state.groups.secondary!) } });
-  }
+function patchEditor(id: EditorId, update: (editor: EditorRef) => EditorRef): void {
+  const found = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
+  if (!found) return;
+  const [groupId, group] = found;
+  commit({ ...state, groups: putGroup(state.groups, groupId, { ...group, editors: group.editors.map(editor => editor.id === id ? update(editor) : editor) }) });
 }
-
-export function patchEditorParams(id: EditorId, patch: Record<string, unknown>): void {
-  const apply = (groupData: EditorGroup): EditorGroup => ({
-    ...groupData,
-    editors: groupData.editors.map((editor) => editor.id === id
-      ? { ...editor, params: { ...editor.params, ...patch } }
-      : editor),
-  });
-  if (state.groups.main.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, main: apply(state.groups.main) } });
-  } else if (state.groups.secondary?.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, secondary: apply(state.groups.secondary!) } });
-  }
-}
-
-export function patchEditorState(id: EditorId, editorState: unknown): void {
-  const apply = (groupData: EditorGroup): EditorGroup => ({
-    ...groupData,
-    editors: groupData.editors.map((editor) => editor.id === id ? { ...editor, state: editorState } : editor),
-  });
-  if (state.groups.main.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, main: apply(state.groups.main) } });
-  } else if (state.groups.secondary?.editors.some((editor) => editor.id === id)) {
-    commit({ ...state, groups: { ...state.groups, secondary: apply(state.groups.secondary!) } });
-  }
-}
-
-/** Move an editor to an insertion position, preserving its complete state. */
+export function setEditorPinned(id: EditorId, pinned: boolean): void { patchEditor(id, editor => ({ ...editor, pinned })); }
+export function patchEditorParams(id: EditorId, patch: Record<string, unknown>): void { patchEditor(id, editor => ({ ...editor, params: { ...editor.params, ...patch } })); }
+export function patchEditorState(id: EditorId, editorState: unknown): void { patchEditor(id, editor => ({ ...editor, state: editorState })); }
 export function moveEditor(from: GroupId, id: EditorId, to: GroupId, index: number): void {
-  const source = state.groups[from];
-  const target = state.groups[to];
-  if (!source || (!target && to !== "secondary")) return;
-  const sourceIndex = source.editors.findIndex((editor) => editor.id === id);
+  const source = getGroup(state.groups, from), target = getGroup(state.groups, to);
+  if (!source || !target) return;
+  const sourceIndex = source.editors.findIndex(editor => editor.id === id);
   if (sourceIndex < 0) return;
-  const editor = source.editors[sourceIndex];
-  const remaining = source.editors.filter((item) => item.id !== id);
-  const destination = from === to ? remaining : (target?.editors ?? []);
+  const editor = source.editors[sourceIndex], remaining = source.editors.filter(item => item.id !== id);
+  const destination = from === to ? remaining : target.editors;
   const insertion = Math.max(0, Math.min(destination.length, index - (from === to && sourceIndex < index ? 1 : 0)));
   const editors = [...destination.slice(0, insertion), editor, ...destination.slice(insertion)];
   const sourceActive = source.activeId === id ? remaining[Math.min(sourceIndex, remaining.length - 1)]?.id ?? null : source.activeId;
-  const groups = { ...state.groups, [from]: { editors: remaining, activeId: sourceActive }, [to]: { editors, activeId: id }, active: to };
-  if (from === "secondary" && to === "main" && !remaining.length) groups.secondary = null;
-  commit({ ...state, groups });
+  let groups = putGroup(state.groups, from, { editors: remaining, activeId: sourceActive });
+  groups = { ...putGroup(groups, to, { editors, activeId: id }), active: to };
+  const result = from !== to ? removeEmptyGroup(groups, state.editorLayout, from) : { groups, layout: state.editorLayout };
+  commit({ ...state, groups: result.groups, editorLayout: result.layout });
 }
-
-/** Splits the editor area: the active editor of the active group moves to a
- *  fresh secondary group on the right (VSCode "split editor" with one tab). */
-export function splitEditor(): void {
-  if (state.groups.secondary) {
-    // Split already open: just focus it.
-    commit({ ...state, groups: { ...state.groups, active: "secondary" } });
-    return;
-  }
-  const sourceGroup = state.groups.active === "secondary" ? state.groups.main : state.groups.main;
-  const active = sourceGroup.activeId;
-  if (!active) return;
-  const moved = sourceGroup.editors.find((editor) => editor.id === active);
-  if (!moved) return;
-  const rest = sourceGroup.editors.filter((editor) => editor.id !== active);
-  commit({
-    ...state,
-    groups: {
-      active: "secondary",
-      main: { editors: rest, activeId: rest.at(-1)?.id ?? null },
-      secondary: { editors: [moved], activeId: active },
-    },
-  });
+export function splitEditorAt(from: GroupId, id: EditorId, target: GroupId, direction: DropDirection): void {
+  const source = getGroup(state.groups, from), destination = getGroup(state.groups, target);
+  if (!source || !destination) return;
+  const index = source.editors.findIndex(editor => editor.id === id);
+  if (index < 0 || (from === target && source.editors.length === 1)) return;
+  const newId = !state.groups.secondary ? "secondary" : `group-${crypto.randomUUID()}`;
+  const editor = source.editors[index], rest = source.editors.filter(item => item.id !== id);
+  let groups = putGroup(state.groups, from, { editors: rest, activeId: source.activeId === id ? rest[Math.min(index, rest.length - 1)]?.id ?? null : source.activeId });
+  groups = { ...putGroup(groups, newId, { editors: [editor], activeId: id }), active: newId };
+  let layout = splitLayout(state.editorLayout, target, newId, direction);
+  if (from !== target) { const result = removeEmptyGroup(groups, layout, from); groups = result.groups; layout = result.layout; }
+  commit({ ...state, groups, editorLayout: layout });
 }
-
-/** Folds the split: secondary editors move back to main (unless duplicated). */
-export function closeSplit(): void {
-  const secondary = state.groups.secondary;
-  if (!secondary) return;
-  const existing = new Set(state.groups.main.editors.map((editor) => editor.id));
-  const merged = [...state.groups.main.editors];
-  for (const editor of secondary.editors) {
-    if (!existing.has(editor.id)) merged.push(editor);
-  }
-  const focusId = state.groups.main.activeId ?? merged.at(-1)?.id ?? null;
-  commit({
-    ...state,
-    groups: {
-      active: "main",
-      main: { editors: merged, activeId: focusId },
-      secondary: null,
-    },
-  });
+/** Reposition an entire group without touching its editors. */
+export function moveGroupAt(from: GroupId, target: GroupId, direction: DropDirection): void {
+  if (from === target || !getGroup(state.groups, from) || !getGroup(state.groups, target)) return;
+  const remaining = removeLayoutGroup(state.editorLayout, from);
+  if (!remaining) return;
+  commit({ ...state, groups: { ...state.groups, active: from }, editorLayout: splitLayout(remaining, target, from, direction) });
 }
-
-export function setEditorSplitRatio(percentMain: number): void {
-  const splitRatio = clampPercent(percentMain, 25, 75, 50);
-  if (state.splitRatio === splitRatio) return;
-  commit({ ...state, splitRatio });
+/** Merge all tabs from one group into another at the requested position. */
+export function mergeGroup(from: GroupId, target: GroupId, index: number): void {
+  if (from === target) return;
+  const source = getGroup(state.groups, from), dest = getGroup(state.groups, target);
+  if (!source || !dest) return;
+  const at = Math.max(0, Math.min(dest.editors.length, index));
+  const editors = [...dest.editors.slice(0, at), ...source.editors, ...dest.editors.slice(at)];
+  let groups = putGroup(state.groups, from, { editors: [], activeId: null });
+  groups = { ...putGroup(groups, target, { editors, activeId: source.activeId ?? dest.activeId }), active: target };
+  const result = removeEmptyGroup(groups, state.editorLayout, from);
+  commit({ ...state, groups: result.groups, editorLayout: result.layout });
 }
+export function splitEditor(groupId: GroupId = state.groups.active): void {
+  const group = getGroup(state.groups, groupId);
+  if (group?.activeId) splitEditorAt(groupId, group.activeId, groupId, "right");
+}
+export function closeSplit(groupId: GroupId = state.groups.active): void {
+  const ids = layoutGroups(state.editorLayout);
+  if (ids.length < 2) return;
+  const sourceId = ids.includes(groupId) ? groupId : ids.at(-1)!;
+  const targetId = ids.find(id => id !== sourceId)!;
+  const source = getGroup(state.groups, sourceId), target = getGroup(state.groups, targetId);
+  if (!source || !target) return;
+  const groups = { ...putGroup(putGroup(state.groups, sourceId, { editors: [], activeId: null }), targetId, { editors: [...target.editors, ...source.editors], activeId: target.activeId ?? source.activeId }), active: targetId };
+  const result = removeEmptyGroup(groups, state.editorLayout, sourceId);
+  commit({ ...state, groups: result.groups, editorLayout: result.layout });
+}
+export function setEditorLayoutRatio(path: string, ratio: number): void {
+  if (!Number.isFinite(ratio) || ratio < 15 || ratio > 85) return;
+  commit({ ...state, editorLayout: resizeLayout(state.editorLayout, path, ratio), splitRatio: path === "" ? ratio : state.splitRatio });
+}
+export function setEditorSplitRatio(percentMain: number): void { setEditorLayoutRatio("", percentMain); }
 
 // ---------------------------------------------------------------------------
 // Sidebar / containers

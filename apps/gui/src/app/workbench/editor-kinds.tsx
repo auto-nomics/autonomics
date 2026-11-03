@@ -2,9 +2,8 @@
  * Editor kinds. Bibliography/config/dag are adapted feature views; the
  * agent and wiki-entry kinds are native workbench editors:
  *
- * - `agent:{path}` — the single AgentWorkspace portals into the active
- *   agent tab's slot (agent-slot-registry); the workspace is NOT mounted
- *   per tab, only its slot div is.
+ * - `agent:{path}` — the shell portals that agent's workspace into its
+ *   registered slot, allowing multiple editor groups to show conversations.
  * - `wiki-entry:{entryId}` — a real keep-alive editor per entry with a
  *   per-tab history stack in `editor.state`; registers the wiki opener
  *   bridge so wiki UI can open tabs without importing the workbench.
@@ -32,6 +31,8 @@ import {
   setContainer,
   setSidebarCollapsed,
   closeEditor,
+  allGroups,
+  getGroup,
   openWikiEntryEditor,
   patchEditorState,
   useWorkbenchState,
@@ -48,12 +49,24 @@ function BibliographyEditorBody({ editor }: EditorContext) {
   const groups = useWorkbenchState().groups;
   const sidebarSlot = useBibliographySidebarSlot();
   const desktop = useMediaQuery("(min-width: 768px)");
-  const active = groups.main.activeId === editor.id || groups.secondary?.activeId === editor.id;
+  const active = allGroups(groups).some(([, group]) => group.activeId === editor.id);
   return (
     <section aria-label="文献工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
       <BibliographyView workspace={workspace} active={active} sidebarSlot={desktop ? sidebarSlot : undefined} externalSidebar={desktop} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
+}
+
+function WikiGraphEditorBody() {
+  const state = useWorkbenchState();
+  const group = getGroup(state.groups, state.groups.active);
+  const current = group?.editors.find(item => item.id === group.activeId && item.kind === "wiki-entry");
+  const last = allGroups(state.groups).flatMap(([, group]) => group.editors).find(item => item.kind === "wiki-entry" && item.id === state.lastWikiEditorId);
+  const editor = current ?? last;
+  const wikiState = editor?.state as WikiEntryEditorState | null | undefined;
+  const location = wikiState?.stack?.[wikiState.cursor];
+  const entryId = location?.entryId ?? (editor ? String(editor.params.entryId ?? "") : "");
+  return <WikiGraph entryId={entryId} title={location?.title || wikiState?.title || ""} />;
 }
 
 function ConfigEditorBody() {
@@ -84,8 +97,7 @@ function AgentEditorBody({ editor }: EditorContext) {
   // render and emit through the registry — force-re-rendering the whole
   // shell — forever.
   const setSlot = useCallback((node: HTMLDivElement | null) => setAgentSlot(path, node), [path]);
-  // Keep-alive: every open agent tab mounts its slot; only the ACTIVE
-  // agent's slot receives the portaled workspace (see the shell).
+  // Each visible agent group receives its own portaled workspace.
   return (
     <div
       ref={setSlot}
@@ -248,7 +260,7 @@ export function registerWorkbenchEditorKinds(): void {
     title: () => "知识图谱",
     name: () => "知识关系图谱",
     icon: () => Network,
-    body: WikiGraph,
+    body: WikiGraphEditorBody,
     mount: "keep-alive",
   });
   registerEditorKind({

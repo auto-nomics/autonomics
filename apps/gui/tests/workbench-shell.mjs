@@ -14,7 +14,7 @@ try {
   for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 120) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000);
-  const errors = [];
+  const errors = []; let spawnedAgent;
   page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR', e.stack); });
 
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
@@ -25,22 +25,22 @@ try {
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     // Loose bib/wiki/system fixtures: the shell test cares about chrome, not content.
     if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], snapshots: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
-    if (path === '/wiki/graph') {
-      const offset = Number(new URL(route.request().url()).searchParams.get('offset') ?? 0);
-      const entry = (id, title) => ({ id, title, tags: [], alias: [], ctime: 1, mtime: 1 });
-      return route.fulfill({ json: offset === 0
-        ? { nodes: [entry('w1', '词条甲'), entry('w2', '词条乙')], edges: [{ source: 'w1', target: 'w2' }, { source: 'w1', target: 'missing' }], next_offset: 2 }
-        : { nodes: [entry('w3', '孤立词条')], edges: [], next_offset: null } });
-    }
+    if (path === '/wiki/graph') throw new Error('Local graph must not request the global graph');
+    if (path === '/wiki/entries/w1/links') return route.fulfill({ json: { entry: { id: 'w1', title: '词条甲' }, out_links: [{ id: 'w2', title: '词条乙' }], in_links: [{ id: 'w3', title: '词条丙' }] } });
+    if (path === '/wiki/entries/w2/links') return route.fulfill({ json: { entry: { id: 'w2', title: '词条乙' }, out_links: [{ id: 'w4', title: '词条丁' }], in_links: ['w1'] } });
+    if (path === '/wiki/entries/w3/links') return route.fulfill({ json: { entry: { id: 'w3', title: '词条丙' }, out_links: ['w1'], in_links: [{ id: 'w4', title: '词条丁' }] } });
+    if (path === '/wiki/entries/w4/links') return route.fulfill({ json: { entry: { id: 'w4', title: '词条丁' }, out_links: ['w1', 'w3', { id: 'w5', title: '词条戊' }], in_links: ['w2'] } });
     if (path === '/wiki/search') return route.fulfill({ json: { results: [{ entry_id: 'w1', score: 1 }] } });
     if (path === '/wiki/entries' || path.startsWith('/wiki/entries?')) return route.fulfill({ json: { entries: [{ id: 'w1', title: '词条甲', alias: [], tags: [], ctime: 1, mtime: 1 }] } });
+    if (path === '/wiki/entries/w2') return route.fulfill({ json: { id: 'w2', title: '词条乙', alias: [], tags: [], content: '# 词条乙', ctime: 1, mtime: 1 } });
+    if (path === '/wiki/entries/w3') return route.fulfill({ json: { id: 'w3', title: '词条丙', alias: [], tags: [], content: '# 词条丙', ctime: 1, mtime: 1 } });
     if (path === '/wiki/entries/w1') return route.fulfill({ json: { id: 'w1', title: '词条甲', alias: [], tags: [], content: '# 词条甲\n\n正文。', ctime: 1, mtime: 1 } });
     if (path === '/model-config') return route.fulfill({ json: { models: [], providers: [] } });
     if (path === '/settings') return route.fulfill({ json: {} });
-    if (path === '/profiles') return route.fulfill({ json: [] });
+    if (path === '/profiles') return route.fulfill({ json: ['researcher', 'developer', 'browser', 'curator'] });
     if (path === '/gateway/status') return route.fulfill({ json: { running: true } });
     if (path === '/storage/agents') return route.fulfill({ json: [{ id: 'a2', name: '/root/beta', config_json: { kind: 'researcher' }, created_at: 1, last_active: 1 }] });
-    if (path === '/agents' && route.request().method() === 'POST') return route.fulfill({ json: { path: '/root/beta' } });
+    if (path === '/agents' && route.request().method() === 'POST') { spawnedAgent = route.request().postDataJSON(); return route.fulfill({ json: { path: '/root/beta' } }); }
     return route.fulfill({ status: 404, json: { error: 'Not mocked: ' + path } });
   });
   // Registered last so LIFO precedence holds the SSE stream open (a
@@ -88,6 +88,38 @@ try {
   await agentTab.waitFor();
   await page.getByPlaceholder('输入消息…').waitFor();
   await page.getByText('Gateway 已连接').waitFor();
+
+  // Agent sidebar exposes list/detail tabs and the existing create/resume flows.
+  await rail.getByRole('button', { name: 'Agent', exact: true }).click();
+  const agentSidebar = page.getByRole('group', { name: 'Agent 工作区' });
+  const agentListTab = agentSidebar.getByRole('tab', { name: 'Agent 列表' });
+  const agentDetailTab = agentSidebar.getByRole('tab', { name: 'Agent 详情' });
+  await agentListTab.waitFor();
+  await agentSidebar.getByRole('button', { name: '打开 Agent /root/alpha' }).waitFor();
+  await agentDetailTab.click();
+  await agentSidebar.getByText('Overview', { exact: true }).waitFor();
+  await agentDetailTab.focus();
+  await page.keyboard.press('ArrowLeft');
+  assert.equal(await agentListTab.getAttribute('aria-selected'), 'true');
+  await agentSidebar.getByRole('textbox', { name: '搜索 Agent' }).fill('missing');
+  await agentSidebar.getByText('没有匹配的 Agent。').waitFor();
+  await agentSidebar.getByRole('textbox', { name: '搜索 Agent' }).fill('');
+  await agentSidebar.getByRole('button', { name: '创建 Agent' }).click();
+  await page.getByRole('dialog').getByText('New agent', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await agentSidebar.getByRole('button', { name: '恢复 Agent' }).click();
+  await page.getByRole('dialog').getByText('Resume persisted agent').waitFor();
+  await page.keyboard.press('Escape');
+  await agentSidebar.getByRole('button', { name: '创建 Agent' }).click();
+  const spawnDialog = page.getByRole('dialog');
+  await spawnDialog.getByPlaceholder('agent name').fill('beta');
+  await spawnDialog.getByRole('combobox', { name: 'Agent profile' }).selectOption('developer');
+  await spawnDialog.getByRole('button', { name: 'Spawn' }).click();
+  await agentSidebar.getByRole('button', { name: '打开 Agent /root/beta' }).waitFor();
+  assert.equal(spawnedAgent.profile, 'developer');
+  await page.locator('[data-editor-group] [role="tab"][title="/root/beta"]').getByRole('button', { name: '关闭 beta' }).click();
+  await agentSidebar.getByRole('button', { name: '打开 Agent /root/alpha' }).click();
+  await agentTab.waitFor();
 
   // ── Activity bar opens container editors ──────────────────────────────
   await rail.getByRole('button', { name: 'Bibliography' }).click();
@@ -165,6 +197,36 @@ try {
     for (const editor of [...store.getWorkbenchState().groups.main.editors]) if (editor.params.overflowTest !== undefined) store.closeEditor(editor.id);
   });
 
+  // Nested horizontal and vertical groups survive reload and can be rearranged.
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    for (let i = 0; i < 3; i++) store.openEditor({ kind: 'config', params: { gridTest: i } });
+  });
+  const mainGroup = page.locator('[data-editor-group="main"]');
+  const mainZoneGrid = mainGroup.locator('[data-editor-zone]');
+  let gridBox = await mainZoneGrid.boundingBox();
+  await mainGroup.getByRole('tab', { name: '设置' }).last().dragTo(mainZoneGrid, { targetPosition: { x: gridBox.width - 5, y: gridBox.height / 2 } });
+  const secondGroup = page.locator('[data-editor-group="secondary"]');
+  await secondGroup.waitFor();
+  const secondZone = secondGroup.locator('[data-editor-zone]');
+  gridBox = await secondZone.boundingBox();
+  await mainGroup.getByRole('tab', { name: '设置' }).last().dragTo(secondZone, { targetPosition: { x: gridBox.width / 2, y: gridBox.height - 5 } });
+  assert.equal(await page.locator('[data-editor-group]').count(), 3, 'nested drop creates a third group');
+  assert.equal(await page.getByRole('separator', { name: '调整分屏高度' }).count(), 1);
+  const extraGroup = page.locator('[data-editor-group^="group-"]');
+  gridBox = await mainZoneGrid.boundingBox();
+  await extraGroup.getByRole('button', { name: '拖动编辑器组' }).dragTo(mainZoneGrid, { targetPosition: { x: gridBox.width / 2, y: 5 } });
+  assert.equal(await page.locator('[data-editor-group]').count(), 3, 'moving a group preserves all groups');
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('[data-editor-group]').length === 3);
+  const layout = await page.evaluate(() => JSON.parse(localStorage.getItem('autonomics.workbench.v2')).editorLayout);
+  assert.ok(layout.first && layout.second, 'nested layout is persisted');
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    for (const [, group] of store.allGroups(store.getWorkbenchState().groups)) for (const editor of group.editors) if (editor.params.gridTest !== undefined) store.closeEditor(editor.id);
+  });
+  await page.waitForFunction(() => document.querySelectorAll('[data-editor-group]').length === 1);
+
   // ── Command palette (Ctrl+P) ─────────────────────────────────────────
   await page.keyboard.press('Control+p');
   const palette = page.getByRole('dialog');
@@ -189,34 +251,78 @@ try {
   await wikiSidebar.getByRole('button', { name: '浏览词条' }).click();
   assert.equal(await wikiSearch.count(), 0);
 
-  // ── Wiki entries are editor tabs ──────────────────────────────────────
+  // A local graph needs an open wiki entry and never loads the global graph.
+  await wikiSidebar.getByRole('button', { name: '打开知识图谱' }).click();
+  const graph = page.getByRole('region', { name: '知识关系图谱' });
+  await graph.getByText('请先打开知识库词条').waitFor();
+  await page.getByRole('tab', { name: '知识图谱' }).getByRole('button', { name: '关闭 知识图谱' }).click();
+
   await page.getByRole('button', { name: /词条甲/ }).first().click();
   const wikiEntryTab = page.getByRole('tab', { name: '词条甲' });
   await wikiEntryTab.waitFor();
   const wikiSection = page.locator('section[aria-label="知识库工作区"]');
   await wikiSection.getByRole('heading', { name: '词条甲' }).first().waitFor();
-  await wikiEntryTab.getByRole('button', { name: '关闭 词条甲' }).click();
-  await wikiEntryTab.waitFor({ state: 'detached' });
-
-  // Knowledge graph loads every page, renders links and opens nodes.
   await wikiSidebar.getByRole('button', { name: '打开知识图谱' }).click();
-  const graph = page.getByRole('region', { name: '知识关系图谱' });
-  await graph.getByText('3 个词条 · 1 条链接').waitFor();
+  await graph.getByText('中心：词条甲 · 3 个词条 · 2 条链接').waitFor();
   assert.equal(await graph.locator('.wiki-graph-node').count(), 3);
-  assert.equal(await graph.locator('.wiki-graph-links line').count(), 1);
-  await graph.getByRole('checkbox', { name: '显示孤立词条' }).uncheck();
-  assert.equal(await graph.locator('.wiki-graph-node').count(), 2);
+  assert.equal(await graph.locator('.wiki-graph-links line').count(), 2);
+  const graphLabel = graph.locator('[data-node-id="w2"] text');
+  assert.equal(await graphLabel.getAttribute('text-anchor'), 'middle');
+  assert.ok(Number(await graphLabel.getAttribute('y')) > 0, 'labels should appear below nodes');
+  await graph.getByRole('checkbox', { name: '显示所有节点标签' }).uncheck();
+  assert.equal(await graphLabel.getAttribute('visibility'), 'hidden');
+  await graph.getByRole('checkbox', { name: '显示所有节点标签' }).check();
+  const graphCanvas = graph.locator('svg[role="group"]');
+  await graphCanvas.hover({ position: { x: 10, y: 10 } });
+  await page.mouse.wheel(0, 1800);
+  await page.waitForFunction(el => Number(el.getAttribute('opacity')) === 0, await graphLabel.elementHandle());
+  assert.equal(await graphLabel.getAttribute('visibility'), 'hidden');
+  await page.mouse.wheel(0, -1800);
+  await page.waitForFunction(el => Number(el.getAttribute('opacity')) > 0, await graphLabel.elementHandle());
+  await graph.getByRole('checkbox', { name: '显示所有节点标签' }).uncheck();
+  await graph.getByRole('checkbox', { name: '显示入链' }).uncheck();
+  await graph.getByText('中心：词条甲 · 2 个词条 · 1 条链接').waitFor();
+  assert.equal(await graph.locator('[data-node-id="w3"]').count(), 0);
+  await graph.getByRole('checkbox', { name: '显示入链' }).check();
+  await graph.getByText('中心：词条甲 · 3 个词条 · 2 条链接').waitFor();
+  await graph.getByRole('button', { name: '图谱设置' }).click();
+  await graph.getByRole('button', { name: '图谱设置' }).click();
+  assert.equal(await graph.locator('[data-node-id="w2"] text').getAttribute('visibility'), 'hidden');
+  const repulsion = graph.getByRole('slider', { name: '节点排斥力' });
+  const distance = graph.getByRole('slider', { name: '链接距离' });
+  await repulsion.fill('220');
+  await distance.fill('105');
+  assert.equal(await repulsion.inputValue(), '220');
+  assert.equal(await distance.inputValue(), '105');
+  assert.equal(await graph.locator('.wiki-graph-node').count(), 3, 'adjusting forces preserves the graph');
+  const graphDepth = graph.getByRole('combobox', { name: '图谱关系层级' });
+  assert.equal(await graphDepth.inputValue(), '1');
+  await graphDepth.selectOption('2');
+  await graph.getByText('中心：词条甲 · 4 个词条 · 4 条链接').waitFor();
+  assert.equal(await graph.locator('[data-node-id="w4"]').count(), 1, 'cycles and convergent paths should not duplicate nodes');
+  await graphDepth.selectOption('3');
+  await graph.getByText('中心：词条甲 · 5 个词条 · 6 条链接').waitFor();
+  await graphDepth.selectOption('1');
+  await graph.getByText('中心：词条甲 · 3 个词条 · 2 条链接').waitFor();
   await graph.getByRole('textbox', { name: '搜索图谱词条' }).fill('词条甲');
   assert.equal(await graph.locator('[data-node-id="w2"]').getAttribute('opacity'), '0.15');
   await graph.getByRole('button', { name: '放大图谱' }).click();
-  await graph.locator('[data-node-id="w1"]').focus();
+  await graph.locator('[data-node-id="w2"]').focus();
   await page.keyboard.press('Enter');
-  await page.getByRole('tab', { name: '词条甲' }).waitFor();
+  await page.getByRole('tab', { name: '词条乙' }).waitFor();
   await page.getByRole('tab', { name: '知识图谱' }).click();
+  await graph.getByText('中心：词条乙 · 3 个词条 · 2 条链接').waitFor();
   await graph.getByRole('button', { name: '刷新图谱' }).click();
-  await graph.getByText('2 个词条 · 1 条链接').waitFor();
+  await graph.getByText('中心：词条乙 · 3 个词条 · 2 条链接').waitFor();
+  await page.getByRole('button', { name: '拆分编辑器' }).click();
+  await page.getByRole('tablist', { name: '编辑器标签', exact: true }).getByRole('tab', { name: '词条甲' }).click();
+  await graph.getByText('中心：词条甲 · 3 个词条 · 2 条链接').waitFor();
+  await page.getByRole('tablist', { name: '编辑器标签', exact: true }).getByRole('tab', { name: '词条乙' }).click();
+  await graph.getByText('中心：词条乙 · 3 个词条 · 2 条链接').waitFor();
+  await page.getByRole('button', { name: '关闭分屏' }).click();
   await page.getByRole('tab', { name: '知识图谱' }).getByRole('button', { name: '关闭 知识图谱' }).click();
-  await page.getByRole('tab', { name: '词条甲' }).getByRole('button', { name: '关闭 词条甲' }).click();
+  await page.getByRole('tab', { name: '词条乙' }).getByRole('button', { name: '关闭 词条乙' }).click();
+  await wikiEntryTab.getByRole('button', { name: '关闭 词条甲' }).click();
 
   // ── Split editor ─────────────────────────────────────────────────────
   await bibTab.click(); // bibliography active again

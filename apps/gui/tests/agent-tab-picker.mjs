@@ -21,7 +21,8 @@ try {
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  const errors = [];
+  const errors = []; const popups = []; const sends = []; let stored = [];
+  page.on('popup', popup => popups.push(popup));
   page.on('pageerror', error => errors.push(error.message));
   page.on('dialog', dialog => dialog.accept());
 
@@ -47,7 +48,9 @@ try {
       { id: `m-${id}`, role: 'assistant', content: [{ type: 'text', text: answer }] },
     ] } }));
   }
-  await page.route('**/api/v1/storage/agents**', route => route.fulfill({ json: [] }));
+  await page.route('**/api/v1/storage/agents**', route => route.fulfill({ json: stored }));
+  await page.route('**/api/v1/agents', route => route.fulfill({ json: { path: '/root/delta' } }));
+  await page.route('**/api/v1/agents/**/messages', route => { sends.push({ url: route.request().url(), body: route.request().postDataJSON() }); return route.fulfill({ json: {} }); });
   await page.route('**/api/v1/bib/**', route => route.fulfill({ json: { collections: [], articles: [], total: 0 } }));
 
   await page.goto(origin);
@@ -102,6 +105,43 @@ try {
   await page.locator('[data-slot="command-input"]').press('Escape');
   await page.locator('[data-slot="command-input"]').waitFor({ state: 'detached' });
   await page.getByText('gamma answer').waitFor({ state: 'visible' });
+
+  // Two agent groups must render their own transcripts and independent drafts.
+  await page.getByRole('button', { name: '拆分编辑器' }).click();
+  const main = page.locator('[data-editor-group="main"]');
+  const secondary = page.locator('[data-editor-group="secondary"]');
+  await secondary.getByText('gamma answer').waitFor();
+  await main.getByText('beta answer').waitFor();
+  const betaComposer = main.getByPlaceholder('输入消息…');
+  const gammaComposer = secondary.getByPlaceholder('输入消息…');
+  await betaComposer.fill('beta draft');
+  await gammaComposer.fill('gamma draft');
+  assert.equal(await betaComposer.inputValue(), 'beta draft');
+  assert.equal(await gammaComposer.inputValue(), 'gamma draft');
+  const betaSend = page.waitForRequest(request => request.method() === 'POST' && decodeURIComponent(request.url()).includes('/root/beta/messages'));
+  await betaComposer.press('Control+Enter');
+  await betaSend;
+  await page.waitForFunction(() => document.querySelector('[data-editor-group="main"] textarea')?.value === '');
+  assert.ok(sends.some(item => decodeURIComponent(item.url).includes('/root/beta/messages') && item.body.text === 'beta draft'));
+  assert.equal(await gammaComposer.inputValue(), 'gamma draft', 'sending from one group must not alter the other draft');
+
+  // Selecting an already open agent in the other group focuses that group,
+  // while the current group remains visible.
+  await secondary.getByRole('button', { name: 'Search agents' }).click();
+  await secondary.locator('[data-slot="command-item"]').filter({ hasText: 'alpha' }).click();
+  await main.getByText('alpha answer').waitFor();
+  await secondary.getByText('gamma answer').waitFor();
+  assert.equal(await gammaComposer.inputValue(), 'gamma draft');
+
+  // Resuming from the picker opens in the current workbench group, without
+  // opening an external browser tab.
+  stored = [{ id: 'a4', name: '/root/delta', config_json: { kind: 'researcher' }, created_at: 1, last_active: 1 }];
+  await secondary.getByRole('button', { name: 'Search agents' }).click();
+  await secondary.locator('[data-slot="command-item"]').filter({ hasText: 'delta' }).click();
+  await secondary.getByRole('tab', { name: 'delta' }).waitFor();
+  await main.getByText('alpha answer').waitFor();
+  assert.equal(popups.length, 0, 'picker must not open browser tabs');
+  assert.equal(page.context().pages().length, 1);
 
   assert.deepEqual(errors, []);
   console.log('agent-tab-picker: all assertions passed');

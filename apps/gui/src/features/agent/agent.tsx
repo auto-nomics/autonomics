@@ -16,7 +16,8 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -133,6 +134,19 @@ export function SpawnAgentDialog({
   const [spawnName, setSpawnName] = useState("");
   const [spawnParent, setSpawnParent] = useState("/root");
   const [spawnProfile, setSpawnProfile] = useState("researcher");
+  const [profiles, setProfiles] = useState(["researcher", "developer", "browser", "curator"]);
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    void gatewayRequest("GET", "/profiles", undefined, { signal: controller.signal }).then((result: unknown) => {
+      if (controller.signal.aborted || !Array.isArray(result)) return;
+      const options = result.filter((item): item is string => typeof item === "string" && item.length > 0);
+      if (!options.length) return;
+      setProfiles(options);
+      setSpawnProfile(current => options.includes(current) ? current : options[0]);
+    }).catch(() => { /* Built-in kinds keep the picker usable offline. */ });
+    return () => controller.abort();
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -151,7 +165,9 @@ export function SpawnAgentDialog({
         >
           <Input value={spawnName} placeholder="agent name" onChange={(event) => setSpawnName(event.target.value)} required />
           <Input value={spawnParent} placeholder="/root" onChange={(event) => setSpawnParent(event.target.value)} required />
-          <Input value={spawnProfile} placeholder="researcher | developer | browser | curator" onChange={(event) => setSpawnProfile(event.target.value)} required />
+          <select aria-label="Agent profile" value={spawnProfile} onChange={(event) => setSpawnProfile(event.target.value)} required className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {profiles.map(profile => <option key={profile} value={profile}>{profile}</option>)}
+          </select>
           <Button type="submit" disabled={busy === "spawn"}>Spawn</Button>
         </form>
       </DialogContent>

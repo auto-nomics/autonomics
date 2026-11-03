@@ -179,6 +179,7 @@ pub fn router(handle: Arc<WikiHandle>) -> Router {
             "/entries/{id}/attachments/{attachment_id}",
             rdelete(detach_attachment),
         )
+        .route("/graph", get(graph))
         .route("/search", get(search_get).post(search_post))
         .route("/recycle", get(recycle))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
@@ -396,6 +397,39 @@ async fn search_post(
         .await
         .map_err(api_err)?;
     Ok(Json(json!({ "results": hits })))
+}
+
+/// Pages through live entries and their outgoing edges in one batch per page.
+async fn graph(State(handle): State<Arc<WikiHandle>>, Query(query): Query<ListQuery>) -> ApiResult {
+    let limit = query.limit.unwrap_or(200).clamp(1, 200);
+    let offset = query.offset.unwrap_or(0);
+    let nodes = handle
+        .list_entries(&ListFilter {
+            limit,
+            offset,
+            ..Default::default()
+        })
+        .await
+        .map_err(api_err)?;
+    let ids: Vec<String> = nodes.iter().map(|entry| entry.id.clone()).collect();
+    let outgoing = handle.get_out_links_batch(&ids).await.map_err(api_err)?;
+    let edges: Vec<Value> = ids
+        .iter()
+        .zip(outgoing)
+        .flat_map(|(source, targets)| {
+            targets
+                .into_iter()
+                .map(move |target| json!({ "source": source, "target": target }))
+        })
+        .collect();
+    let next_offset = if nodes.len() == limit {
+        Some(offset + nodes.len())
+    } else {
+        None
+    };
+    Ok(Json(
+        json!({ "nodes": nodes, "edges": edges, "next_offset": next_offset }),
+    ))
 }
 
 async fn links(State(handle): State<Arc<WikiHandle>>, Path(id): Path<String>) -> ApiResult {

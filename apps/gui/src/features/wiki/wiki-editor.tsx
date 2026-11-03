@@ -21,6 +21,7 @@ import {
   detachAttachment,
   formatTime,
   getLinks,
+  getEntry,
   getMentions,
   listAttachments,
   listVersions,
@@ -221,6 +222,7 @@ function LinksTab({
   const [filter, setFilter] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [descending, setDescending] = useState(false);
+  const [contexts, setContexts] = useState<Record<string, MentionContext | null>>({});
   const [, setResolvedTick] = useState(0);
 
   useEffect(() => {
@@ -239,6 +241,27 @@ function LinksTab({
     return () => { cancelled = true; };
   }, [graph, mentions]);
 
+  useEffect(() => {
+    if (!graph) return;
+    let cancelled = false;
+    const ids = [...new Set(normalizeRefs(graph.in_links).map(ref => ref.id))];
+    let next = 0;
+    setContexts({});
+    const load = async () => {
+      while (!cancelled && next < ids.length) {
+        const id = ids[next++];
+        try {
+          const source = await getEntry(id);
+          if (!cancelled) setContexts(previous => ({ ...previous, [id]: findMentionContext(source.content, entry) }));
+        } catch {
+          if (!cancelled) setContexts(previous => ({ ...previous, [id]: null }));
+        }
+      }
+    };
+    void Promise.all(Array.from({ length: Math.min(6, ids.length) }, load));
+    return () => { cancelled = true; };
+  }, [graph, entry]);
+
   const withTitles = (refs: unknown) => normalizeRefs(refs).map(ref => ({ ...ref, title: cachedTitle(ref.id) ?? ref.title }));
   const incoming = withTitles(graph?.in_links ?? []);
   const visible = incoming.filter(ref => ref.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).sort((a, b) => (descending ? -1 : 1) * a.title.localeCompare(b.title, undefined, { numeric: true }));
@@ -252,7 +275,7 @@ function LinksTab({
       </div>
     </div>
     {searchOpen && <Input autoFocus aria-label="筛选来源词条" value={filter} onChange={event => setFilter(event.target.value)} placeholder="筛选来源词条" className="my-2 h-8 text-xs" />}
-    {error ? <p className="py-3 text-xs text-destructive">无法加载关联提及。</p> : !graph ? <Loader2 className="my-3 size-4 animate-spin" /> : visible.length === 0 ? <p className="py-3 text-xs text-muted-foreground">{filter ? "没有匹配的来源词条。" : "暂无关联提及。"}</p> : <div className="mt-2 space-y-1">{visible.map(ref => <MentionRow key={ref.id} entry={entry} source={ref} onNavigate={onNavigate} />)}</div>}
+    {error ? <p className="py-3 text-xs text-destructive">无法加载关联提及。</p> : !graph ? <Loader2 className="my-3 size-4 animate-spin" /> : visible.length === 0 ? <p className="py-3 text-xs text-muted-foreground">{filter ? "没有匹配的来源词条。" : "暂无关联提及。"}</p> : <div className="mt-2 space-y-1">{visible.map(ref => <MentionRow key={ref.id} entry={entry} source={ref} context={contexts[ref.id]} onNavigate={onNavigate} />)}</div>}
     <div className="mt-4 space-y-3 border-t pt-3 text-xs text-muted-foreground">
       <LinkSection title={`出链(${graph ? withTitles(graph.out_links).length : "…"})`} refs={withTitles(graph?.out_links ?? [])} onOpen={(id, title) => onNavigate(id, title)} loading={!graph && !error} />
       <LinkSection title={`未链接提及(${mentions?.length ?? 0})`} refs={withTitles(mentions ?? [])} onOpen={(id, title) => onNavigate(id, title)} empty="暂无未链接提及。" loading={mentions === null} />
@@ -260,29 +283,33 @@ function LinksTab({
   </div>;
 }
 
-function MentionRow({ entry, source, onNavigate }: { entry: WikiEntry; source: WikiLinkRef; onNavigate: (id: string, title?: string) => void }) {
+type MentionContext = { lines: string[]; count: number };
+
+function isLinkToEntry(link: string, entry: WikiEntry): boolean {
+  const target = link.split("|")[0].split("#")[0].trim().toLocaleLowerCase();
+  return [entry.id, entry.title, ...entry.alias].some(value => value.trim().toLocaleLowerCase() === target);
+}
+
+function findMentionContext(content: string, entry: WikiEntry): MentionContext {
+  const lines: string[] = [];
+  let count = 0;
+  for (const line of content.split("\n")) {
+    const matches = Array.from(line.matchAll(/\[\[([^\]]+)\]\]/g)).filter(match => isLinkToEntry(match[1], entry));
+    if (matches.length) { lines.push(line); count += matches.length; }
+  }
+  return { lines, count };
+}
+
+function MentionRow({ entry, source, context, onNavigate }: { entry: WikiEntry; source: WikiLinkRef; context: MentionContext | null | undefined; onNavigate: (id: string, title?: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [lines, setLines] = useState<string[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    if (!open || lines !== null || failed) return;
-    let cancelled = false;
-    void fetchEntryCached(source.id).then(found => {
-      if (cancelled) return;
-      if (!found) { setFailed(true); return; }
-      const targets = new Set([entry.id, entry.title, ...entry.alias].map(value => value.trim().toLocaleLowerCase()));
-      const matching = found.content.split("\n").filter(line => Array.from(line.matchAll(/\[\[([^\]]+)\]\]/g)).some(match => targets.has(match[1].split("|")[0].split("#")[0].trim().toLocaleLowerCase())));
-      setLines(matching);
-    }).catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; };
-  }, [open, lines, failed, source.id, entry]);
   return <div>
     <div className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
       <button type="button" aria-label={`${open ? "折叠" : "展开"} ${source.title} 的关联提及`} aria-expanded={open} className="rounded p-1 hover:bg-accent" onClick={() => setOpen(value => !value)}>{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button>
       <button type="button" className="min-w-0 flex-1 truncate py-1 text-left hover:underline" title={source.title} onClick={() => onNavigate(source.id, source.title)}>{source.title}</button>
-      {lines !== null && lines.length > 0 && <span className="px-1 text-xs">{lines.length}</span>}
+      {context && context.count > 0 && <span className="px-1 text-xs" aria-label={`${source.title} 有 ${context.count} 处关联提及`}>{context.count}</span>}
+      {context === null && <span className="px-1 text-xs" title="无法加载来源内容" aria-label={`${source.title} 的计数不可用`}>—</span>}
     </div>
-    {open && <div className="space-y-1 pb-1 pl-1">{failed ? <p className="px-2 text-xs text-muted-foreground">无法加载来源内容。</p> : lines === null ? <Loader2 className="m-2 size-3.5 animate-spin" /> : lines.length === 0 ? <p className="px-2 text-xs text-muted-foreground">未能定位链接上下文。</p> : lines.map((line, index) => <button key={index} type="button" className="block w-full rounded border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => onNavigate(source.id, source.title)}>{line.split(/(\[\[[^\]]+\]\])/g).map((part, partIndex) => part.startsWith("[[") && part.endsWith("]]") && [entry.id, entry.title, ...entry.alias].some(target => target.toLocaleLowerCase() === part.slice(2, -2).split("|")[0].split("#")[0].trim().toLocaleLowerCase()) ? <mark key={partIndex} className="rounded-sm bg-yellow-500/30 text-foreground">{part}</mark> : part)}</button>)}</div>}
+    {open && <div className="space-y-1 pb-1 pl-1">{context === null ? <p className="px-2 text-xs text-muted-foreground">无法加载来源内容。</p> : context === undefined ? <Loader2 className="m-2 size-3.5 animate-spin" /> : context.lines.length === 0 ? <p className="px-2 text-xs text-muted-foreground">未能定位链接上下文。</p> : context.lines.map((line, index) => <button key={index} type="button" className="block w-full rounded border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => onNavigate(source.id, source.title)}>{line.split(/(\[\[[^\]]+\]\])/g).map((part, partIndex) => part.startsWith("[[") && part.endsWith("]]") && isLinkToEntry(part.slice(2, -2), entry) ? <mark key={partIndex} className="rounded-sm bg-yellow-500/30 text-foreground">{part}</mark> : part)}</button>)}</div>}
   </div>;
 }
 
