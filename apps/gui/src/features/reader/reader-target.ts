@@ -1,6 +1,10 @@
 export type ReaderWorkspaceOptions = {
   host?: HTMLElement;
   onReference?: (selection: { text: string; page?: number; start?: number; end?: number }) => void;
+  /** Fires once when the reader is destroyed for any reason (own close
+   *  button, superseded by another reader). Hosts that survive the destroy
+   *  use it to react — the workbench editor closes its tab. */
+  onClosed?: () => void;
 };
 export type ReaderSearchTarget = { query?: string; page?: number | null; annotationId?: string | null };
 export function readerBase(articleId: string, attachmentKey?: string | null) {

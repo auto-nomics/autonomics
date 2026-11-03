@@ -32,9 +32,9 @@ export function HomeView({
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2 text-xs text-muted-foreground">
         <span>
-          共 {entries.length} 条词条{hasMore ? "(可继续加载)" : ""}
+          共 {entries.length} 条词条
         </span>
-        <span className="opacity-70">· 右上角 🔍 检索(Ctrl+K)</span>
+        <span className="opacity-70"> 检索(Ctrl+K)</span>
       </div>
       <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6">
         {loading ? (

@@ -144,6 +144,7 @@ export async function openPdfReader(options: {
   sessionToken?: number;
   host?: HTMLElement;
   onReference?: ReaderWorkspaceOptions["onReference"];
+  onClosed?: () => void;
 }): Promise<PdfReaderHandle> {
   const token = options.sessionToken ?? beginReaderSession();
   // Right-click entry points may not know the stored format; sniff the served
@@ -2044,6 +2045,7 @@ class ZoteroStylePdfReader {
     this.saveReadingLocation();
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
+    this.workspace.onClosed?.();
     this.alertDialog.destroy();
     this.noteComposer.destroy();
     if (this.readingSaveTimer !== null) clearTimeout(this.readingSaveTimer);

@@ -115,6 +115,7 @@ export async function openTxtReader(options: {
   sessionToken?: number;
   host?: HTMLElement;
   onReference?: ReaderWorkspaceOptions["onReference"];
+  onClosed?: () => void;
 }): Promise<TxtReaderHandle> {
   const token = options.sessionToken ?? beginReaderSession();
   const bytes = options.bytes ?? await fetchBibFulltextRaw(options.articleId, options.attachmentKey, options.expectedHash);
@@ -1149,6 +1150,7 @@ class ZoteroStyleTxtReader {
     this.saveReadingLocation();
     this.destroyed = true;
     releaseReaderSession(this.sessionToken);
+    this.workspace.onClosed?.();
     this.events.abort();
     this.alertDialog.destroy();
     this.noteComposer.destroy();

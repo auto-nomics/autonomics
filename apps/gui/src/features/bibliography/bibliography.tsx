@@ -26,7 +26,7 @@ import {
 import { gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext, watchBibCollections } from "@/gateway";
 import { CollectionTree, type CollectionAction } from "./collection-tree";
 import { collectionPath } from "./collection-tree-model";
-import { openPdfReader, openTxtReader } from "@/features/reader";
+import { openPdfReader, openTxtReader, hasReaderOpener, openReaderEditor } from "@/features/reader";
 import type { BibArticle, BibCollection, BibDetail } from "@/types";
 import {
   ContextMenu,
@@ -727,6 +727,14 @@ function LibraryView() {
     return () => { libraryAlive.current = false; readerRef.current?.close(); };
   }, []);
   const openReaderFor = (article: BibArticle, format?: string | null, attachmentKey?: string | null, search?: import("@/features/reader/reader-target").ReaderSearchTarget, expectedHash?: string | null) => {
+    // Workbench mode: the reader opens as its own editor tab (one session
+    // per reader, reopened from the persisted position on reactivation).
+    if (hasReaderOpener()) {
+      openReaderEditor({ articleId: article.id, title: article.title, attachmentKey, expectedHash, search });
+      return;
+    }
+    // Mount-harness fallback (feature tests without the workbench shell):
+    // host the reader inside the library container as before.
     readerRef.current?.close();
     readerRef.current = null;
     const openReader = format === "txt" ? openTxtReader : openPdfReader;

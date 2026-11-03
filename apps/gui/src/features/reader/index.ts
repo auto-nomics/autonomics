@@ -4,3 +4,4 @@
 export { openPdfReader } from "./pdf-reader";
 export { openTxtReader } from "./txt-reader";
 export type { ReaderSearchTarget } from "./reader-target";
+export { registerReaderOpener, hasReaderOpener, openReaderEditor, type ReaderEditorSpec } from "./reader-opener";

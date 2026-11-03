@@ -22,6 +22,7 @@ import {
 import { ConfigView, DagView } from "@/features/system";
 import { leafName } from "@/features/agent";
 import { registerEditorKind, type EditorContext } from "./editor-registry";
+import { registerReaderEditorKind } from "./editors/reader-editor";
 import { setAgentSlot } from "./agent-slot-registry";
 import {
   closeEditor,
@@ -254,6 +255,10 @@ export function registerWorkbenchEditorKinds(): void {
     body: ConfigEditorBody,
     mount: "keep-alive",
   });
+  // Reader editor kind lives in editors/reader-editor.tsx (registers its
+  // opener bridge too).
+  registerReaderEditorKind();
+
   registerEditorKind({
     kind: "dag",
     title: (editor) => `DAG · ${leafName(String(editor.params.agentPath ?? ""))}`,

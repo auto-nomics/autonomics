@@ -53,6 +53,10 @@ try {
   await agentTabOf('alpha').click(); assert.equal(await ref('文献 Paper Alpha').count(), 1);
   await bibTabClick();
   await page.getByRole('button', {name:/Research text/}).last().click();
+  // The reader opens as its own workbench editor tab (not inside the
+  // library grid anymore).
+  const readerTab = page.getByRole('tab', { name: /Paper Alpha/ });
+  await readerTab.waitFor();
   const reader = page.locator('.zotero-pdf-reader[data-hosted]'); await reader.waitFor();
   const rb = await reader.boundingBox();
   assert.ok(rb.width > 300 && rb.height > 200, 'reader must fill its editor body');
@@ -66,17 +70,31 @@ try {
   await agentTabOf('alpha').click(); await ref('证据 Paper Alpha · 选中文本').waitFor();
   await composer.fill('Draft can be edited beside the reader');
   await page.screenshot({path:'/tmp/autonomics-workbench-reader.png'});
+  // Split: the reader moves to the secondary group and stays on screen
+  // while the chat switches agents in main — the unified-tabs way to keep
+  // both visible. (The reader is ephemeral: a group move remounts it, so
+  // re-select before adding.)
+  await readerTab.click();
+  await page.getByRole('button', { name: '拆分编辑器' }).click();
   await goAgent('beta'); await empty();
-  // The reader targets the CURRENT session's basket even though it lives
-  // in the bibliography tab: add while beta is the active agent.
-  await bibTabClick();
-  await reader.locator('[data-action=add-context]').click();
-  await agentTabOf('beta').click();
+  await reader.waitFor();
+  await page.evaluate(() => {
+    const doc = document.querySelector('.reader-txt-document'); const range = document.createRange(); range.selectNodeContents(doc);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+    document.querySelector('.reader-reflow').dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));
+  });
+  await page.waitForFunction(() => !document.querySelector('.reader-selection-popup').hidden);
+  await reader.locator('[data-action=add-selection-context]').click();
   await ref('证据 Paper Alpha · 选中文本').waitFor(); await ref('清空引用').click();
   await goAgent('alpha'); await ref('文献 Paper Alpha').waitFor();
+  await page.getByRole('button', { name: '关闭分屏' }).click();
   const bibTab = page.getByRole('tab', { name: '文献与证据' });
-  await go('CONFIG'); await reader.waitFor({state:'hidden'}); await bibTab.click(); await reader.waitFor();
+  await go('CONFIG'); await reader.waitFor({state:'hidden'});
+  // Reactivating the reader tab reopens it from the persisted position.
+  await readerTab.click(); await reader.waitFor();
+  // The reader's own close button now closes the whole tab.
   await reader.getByRole('button',{name:'Close reader',exact:true}).click();
+  await reader.waitFor({state:'hidden'}); await readerTab.waitFor({state:'detached'});
   await go('CONFIG'); await bibTab.click();
   await agentTabOf('alpha').click();
   await composer.fill('Compare all selected resources'); await go('发送');
