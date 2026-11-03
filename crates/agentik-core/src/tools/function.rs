@@ -324,6 +324,13 @@ pub trait ToolFunction: Send + Sync {
         ExecutionMode::Sync
     }
 
+    /// For goal-owned local operations, allow an already-started bounded
+    /// operation to finish on cancellation instead of losing its outcome.
+    /// Independently managed workers must keep the conservative default.
+    fn finish_on_cancel(&self) -> bool {
+        false
+    }
+
     /// Timeout in seconds.
     ///
     /// For Sync tools: the agent blocks up to this duration. On expiry,
@@ -384,6 +391,7 @@ pub trait DynToolFunction: Send + Sync {
     fn validate_input(&self, input: &Value) -> Result<(), ToolError>;
 
     fn execution_mode(&self) -> ExecutionMode;
+    fn finish_on_cancel(&self) -> bool;
     fn timeout_seconds(&self) -> u64;
 
     fn definition(&self) -> ToolDefinition;
@@ -409,6 +417,10 @@ impl<T: ToolFunction + ?Sized> DynToolFunction for T {
 
     fn execution_mode(&self) -> ExecutionMode {
         ToolFunction::execution_mode(self)
+    }
+
+    fn finish_on_cancel(&self) -> bool {
+        ToolFunction::finish_on_cancel(self)
     }
 
     fn timeout_seconds(&self) -> u64 {

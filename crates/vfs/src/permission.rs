@@ -15,7 +15,8 @@ pub const VFS_ROOT_GID: u32 = 0;
 pub const VFS_PLUGIN_DEVELOPER_GID: u32 = 100;
 
 /// The process identity attached to a VFS view.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct VfsPrincipal {
     pub uid: u32,
     pub gid: u32,
@@ -24,6 +25,22 @@ pub struct VfsPrincipal {
 }
 
 impl VfsPrincipal {
+    /// Validate a transported identity before binding a remote VFS view.
+    /// Privilege is conveyed only by the coordinator's actual storage context.
+    pub fn validate_transport(&self) -> Result<(), &'static str> {
+        if self.groups.len() > 1024 {
+            return Err("too many VFS principal groups");
+        }
+        if self.superuser {
+            if self != &Self::root() {
+                return Err("noncanonical VFS superuser identity");
+            }
+        } else if !self.groups.contains(&self.gid) {
+            return Err("VFS principal is missing its primary group");
+        }
+        Ok(())
+    }
+
     pub fn root() -> Self {
         Self {
             uid: VFS_ROOT_UID,

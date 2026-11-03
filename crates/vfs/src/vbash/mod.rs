@@ -6,19 +6,29 @@
 
 mod ops;
 mod search;
+mod space;
+mod text_page;
+#[cfg(test)]
+mod text_page_tests;
 
 use std::sync::Arc;
 
 use agentik_core::tools::truncation::{DEFAULT_MAX_CHARS, TruncationConfig, truncate_tool_output};
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent};
+use agentik_sdk::types::{
+    ToolImageSource, ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent,
+};
 use async_trait::async_trait;
 
 use crate::storage::OpendalFileStorage;
 
 /// Leave room for the outer ToolResult JSON and error/type metadata.
 const VFS_OUTPUT_MARGIN: usize = 256;
+
+pub(super) const VFS_IMAGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const VFS_IMAGE_MAX_BASE64_CHARS: usize = 6 * 1024 * 1024;
+const VFS_IMAGE_MAX_COUNT: usize = 4;
 
 // ────────────────────────── input ──────────────────────────
 
@@ -27,17 +37,21 @@ const VFS_OUTPUT_MARGIN: usize = 256;
     description = "Virtual filesystem operations through OpenDAL VFS. \
         All operations execute in pure Rust — no system shell is spawned. \
         Supported ops: read, cat, ls, cp, mv, rm, mkdir, stat, touch, \
-        write, edit, patch, head, tail, wc, grep, glob, tree, mount_list. \
+        write, edit, patch, head, tail, wc, grep, glob, tree, mount_list, df, temp_space, read_chunk. \
+        For long lines or minified HTML, use read_chunk; follow next_offset with source_version \
+        until eof=true. It returns bounded UTF-8 text, not parsed HTML. \
+        Paths may be covered by VFS mounts (see mount_list). Read-only \
+        mounts reject writes. df(path) reports the selected local filesystem capacity; \
+        temp_space takes no path and reports the daemon runtime temp filesystem. \
+        Capacity snapshots are not quota, physical Btrfs allocation, container /tmp, or admission. \
         read detects image files (png, jpg, jpeg, gif, webp) and returns \
-        them as image content blocks, so images are directly visible to \
-        the model. Paths may be covered by VFS mounts (see mount_list). \
-        Read-only mounts reject writes. \
+        them as image content blocks (up to 4 MiB each); text and image budgets are separate. \
         Unsupported (will error): chmod, chown, ln, pipes, redirects."
 )]
 pub struct VfsBashInput {
-    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree|mount_list"]
+    #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree|mount_list|df|temp_space|read_chunk"]
     pub op: String,
-    #[desc = "Primary path (file or directory)."]
+    #[desc = "Primary VFS path (file or directory), required for df; forbidden for temp_space."]
     pub path: Option<String>,
     #[desc = "Source path for cp/mv."]
     pub src: Option<String>,
@@ -76,15 +90,20 @@ pub struct VfsBashInput {
         Set true to force insensitive, false to force sensitive."]
     pub case_insensitive: Option<bool>,
     #[desc = "Starting line number, 1-indexed (for cat/read/head/tail), \
-        or number of entries to skip (for ls/tree pagination)."]
+        or number of entries to skip (for ls/tree pagination). For read_chunk ONLY, \
+        offset is a zero-based byte position; follow the returned next_offset."]
     pub offset: Option<usize>,
     #[desc = "Max lines/entries to return (for cat/read/head/tail/ls/tree). \
         ls defaults to 200 and tree defaults to 500; use with offset to page \
         through large listings. tree is capped at 1000 entries per response."]
     pub limit: Option<usize>,
     #[desc = "Maximum file size in bytes for cat. Defaults to 10 MiB; values \
-        above 10 MiB are rejected so large files are never fully downloaded."]
+        above 10 MiB are rejected so large files are never fully downloaded. For read_chunk \
+        ONLY, max_bytes is the page size, 4..4096 bytes (default 4096)."]
     pub max_bytes: Option<usize>,
+    #[desc = "For read_chunk: copy source_version from the previous page to refuse a changed file. \
+        This is a metadata consistency token, not a content hash or proof of snapshot isolation."]
+    pub source_version: Option<String>,
 }
 
 // ────────────────────────── tool ──────────────────────────
@@ -96,6 +115,7 @@ pub struct VfsBashTool {
 #[async_trait]
 impl ToolFunction for VfsBashTool {
     type Input = VfsBashInput;
+    fn finish_on_cancel(&self) -> bool { true }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let storage = &self.storage;
@@ -103,8 +123,21 @@ impl ToolFunction for VfsBashTool {
         let result = match input.op.as_str() {
             // ── introspection ──
             "mount_list" => ops::op_mount_list(storage).await,
+            "df" => space::op_df(storage, input.path.as_deref()).await,
+            "temp_space" => space::op_temp_space(input.path.as_deref()).await,
 
             // ── reading ──
+            "read_chunk" => {
+                text_page::read(
+                    storage,
+                    input.path.as_deref(),
+                    input.offset,
+                    input.max_bytes,
+                    input.source_version.as_deref(),
+                    input.limit,
+                )
+                .await
+            }
             "read" => ops::op_read(storage, input.path.as_deref(), input.offset, input.limit).await,
             "cat" => {
                 ops::op_cat(
@@ -177,7 +210,7 @@ impl ToolFunction for VfsBashTool {
             other => Ok(AgentToolResult::error(format!(
                 "Unknown or unsupported operation '{other}'. \
                  Supported: read cat ls cp mv rm mkdir stat touch write edit patch \
-                 head tail wc grep glob tree mount_list."
+                 head tail wc grep glob tree mount_list df temp_space read_chunk."
             ))),
         };
 
@@ -211,52 +244,79 @@ fn bound_vfs_output(mut result: AgentToolResult) -> AgentToolResult {
             }
         }
         ToolResultContent::Blocks(blocks) => {
-            let joined = blocks
-                .iter()
-                .filter_map(|block| match block {
-                    ToolResultBlock::Text { text } => Some(text.as_str()),
-                    ToolResultBlock::Image { .. } => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            let bounded = truncate_tool_output(&joined, &config);
-            let images = blocks
-                .drain(..)
-                .filter(|block| matches!(block, ToolResultBlock::Image { .. }))
-                .collect::<Vec<_>>();
-
-            if !bounded.content.is_empty() {
-                blocks.push(ToolResultBlock::text(bounded.content));
+            let mut images = Vec::new();
+            let mut texts = Vec::new();
+            for block in std::mem::take(blocks) {
+                match block {
+                    ToolResultBlock::Text { text } => texts.push(text),
+                    image @ ToolResultBlock::Image { .. } => {
+                        let chars = image_data_chars(&image);
+                        if chars > VFS_IMAGE_MAX_BASE64_CHARS {
+                            texts.push(format!("[image omitted: base64 expansion was {chars} characters; limit is {VFS_IMAGE_MAX_BASE64_CHARS}]"));
+                        } else if images.len() >= VFS_IMAGE_MAX_COUNT {
+                            texts.push(format!(
+                                "[image omitted: per-call image limit is {VFS_IMAGE_MAX_COUNT}]"
+                            ));
+                        } else {
+                            images.push(image);
+                        }
+                    }
+                }
             }
-            blocks.extend(images);
+            let text = truncate_tool_output(&texts.join("\n"), &config).content;
+            if images.is_empty() {
+                result.content = ToolResultContent::Text(text);
+            } else {
+                // Do not stringify or truncate base64. The core reattaches
+                // these exact blocks to the next request for a vision model.
+                if !text.is_empty() {
+                    blocks.push(ToolResultBlock::text(text));
+                }
+                blocks.extend(images);
+            }
         }
     }
     result
 }
 
-fn truncated_json_payload(serialized: &str, config: &TruncationConfig) -> serde_json::Value {
-    let mut content = truncate_tool_output(serialized, config).content;
-    let mut payload = serde_json::json!({
-        "output_truncated": true,
-        "content": content,
-    });
+fn image_data_chars(block: &ToolResultBlock) -> usize {
+    let ToolResultBlock::Image { source } = block else {
+        return 0;
+    };
+    let ToolImageSource::Base64 { data, .. } = source;
+    data.chars().count()
+}
 
-    // JSON escaping can make nested text longer than its raw character count.
-    // Shrink it until the complete serialized wrapper also fits.
+fn truncated_json_payload(serialized: &str, config: &TruncationConfig) -> serde_json::Value {
+    let source_path = serde_json::from_str::<serde_json::Value>(serialized)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("path")
+                .and_then(|p| p.as_str())
+                .map(str::to_owned)
+        })
+        .filter(|path| path.len() <= 1024);
+    let make_payload = |content: &str| {
+        let mut payload = serde_json::json!({
+            "output_truncated": true,
+            "content": content,
+            "recovery_hint": "For long text lines, use vfs read_chunk with max_bytes=4096; follow next_offset and source_version until eof=true. Truncated output is not a complete read.",
+        });
+        if let Some(path) = &source_path {
+            payload["read_chunk_request"] = serde_json::json!({"op": "read_chunk", "path": path, "offset": 0, "max_bytes": 4096});
+        }
+        payload
+    };
+    let mut content = truncate_tool_output(serialized, config).content;
+    let mut payload = make_payload(&content);
     while serde_json::to_string(&payload)
         .map(|bounded| bounded.chars().count() > DEFAULT_MAX_CHARS - VFS_OUTPUT_MARGIN)
         .unwrap_or(true)
     {
-        let cut = content.chars().count().saturating_sub(128).max(1);
-        if cut == content.chars().count() {
-            content.clear();
-        } else {
-            content = content.chars().take(cut).collect();
-        }
-        payload = serde_json::json!({
-            "output_truncated": true,
-            "content": content,
-        });
+        let cut = content.chars().count().saturating_sub(128);
+        content = content.chars().take(cut).collect();
+        payload = make_payload(&content);
         if content.is_empty() {
             break;
         }
@@ -349,6 +409,7 @@ mod tests {
             offset: None,
             limit: None,
             max_bytes: None,
+            source_version: None,
         }
     }
 
@@ -424,6 +485,27 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn filesystem_capacity_operations_are_dispatched_by_the_actual_vfs_tool() {
+        let tool = make_tool();
+        let mut df = input("df");
+        df.path = Some("/".into());
+        let space = result_json(tool.run(df).await.unwrap());
+        assert_eq!(
+            space["scope"],
+            "FILESYSTEM_CAPACITY_SNAPSHOT_NOT_RESOURCE_ADMISSION"
+        );
+        assert_eq!(space["admission_granted"], false);
+        let temp = result_json(tool.run(input("temp_space")).await.unwrap());
+        assert_eq!(
+            temp["temp_scope"],
+            "DAEMON_PROCESS_TEMP_NOT_CONTAINER_TMP_OR_ADMISSION"
+        );
+        let mut forbidden = input("temp_space");
+        forbidden.path = Some("/etc".into());
+        assert_eq!(tool.run(forbidden).await.unwrap().is_error, Some(true));
+    }
+
     /// Helper: extract JSON from a successful tool result.
     fn result_json(result: AgentToolResult) -> serde_json::Value {
         match result.content {
@@ -472,6 +554,103 @@ mod tests {
         };
         assert_eq!(blocks.len(), 1);
         assert!(matches!(blocks[0], ToolResultBlock::Image { .. }));
+    }
+
+    #[tokio::test]
+    async fn oversized_image_is_refused_before_reading_or_base64_expansion() {
+        let tool = make_tool();
+        tool.storage
+            .write_bytes("/large.png", vec![0; VFS_IMAGE_MAX_BYTES as usize + 1])
+            .await
+            .unwrap();
+        let mut read = input("read");
+        read.path = Some("/large.png".into());
+        let result = tool.run(read).await.unwrap();
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.text_content().contains("4 MiB"));
+    }
+
+    #[tokio::test]
+    async fn actual_vfs_read_preserves_image_larger_than_the_text_budget() {
+        let tool = make_tool();
+        let data = vec![42; 60_000];
+        tool.storage.write_bytes("/figure.jpg", data).await.unwrap();
+        let mut read = input("read");
+        read.path = Some("/figure.jpg".into());
+        let result = tool.run(read).await.unwrap();
+        let ToolResultContent::Blocks(blocks) = result.content else {
+            panic!("image was flattened into text")
+        };
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            matches!(&blocks[0],ToolResultBlock::Image{source:ToolImageSource::Base64{data,..}}if data.len()==80_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn dag_vfs_uris_read_the_same_images_and_text_as_bare_paths() {
+        let tool = make_tool();
+        tool.storage
+            .write_bytes("/figure.jpg", vec![42; 60_000])
+            .await
+            .unwrap();
+        tool.storage
+            .write_bytes("/reading_map.json", b"{\"page\":1}".to_vec())
+            .await
+            .unwrap();
+        let mut image_read = input("read");
+        image_read.path = Some("vfs:///figure.jpg".into());
+        let result = tool.run(image_read).await.unwrap();
+        assert!(
+            matches!(result.content, ToolResultContent::Blocks(ref blocks) if blocks.iter().any(|b| matches!(b,ToolResultBlock::Image{..})))
+        );
+        let mut text_read = input("read");
+        text_read.path = Some("vfs:///reading_map.json".into());
+        let result = tool.run(text_read).await.unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert!(result.text_content().contains("page"));
+    }
+
+    #[test]
+    fn mixed_results_bound_text_and_preserve_images_separately() {
+        let result = AgentToolResult::with_blocks(vec![
+            ToolResultBlock::text("x".repeat(DEFAULT_MAX_CHARS * 2)),
+            ToolResultBlock::image_base64("image/png", "a".repeat(80_000)),
+        ]);
+        let bounded = bound_vfs_output(result);
+        let ToolResultContent::Blocks(blocks) = bounded.content else {
+            panic!("image lost")
+        };
+        assert!(
+            matches!(&blocks[0],ToolResultBlock::Text{text}if text.chars().count()<=DEFAULT_MAX_CHARS)
+        );
+        assert!(matches!(&blocks[1], ToolResultBlock::Image { .. }));
+    }
+
+    #[test]
+    fn image_caps_remain_explicit_without_silent_truncation() {
+        let result = bound_vfs_output(AgentToolResult::with_blocks(vec![
+            ToolResultBlock::image_base64("image/png", "a".repeat(VFS_IMAGE_MAX_BASE64_CHARS + 1)),
+        ]));
+        assert!(result.text_content().contains("image omitted"));
+        let result = bound_vfs_output(AgentToolResult::with_blocks(
+            (0..5)
+                .map(|_| ToolResultBlock::image_base64("image/png", "AAAA"))
+                .collect(),
+        ));
+        let ToolResultContent::Blocks(blocks) = result.content else {
+            panic!("images lost")
+        };
+        assert_eq!(
+            blocks
+                .iter()
+                .filter(|b| matches!(b, ToolResultBlock::Image { .. }))
+                .count(),
+            4
+        );
+        assert!(blocks.iter().any(
+            |b| matches!(b,ToolResultBlock::Text{text}if text.contains("per-call image limit"))
+        ));
     }
 
     #[test]

@@ -69,6 +69,11 @@ impl OpendalFileStorage {
         }
     }
 
+    /// Identity authorizing this storage view, including operator-only mounts.
+    pub fn principal(&self) -> &VfsPrincipal {
+        &self.principal
+    }
+
     /// Return a credential-carrying view sharing operators, mounts, and locks.
     pub fn with_principal(&self, principal: VfsPrincipal) -> Self {
         Self {
@@ -347,6 +352,82 @@ impl OpendalFileStorage {
         local_fs_host_path(&self.op, p.as_ref())
     }
 
+    /// Refuse to hide an existing file, directory, symlink or object prefix
+    /// when the operator enrolls a new mount. Errors are not proof of absence.
+    pub async fn require_vacant_mount_path(&self, path: &str) -> Result<(), opendal::Error> {
+        let occupied = || opendal::Error::new(
+            opendal::ErrorKind::AlreadyExists,
+            format!("data source would shadow existing VFS data at {path}"),
+        );
+        if let Some(host_path) = self.local_host_path(path) {
+            // stat follows dangling symlinks and would incorrectly admit them.
+            return match std::fs::symlink_metadata(host_path) {
+                Ok(_) => Err(occupied()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(opendal::Error::new(
+                    opendal::ErrorKind::Unexpected,
+                    "cannot establish that the data-source path is vacant",
+                ).set_source(error)),
+            };
+        }
+        let operator = self.resolve(path);
+        let key = self.resolve_path(path);
+        let prefix = format!("{}/", key.trim_end_matches('/'));
+        for candidate in [&key, &prefix] {
+            match operator.stat(candidate).await {
+                Ok(_) => return Err(occupied()),
+                Err(error) if error.kind() == opendal::ErrorKind::NotFound => (),
+                Err(error) => return Err(error),
+            }
+        }
+        // Object stores can contain children without a directory marker.
+        let mut entries = match operator.lister_with(&prefix).recursive(true).await {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        match entries.try_next().await {
+            Ok(Some(_)) => Err(occupied()),
+            Ok(None) => Ok(()),
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Resolve an SSH input without copying it onto the coordinator.
+    /// Checks the attached principal before releasing a physical reference.
+    /// A same-host worker must independently open the path without following
+    /// symlinks and enforce its own admitted input roots.
+    pub fn ssh_location(&self, path: &str) -> Result<Option<crate::SshLocation>, opendal::Error> {
+        let stripped = path.strip_prefix("vfs://").unwrap_or(path);
+        let normalized = Self::normalize_path(stripped);
+        self.check_readable(&normalized)?;
+        let parsed = Path::parse(&normalized).map_err(|_| {
+            opendal::Error::new(opendal::ErrorKind::ConfigInvalid, "invalid SSH VFS path")
+        })?;
+        let Some(handle) = self
+            .mounts
+            .as_ref()
+            .and_then(|mounts| mounts.handle_for(&parsed))
+        else {
+            return Ok(None);
+        };
+        let Some((alias, root, endpoint)) = &handle.ssh_backend else {
+            return Ok(None);
+        };
+        let key = mount_key(&handle, &parsed);
+        Ok(Some(crate::SshLocation {
+            endpoint: endpoint.clone(),
+            alias: alias.clone(),
+            root: root.clone(),
+            path: if key.is_empty() {
+                root.clone()
+            } else {
+                format!("{root}/{key}")
+            },
+        }))
+    }
+
     /// Authorize a read for the storage's attached principal.
     pub fn check_readable(&self, path: &str) -> Result<(), opendal::Error> {
         self.check_access(path, VfsAccess::Read, false)
@@ -458,6 +539,32 @@ impl OpendalFileStorage {
     }
 
     /// Return an object's byte length.
+    /// Open a complete object and measure its length under the same read lock.
+    /// Consumers verifying a whole file must not stat it before acquiring the
+    /// stream lock, since a replacement could otherwise change the range.
+    pub async fn read_full_stream(
+        &self,
+        virtual_path: &str,
+    ) -> Result<
+        (
+            u64,
+            impl Stream<Item = Result<Bytes, opendal::Error>> + Send + 'static,
+        ),
+        opendal::Error,
+    > {
+        self.check_readable(virtual_path)?;
+        let operator = self.resolve(virtual_path);
+        let key = self.resolve_path(virtual_path);
+        let guard = self.object_lock(&key).read_owned().await;
+        let size = operator.stat(&key).await?.content_length();
+        let inner = operator.reader(&key).await?.into_stream(0..size).await?;
+        let stream = futures::stream::unfold((guard, inner), |(guard, mut inner)| async move {
+            inner.next().await.map(|item| (item.map(|buffer| buffer.to_bytes()), (guard, inner)))
+        });
+        Ok((size, stream))
+    }
+
+    /// Return an object's byte length.
     pub async fn content_length(&self, virtual_path: &str) -> Result<u64, opendal::Error> {
         self.check_readable(virtual_path)?;
         let operator = self.resolve(virtual_path);
@@ -474,20 +581,41 @@ impl OpendalFileStorage {
     /// hashing them would silently corrupt the digest. An empty object
     /// hashes to the well-known empty-input digest.
     pub async fn sha256(&self, virtual_path: &str) -> Result<(u64, String), opendal::Error> {
+        self.sha256_with_progress(virtual_path, |_, _| {}).await
+    }
+
+    pub async fn sha256_with_progress(
+        &self,
+        virtual_path: &str,
+        progress: impl Fn(u64, u64) + Send + Sync,
+    ) -> Result<(u64, String), opendal::Error> {
         use sha2::Digest;
 
         const CHUNK: u64 = 1024 * 1024;
         let size = self.content_length(virtual_path).await?;
         let mut hasher = sha2::Sha256::new();
         let mut offset: u64 = 0;
+        let mut last = std::time::Instant::now();
+        progress(0, size);
         while offset < size {
             let end = (offset + CHUNK).min(size);
             let buffer = self.read_range(virtual_path, offset..end).await?;
             let bytes = buffer.to_bytes();
             let take = ((end - offset) as usize).min(bytes.len());
+            if take == 0 {
+                return Err(opendal::Error::new(
+                    opendal::ErrorKind::Unexpected,
+                    "input ended before its declared length while hashing",
+                ));
+            }
             hasher.update(&bytes[..take]);
             offset += take as u64;
+            if last.elapsed() >= std::time::Duration::from_secs(1) {
+                progress(offset, size);
+                last = std::time::Instant::now();
+            }
         }
+        progress(offset, size);
         Ok((size, hex_lower(&hasher.finalize())))
     }
 
@@ -1481,6 +1609,49 @@ impl AtomicWriter {
         Ok(self.bytes_written)
     }
 
+    /// Publish a new object only. The destination lock also serializes this
+    /// freshness check with other writers using this storage instance.
+    pub async fn commit_new(mut self) -> Result<u64, opendal::Error> {
+        match self.operator.stat(&self.destination_path).await {
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => {}
+            result => {
+                let error = result.err().unwrap_or_else(|| {
+                    opendal::Error::new(
+                        opendal::ErrorKind::AlreadyExists,
+                        "existing output not overwritten",
+                    )
+                });
+                self.abort().await?;
+                return Err(error);
+            }
+        }
+        self.writer.close().await?;
+        // hard_link atomically rejects an existing local destination, including
+        // writes by processes outside our in-memory lock.
+        if self.operator.info().scheme() == "fs" {
+            let root = std::path::PathBuf::from(self.operator.info().root());
+            let result = tokio::fs::hard_link(
+                root.join(&self.staging_path),
+                root.join(&self.destination_path),
+            )
+            .await;
+            let _ = self.operator.delete(&self.staging_path).await;
+            result.map_err(|error| {
+                opendal::Error::new(opendal::ErrorKind::Unexpected, error.to_string())
+            })?;
+            return Ok(self.bytes_written);
+        }
+        if let Err(error) = self
+            .operator
+            .rename(&self.staging_path, &self.destination_path)
+            .await
+        {
+            let _ = self.operator.delete(&self.staging_path).await;
+            return Err(error);
+        }
+        Ok(self.bytes_written)
+    }
+
     /// Abort the transfer and delete its staging object.
     pub async fn abort(mut self) -> Result<(), opendal::Error> {
         let _ = self.writer.abort().await;
@@ -1612,6 +1783,20 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::OpendalFileStorage;
     use crate::permission::MountPermissions;
+
+    #[tokio::test]
+    async fn mount_namespace_rejects_objects_without_directory_markers() {
+        let operator = opendal::Operator::new(opendal::services::Memory::default()).unwrap().finish();
+        let storage = OpendalFileStorage::from_operator(operator.clone());
+        storage.require_vacant_mount_path("/data/empty").await.unwrap();
+        operator.write("data/occupied/input.csv", b"original".to_vec()).await.unwrap();
+        assert_eq!(storage.require_vacant_mount_path("/data/occupied").await.unwrap_err().kind(),
+            opendal::ErrorKind::AlreadyExists);
+        operator.write("data/file", b"original".to_vec()).await.unwrap();
+        assert_eq!(storage.require_vacant_mount_path("/data/file").await.unwrap_err().kind(),
+            opendal::ErrorKind::AlreadyExists);
+        storage.require_vacant_mount_path("/data/occupied-other").await.unwrap();
+    }
 
     #[test]
     fn normalize_absolute_path() {
@@ -2422,6 +2607,37 @@ mod tests {
                 .unwrap()
                 .to_vec(),
             b"hello world"
+        );
+    }
+
+    #[tokio::test]
+    async fn atomic_new_writer_preserves_existing_and_concurrently_created_files() {
+        let storage = OpendalFileStorage::new_temp();
+        let mut first = storage.atomic_writer("/out/new.txt").await.unwrap();
+        first.write(b"new bytes".to_vec()).await.unwrap();
+        assert_eq!(first.commit_new().await.unwrap(), 9);
+        let mut replacement = storage.atomic_writer("/out/new.txt").await.unwrap();
+        replacement.write(b"replacement".to_vec()).await.unwrap();
+        assert!(replacement.commit_new().await.is_err());
+        assert_eq!(
+            storage
+                .read_range("/out/new.txt", 0..9)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"new bytes"
+        );
+        let mut concurrent = storage.atomic_writer("/out/race.txt").await.unwrap();
+        concurrent.write(b"candidate".to_vec()).await.unwrap();
+        std::fs::write(
+            storage.local_host_path("/out/race.txt").unwrap(),
+            b"external history",
+        )
+        .unwrap();
+        assert!(concurrent.commit_new().await.is_err());
+        assert_eq!(
+            std::fs::read(storage.local_host_path("/out/race.txt").unwrap()).unwrap(),
+            b"external history"
         );
     }
 

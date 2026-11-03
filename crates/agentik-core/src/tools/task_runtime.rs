@@ -111,6 +111,9 @@ pub struct TaskEntry {
     status: watch::Receiver<TaskStatus>,
     cancel_token: CancellationToken,
     abort_handle: AbortHandle,
+    /// For goal-owned local operations, allow an already-started bounded
+    /// operation to finish on cancellation instead of losing its outcome.
+    finish_on_cancel: bool,
     read: watch::Receiver<bool>,
     read_tx: watch::Sender<bool>,
     /// Structured, append-only progress buffer shared with the executing tool
@@ -226,12 +229,20 @@ impl TaskEntry {
             status,
             cancel_token,
             abort_handle,
+            finish_on_cancel: false,
             read,
             read_tx,
             output,
             tool_result,
             metadata,
         }
+    }
+
+    /// Allow an already-started bounded operation to finish on cancellation
+    /// instead of aborting it and losing its outcome.
+    pub(crate) fn with_finish_on_cancel(mut self, finish: bool) -> Self {
+        self.finish_on_cancel = finish;
+        self
     }
 
     /// Return the short task sequence number (1-based).
@@ -280,7 +291,9 @@ impl TaskEntry {
     /// Signal cancellation to the running task.
     pub fn cancel(&self) {
         self.cancel_token.cancel();
-        self.abort_handle.abort();
+        if !self.finish_on_cancel {
+            self.abort_handle.abort();
+        }
     }
 
     /// Wait for the task to complete (Done or Failed). No timeout —
@@ -296,7 +309,7 @@ impl TaskEntry {
             // Tool futures are cooperatively scheduled. If an implementation
             // is stuck in non-yielding work, do not keep the agent's session
             // loop blocked waiting for its JoinHandle.
-            _ = self.cancel_token.cancelled() => {
+            _ = self.cancel_token.cancelled(), if !self.finish_on_cancel => {
                 self.abort_handle.abort();
                 return ToolResult::error(ToolError::Cancel.to_string()).with_id(&self.id);
             }

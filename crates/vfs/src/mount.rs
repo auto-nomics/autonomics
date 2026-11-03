@@ -33,7 +33,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use datafusion::object_store::path::Path;
 use datafusion::object_store::{
@@ -75,6 +75,16 @@ pub enum BackendConfig {
     Local {
         root: String,
     },
+    /// Read-only SSH data home. Credentials and known hosts remain in
+    /// operator-owned OpenSSH configuration, outside this manifest.
+    Ssh {
+        alias: String,
+        root: String,
+        #[serde(default = "default_ssh_python")]
+        python: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        endpoint: Option<crate::SshEndpoint>,
+    },
     S3 {
         bucket: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +105,10 @@ pub enum BackendConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret_access_key: Option<String>,
     },
+}
+
+fn default_ssh_python() -> String {
+    "python3".into()
 }
 
 impl BackendConfig {
@@ -153,6 +167,12 @@ impl BackendConfig {
     /// mounts or path mappings.
     pub fn build(&self) -> Result<opendal::Operator, opendal::Error> {
         match self {
+            Self::Ssh {
+                alias,
+                root,
+                python,
+                endpoint,
+            } => crate::ssh::build_pinned(alias, root, python, endpoint.clone()),
             Self::Local { root } => {
                 opendal::Operator::new(opendal::services::Fs::default().root(root))
                     .map(|op| op.finish())
@@ -286,6 +306,7 @@ struct Mount {
     /// wrapper, which exposes an OpenDAL-style surface). Wrapped in
     /// `Arc` so cloning the outer [`MountedObjectStore`] is cheap.
     backend_op: Arc<opendal::Operator>,
+    ssh_backend: Option<(String, String, Option<crate::SshEndpoint>)>,
 
     /// Whether mutations through this mount are rejected. Read access remains
     /// allowed when true.
@@ -310,6 +331,7 @@ pub struct MountHandle {
     /// backend operator. Mirrors `Mount::source_prefix`; callers that
     /// dispatch to `backend_op` must prepend this to the virtual suffix.
     pub source_prefix: Path,
+    pub(crate) ssh_backend: Option<(String, String, Option<crate::SshEndpoint>)>,
 }
 
 impl MountHandle {
@@ -336,7 +358,7 @@ fn backend_source_key(config: &BackendConfig, source: &str) -> Result<String, St
     }
 
     match config {
-        BackendConfig::Local { root } => {
+        BackendConfig::Local { root } | BackendConfig::Ssh { root, .. } => {
             let root = lexical_absolute(PathBuf::from(root));
             let source_path = PathBuf::from(trimmed);
             let source_abs = if source_path.is_absolute() {
@@ -388,7 +410,7 @@ fn lexical_absolute(path: PathBuf) -> PathBuf {
 /// backend key, and forwarded to that backend's opendal-backed store.
 #[derive(Clone, Default)]
 pub struct MountedObjectStore {
-    mounts: Vec<Mount>,
+    mounts: Arc<RwLock<Vec<Mount>>>,
     principal: VfsPrincipal,
 }
 
@@ -427,6 +449,12 @@ impl MountedObjectStore {
                         path: definition.path.clone(),
                         backend: definition.backend.clone(),
                     })?;
+            if matches!(backend.config, BackendConfig::Ssh { .. }) && !definition.read_only {
+                return Err(MountError::Config(format!(
+                    "SSH mount '{}' must explicitly set read_only = true",
+                    definition.path
+                )));
+            }
             let operator = built_backends
                 .get(&definition.backend)
                 .cloned()
@@ -460,6 +488,19 @@ impl MountedObjectStore {
                 source_prefix,
                 store,
                 backend_op: operator,
+                ssh_backend: match &backend.config {
+                    BackendConfig::Ssh {
+                        alias,
+                        root,
+                        endpoint,
+                        ..
+                    } => Some((
+                        alias.clone(),
+                        root.trim_end_matches('/').into(),
+                        endpoint.clone(),
+                    )),
+                    _ => None,
+                },
                 read_only: definition.read_only,
                 definition: definition.clone(),
             });
@@ -474,22 +515,27 @@ impl MountedObjectStore {
                 .then_with(|| a.virtual_prefix.as_ref().cmp(b.virtual_prefix.as_ref()))
         });
         Ok(Self {
-            mounts,
+            mounts: Arc::new(RwLock::new(mounts)),
             principal: VfsPrincipal::root(),
         })
     }
 
     pub fn mount_paths(&self) -> Vec<String> {
         self.mounts
+            .read()
+            .expect("VFS mount lock poisoned")
             .iter()
             .map(|m| m.definition.path.clone())
             .collect()
     }
 
-    fn find(&self, path: &Path) -> Option<&Mount> {
+    fn find(&self, path: &Path) -> Option<Mount> {
         self.mounts
+            .read()
+            .expect("VFS mount lock poisoned")
             .iter()
             .find(|mount| path.prefix_matches(&mount.virtual_prefix))
+            .cloned()
     }
 
     /// Public-facing mount lookup. Returns a [`MountHandle`] for the
@@ -506,6 +552,7 @@ impl MountedObjectStore {
             read_only: m.read_only,
             permissions: m.definition.permissions.clone(),
             source_prefix: m.source_prefix.clone(),
+            ssh_backend: m.ssh_backend.clone(),
         })
     }
 
@@ -520,10 +567,46 @@ impl MountedObjectStore {
     /// Returns a snapshot of every mount's declarative definition, in
     /// the same longest-prefix-first order used internally.
     pub fn mount_definitions(&self) -> Vec<MountDefinition> {
-        self.mounts.iter().map(|m| m.definition.clone()).collect()
+        self.mounts
+            .read()
+            .expect("VFS mount lock poisoned")
+            .iter()
+            .map(|m| m.definition.clone())
+            .collect()
     }
 
-    fn resolve<'a>(&'a self, path: &'a Path) -> Result<(&'a Mount, Path), ObjectStoreError> {
+    /// Add a storage namespace to all existing principal-scoped clones.
+    /// Existing paths cannot be rebound or shadowed, including nested mounts.
+    pub fn add_data_mount(&self, manifest: &VfsManifest) -> Result<(), MountError> {
+        let additions = Self::from_manifest(manifest)?;
+        let additions = additions
+            .mounts
+            .read()
+            .map_err(|_| MountError::Config("VFS mount lock poisoned".into()))?;
+        let mut mounts = self
+            .mounts
+            .write()
+            .map_err(|_| MountError::Config("VFS mount lock poisoned".into()))?;
+        for addition in additions.iter() {
+            if addition.definition.path == "/"
+                || mounts.iter().any(|old| {
+                    old.definition.path == addition.definition.path
+                        || old.virtual_prefix.prefix_matches(&addition.virtual_prefix)
+                        || (addition.virtual_prefix.prefix_matches(&old.virtual_prefix)
+                            && old.definition.path != "/")
+                })
+            {
+                return Err(MountError::Config(
+                    "data source would shadow an existing namespace".into(),
+                ));
+            }
+        }
+        mounts.extend(additions.iter().cloned());
+        mounts.sort_by_key(|m| std::cmp::Reverse(m.virtual_prefix.as_ref().len()));
+        Ok(())
+    }
+
+    fn resolve(&self, path: &Path) -> Result<(Mount, Path), ObjectStoreError> {
         let mount = self.find(path).ok_or_else(|| not_mounted(path))?;
         let suffix = path
             .prefix_match(&mount.virtual_prefix)
@@ -553,7 +636,23 @@ impl MountedObjectStore {
                 mount.definition.path
             )));
         }
-        let relative = mount_relative_path(mount, path);
+        let relative = mount_relative_path(&mount, path);
+        let segments: Vec<&str> = relative
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        for index in 0..segments.len().saturating_sub(1) {
+            mount
+                .definition
+                .permissions
+                .authorize(
+                    &self.principal,
+                    &segments[..=index].join("/"),
+                    true,
+                    VfsAccess::Execute,
+                )
+                .map_err(|error| permission_error(error.to_string()))?;
+        }
         mount
             .definition
             .permissions
@@ -581,7 +680,7 @@ fn mount_relative_path(mount: &Mount, path: &Path) -> String {
 
 impl fmt::Display for MountedObjectStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MountedObjectStore({} mounts)", self.mounts.len())
+        write!(f, "MountedObjectStore({} mounts)", self.mount_paths().len())
     }
 }
 
@@ -625,6 +724,7 @@ impl ObjectStore for MountedObjectStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+        self.authorize(location, VfsAccess::Read, false)?;
         let (mount, remote) = self.resolve(location).map_err(|_| not_mounted(location))?;
         let result = mount.store.get_opts(&remote, options).await?;
         let GetResult {
@@ -647,24 +747,38 @@ impl ObjectStore for MountedObjectStore {
         prefix: Option<&Path>,
     ) -> BoxStream<'static, Result<ObjectMeta, ObjectStoreError>> {
         let Some(prefix) = prefix else {
-            return futures::stream::iter(Err(not_mounted(&Path::ROOT))).boxed();
+            return futures::stream::iter([Err(not_mounted(&Path::ROOT))]).boxed();
         };
         if let Err(error) = self.authorize(prefix, VfsAccess::Read, true) {
-            return futures::stream::iter(Err(error)).boxed();
+            return futures::stream::iter([Err(error)]).boxed();
         }
         let Ok((mount, remote)) = self.resolve(prefix) else {
-            return futures::stream::iter(Err(not_mounted(prefix))).boxed();
+            return futures::stream::iter([Err(not_mounted(prefix))]).boxed();
         };
         let mount_prefix = mount.virtual_prefix.clone();
         let source_prefix = mount.source_prefix.clone();
+        let authorization = self.clone();
 
         mount
             .store
             .list(Some(&remote))
-            .map(move |meta| {
-                let mut meta = meta?;
-                meta.location = remap_location(&meta.location, &source_prefix, &mount_prefix)?;
-                Ok(meta)
+            .filter_map(move |meta| {
+                let authorized = match meta {
+                    Err(error) => Some(Err(error)),
+                    Ok(mut meta) => {
+                        match remap_location(&meta.location, &source_prefix, &mount_prefix) {
+                            Err(error) => Some(Err(error)),
+                            Ok(location) => {
+                                meta.location = location;
+                                authorization
+                                    .authorize(&meta.location, VfsAccess::Read, false)
+                                    .is_ok()
+                                    .then_some(Ok(meta))
+                            }
+                        }
+                    }
+                };
+                futures::future::ready(authorized)
             })
             .boxed()
     }
@@ -683,15 +797,30 @@ impl ObjectStore for MountedObjectStore {
         let objects = result
             .objects
             .into_iter()
-            .map(|mut meta| {
-                meta.location = remap_location(&meta.location, &source_prefix, &mount_prefix)?;
-                Ok(meta)
+            .filter_map(|mut meta| {
+                match remap_location(&meta.location, &source_prefix, &mount_prefix) {
+                    Err(error) => Some(Err(error)),
+                    Ok(location) => {
+                        meta.location = location;
+                        self.authorize(&meta.location, VfsAccess::Read, false)
+                            .is_ok()
+                            .then_some(Ok(meta))
+                    }
+                }
             })
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
         let common_prefixes = result
             .common_prefixes
             .into_iter()
-            .map(|location| remap_location(&location, &source_prefix, &mount_prefix))
+            .filter_map(
+                |location| match remap_location(&location, &source_prefix, &mount_prefix) {
+                    Err(error) => Some(Err(error)),
+                    Ok(location) => self
+                        .authorize(&location, VfsAccess::Read, true)
+                        .is_ok()
+                        .then_some(Ok(location)),
+                },
+            )
             .collect::<Result<Vec<_>, ObjectStoreError>>()?;
 
         Ok(ListResult {
@@ -978,5 +1107,114 @@ mod datafusion_tests {
             .unwrap();
         let batches = df.collect().await.unwrap();
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    }
+}
+
+#[cfg(test)]
+mod principal_tests {
+    use super::*;
+    use crate::permission::{VfsMode, VfsOwnership, VfsPathRule};
+
+    #[tokio::test]
+    async fn direct_mounted_store_get_head_and_ranges_cannot_bypass_principal() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("input"), b"SYNTHETIC-PRIVATE").unwrap();
+        let mut manifest = VfsManifest::local_root(root.path().to_string_lossy());
+        manifest.mount[0].path = "/secure".into();
+        manifest.mount[0].permissions = MountPermissions::unix(
+            VfsOwnership { uid: 0, gid: 0 },
+            VfsMode::from_bits(0o700),
+            VfsMode::from_bits(0o600),
+            VfsMode::from_bits(0o700),
+        );
+        let operator = MountedObjectStore::from_manifest(&manifest).unwrap();
+        let principal = operator.with_principal(VfsPrincipal::new(12_345, 100));
+        let path = Path::from("secure/input");
+        assert!(operator.get(&path).await.is_ok());
+        assert!(principal.get(&path).await.is_err());
+        assert!(principal.head(&path).await.is_err());
+        assert!(principal.get_range(&path, 0..3).await.is_err());
+        assert!(principal.get_ranges(&path, &[0..3, 3..5]).await.is_err());
+        assert!(
+            principal
+                .list(Some(&Path::from("secure")))
+                .try_collect::<Vec<_>>()
+                .await
+                .is_err()
+        );
+        // A Result used directly as IntoIterator drops its Err. These streams
+        // must carry one error rather than masquerading as an empty listing.
+        for prefix in [None, Some(Path::from("unmounted"))] {
+            assert!(
+                operator
+                    .list(prefix.as_ref())
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mounted_listing_filters_denied_entries_and_enforces_ancestor_traversal() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("hidden")).unwrap();
+        std::fs::create_dir(root.path().join("blocked")).unwrap();
+        std::fs::write(root.path().join("public.txt"), b"public toy").unwrap();
+        std::fs::write(root.path().join("hidden/secret.txt"), b"private toy").unwrap();
+        std::fs::write(root.path().join("blocked/input.txt"), b"private toy").unwrap();
+        let mut manifest = VfsManifest::local_root(root.path().to_string_lossy());
+        manifest.mount[0].path = "/data".into();
+        manifest.mount[0].permissions.rules = vec![
+            VfsPathRule::Deny {
+                path: "hidden".into(),
+                access: vec![VfsAccess::Read],
+            },
+            VfsPathRule::Deny {
+                path: "hidden/**".into(),
+                access: vec![VfsAccess::Read],
+            },
+            VfsPathRule::Deny {
+                path: "blocked".into(),
+                access: vec![VfsAccess::Execute],
+            },
+        ];
+        let store = MountedObjectStore::from_manifest(&manifest)
+            .unwrap()
+            .with_principal(VfsPrincipal::new(12_345, 100));
+        let objects = store
+            .list(Some(&Path::from("data")))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(
+            objects
+                .iter()
+                .map(|entry| entry.location.to_string())
+                .collect::<Vec<_>>(),
+            vec!["data/public.txt"]
+        );
+        let listing = store
+            .list_with_delimiter(Some(&Path::from("data")))
+            .await
+            .unwrap();
+        assert!(
+            !listing
+                .common_prefixes
+                .iter()
+                .any(|path| path.as_ref().contains("hidden"))
+        );
+        assert!(
+            store
+                .get(&Path::from("data/blocked/input.txt"))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .get(&Path::from("data/hidden/secret.txt"))
+                .await
+                .is_err()
+        );
     }
 }

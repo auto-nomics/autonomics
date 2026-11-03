@@ -401,6 +401,12 @@ impl Toolset {
             }
 
             let mode = registration.implementation.execution_mode();
+            // Bounded goal-owned operations may opt to complete their final
+            // result on cancellation instead of being aborted mid-flight.
+            // The source deployment additionally requires an admission guard
+            // here; this workspace has no execution guard yet, so the tool's
+            // own opt-in is the gate.
+            let finish_on_cancel = registration.implementation.finish_on_cancel();
             let timeout_secs = registration.implementation.timeout_seconds();
 
             let implementation = registration.implementation.clone();
@@ -489,7 +495,8 @@ impl Toolset {
                 notify_tx,
                 output,
                 metadata,
-            });
+            })
+            .with_finish_on_cancel(finish_on_cancel);
             new_entries.push(entry);
         }
 

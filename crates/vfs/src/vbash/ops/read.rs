@@ -23,6 +23,12 @@ pub async fn op_read(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "read")?;
+    // DAG FileRefs name this same mounted namespace with a vfs:// URI.
+    // Strip only that scheme before the usual principal and mount checks.
+    let raw_path = require_path(
+        Some(raw_path.strip_prefix("vfs://").unwrap_or(raw_path)),
+        "read",
+    )?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);
     storage
         .check_readable(&vpath)
@@ -345,6 +351,12 @@ async fn read_image(
         return Ok(AgentToolResult::error(format!(
             "Image file is empty: {display_path}"
         )));
+    }
+
+    if total_size > crate::vbash::VFS_IMAGE_MAX_BYTES {
+        return Ok(AgentToolResult::error(
+            "Image exceeds the 4 MiB vision input cap; render a smaller page or crop the region of interest.",
+        ));
     }
 
     let reader = op.reader(remote_path).await.map_err(|e| e.to_string())?;

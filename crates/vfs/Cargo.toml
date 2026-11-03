@@ -29,5 +29,6 @@ tempfile = "3.27.0"
 
 schemars.workspace = true
 sha2.workspace = true
+libc = "0.2"
 [lints]
 workspace = true
