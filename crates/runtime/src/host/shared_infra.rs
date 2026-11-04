@@ -185,6 +185,18 @@ pub struct SharedInfra {
     /// template and tweaks it (today: nothing — per-agent overrides
     /// belong on `AgentProfileConfig` once we have a use case).
     pub(super) browser_options_template: BrowserOptions,
+    /// The resolved startup config snapshot (`startup_config`-processed:
+    /// site profile + enrolled catalog applied). The HPC config endpoint
+    /// serves this to operator UIs; editing goes through the site profile
+    /// file and requires a daemon restart to take effect.
+    pub slurm_config: crate::config::SlurmConfig,
+    /// The resolved config's `state_dir` — where the operator site
+    /// profile (`slurm-site.json`) lives.
+    pub state_dir: std::path::PathBuf,
+    /// The site profile as it was at boot (`None` when absent). The HPC
+    /// config endpoint compares this against the file on disk to decide
+    /// whether edits are pending a restart.
+    pub slurm_site_profile_boot: Option<crate::config::slurm::SlurmSiteProfile>,
 }
 
 impl SharedInfra {
@@ -329,6 +341,12 @@ impl SharedInfra {
             host_control: None,
             browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
             browser_options_template: browser_options,
+            slurm_config: resolved_config.slurm.clone(),
+            state_dir: resolved_config.state_dir.clone(),
+            slurm_site_profile_boot: crate::config::slurm::SlurmSiteProfile::load(
+                &resolved_config.state_dir,
+            )
+            .unwrap_or(None),
         })
     }
 

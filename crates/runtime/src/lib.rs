@@ -21,6 +21,7 @@ pub mod skill_workflow_tools;
 pub mod tools;
 
 pub use config::{RuntimeConfig, RuntimeConfigBuilder};
+pub use config::slurm::SlurmSiteProfile;
 pub use control::{HostCommand, HostControl, HostStatus};
 pub use error::{Error, Result};
 pub use host::{

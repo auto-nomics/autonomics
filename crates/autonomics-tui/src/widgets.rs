@@ -9,6 +9,7 @@ pub mod chat_widget;
 pub mod command_palette;
 pub mod dag_view;
 pub mod embedding_config_widget;
+pub mod hpc_panel_widget;
 pub mod input_area;
 pub mod message_picker;
 pub mod model_config_widget;

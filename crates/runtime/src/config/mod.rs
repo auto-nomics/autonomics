@@ -45,7 +45,7 @@ mod defaults;
 mod prompt;
 mod rsi;
 mod runtime;
-mod slurm;
+pub(crate) mod slurm;
 
 pub use builder::RuntimeConfigBuilder;
 pub use defaults::{

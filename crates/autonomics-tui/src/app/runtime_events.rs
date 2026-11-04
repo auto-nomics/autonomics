@@ -158,7 +158,10 @@ impl App {
                 }
                 self.state.stored_records = records;
                 self.refresh_agents_popup();
-                tracing::info!(count = self.state.stored_records.len(), "agent records page applied");
+                tracing::info!(
+                    count = self.state.stored_records.len(),
+                    "agent records page applied"
+                );
             }
             crate::app_event::AppEvent::SearchStoredAgents(query) => {
                 // Only the newest query matters.
@@ -168,7 +171,9 @@ impl App {
                 self.fetch_stored_agents(&query);
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
-                self.state.stored_records.retain(|record| record.id != agent_id);
+                self.state
+                    .stored_records
+                    .retain(|record| record.id != agent_id);
                 // If this identity's leaf is currently open, close it too —
                 // all stored data has been erased so there's nothing to
                 // resume.
@@ -366,6 +371,17 @@ impl App {
                     self.state.dag_view_error = Some(error);
                 }
             },
+            crate::app_event::AppEvent::HpcConfigLoaded(result) => match result {
+                Ok(reply) => self.apply_hpc_config_reply(reply),
+                Err(error) => self.apply_hpc_config_failed(error),
+            },
+            crate::app_event::AppEvent::HpcJobsLoaded(reply) => {
+                self.apply_hpc_jobs_reply(reply);
+            }
+            crate::app_event::AppEvent::HpcProfileSaved(result) => match result {
+                Ok(reply) => self.apply_hpc_save_reply(reply),
+                Err(error) => self.apply_hpc_save_failed(error),
+            },
             crate::app_event::AppEvent::BibliographySnapshotLoaded { token, result } => {
                 self.apply_bibliography_snapshot(token, result);
             }
@@ -550,13 +566,16 @@ impl App {
                         info: info.clone(),
                     })
                     .unwrap_or_else(uuid::Uuid::new_v4);
-                self.state
-                    .upsert_live_agent(&name, agent_id, info.status);
+                self.state.upsert_live_agent(&name, agent_id, info.status);
 
                 // Deliver a message queued while this identity was
                 // passivated — registration is the earliest moment the
                 // daemon can accept a delivery.
-                if self.state.pending_outbound.as_ref().is_some_and(|(pending, _)| pending == &name)
+                if self
+                    .state
+                    .pending_outbound
+                    .as_ref()
+                    .is_some_and(|(pending, _)| pending == &name)
                 {
                     let (_, text) = self.state.pending_outbound.take().expect("checked above");
                     let client = self.client.clone();
@@ -580,9 +599,7 @@ impl App {
                     self.state.pending_focus_agent_name = None;
                 }
 
-                if let Some(session) =
-                    self.state.sessions.iter_mut().find(|s| s.name == name)
-                {
+                if let Some(session) = self.state.sessions.iter_mut().find(|s| s.name == name) {
                     // An open leaf already covers this identity (e.g. a
                     // dormant view re-activated): refresh its identity
                     // binding and hydrate the context.
@@ -701,11 +718,7 @@ impl App {
 
     /// Fold the agent's sole context (from hydration or a `ContextList`
     /// event that arrived before the agent's context existed) into the UI.
-    pub(super) fn apply_context_list(
-        &mut self,
-        agent_path: &str,
-        context: Option<ContextInfo>,
-    ) {
+    pub(super) fn apply_context_list(&mut self, agent_path: &str, context: Option<ContextInfo>) {
         let Some(agent) = self
             .state
             .sessions

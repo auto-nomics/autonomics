@@ -36,6 +36,7 @@ mod event_loop;
 mod history;
 mod keyboard;
 mod leader;
+mod hpc_panel;
 mod model_config;
 mod naming;
 mod overlays;

@@ -121,6 +121,9 @@ impl App {
                     self.state.delete_agent_confirm = true;
                 }
             }
+            CommandAction::HpcPanel => {
+                self.open_hpc_panel();
+            }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
                 // Align the ● marker with the active agent's real model

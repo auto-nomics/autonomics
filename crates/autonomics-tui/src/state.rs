@@ -982,6 +982,8 @@ pub struct AppState {
     pub bibliography_detail_token: u64,
     /// Model config popup visibility.
     pub model_config_visible: bool,
+    /// HPC (Slurm) site panel state and visibility.
+    pub hpc_panel: crate::widgets::hpc_panel_widget::HpcPanelState,
     pub embedding_config_visible: bool,
     /// Per-agent runtime config popup state.
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,

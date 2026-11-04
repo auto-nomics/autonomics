@@ -43,6 +43,8 @@ pub(super) enum Overlay {
     AgentConfig,
     /// Model provider/catalog config form.
     ModelConfig,
+    /// HPC (Slurm) site config + job monitor panel.
+    HpcPanel,
     /// Embedding model config form.
     EmbeddingConfig,
     /// Skill library dashboard.
@@ -88,6 +90,7 @@ impl AppState {
         [
             (AgentConfig, self.agent_config.visible),
             (ModelConfig, self.model_config_visible),
+            (HpcPanel, self.hpc_panel.visible),
             (EmbeddingConfig, self.embedding_config_visible),
             (SkillLibrary, self.skill_library.visible),
             (Bibliography, self.bibliography_visible),
@@ -120,6 +123,7 @@ mod tests {
     fn all_visible(state: &mut AppState) {
         state.agent_config.visible = true;
         state.model_config_visible = true;
+        state.hpc_panel.visible = true;
         state.embedding_config_visible = true;
         state.skill_library.visible = true;
         state.bibliography_visible = true;
@@ -154,7 +158,7 @@ mod tests {
         let mut state = AppState::default();
         all_visible(&mut state);
         let stack = state.overlay_stack();
-        assert_eq!(stack.len(), 16, "every overlay variant must be listed");
+        assert_eq!(stack.len(), 17, "every overlay variant must be listed");
         let unique: std::collections::HashSet<_> = stack.iter().collect();
         assert_eq!(unique.len(), stack.len(), "no duplicates in the stack");
     }

@@ -550,3 +550,57 @@ async fn model_config_catalog_serves_builtin_presets() {
 
     gateway_daemon.stop().await;
 }
+
+// ── HPC site config ─────────────────────────────────────────────────────
+
+/// GET serves the effective snapshot; PUT persists the profile atomically,
+/// flags `pending_restart`, and leaves the live config untouched until a
+/// restart. Invalid values are rejected without writing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hpc_config_round_trip_marks_pending_restart() {
+    let gateway_daemon = start_mock_gateway("ok").await;
+    let client = gateway_daemon.client();
+
+    let before = client.hpc_config().await.unwrap();
+    assert_eq!(before["pending_restart"], serde_json::json!(false));
+    assert_eq!(before["site_profile"]["exists"], serde_json::json!(false));
+    let live_host = before["config"]["ssh_host"].as_str().unwrap().to_string();
+
+    let profile = serde_json::json!({"ssh_host": "hpc-login-test", "poll_interval_secs": 30});
+    let saved = client.update_hpc_config(&profile).await.unwrap();
+    assert_eq!(saved["pending_restart"], serde_json::json!(true));
+
+    let after = client.hpc_config().await.unwrap();
+    assert_eq!(after["site_profile"]["exists"], serde_json::json!(true));
+    assert_eq!(after["pending_restart"], serde_json::json!(true));
+    // The running executor keeps its boot-time values.
+    assert_eq!(after["config"]["ssh_host"], serde_json::json!(live_host));
+
+    // Zero poll interval is rejected and must not land on disk.
+    let bad = client
+        .update_hpc_config(&serde_json::json!({"poll_interval_secs": 0}))
+        .await;
+    assert!(bad.is_err(), "zero poll interval must be rejected");
+    let unchanged = client.hpc_config().await.unwrap();
+    assert_eq!(unchanged["config"]["ssh_host"], serde_json::json!(live_host));
+    assert_eq!(
+        unchanged["config"]["poll_interval_secs"],
+        before["config"]["poll_interval_secs"]
+    );
+
+    gateway_daemon.stop().await;
+}
+
+/// Unknown profile fields fail closed — a typo must not silently disable a
+/// production setting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hpc_config_rejects_unknown_fields() {
+    let gateway_daemon = start_mock_gateway("ok").await;
+    let client = gateway_daemon.client();
+    let err = client
+        .update_hpc_config(&serde_json::json!({"nonsense_field": 1}))
+        .await;
+    assert!(err.is_err(), "unknown profile fields must be rejected");
+
+    gateway_daemon.stop().await;
+}

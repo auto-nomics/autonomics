@@ -128,6 +128,11 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
         action: CommandAction::ModelConfig,
     },
     LeaderNode::Leaf {
+        key: 'P',
+        label: "HPC site config",
+        action: CommandAction::HpcPanel,
+    },
+    LeaderNode::Leaf {
         key: 'e',
         label: "Embedding config",
         action: CommandAction::EmbeddingConfig,

@@ -257,3 +257,321 @@ fn default_slurm_ssh_connect_timeout_secs() -> u64 {
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(10)
 }
+
+// ── Operator site profile ────────────────────────────────────────────────
+//
+// The panel-edited persistent layer between env bootstrap and code
+// defaults. `<state_dir>/slurm-site.json`; every field optional. Precedence
+// at daemon start: enrolled compute catalog > site profile > env > default.
+// Writes go through `PUT /hpc/config` (atomic staging+rename); a running
+// daemon never re-reads the file — the panel surfaces a restart hint
+// instead, because ssh targets and executors are wired once at boot.
+
+/// Operator-editable site profile persisted at
+/// [`site_profile_path`](Self::path). `None` fields fall through to env /
+/// built-in defaults; `deny_unknown_fields` keeps typos from silently
+/// disabling a setting.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SlurmSiteProfile {
+    pub enabled: Option<bool>,
+    pub tools_enabled: Option<bool>,
+    pub ssh_host: Option<String>,
+    pub ssh_command: Option<String>,
+    pub scratch_remote_dir: Option<String>,
+    pub artifact_root: Option<PathBuf>,
+    pub apptainer_manifest: Option<PathBuf>,
+    pub typed_worker_config: Option<PathBuf>,
+    pub panel_cache_remote_dir: Option<String>,
+    pub account: Option<String>,
+    pub partition: Option<String>,
+    pub gpu_partition: Option<String>,
+    pub gpu_cpus_per_gpu: Option<u32>,
+    pub gpu_qos: Option<String>,
+    pub mem_per_cpu: Option<String>,
+    pub default_time: Option<String>,
+    pub poll_interval_secs: Option<u64>,
+    pub ssh_connect_timeout_secs: Option<u64>,
+    pub data_ssh_host: Option<String>,
+    pub pi_ssh_host: Option<String>,
+    pub remote_python: Option<String>,
+}
+
+impl SlurmSiteProfile {
+    /// `<state_dir>/slurm-site.json`.
+    pub fn path(state_dir: &std::path::Path) -> PathBuf {
+        state_dir.join("slurm-site.json")
+    }
+
+    /// Load the profile; `None` when the file does not exist. Unreadable or
+    /// malformed profiles surface as errors — a silent fallback would let a
+    /// typo disable production routing.
+    pub fn load(state_dir: &std::path::Path) -> Result<Option<Self>, String> {
+        let path = Self::path(state_dir);
+        match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("read {}: {e}", path.display())),
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| format!("parse {}: {e}", path.display())),
+        }
+    }
+
+    /// Overlay every present field onto `config`.
+    pub fn apply_to(&self, config: &mut SlurmConfig) {
+        if let Some(v) = self.enabled {
+            config.enabled = v;
+        }
+        if let Some(v) = self.tools_enabled {
+            config.tools_enabled = v;
+        }
+        if let Some(v) = &self.ssh_host {
+            config.ssh_host = v.clone();
+        }
+        if let Some(v) = &self.ssh_command {
+            config.ssh_command = v.clone();
+        }
+        if let Some(v) = &self.scratch_remote_dir {
+            config.scratch_remote_dir = v.clone();
+        }
+        if let Some(v) = &self.artifact_root {
+            config.artifact_root = v.clone();
+        }
+        if let Some(v) = &self.apptainer_manifest {
+            config.apptainer_manifest = Some(v.clone());
+        }
+        if let Some(v) = &self.typed_worker_config {
+            config.typed_worker_config = Some(v.clone());
+        }
+        if let Some(v) = &self.panel_cache_remote_dir {
+            config.panel_cache_remote_dir = v.clone();
+        }
+        if let Some(v) = &self.account {
+            config.account = Some(v.clone());
+        }
+        if let Some(v) = &self.partition {
+            config.partition = v.clone();
+        }
+        if let Some(v) = &self.gpu_partition {
+            config.gpu_partition = v.clone();
+        }
+        if let Some(v) = self.gpu_cpus_per_gpu {
+            config.gpu_cpus_per_gpu = v;
+        }
+        if let Some(v) = &self.gpu_qos {
+            config.gpu_qos = Some(v.clone());
+        }
+        if let Some(v) = &self.mem_per_cpu {
+            config.mem_per_cpu = v.clone();
+        }
+        if let Some(v) = &self.default_time {
+            config.default_time = v.clone();
+        }
+        if let Some(v) = self.poll_interval_secs {
+            config.poll_interval_secs = v;
+        }
+        if let Some(v) = self.ssh_connect_timeout_secs {
+            config.ssh_connect_timeout_secs = v;
+        }
+        if let Some(v) = &self.data_ssh_host {
+            config.data_ssh_host = Some(v.clone());
+        }
+        if let Some(v) = &self.pi_ssh_host {
+            config.pi_ssh_host = Some(v.clone());
+        }
+        if let Some(v) = &self.remote_python {
+            config.remote_python = v.clone();
+        }
+    }
+
+    /// Persist atomically: stage alongside the target, then rename over it.
+    /// The site directory is created on demand.
+    pub fn store(&self, state_dir: &std::path::Path) -> Result<PathBuf, String> {
+        let path = Self::path(state_dir);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+        let bytes = serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?;
+        let stage = path.with_extension("json.staging");
+        std::fs::write(&stage, &bytes).map_err(|e| format!("write {}: {e}", stage.display()))?;
+        std::fs::rename(&stage, &path).map_err(|e| format!("rename into place: {e}"))?;
+        Ok(path)
+    }
+
+    /// Operator-input validation before a write is accepted. Only rejects
+    /// values the daemon would refuse at boot; filesystem reachability is
+    /// deliberately not checked here (paths may be created later).
+    pub fn validate(&self) -> Result<(), String> {
+        let non_empty = |field: &str, value: &str| {
+            (!value.trim().is_empty())
+                .then_some(())
+                .ok_or_else(|| format!("{field} must not be empty"))
+        };
+        if let Some(v) = &self.ssh_host {
+            non_empty("ssh_host", v)?;
+        }
+        if let Some(v) = &self.ssh_command {
+            non_empty("ssh_command", v)?;
+        }
+        if let Some(v) = &self.scratch_remote_dir {
+            non_empty("scratch_remote_dir", v)?;
+            if v.contains(char::is_whitespace) {
+                return Err("scratch_remote_dir must not contain whitespace (sbatch \
+                            directive values cannot be quoted)"
+                    .into());
+            }
+        }
+        if let Some(v) = &self.partition {
+            non_empty("partition", v)?;
+            if v.contains(char::is_whitespace) {
+                return Err("partition must not contain whitespace".into());
+            }
+        }
+        if let Some(v) = &self.gpu_partition {
+            non_empty("gpu_partition", v)?;
+        }
+        if let Some(v) = self.gpu_cpus_per_gpu {
+            if v == 0 {
+                return Err("gpu_cpus_per_gpu must be at least 1".into());
+            }
+        }
+        if let Some(v) = self.poll_interval_secs {
+            if v == 0 {
+                return Err("poll_interval_secs must be at least 1".into());
+            }
+        }
+        if let Some(v) = self.ssh_connect_timeout_secs {
+            if v == 0 {
+                return Err("ssh_connect_timeout_secs must be at least 1".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod site_profile_tests {
+    use super::*;
+
+    #[test]
+    fn round_trips_through_disk_and_applies_over_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = SlurmSiteProfile {
+            enabled: Some(true),
+            ssh_host: Some("hpc-login".into()),
+            poll_interval_secs: Some(30),
+            account: Some("proj42".into()),
+            ..Default::default()
+        };
+        let path = profile.store(dir.path()).unwrap();
+        assert_eq!(path, SlurmSiteProfile::path(dir.path()));
+        assert!(path.with_extension("json.staging").parent().is_some());
+        assert!(
+            !SlurmSiteProfile::path(dir.path())
+                .to_string_lossy()
+                .contains("staging")
+        );
+
+        let loaded = SlurmSiteProfile::load(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded, profile);
+
+        let mut config = SlurmConfig::default();
+        loaded.apply_to(&mut config);
+        assert!(config.enabled);
+        assert_eq!(config.ssh_host, "hpc-login");
+        assert_eq!(config.poll_interval_secs, 30);
+        assert_eq!(config.account.as_deref(), Some("proj42"));
+        // Untouched fields keep their env/default resolution.
+        assert_eq!(config.partition, SlurmConfig::default().partition);
+    }
+
+    #[test]
+    fn absent_profile_loads_as_none_and_errors_are_surfaced() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(SlurmSiteProfile::load(dir.path()).unwrap().is_none());
+
+        std::fs::write(SlurmSiteProfile::path(dir.path()), b"{not json").unwrap();
+        assert!(
+            SlurmSiteProfile::load(dir.path()).is_err(),
+            "malformed profile must error"
+        );
+
+        std::fs::write(
+            SlurmSiteProfile::path(dir.path()),
+            br#"{"ssh_host_but_typo": 1}"#,
+        )
+        .unwrap();
+        assert!(
+            SlurmSiteProfile::load(dir.path()).is_err(),
+            "unknown fields must be rejected (deny_unknown_fields)"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_operator_errors() {
+        assert!(
+            SlurmSiteProfile {
+                ssh_host: Some("  ".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SlurmSiteProfile {
+                scratch_remote_dir: Some("~/no spaces/here".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SlurmSiteProfile {
+                poll_interval_secs: Some(0),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SlurmSiteProfile {
+                gpu_cpus_per_gpu: Some(0),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        // A minimal sane profile passes.
+        assert!(
+            SlurmSiteProfile {
+                enabled: Some(true),
+                ssh_host: Some("sjtu".into()),
+                partition: Some("64c512g".into()),
+                ..Default::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn startup_config_applies_the_site_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile = SlurmSiteProfile {
+            ssh_host: Some("boot-time-host".into()),
+            ..Default::default()
+        };
+        profile.store(dir.path()).unwrap();
+
+        let mut config = crate::RuntimeConfig::default();
+        config.state_dir = dir.path().to_path_buf();
+        let resolved = crate::compute::startup_config(&config).unwrap();
+        assert_eq!(resolved.slurm.ssh_host, "boot-time-host");
+
+        // No catalog present — the site profile is the only overlay.
+        std::fs::remove_file(SlurmSiteProfile::path(dir.path())).unwrap();
+        let resolved = crate::compute::startup_config(&config).unwrap();
+        assert_eq!(resolved.slurm.ssh_host, SlurmConfig::default().ssh_host);
+    }
+}

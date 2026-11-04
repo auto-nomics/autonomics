@@ -9,6 +9,7 @@ mod docs;
 mod error;
 mod events;
 mod gui;
+mod hpc_config;
 mod hpc_jobs;
 mod hydration;
 mod lifecycle;

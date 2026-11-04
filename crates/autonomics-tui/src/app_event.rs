@@ -162,4 +162,10 @@ pub(crate) enum AppEvent {
         agent: String,
         context: Option<agentik_types::ContextInfo>,
     },
+    /// HPC site config snapshot from `GET /hpc/config`.
+    HpcConfigLoaded(std::result::Result<serde_json::Value, String>),
+    /// HPC monitor inventory from `GET /hpc/jobs`.
+    HpcJobsLoaded(serde_json::Value),
+    /// Site profile persisted via `PUT /hpc/config`.
+    HpcProfileSaved(std::result::Result<serde_json::Value, String>),
 }

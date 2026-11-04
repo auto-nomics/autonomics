@@ -22,6 +22,13 @@ impl App {
                     return 0;
                 }
 
+                if self.state.hpc_panel.visible && self.state.hpc_panel.edit_buffer.is_some() {
+                    if let Some(buffer) = &mut self.state.hpc_panel.edit_buffer {
+                        buffer.push_str(&s);
+                    }
+                    return 0;
+                }
+
                 if self.state.bibliography_visible {
                     return 0;
                 }
@@ -264,6 +271,7 @@ impl App {
                 Overlay::SkillLibrary => self.handle_skill_library_key(key),
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
                 Overlay::ModelConfig => self.handle_model_config_key(key),
+                Overlay::HpcPanel => self.handle_hpc_panel_key(key),
                 Overlay::AgentConfig => self.handle_agent_config_key(key),
                 // Captured above, before the global chords; handled here
                 // too so a future reorder degrades to "the confirm

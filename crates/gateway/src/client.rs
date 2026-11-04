@@ -688,8 +688,12 @@ impl GatewayClient {
         &self,
         request: &runtime::compute::SaveDataSource,
     ) -> Result<runtime::compute::ComputeCatalog> {
-        self.request(reqwest::Method::POST, "/compute/data-sources", Some(request))
-            .await
+        self.request(
+            reqwest::Method::POST,
+            "/compute/data-sources",
+            Some(request),
+        )
+        .await
     }
 
     /// Read-only connectivity/configuration check; never submits a job.
@@ -705,6 +709,20 @@ impl GatewayClient {
     /// Durable HPC monitor inventory (owned jobs and their terminal evidence).
     pub async fn hpc_jobs(&self) -> Result<serde_json::Value> {
         self.get("/hpc/jobs").await
+    }
+
+    /// Effective HPC (Slurm) site configuration snapshot.
+    pub async fn hpc_config(&self) -> Result<serde_json::Value> {
+        self.get("/hpc/config").await
+    }
+
+    /// Persist an operator HPC site profile (takes effect on daemon restart).
+    pub async fn update_hpc_config(
+        &self,
+        profile: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        self.request(reqwest::Method::PUT, "/hpc/config", Some(profile))
+            .await
     }
 }
 

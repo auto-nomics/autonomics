@@ -13,8 +13,8 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, compute, context, events, gui, hpc_jobs, hydration, lifecycle, model_config,
-    plugin_environments, plugins, settings, skills, storage,
+    agents, compute, context, events, gui, hpc_config, hpc_jobs, hydration, lifecycle,
+    model_config, plugin_environments, plugins, settings, skills, storage,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -29,6 +29,7 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/compute/policy", put(compute::select))
         .route("/compute/data-sources", post(compute::source))
         .route("/compute/image-evidence", get(compute::image_evidence))
+        .route("/hpc/config", get(hpc_config::show).put(hpc_config::update))
         .route("/hpc/jobs", get(hpc_jobs::list))
         .route("/hpc/jobs/watch", post(hpc_jobs::watch))
         .route("/hpc/jobs/{id}/stop-monitor", post(hpc_jobs::stop_monitor))
@@ -108,6 +109,12 @@ pub fn api_router(state: GatewayState) -> Router {
             "/settings",
             get(settings::get_settings).put(settings::put_setting),
         )
+        .route(
+            "/plugin-projects",
+            get(plugins::list_projects).post(plugins::create_project),
+        )
+        .route("/plugin-projects/{name}/files", get(plugins::project_files))
+        .route("/plugin-projects/{name}/file", get(plugins::read_project_file).put(plugins::save_project_file))
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
         .route(

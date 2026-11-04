@@ -78,9 +78,17 @@ fn yes() -> bool {
     true
 }
 
-/// Resolve durable placement before opening any legacy backend. Environment
-/// variables seed the first catalog; they do not retarget an enrolled revision.
+/// Resolve durable placement before opening any legacy backend. The
+/// operator's site profile seeds the base config (file > env > default);
+/// an enrolled compute catalog then overrides placement for enrolled
+/// deployments. Environment variables seed the first catalog; they do not
+/// retarget an enrolled revision.
 pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, String> {
+    let mut config = config.clone();
+    if let Some(profile) = crate::config::slurm::SlurmSiteProfile::load(&config.state_dir)? {
+        profile.apply_to(&mut config.slurm);
+    }
+    let config = &config;
     let path = config.state_dir.join("compute/catalog.json");
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(config.clone()),

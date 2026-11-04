@@ -39,7 +39,9 @@ impl App {
             .borders(ratatui::widgets::Borders::ALL)
             .title(Span::styled(
                 " ⚠ Delete Agent ",
-                Style::default().fg(theme.error).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.error)
+                    .add_modifier(Modifier::BOLD),
             ))
             .border_style(Style::default().fg(theme.error));
         let inner = block.inner(popup_area);
@@ -50,9 +52,7 @@ impl App {
                 Span::styled(" Permanently delete ", Style::default().fg(theme.text_dim)),
                 Span::styled(
                     agent_name.to_string(),
-                    Style::default()
-                        .fg(theme.text)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("?", Style::default().fg(theme.text_dim)),
             ]),
@@ -364,6 +364,21 @@ impl App {
                 if let Some((x, y)) = self.state.name_input.cursor_pos {
                     frame.set_cursor_position(ratatui::layout::Position { x, y });
                 }
+            }
+            Overlay::HpcPanel => {
+                use ratatui::widgets::StatefulWidgetRef as _;
+                let popup_width = frame.area().width * 8 / 10;
+                let popup_height = frame.area().height * 9 / 10;
+                let popup = crate::widgets::popup::Popup::new(
+                    " HPC Site ",
+                    crate::widgets::popup::PopupControls::default(),
+                )
+                .width(popup_width)
+                .height(popup_height)
+                .accent(crate::theme::current().accent_alt);
+                let inner = popup.render(frame.area(), frame.buffer_mut());
+                let widget = crate::widgets::hpc_panel_widget::HpcPanelWidget;
+                widget.render_ref(inner, frame.buffer_mut(), &mut self.state.hpc_panel);
             }
             Overlay::ModelConfig => {
                 use ratatui::widgets::StatefulWidgetRef as _;
