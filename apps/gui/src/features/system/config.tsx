@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { gatewayRequest } from "@/gateway";
+import { Bot, ChevronDown, Cpu, RefreshCw, Settings2, X } from "lucide-react";
 import type {
   AgentRuntimeConfigView,
   AgentRuntimeOverrides,
@@ -218,7 +219,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
       await gatewayRequest("PUT", "/model-config/active-model", { spec });
       setCatalog((current) => ({ ...current, active_model: spec }));
     } catch (cause) {
-      window.alert(String(cause));
+      setStatus({ kind: "error", text: String(cause) });
     }
   };
 
@@ -259,7 +260,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
       await gatewayRequest("PUT", "/settings", { key, value: value ? "1" : "0" });
     } catch (cause) {
       setDisplay((current) => ({ ...current, [key]: previous }));
-      window.alert(String(cause));
+      setStatus({ kind: "error", text: String(cause) });
     }
   };
 
@@ -313,39 +314,50 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
   };
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 pb-6">
-        {loading && <Card className="p-4 text-sm text-muted-foreground">Loading configuration…</Card>}
-        {error && <Card className="border-destructive/40 p-4 text-sm text-destructive">{error}</Card>}
+    <ScrollArea className="min-h-0 flex-1" viewportLabel="Configuration">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-1 pb-8 pt-2 sm:px-4 sm:pt-5">
+        <header className="space-y-1">
+          <h1 className="text-xl font-semibold tracking-tight">Configuration</h1>
+          <p className="text-sm text-muted-foreground">Manage models, agent behavior, and application preferences.</p>
+        </header>
+        {loading && <Card className="p-4 text-sm text-muted-foreground" role="status">Loading configuration…</Card>}
+        {error && <Card className="gap-3 p-4 text-sm text-destructive" role="alert"><span>Could not load configuration: {error}</span><Button className="w-fit" size="sm" variant="outline" onClick={() => void loadAll(activeAgent)}>Try again</Button></Card>}
         {status && (
-          <div className={cn(
-            "rounded-lg border p-3 text-sm",
+          <div role={status.kind === "error" ? "alert" : "status"} className={cn(
+            "flex items-start justify-between gap-3 rounded-lg border p-3 text-sm",
             status.kind === "ok" ? "border-primary/40 text-foreground" : "border-destructive/40 text-destructive",
           )}>
-            {status.text}
+            <span className="min-w-0 break-words">{status.text}</span>
+            <button type="button" aria-label="Dismiss notification" className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setStatus(null)}><X className="size-4" /></button>
           </div>
         )}
 
-        <Tabs defaultValue="models" className="gap-4">
-          <TabsList>
-            <TabsTrigger value="models">Models</TabsTrigger>
-            <TabsTrigger value="agent">Agent Runtime</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
+        {!loading && !error && <Tabs defaultValue="models" className="gap-5">
+          <TabsList className="h-auto max-w-full flex-wrap justify-start gap-1 p-1">
+            <TabsTrigger className="px-3 py-1.5" value="models"><Cpu /> Models</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="agent"><Bot /> Agent Runtime</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="settings"><Settings2 /> Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="models" className="grid gap-4">
             <Card className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-medium">Active model</h3>
-                  <p className="text-xs text-muted-foreground">{catalog.active_model ?? "No model selected"}</p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0 space-y-1">
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active model</h2>
+                  <p className="break-all text-base font-medium">{catalog.active_model ?? "No model selected"}</p>
+                  <p className="text-xs text-muted-foreground">Choose a model from a provider below.</p>
                 </div>
-                <Button size="sm" variant="secondary" onClick={() => void refreshCatalog().then(() => setStatus({ kind: "ok", text: "Catalog refreshed" }))}>
-                  Refresh
+                <Button size="sm" variant="outline" onClick={() => void refreshCatalog().then(() => setStatus({ kind: "ok", text: "Catalog refreshed" })).catch((cause) => setStatus({ kind: "error", text: String(cause) }))}>
+                  <RefreshCw /> Refresh catalog
                 </Button>
               </div>
             </Card>
 
+            <div className="space-y-1 px-1">
+              <h2 className="text-sm font-semibold">Providers</h2>
+              <p className="text-xs text-muted-foreground">Configure connections and manage available models.</p>
+            </div>
+            {catalog.providers.length === 0 && <Card className="p-4 text-sm text-muted-foreground">No providers available. Refresh the catalog to try again.</Card>}
             {catalog.providers.map((provider) => {
               const open = expanded.has(provider.name);
               const models = modelsFor(provider.name);
@@ -354,7 +366,8 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
                 <Card key={provider.id} className="p-0">
                   <button
                     type="button"
-                    className="flex w-full items-center gap-2 p-3 text-left hover:bg-accent"
+                    className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
+                    aria-expanded={open}
                     onClick={() => setExpanded((current) => {
                       const next = new Set(current);
                       if (next.has(provider.name)) next.delete(provider.name);
@@ -362,18 +375,21 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
                       return next;
                     })}
                   >
-                    <strong className="text-sm">{provider.name}</strong>
-                    <Badge variant="secondary" className="ml-auto">{provider.api_key ? "configured" : "not configured"}</Badge>
-                    <span>{open ? "▾" : "▸"}</span>
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-sm">{provider.name}</strong>
+                      <span className="text-xs text-muted-foreground">{models.length} {models.length === 1 ? "model" : "models"} · {provider.provider_type}</span>
+                    </span>
+                    <Badge variant="secondary">{provider.api_key ? "configured" : "not configured"}</Badge>
+                    <ChevronDown aria-hidden="true" className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
                   </button>
                   {open && (
                     <div className="space-y-3 border-t p-3">
                       {models.map((model) => {
                         const spec = `${provider.name}:${model.model_name}`;
                         return (
-                          <div key={spec} className="flex items-center gap-2 rounded-md border bg-background p-2">
+                          <div key={spec} className="flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3">
                             <span className={cn("text-xs", catalog.active_model === spec ? "text-primary" : "text-transparent")}>●</span>
-                            <span className="min-w-0 flex-1 truncate text-sm">{model.model_name}</span>
+                            <span className="min-w-[8rem] flex-1 break-all text-sm font-medium">{model.model_name}</span>
                             <span className="text-xs text-muted-foreground">{model.context_length.toLocaleString()} ctx</span>
                             <Button size="xs" variant={catalog.active_model === spec ? "secondary" : "outline"} disabled={catalog.active_model === spec} onClick={() => void setActiveModel(spec)}>
                               {catalog.active_model === spec ? "active" : "activate"}
@@ -522,6 +538,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
           <TabsContent value="settings" className="grid gap-4">
             <Card className="p-4">
               <h3 className="text-sm font-medium">Display</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Choose which details are collapsed by default. Changes are saved automatically.</p>
               <div className="mt-3 grid gap-2">
                 <Toggle label="Collapse thinking" checked={display.collapse_thinking} onChange={(checked) => void saveDisplay("collapse_thinking", checked)} />
                 <Toggle label="Collapse tool calls" checked={display.collapse_tool_calls} onChange={(checked) => void saveDisplay("collapse_tool_calls", checked)} />
@@ -533,6 +550,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
                 <h3 className="text-sm font-medium">Embedding Model</h3>
                 <Badge variant="secondary">{embedding.enabled ? "enabled" : "disabled"}</Badge>
               </div>
+              <p className="mt-1 text-xs text-muted-foreground">Configure the embedding service used for semantic search.</p>
               <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void saveEmbedding(); }}>
                 <div className="md:col-span-2"><Toggle label="Enabled" checked={embedding.enabled} onChange={(checked) => setEmbedding({ ...embedding, enabled: checked })} /></div>
                 <Field label="Base URL"><Input value={embedding.base_url} onChange={(event) => setEmbedding({ ...embedding, base_url: event.target.value })} /></Field>
@@ -546,7 +564,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
               </form>
             </Card>
           </TabsContent>
-        </Tabs>
+        </Tabs>}
       </div>
     </ScrollArea>
   );

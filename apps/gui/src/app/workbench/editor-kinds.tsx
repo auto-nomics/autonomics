@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -21,6 +21,7 @@ import {
   registerWikiOpener,
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
+import { ProjectEditor } from "@/features/projects/project-editor";
 import { ConfigView, DagView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
@@ -272,6 +273,14 @@ export function registerWorkbenchEditorKinds(): void {
     icon: (editor) => ({ discover: Compass, snapshots: Camera, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
+  });
+  registerEditorKind({
+    kind: "plugin-projects",
+    title: () => "插件项目",
+    icon: () => FolderCode,
+    body: ProjectEditor,
+    mount: "keep-alive",
+    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
   });
   registerEditorKind({
     kind: "config",

@@ -136,3 +136,32 @@ async fn plugin_store_develops_one_repository_in_place() {
         .unwrap();
     assert_eq!(commit.len(), 40);
 }
+
+#[test]
+fn project_inventory_reports_invalid_workspaces_and_rejects_traversal() {
+    let state = tempfile::tempdir().unwrap();
+    let layout = plugin_rsi::PluginStateLayout::v2(state.path());
+    let root = layout.workspace_root();
+    let store = PluginStore::open_with_layout(layout, "main", "Autonomics RSI", "rsi@example.com");
+    store
+        .create(
+            "valid-project",
+            "alpine",
+            "Test project inventory",
+            &catalog(),
+        )
+        .unwrap();
+    std::fs::create_dir_all(root.join("broken-project")).unwrap();
+    std::fs::write(root.join("broken-project/manifest.toml"), "invalid = [").unwrap();
+    std::fs::create_dir_all(root.join("incomplete-project")).unwrap();
+
+    let projects = store.list_projects().unwrap();
+    assert_eq!(
+        projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        vec!["broken-project", "incomplete-project", "valid-project"]
+    );
+    assert!(projects[0].error.is_some());
+    assert!(projects[1].error.is_some());
+    assert!(projects[2].manifest.is_some());
+    assert!(store.develop("../valid-project").is_err());
+}

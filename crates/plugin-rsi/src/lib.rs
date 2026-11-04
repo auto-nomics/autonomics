@@ -62,7 +62,8 @@ pub use plugin::source_registry::{
 };
 pub use plugin::store::{
     GitPluginSourceFetcher, PLUGIN_DEVELOPMENT_VFS_ROOT, PluginCacheActiveSource,
-    PluginCacheReport, PluginOperator, PluginScriptCache, PluginSourceFetcher, PluginStore,
+    PluginCacheReport, PluginOperator, PluginProjectEntry, PluginScriptCache, PluginSourceFetcher,
+    PluginStore,
 };
 pub use plugin::validation::workspace_validator::validate_workspace;
 pub use publication::github::{

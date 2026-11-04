@@ -96,6 +96,14 @@ pub struct PluginCacheReport {
     pub stale_scripts: usize,
 }
 
+/// One project directory, including manifests that need repair.
+#[derive(Debug, Serialize)]
+pub struct PluginProjectEntry {
+    pub name: String,
+    pub manifest: Option<PluginManifest>,
+    pub error: Option<String>,
+}
+
 /// A host-owned handle to one long-lived plugin workspace.
 #[derive(Debug)]
 pub struct PluginOperator<'a> {
@@ -779,8 +787,56 @@ impl PluginStore {
         Ok(manifests)
     }
 
+    /// List project directories without hiding invalid or incomplete manifests.
+    pub fn list_projects(&self) -> Result<Vec<PluginProjectEntry>> {
+        let entries = match std::fs::read_dir(self.root()) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut projects = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            let result = crate::validate_plugin_name(&name).and_then(|_| {
+                let path = entry.path().join("manifest.toml");
+                let metadata = std::fs::symlink_metadata(&path)?;
+                if !metadata.file_type().is_file() {
+                    return Err(Error::Validation(
+                        "manifest.toml must be a regular file".into(),
+                    ));
+                }
+                let manifest = load_manifest(&PluginWorkspace::new(entry.path()))?;
+                if manifest.plugin_name != name {
+                    return Err(Error::Validation(format!(
+                        "manifest plugin_name `{}` does not match workspace `{name}`",
+                        manifest.plugin_name
+                    )));
+                }
+                Ok(manifest)
+            });
+            let (manifest, error) = match result {
+                Ok(manifest) => (Some(manifest), None),
+                Err(error) => (None, Some(error.to_string())),
+            };
+            projects.push(PluginProjectEntry {
+                name,
+                manifest,
+                error,
+            });
+        }
+        projects.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(projects)
+    }
+
     /// Open one existing plugin workspace.
     pub fn develop(&self, plugin_name: &str) -> Result<Option<PluginOperator<'_>>> {
+        crate::validate_plugin_name(plugin_name)?;
         let path = self.plugin_path(plugin_name);
         if !path.join("manifest.toml").is_file() {
             return Ok(None);

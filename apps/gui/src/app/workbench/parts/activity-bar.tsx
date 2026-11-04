@@ -5,7 +5,7 @@
  * behavior); clicking it again reveals it.
  */
 
-import { BookOpen, Bot, Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
+import { BookOpen, Bot, Camera, Compass, FolderCode, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -98,6 +98,7 @@ export function ActivityBar(props: {
           active={wikiActive}
           onClick={() => containerClick("wiki")}
         />
+        <RailButton label="插件项目" title="插件项目" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-projects" })} />
         <RailButton
           label="Agent"
           title="Agent 概览(对话即编辑器标签)"

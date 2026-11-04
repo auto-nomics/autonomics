@@ -41,6 +41,8 @@ pub enum CommandAction {
     NewAgent,
     /// Open the model config popup for the active agent.
     ModelConfig,
+    /// Open the HPC (Slurm) site config + job monitor panel.
+    HpcPanel,
     EmbeddingConfig,
     /// Open per-agent runtime settings for the active agent.
     AgentConfig,
@@ -276,7 +278,9 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut CommandPaletteS
     let prompt_style = if state.textarea.is_empty() {
         Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, ">", prompt_style);
 
@@ -343,6 +347,13 @@ fn default_commands() -> Vec<Command> {
             keywords: "model config provider api key switch agent".into(),
             category: "agent".into(),
             action: CommandAction::ModelConfig,
+        },
+        Command {
+            title: "HPC site".into(),
+            keywords: "hpc slurm cluster site config jobs monitor ssh partition apptainer sbatch"
+                .into(),
+            category: "system".into(),
+            action: CommandAction::HpcPanel,
         },
         Command {
             title: "Embedding model".into(),

@@ -646,3 +646,25 @@ pub struct ApprovePluginEnvironmentRequest {
 fn default_true() -> bool {
     true
 }
+
+/// A development workspace and its manifest health.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginProjectView {
+    pub name: String,
+    pub status: Option<String>,
+    pub image: Option<String>,
+    pub kinds: Vec<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PluginProjectListView {
+    pub projects: Vec<PluginProjectView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct CreatePluginProjectRequest {
+    pub name: String,
+    pub environment_id: String,
+    pub purpose: String,
+}

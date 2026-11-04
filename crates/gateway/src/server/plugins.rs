@@ -91,3 +91,139 @@ fn plugin_source_view(source: &container_plugin::sync::PluginSource) -> PluginSo
         local_digest: source.local_digest.clone(),
     }
 }
+
+/// Development projects, including incomplete or invalid workspaces.
+#[utoipa::path(get, path = "/api/v1/plugin-projects", tag = "plugins",
+    responses((status = 200, body = PluginProjectListView)))]
+pub(crate) async fn list_projects(
+    State(state): State<GatewayState>,
+) -> super::error::GatewayResult<Json<PluginProjectListView>> {
+    let store = state.infra.rsi.store();
+    let projects = store
+        .list_projects()
+        .map_err(|error| {
+            super::error::GatewayError::Status(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            )
+        })?
+        .into_iter()
+        .map(|entry| {
+            let manifest = entry.manifest;
+            PluginProjectView {
+                name: entry.name,
+                status: manifest.as_ref().map(|m| status_label(m.status)),
+                image: manifest.as_ref().map(|m| m.image.reference.to_string()),
+                kinds: manifest
+                    .as_ref()
+                    .map(|m| m.nodes.iter().map(|n| n.kind.clone()).collect())
+                    .unwrap_or_default(),
+                error: entry.error,
+            }
+        })
+        .collect();
+    Ok(Json(PluginProjectListView { projects }))
+}
+
+/// Create a draft project bound to an approved development environment.
+#[utoipa::path(post, path = "/api/v1/plugin-projects", tag = "plugins",
+    request_body = CreatePluginProjectRequest,
+    responses((status = 200, body = PluginProjectView), (status = 400, description = "Invalid project request")))]
+pub(crate) async fn create_project(
+    State(state): State<GatewayState>,
+    Json(request): Json<CreatePluginProjectRequest>,
+) -> super::error::GatewayResult<Json<PluginProjectView>> {
+    let operator = state
+        .infra
+        .rsi
+        .create_plugin(&request.name, &request.environment_id, &request.purpose)
+        .map_err(|error| super::error::GatewayError::Message(error.to_string()))?;
+    let manifest = operator.manifest();
+    Ok(Json(PluginProjectView {
+        name: manifest.plugin_name.clone(),
+        status: Some(status_label(manifest.status)),
+        image: Some(manifest.image.reference.to_string()),
+        kinds: Vec::new(),
+        error: None,
+    }))
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct FileQuery {
+    path: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct SaveProjectFile {
+    path: String,
+    contents: String,
+    original: String,
+}
+
+fn project_workspace(
+    state: &GatewayState,
+    name: &str,
+) -> super::error::GatewayResult<plugin_rsi::PluginWorkspace> {
+    use super::error::GatewayError;
+    plugin_rsi::validate_plugin_name(name).map_err(|e| GatewayError::Message(e.to_string()))?;
+    let root = state.infra.rsi.store().root().join(name);
+    let metadata = std::fs::symlink_metadata(&root).map_err(|_| {
+        GatewayError::Status(
+            axum::http::StatusCode::NOT_FOUND,
+            "Project not found".into(),
+        )
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(GatewayError::Message("Project must be a directory".into()));
+    }
+    Ok(plugin_rsi::PluginWorkspace::new(root))
+}
+
+pub(crate) async fn project_files(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    let workspace = project_workspace(&state, &name)?;
+    let files = workspace
+        .list_files()
+        .map_err(|e| super::error::GatewayError::Message(e.to_string()))?;
+    Ok(Json(serde_json::json!({"files": files})))
+}
+
+pub(crate) async fn read_project_file(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<FileQuery>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    let workspace = project_workspace(&state, &name)?;
+    let contents = workspace
+        .read_text(&query.path)
+        .map_err(|e| super::error::GatewayError::Message(e.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"path": query.path, "contents": contents}),
+    ))
+}
+
+pub(crate) async fn save_project_file(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<SaveProjectFile>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    use super::error::GatewayError;
+    let workspace = project_workspace(&state, &name)?;
+    let current = workspace
+        .read_text(&request.path)
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    if current != request.original {
+        return Err(GatewayError::Status(
+            axum::http::StatusCode::CONFLICT,
+            "File changed on disk; reload it before saving".into(),
+        ));
+    }
+    workspace
+        .write_text(&request.path, &request.contents)
+        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"path": request.path, "contents": request.contents}),
+    ))
+}

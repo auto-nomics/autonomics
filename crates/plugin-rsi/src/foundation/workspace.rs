@@ -37,8 +37,11 @@ impl PluginWorkspace {
                 limit: MAX_FILE_BYTES,
             });
         }
-        self.assert_file_budget()?;
+        if !path.exists() {
+            self.assert_file_budget()?;
+        }
         if let Some(parent) = path.parent() {
+            ensure_no_symlink_parent(&self.repo_path, parent)?;
             std::fs::create_dir_all(parent)?;
             ensure_no_symlink_parent(&self.repo_path, parent)?;
         }
@@ -65,7 +68,18 @@ impl PluginWorkspace {
 
     pub fn read_text(&self, relative: &str) -> Result<String> {
         let path = self.safe_path(relative)?;
+        if let Some(parent) = path.parent() {
+            ensure_no_symlink_parent(&self.repo_path, parent)?;
+        }
         ensure_not_symlink(&path)?;
+        let size = std::fs::metadata(&path)?.len();
+        if size > MAX_FILE_BYTES as u64 {
+            return Err(Error::FileTooLarge {
+                path: relative.to_string(),
+                size: size as usize,
+                limit: MAX_FILE_BYTES,
+            });
+        }
         std::fs::read_to_string(&path).map_err(|source| Error::ReadFile { path, source })
     }
 
@@ -219,6 +233,19 @@ mod tests {
             vec!["manifest.toml", "scripts/adapter.sh"]
         );
         assert_eq!(workspace.read_text("manifest.toml").unwrap(), "x = 1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlinked_parent_before_reading_or_creating_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "outside").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+        let workspace = PluginWorkspace::new(root.path());
+        assert!(workspace.read_text("link/secret").is_err());
+        assert!(workspace.write_text("link/new/file", "x").is_err());
+        assert!(!outside.path().join("new").exists());
     }
 
     #[test]
