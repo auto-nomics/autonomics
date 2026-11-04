@@ -47,10 +47,30 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
     let mut manifest = state.manifest;
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
-    ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
+    ensure_executor_workspace_mounts(&mut manifest, config);
     ensure_environment_dev_mount(&mut manifest, config)?;
     ensure_browser_download_mount(&mut manifest, config)?;
     MountedObjectStore::from_manifest(&manifest).map_err(|e| Error::Other(e.to_string()))
+}
+
+/// Mount every root a container executor may write outputs under.
+///
+/// Two construction paths exist and both are load-bearing: the executor
+/// infra builds its workspace from `state_dir/containers/workspace`
+/// (`ContainerExecutionInfra::for_operator_state_dir`), while this module
+/// historically mounted only the `PodmanConfig::from_env()` root
+/// (`state/work`, or an env override). Mounting just one lets container
+/// outputs fall through to whatever catch-all mount covers the rest of
+/// the host — with an operator root mount (`path = "/"` → a study
+/// directory) that silently misroutes downstream reads to a nonexistent
+/// path and the run fails with `VFS stat … NotFound`. Longest-prefix
+/// matching makes the specific identity mounts win once present.
+pub(super) fn ensure_executor_workspace_mounts(manifest: &mut VfsManifest, config: &RuntimeConfig) {
+    ensure_workspace_mount(manifest, &PodmanConfig::from_env().workspace_root);
+    let operator_root = container_runtime::canonicalize_workspace_root(
+        config.state_dir.join("containers/workspace"),
+    );
+    ensure_workspace_mount(manifest, &operator_root);
 }
 
 pub(super) async fn build_vfs_with_catalog(
@@ -64,7 +84,7 @@ pub(super) async fn build_vfs_with_catalog(
     let mut manifest = state.manifest;
     let plugin_layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     ensure_plugin_mounts(&mut manifest, config, &plugin_layout)?;
-    ensure_workspace_mount(&mut manifest, &PodmanConfig::from_env().workspace_root);
+    ensure_executor_workspace_mounts(&mut manifest, config);
     ensure_environment_dev_mount(&mut manifest, config)?;
     ensure_browser_download_mount(&mut manifest, config)?;
 
@@ -1097,5 +1117,61 @@ mod plugin_vfs_tests {
                 .await
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod executor_workspace_mount_tests {
+    use super::*;
+
+    /// Regression: with an operator catch-all root mount (`path = "/"` →
+    /// some study directory), container outputs under
+    /// `state_dir/containers/workspace` must still resolve to their real
+    /// host location — the executor workspace identity mount wins by
+    /// longest-prefix matching instead of falling through to the root.
+    #[tokio::test]
+    async fn executor_workspace_mount_beats_catch_all_root_mount() {
+        let home = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let catch_all = tempfile::tempdir().unwrap();
+        let mut manifest = VfsManifest {
+            backend: vec![vfs::BackendDefinition {
+                id: "default".into(),
+                config: vfs::BackendConfig::local("/"),
+            }],
+            mount: vec![vfs::MountDefinition {
+                path: "/".into(),
+                backend: "default".into(),
+                source: catch_all.path().to_string_lossy().into_owned(),
+                read_only: false,
+                permissions: Default::default(),
+            }],
+        };
+        let mut config = crate::RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        // Pin from_env()'s root to a tempdir via its env override —
+        // touching $HOME would race other tests.
+        // SAFETY: read only by PodmanConfig::from_env below.
+        unsafe { std::env::set_var("AUTONOMICS_DAG_WORK_ROOT", home.path()) };
+
+        ensure_executor_workspace_mounts(&mut manifest, &config);
+
+        let executor_root = state.path().join("containers/workspace");
+        std::fs::create_dir_all(executor_root.join("ab/cd")).unwrap();
+        std::fs::write(executor_root.join("ab/cd/out.zip"), b"payload").unwrap();
+
+        let mounts =
+            std::sync::Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(home.path(), mounts);
+        let visible = executor_root.join("ab/cd/out.zip");
+        let path = visible.to_string_lossy().into_owned();
+        let host = storage.local_host_path(&path);
+        assert_eq!(
+            host.as_deref(),
+            Some(visible.as_path()),
+            "container output must resolve to its real host path, not the catch-all root"
+        );
+        let bytes = storage.read_range(&path, 0..7).await.unwrap();
+        assert_eq!(&bytes.to_vec(), b"payload");
     }
 }
