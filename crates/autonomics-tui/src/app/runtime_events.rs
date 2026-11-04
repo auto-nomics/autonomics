@@ -59,6 +59,10 @@ impl App {
     fn handle_gateway_notice(&mut self, notice: gateway::proto::GatewayNotice) {
         use gateway::proto::GatewayNotice;
         match notice {
+            // Compute-target changes refresh the daemon-side registry and
+            // reach live agents through the compute context provider; the
+            // TUI has no compute panel, so no local action is required.
+            GatewayNotice::ComputeChanged { .. } => {}
             GatewayNotice::ModelChanged { spec, reason } => {
                 self.handle_app_event(crate::app_event::AppEvent::ActiveModelChanged {
                     spec,
