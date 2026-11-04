@@ -99,7 +99,8 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
       onSelectAgent={select} openTabs={runtime.openTabs} onCloseAgent={runtime.closeTab} onSpawn={onSpawn}
       storedAgents={runtime.storedAgents} onSearchStoredAgents={query => void runtime.refreshStoredAgents(query)}
       onResumeAgent={agent => { void runtime.resumeAgent(agent).then(() => openAgentEditor(runtime.agents.find(item => item.agent_id === agent.id)?.path ?? agent.name)).catch(cause => window.alert(String(cause))); }}
-      onOpenDag={() => openEditor({ kind: "dag", params: { agentPath: path } })} />
+      onOpenDag={() => openEditor({ kind: "dag", params: { agentPath: path } })}
+      onOpenFlow={() => openEditor({ kind: "flow", params: { agentPath: path } })} />
   </ContextBasketScope>;
 }
 

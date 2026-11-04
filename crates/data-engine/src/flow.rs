@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use dag_engine::{
-    FlowGraph, FlowRunConfig, FlowRunReport, FlowScheduler, NodeBuilder, SourceResolution,
-    build_plan, resolve_sources,
+    FlowGraph, FlowRunConfig, FlowRunReport, FlowScheduler, InstanceCache, NodeBuilder,
+    SourceResolution, build_plan, resolve_sources,
 };
 use tokio_util::sync::CancellationToken;
 use vfs::OpendalFileStorage;
@@ -28,6 +28,40 @@ pub struct FlowOptions {
     /// Maximum instances executing concurrently. `None` uses the engine
     /// default (CPU-derived), matching [`FlowRunConfig::default`].
     pub max_concurrency: Option<usize>,
+    /// Reuse instances whose recomputed fingerprint matches a cached result
+    /// with still-valid output files (the flow engine's `-resume`).
+    pub resume: Option<bool>,
+}
+
+/// Combined view payload for surfaces (TUI / GUI / gateway): the authored
+/// flow plus the most recent run's grouped report.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FlowView {
+    pub flow: FlowGraph,
+    /// The engine's node-registry kind for each process is carried in the
+    /// flow itself; this summary adds only run outcome.
+    pub last_run: Option<FlowRunReportSummary>,
+}
+
+/// The observation-safe subset of [`FlowRunReport`] for views: per-process
+/// counts and the ok flag. Instances stay drill-down-only.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FlowRunReportSummary {
+    pub ok: bool,
+    pub processes: std::collections::BTreeMap<String, dag_engine::ProcessRunSummary>,
+}
+
+impl From<&FlowRunReport> for FlowRunReportSummary {
+    fn from(report: &FlowRunReport) -> Self {
+        Self {
+            ok: report.ok,
+            processes: report
+                .processes
+                .iter()
+                .map(|(name, summary)| (name.clone(), summary.clone()))
+                .collect(),
+        }
+    }
 }
 
 /// A ready-to-run flow scheduler bound to one engine's ingredients. Cheap to
@@ -35,6 +69,10 @@ pub struct FlowOptions {
 pub struct FlowRunner {
     scheduler: FlowScheduler,
     storage: Option<Arc<OpendalFileStorage>>,
+    /// Cross-run instance results, shared with every other runner this
+    /// engine assembles (behind a lock; runs are serialized per agent by
+    /// the actor's `running` flag anyway).
+    cache: Arc<tokio::sync::Mutex<InstanceCache>>,
 }
 
 impl DataEngine {
@@ -59,6 +97,7 @@ impl DataEngine {
                 Arc::new(self.engine_ctx.clone()),
             ),
             storage: self.engine_ctx.opendal.clone(),
+            cache: Arc::clone(&self.flow_cache),
         }
     }
 }
@@ -95,14 +134,16 @@ impl FlowRunner {
             max_concurrency: options
                 .max_concurrency
                 .unwrap_or_else(|| FlowRunConfig::default().max_concurrency),
+            resume: options.resume.unwrap_or(false),
         };
-        self.scheduler.run(&plan, &config, cancel).await
+        // A shared, long-lived cache: the manager hands the same host to
+        // every run of this agent session, so the second batch reuses the
+        // first batch's instances.
+        let mut cache = self.cache.lock().await;
+        self.scheduler
+            .run(&plan, &config, Some(&mut cache), cancel)
+            .await
     }
-}
-
-/// Exposed for the actor: build the runner under the engine lock.
-pub(crate) fn runner_for(engine: &DataEngine) -> FlowRunner {
-    engine.flow_runner()
 }
 
 #[cfg(test)]

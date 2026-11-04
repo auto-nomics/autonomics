@@ -22,7 +22,7 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { ProjectEditor } from "@/features/projects/project-editor";
-import { ConfigView, DagView } from "@/features/system";
+import { ConfigView, DagView, FlowView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
 import { registerEditorKind, type EditorContext } from "./editor-registry";
@@ -85,6 +85,15 @@ function DagEditorBody({ editor }: EditorContext) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DagView key={agentPath} activeAgent={agentPath} />
+    </div>
+  );
+}
+
+function FlowEditorBody({ editor }: EditorContext) {
+  const agentPath = String(editor.params.agentPath ?? "");
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <FlowView key={agentPath} activeAgent={agentPath} />
     </div>
   );
 }
@@ -320,6 +329,15 @@ export function registerWorkbenchEditorKinds(): void {
     name: (editor) => `Agent DAG (${String(editor.params.agentPath ?? "")})`,
     icon: () => GitFork,
     body: DagEditorBody,
+    mount: "keep-alive",
+  });
+
+  registerEditorKind({
+    kind: "flow",
+    title: (editor) => `Flow · ${leafName(String(editor.params.agentPath ?? ""))}`,
+    name: (editor) => `Agent Flow (${String(editor.params.agentPath ?? "")})`,
+    icon: () => Network,
+    body: FlowEditorBody,
     mount: "keep-alive",
   });
 }

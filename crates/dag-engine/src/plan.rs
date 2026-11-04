@@ -69,6 +69,10 @@ pub struct InstanceRoute {
     pub from_port: PortIndex,
     pub to: InstanceId,
     pub to_port: PortIndex,
+    /// The authored wire's operator, needed at completion time: an ignored
+    /// failure skips `Direct` dependents but lets `Collect` consumers run on
+    /// the surviving bindings.
+    pub op: crate::model::WireOp,
 }
 
 /// One process's materialized instance set for this run.
@@ -77,6 +81,11 @@ pub struct ProcessPlan {
     pub process: ProcessName,
     /// The node-registry kind every instance of this process builds from.
     pub kind: String,
+    /// The raw (pre-rendering) spec template. Fingerprints hash this, never
+    /// the rendered spec — mirroring Nextflow's script-source hashing.
+    pub spec: serde_json::Value,
+    /// Failure posture carried from the authored process.
+    pub error_strategy: crate::model::ErrorStrategy,
     /// In item order given by the resolution (stable input order, not
     /// key-sorted — reports read better when they match the listing).
     pub instances: Vec<Instance>,
@@ -179,6 +188,8 @@ pub fn build_plan(
             ProcessPlan {
                 process: process.id.clone(),
                 kind: process.kind.clone(),
+                spec: process.spec.clone(),
+                error_strategy: process.error_strategy.clone(),
                 instances,
             },
         );
@@ -238,6 +249,7 @@ pub fn build_plan(
                                 from_port: wire.from_port,
                                 to: target.id.clone(),
                                 to_port: wire.to_port,
+                                op: wire.op,
                             });
                         }
                     }
@@ -251,6 +263,7 @@ pub fn build_plan(
                                 from_port: wire.from_port,
                                 to: target.id.clone(),
                                 to_port: wire.to_port,
+                                op: wire.op,
                             });
                         }
                     }
@@ -267,6 +280,7 @@ pub fn build_plan(
                         from_port: wire.from_port,
                         to: target.id.clone(),
                         to_port: wire.to_port,
+                        op: wire.op,
                     });
                 }
             }

@@ -77,6 +77,7 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
+    FlowViewLoaded(std::result::Result<data_engine::flow::FlowView, String>),
     /// A bibliography popup snapshot arrived. The token discards replies from
     /// a superseded refresh/search.
     BibliographySnapshotLoaded {

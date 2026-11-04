@@ -19,7 +19,6 @@ pub(crate) const HOST_FUNCTIONS: &[&str] = &[
     "remove_node",
     "edge",
     "remove_edge",
-    "add_logical_graph",
     "commit",
     "has_node",
     "node_info",

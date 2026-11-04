@@ -81,6 +81,60 @@ impl Cardinality {
     }
 }
 
+/// Failure posture of one process — Nextflow's `errorStrategy` directive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorMode {
+    /// Default: a failed instance fatally skips its dependents, including
+    /// `Collect` consumers.
+    Fail,
+    /// A failed instance is recorded but does not fail the run: key-matched
+    /// `Direct` dependents are skipped (the item was never delivered), while
+    /// `Collect` consumers run on the surviving bindings.
+    Ignore,
+    /// A failed instance is re-dispatched up to `max_retries` times (with an
+    /// optional delay); exhaustion degrades to [`ErrorMode::Fail`].
+    Retry,
+}
+
+/// Per-process error strategy. Defaults to fail-closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ErrorStrategy {
+    pub mode: ErrorMode,
+    /// Total re-dispatches per instance for [`ErrorMode::Retry`].
+    pub max_retries: usize,
+    /// Delay between retry attempts.
+    pub retry_delay_ms: u64,
+}
+
+impl Default for ErrorStrategy {
+    fn default() -> Self {
+        Self {
+            mode: ErrorMode::Fail,
+            max_retries: 0,
+            retry_delay_ms: 0,
+        }
+    }
+}
+
+impl ErrorStrategy {
+    pub fn ignore() -> Self {
+        Self {
+            mode: ErrorMode::Ignore,
+            ..Self::default()
+        }
+    }
+
+    pub fn retry(max_retries: usize, retry_delay_ms: u64) -> Self {
+        Self {
+            mode: ErrorMode::Retry,
+            max_retries,
+            retry_delay_ms,
+        }
+    }
+}
+
 /// One workflow process: the authored unit of work. `kind` names a node kind in
 /// the (reused) dag-core node registry; `spec` is the raw template — `{{item}}`
 /// / `{{item.field}}` placeholders are rendered per instance at
@@ -91,6 +145,9 @@ pub struct Process {
     pub kind: String,
     pub spec: serde_json::Value,
     pub cardinality: Cardinality,
+    /// Failure posture (Nextflow's `errorStrategy`). Defaults to fail-closed.
+    #[serde(default)]
+    pub error_strategy: ErrorStrategy,
 }
 
 impl Process {
@@ -104,6 +161,7 @@ impl Process {
             kind: kind.into(),
             spec,
             cardinality: Cardinality::Singleton,
+            error_strategy: ErrorStrategy::default(),
         }
     }
 
@@ -119,6 +177,7 @@ impl Process {
             kind: kind.into(),
             spec,
             cardinality: Cardinality::fanout(source, axis),
+            error_strategy: ErrorStrategy::default(),
         }
     }
 }
@@ -126,7 +185,7 @@ impl Process {
 /// Edge operator. Routing semantics are resolved by [`crate::plan`]; the
 /// model only records intent and enforces the structural rules below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
 pub enum WireOp {
     /// Item-preserving routing:
     /// - fanout → fanout: zip by item key (key sets must agree at run start);
@@ -140,6 +199,15 @@ pub enum WireOp {
     /// (Nextflow's `collect` as an edge operator). Only meaningful from a
     /// fanout process into a singleton; the executor aggregates the bindings.
     Collect,
+}
+
+impl std::fmt::Display for WireOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Direct => "direct",
+            Self::Collect => "collect",
+        })
+    }
 }
 
 /// One wire between two stages' ports.
@@ -198,6 +266,17 @@ pub struct FlowGraph {
 impl FlowGraph {
     pub fn builder() -> FlowGraphBuilder {
         FlowGraphBuilder::default()
+    }
+
+    /// The empty (no processes, no wires) flow — the initial session state.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// True when the flow declares no processes. Running an empty flow is an
+    /// authoring error surfaced by the engine, not a valid no-op.
+    pub fn is_empty(&self) -> bool {
+        self.processes.is_empty()
     }
 
     pub fn processes(&self) -> &[Process] {

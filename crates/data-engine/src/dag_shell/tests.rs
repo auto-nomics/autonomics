@@ -49,31 +49,7 @@ fn rejects_oversized_script_before_compilation() {
     assert_eq!(error.code, "script_too_large");
 }
 
-#[test]
-fn large_logical_graph_can_be_staged() {
-    let (registry, snapshot) = sandbox();
-    // Reproduce the field's 127-node / 246-edge graph shape. The map-property
-    // budget counts nested properties recursively, so edges matter here.
-    let script = r#"
-nodes = []
-edges = []
-for i in range(127):
-    node_id = "n" + str(i)
-    nodes.append({
-        "id": node_id,
-        "definition": {"Registry": {"kind": "core/echo", "spec": {}}},
-        "strategy": "Once",
-    })
-    edges.append({"from": node_id, "from_port": 0, "to": node_id, "to_port": 0})
-    edges.append({"from": node_id, "from_port": 0, "to": node_id, "to_port": 1})
-add_logical_graph({"nodes": nodes, "edges": edges})
-commit()
-"#;
-    let execution = execute_script(script, Duration::from_millis(1000), &snapshot, &registry)
-        .expect("a 127-node, 246-edge logical graph must be stageable");
-    assert_eq!(execution.operations.len(), 1);
-    assert!(execution.committed);
-}
+
 
 #[test]
 fn times_out_unbounded_scripts() {

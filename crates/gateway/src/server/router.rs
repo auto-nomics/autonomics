@@ -58,6 +58,7 @@ pub fn api_router(state: GatewayState) -> Router {
             get(agents::get_agent_config).put(agents::set_agent_config),
         )
         .route("/agents/{name}/dag", get(agents::get_agent_dag))
+        .route("/agents/{name}/flow", get(agents::get_agent_flow))
         .route("/agents/{name}/context", get(context::request_context_list))
         // ── storage (persisted agents / history / plans) ──
         .route("/storage/agents", get(storage::list_storage_agents))

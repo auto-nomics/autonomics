@@ -179,15 +179,16 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
 \n\
-- **Channel/dataflow control**: registered typed nodes and logical graphs are both built through \
-`dag_shell`. When a workflow needs Channel operators (`of_items`, `map`, `filter`, `flatten`, \
-`mix`, `collect`, `combine`, `join`, `group_tuple`, `branch`) or logical strategies (`for_each`, \
-`dynamic_for_each`, `gather`), include `add_logical_graph` in the same transactional script. Do \
-not attempt to express these operators as SQL or an unregistered node kind.\n\
+- **Batch/cardinality workflows**: for any scatter-style analysis (apply the same pipeline to \
+many files or items), use the stage-model flow tools instead of expanding nodes: author ONE \
+process per pipeline stage with `set_flow` (cardinality: fanout with a glob or items source; \
+`{{item}}` templates in specs; wires with op direct for key-zip/broadcast and collect to fold \
+results), then execute with `run_flow` (omit `flow` to re-run the session's stored flow; pass \
+resume=true so only new or changed items execute; per-process error_strategy: fail (default), \
+ignore, or retry with max_retries/retry_delay_ms). Authored flows stay process-granular however \
+many items they expand to — never generate per-item nodes for batch work.\n\
 \n\
-- **Transactional graph edits**: use `dag_shell` for every node, edge, update, removal, or logical \
-  graph edit. It is especially useful with loops, conditionals, reusable script functions, or mixed \
-  logical graphs. Scripts use a sandboxed subset of Python syntax (dict/list literals, loops, \
+- **Transactional graph edits**: use `dag_shell` for every node, edge, update, or removal. Scripts use a sandboxed subset of Python syntax (dict/list literals, loops, \
   comprehensions, f-strings, plain functions; no imports, I/O, or classes) \
   and only orchestrate registered graph operations and query metadata; they cannot read files, \
   access the network/environment, inspect output data, or run arbitrary processes. Every mutation \

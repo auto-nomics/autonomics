@@ -252,6 +252,13 @@ impl App {
             return;
         }
 
+        // Ctrl+Y opens the stage-model flow view (process granularity), the
+        // batch-workflow counterpart of the DAG overlay.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('y') {
+            self.open_flow_view();
+            return;
+        }
+
         // The top-most visible overlay captures all remaining keys. The
         // stack ([`AppState::overlay_stack`]) is the same ordered list the
         // render pass paints with, so the surface the user sees on top is
@@ -267,6 +274,7 @@ impl App {
                 Overlay::AgentEffortPicker => self.handle_agent_effort_picker_key(key),
                 Overlay::MessagePicker => self.handle_message_picker_key(key),
                 Overlay::DagView => self.handle_dag_view_key(key),
+                Overlay::FlowView => self.handle_flow_view_key(key),
                 Overlay::Bibliography => self.handle_bibliography_key(key),
                 Overlay::SkillLibrary => self.handle_skill_library_key(key),
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),

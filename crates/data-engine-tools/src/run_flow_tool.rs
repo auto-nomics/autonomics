@@ -16,7 +16,7 @@ const MAX_ERROR_CHARS: usize = 300;
 
 #[tool(
     name = "run_flow",
-    description = "Execute a stage-model workflow (Nextflow-style) for batch analysis. \
+    description = "Execute the stage-model workflow (Nextflow-style) for batch analysis. \
                   The flow is authored at PROCESS granularity: one process per pipeline \
                   stage, regardless of how many items it fans out to — a folder of 100 \
                   files into the same pipeline is ONE fanout process, not 100 nodes. \
@@ -30,19 +30,32 @@ const MAX_ERROR_CHARS: usize = 300;
                   broadcast from a singleton) or \"collect\" (fanout -> singleton, \
                   Nextflow's collect)}. Rules: direct fanout->singleton is invalid — use \
                   collect; connected fanouts must resolve to identical item key sets. \
+                  Per-process error_strategy (Nextflow's errorStrategy): default is \
+                  fail-closed; mode=ignore tolerates that process's item failures \
+                  (key-matched dependents skip, collect consumers still run on survivors, \
+                  the run stays ok); mode=retry with max_retries=N and optional \
+                  retry_delay_ms=M re-dispatches failed instances before degrading \
+                  to fail-closed. \
                   Returns a process-grouped summary (succeeded/failed/skipped/cancelled \
                   per process) plus failed instances with item keys for triage. Item \
                   instances are run-scoped: the authored flow you pass in is the complete \
                   persistent state; nothing is added to the engine's DAG."
 )]
 pub struct RunFlowInput {
-    /// The authored flow graph. Must round-trip through the flow engine's
-    /// JSON shape (processes + wires arrays).
-    pub flow: Value,
+    /// The authored flow graph (processes + wires arrays). Omit to run the
+    /// flow already stored for this session (see set_flow); passing a graph
+    /// replaces the stored flow and runs it in one step.
+    #[serde(default)]
+    pub flow: Option<Value>,
     /// Maximum item instances executing concurrently. Omit for the
     /// CPU-derived default.
     #[serde(default)]
     pub max_concurrency: Option<usize>,
+    /// Reuse instances whose inputs are unchanged since a previous run of
+    /// the same flow (fingerprint match + output files still valid): only
+    /// new or changed items execute. Nextflow's `-resume`.
+    #[serde(default)]
+    pub resume: Option<bool>,
 }
 
 pub struct RunFlowTool {
@@ -69,6 +82,7 @@ fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
                 "failed": summary.failed,
                 "skipped": summary.skipped,
                 "cancelled": summary.cancelled,
+                "reused": summary.reused,
                 "summed_elapsed_ms": summary.summed_elapsed_ms,
             }),
         );
@@ -92,6 +106,8 @@ fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
                 "process": record.process,
                 "item_key": record.item_key,
                 "status": format!("{:?}", record.status).to_lowercase(),
+                "ignored": record.ignored,
+                "attempts": record.attempts,
                 "error": record.error.as_deref().map(|text| {
                     &text[..text.len().min(MAX_ERROR_CHARS)]
                 }),
@@ -119,12 +135,19 @@ impl ToolFunction for RunFlowTool {
     }
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let flow: dag_engine::FlowGraph = serde_json::from_value(input.flow)
-            .map_err(|error| ToolError::ValidationFailed {
-                message: format!("invalid flow graph: {error}"),
-            })?;
+        let flow = match input.flow {
+            Some(value) => Some(
+                serde_json::from_value::<dag_engine::FlowGraph>(value).map_err(
+                    |error| ToolError::ValidationFailed {
+                        message: format!("invalid flow graph: {error}"),
+                    },
+                )?,
+            ),
+            None => None,
+        };
         let options = data_engine::flow::FlowOptions {
             max_concurrency: input.max_concurrency,
+            resume: input.resume,
         };
         let report = self
             .client
@@ -161,8 +184,9 @@ mod tests {
         let tool = RunFlowTool::new(Arc::new(client));
         let result = tool
             .run(RunFlowInput {
-                flow,
+                flow: Some(flow),
                 max_concurrency: None,
+                resume: None,
             })
             .await
             .unwrap();
@@ -182,8 +206,9 @@ mod tests {
         let tool = RunFlowTool::new(Arc::new(client));
         let error = tool
             .run(RunFlowInput {
-                flow: serde_json::json!({"processes": "not-a-list"}),
+                flow: Some(serde_json::json!({"processes": "not-a-list"})),
                 max_concurrency: None,
+                resume: None,
             })
             .await
             .unwrap_err();

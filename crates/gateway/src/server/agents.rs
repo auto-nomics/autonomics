@@ -207,6 +207,19 @@ pub(crate) async fn set_agent_model(
     Ok(StatusCode::ACCEPTED)
 }
 
+#[utoipa::path(get, path = "/api/v1/agents/{name}/flow", tag = "agents", responses((status = 200, body = Object), (status = 500, description = "Flow view failed")))]
+pub(crate) async fn get_agent_flow(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+) -> GatewayResult<Json<data_engine::flow::FlowView>> {
+    let client = state.infra.engine_manager.client_for_agent(&name);
+    let view = client
+        .get_flow_view()
+        .await
+        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(view))
+}
+
 #[utoipa::path(get, path = "/api/v1/agents/{name}/dag", tag = "agents", responses((status = 200, body = Object), (status = 500, description = "DAG snapshot failed")))]
 pub(crate) async fn get_agent_dag(
     State(state): State<GatewayState>,

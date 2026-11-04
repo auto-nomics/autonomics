@@ -355,6 +355,7 @@ export type AgentWorkspaceProps = {
    *  and makes it the active tab. */
   onResumeAgent: (agent: StoredAgent) => void;
   onOpenDag: () => void;
+  onOpenFlow: () => void;
 };
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {

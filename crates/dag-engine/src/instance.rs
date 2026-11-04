@@ -342,16 +342,34 @@ pub fn instance_fingerprint(
     engine_version: &str,
     source_revision: &str,
 ) -> String {
+    instance_fingerprint_of(
+        &process.id,
+        &process.spec,
+        instance,
+        upstream,
+        engine_version,
+        source_revision,
+    )
+}
+
+/// Parts-based form used by the scheduler, which holds the raw spec on the
+/// process plan rather than a [`Process`] value.
+pub fn instance_fingerprint_of(
+    process_id: &str,
+    raw_spec: &serde_json::Value,
+    instance: &Instance,
+    upstream: &[UpstreamBinding],
+    engine_version: &str,
+    source_revision: &str,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(engine_version.as_bytes());
     hasher.update([0]);
     hasher.update(source_revision.as_bytes());
     hasher.update([0]);
-    hasher.update(process.id.as_bytes());
+    hasher.update(process_id.as_bytes());
     hasher.update([0]);
-    hasher.update(
-        serde_json::to_vec(&process.spec).unwrap_or_default(),
-    );
+    hasher.update(serde_json::to_vec(raw_spec).unwrap_or_default());
     hasher.update([0]);
     hasher.update(
         serde_json::to_vec(instance.item.as_ref().unwrap_or(&serde_json::Value::Null))

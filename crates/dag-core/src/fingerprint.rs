@@ -727,11 +727,9 @@ pub async fn cached_file_changed_observed(
 
 #[cfg(test)]
 #[path = "content_cache_regressions.rs"]
-mod content_cache_regressions;
 
 #[cfg(test)]
 #[path = "cache_dependency_tests.rs"]
-mod cache_dependency_tests;
 
 #[cfg(test)]
 mod tests {

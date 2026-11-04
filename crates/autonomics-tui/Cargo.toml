@@ -24,6 +24,8 @@ bib-base = { path = "../bib-base" }
 vfs = { path = "../vfs" }
 kms = { path = "../kms" }
 dag-core = { path = "../dag-core" }
+dag-engine = { path = "../dag-engine" }
+data-engine = { path = "../data-engine" }
 ascii-dag-core = { path = "../ascii-dag-core", default-features = false, features = [
   "std",
   "layout-horizontal",

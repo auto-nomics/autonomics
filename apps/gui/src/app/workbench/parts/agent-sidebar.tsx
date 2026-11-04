@@ -54,7 +54,8 @@ export function AgentSidebar({ onSpawn }: { onSpawn: () => void }) {
       </ScrollArea>
     </div>
     <div id="agent-sidebar-overview" role="tabpanel" aria-label="Agent 详情" hidden={view !== "overview"} className={cn("min-h-0 flex-1 flex-col overflow-hidden", view === "overview" ? "flex" : "hidden")}>
-      <AgentInspector activeAgent={runtime.activeAgent} activeInfo={runtime.agents.find(agent => agent.path === runtime.activeAgent)} status={runtime.statuses[runtime.activeAgent]} plan={runtime.plans[runtime.activeAgent] ?? null} usage={runtime.usage[runtime.activeAgent] ?? null} display={runtime.display} inspectorOpen={view === "overview"} onToggleDisplay={key => void runtime.toggleDisplay(key)} onOpenDag={() => { if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } }); }} onOpenCopy={() => openAgentDialog("copy")} onOpenHistory={() => openAgentDialog("history")} onRefreshHistory={runtime.refreshHistory} />
+      <AgentInspector activeAgent={runtime.activeAgent} activeInfo={runtime.agents.find(agent => agent.path === runtime.activeAgent)} status={runtime.statuses[runtime.activeAgent]} plan={runtime.plans[runtime.activeAgent] ?? null} usage={runtime.usage[runtime.activeAgent] ?? null} display={runtime.display} inspectorOpen={view === "overview"} onToggleDisplay={key => void runtime.toggleDisplay(key)} onOpenFlow={() => { if (runtime.activeAgent) openEditor({ kind: "flow", params: { agentPath: runtime.activeAgent } }); }}
+          onOpenDag={() => { if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } }); }} onOpenCopy={() => openAgentDialog("copy")} onOpenHistory={() => openAgentDialog("history")} onRefreshHistory={runtime.refreshHistory} />
     </div>
   </div>;
 }

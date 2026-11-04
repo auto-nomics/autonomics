@@ -38,6 +38,7 @@ export type AgentInspectorProps = {
   inspectorOpen: boolean;
   onToggleDisplay: (key: keyof DisplaySettings) => void;
   onOpenDag: () => void;
+  onOpenFlow: () => void;
   onOpenCopy: () => void;
   onOpenHistory: () => void;
   onRefreshHistory: () => void;
@@ -81,8 +82,11 @@ export function AgentInspector(props: AgentInspectorProps) {
 
       <section>
         <div className="mb-1.5 flex items-center justify-between">
-          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">DAG</h2>
-          <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenDag}>Open</Button>
+          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">DAG / Flow</h2>
+          <div className="flex gap-1">
+            <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenDag}>Nodes</Button>
+            <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenFlow}>Flow</Button>
+          </div>
         </div>
         {inspectorOpen && activeAgent ? <DagMinimap key={activeAgent} activeAgent={activeAgent} /> : <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>}
       </section>

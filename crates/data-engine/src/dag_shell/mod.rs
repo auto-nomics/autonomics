@@ -69,9 +69,7 @@ pub enum GraphEditOp {
         to: String,
         to_port: u8,
     },
-    AddLogicalGraph {
-        graph: LogicalGraph,
-    },
+
 }
 
 impl GraphEditOp {
@@ -82,7 +80,6 @@ impl GraphEditOp {
             Self::RemoveNode { .. } => "remove_node",
             Self::AddEdge { .. } => "add_edge",
             Self::RemoveEdge { .. } => "remove_edge",
-            Self::AddLogicalGraph { .. } => "add_logical_graph",
         }
     }
 }
@@ -314,7 +311,6 @@ pub fn operation_traces(operations: &[GraphEditOp]) -> Vec<OperationTrace> {
                     trace.from = Some(from.clone());
                     trace.to = Some(to.clone());
                 }
-                GraphEditOp::AddLogicalGraph { .. } => {}
             }
             trace
         })

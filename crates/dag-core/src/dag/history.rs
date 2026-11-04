@@ -1182,33 +1182,7 @@ mod tests {
         assert!(manifest.physical_jobs.is_empty());
     }
 
-    #[test]
-    fn manifest_roundtrips_logical_and_physical_layers() {
-        let graph = super::super::LogicalGraph::builder()
-            .add_node(super::super::LogicalNode::for_each(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": "{{item.path}}"}),
-                "sample",
-                vec![serde_json::json!({"key": "a", "path": "/tmp/a.csv"})],
-            ))
-            .build();
-        let manifest = DagManifest {
-            logical: LogicalManifest {
-                graphs: vec![graph],
-                ..Default::default()
-            },
-            ..Default::default()
-        };
 
-        let encoded = serde_json::to_string(&manifest).unwrap();
-        let decoded: DagManifest = serde_json::from_str(&encoded).unwrap();
-
-        assert_eq!(decoded.schema_version, MANIFEST_SCHEMA_VERSION);
-        assert_eq!(decoded.logical.compiler_version, LOGICAL_COMPILER_VERSION);
-        assert_eq!(decoded.logical.graphs.len(), 1);
-        assert_eq!(decoded.logical.graphs[0].nodes()[0].id, "read");
-    }
 
     #[tokio::test]
     async fn commit_rejects_invalid_layer_provenance() {

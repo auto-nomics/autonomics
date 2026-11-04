@@ -53,6 +53,7 @@ pub(super) enum Overlay {
     Bibliography,
     /// Interactive DAG view.
     DagView,
+    FlowView,
     // ── Pickers and popups ──
     /// "Copy message" picker.
     MessagePicker,
@@ -95,6 +96,7 @@ impl AppState {
             (SkillLibrary, self.skill_library.visible),
             (Bibliography, self.bibliography_visible),
             (DagView, self.dag_view_visible),
+            (FlowView, self.flow_view_visible),
             (MessagePicker, self.message_picker.is_visible()),
             (TasksPopup, self.tasks_popup.visible),
             (PlanPopup, self.plan_popup.visible),

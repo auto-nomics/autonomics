@@ -19,5 +19,6 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 async-trait.workspace = true
+tempfile = "3.27.0"
 datafusion.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }

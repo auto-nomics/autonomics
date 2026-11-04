@@ -32,7 +32,7 @@ use tokio_util::sync::CancellationToken;
 use crate::data_engine::DataEngine;
 use crate::node_registry::NodeRegistry;
 use crate::runtime::error::{ClientError, Result};
-use crate::runtime::types::{DataEngineCmd, EngineMsg, RunDagOptions};
+use crate::runtime::types::{DataEngineCmd, EngineMsg};
 
 pub mod error;
 pub mod storage;
@@ -110,11 +110,43 @@ impl AgentEngineActor {
         let EngineMsg { cmd } = msg;
 
         match cmd {
+            // ── Stage-model flow session state ───────────────────────────
+            DataEngineCmd::SetFlow { flow, reply } => {
+                let engine = self.engine.lock().await;
+                let result = flow
+                    .validate()
+                    .map_err(|error| crate::error::Error::Custom(error.to_string()))
+                    .and_then(|()| {
+                        *engine.flow.write().expect("flow lock") = flow;
+                        Ok(())
+                    });
+                let _ = reply.send(result);
+            }
+            DataEngineCmd::GetFlow { reply } => {
+                let engine = self.engine.lock().await;
+                let flow = engine.flow.read().expect("flow lock").clone();
+                let _ = reply.send(Ok(flow));
+            }
+            DataEngineCmd::GetFlowView { reply } => {
+                let engine = self.engine.lock().await;
+                let view = crate::flow::FlowView {
+                    flow: engine.flow.read().expect("flow lock").clone(),
+                    last_run: engine
+                        .flow_report
+                        .read()
+                        .expect("flow report lock")
+                        .as_ref()
+                        .map(crate::flow::FlowRunReportSummary::from),
+                };
+                let _ = reply.send(Ok(view));
+            }
+
             // ── Stage-model flow execution ────────────────────────────────
             //
-            // Flow runs never touch engine mutable state (the authored graph
-            // arrives with the request), so the engine lock is taken only to
-            // assemble the runner and is released for the whole execution.
+            // Flow runs never touch engine mutable state beyond reading the
+            // session flow, so the engine lock is taken only to resolve the
+            // graph and assemble the runner; it is released for the whole
+            // execution.
             DataEngineCmd::RunFlow {
                 flow,
                 options,
@@ -134,12 +166,40 @@ impl AgentEngineActor {
                     return;
                 }
                 let engine = Arc::clone(&self.engine);
+                let engine_for_report = Arc::clone(&self.engine);
                 let running = Arc::clone(&self.running);
+                let agent_id = self.agent_id.clone();
                 tokio::spawn(async move {
-                    let runner = {
+                    let (runner, flow, history) = {
                         let engine = engine.lock().await;
-                        engine.flow_runner()
+                        let flow = match flow {
+                            Some(flow) => {
+                                if let Err(error) = flow.validate() {
+                                    let _ = reply.send(Err(crate::error::Error::Custom(
+                                        error.to_string(),
+                                    )));
+                                    running.store(false, Ordering::SeqCst);
+                                    return;
+                                }
+                                *engine.flow.write().expect("flow lock") = flow.clone();
+                                flow
+                            }
+                            None => {
+                                let stored = engine.flow.read().expect("flow lock").clone();
+                                if stored.is_empty() {
+                                    let _ = reply.send(Err(crate::error::Error::Custom(
+                                        "no flow is set for this session; pass `flow` or call set_flow first".to_string(),
+                                    )));
+                                    running.store(false, Ordering::SeqCst);
+                                    return;
+                                }
+                                stored
+                            }
+                        };
+                        (engine.flow_runner(), flow, engine.history.clone())
                     };
+                    let started_at = chrono::Utc::now().to_rfc3339();
+                    let trigger = Some(format!("agent:{agent_id}"));
                     let result = AssertUnwindSafe(
                         runner.run(&flow, &options, Some(cancel_token.clone())),
                     )
@@ -150,130 +210,36 @@ impl AgentEngineActor {
                             "flow run panicked: {panic:?}"
                         )))
                     });
+                    // Audit trail: flow runs append to the same `runs` table
+                    // as DAG runs. Flow snapshots (the DagManifest-backed ref
+                    // machinery) are a follow-up; the flow JSON itself is
+                    // recoverable from the report's identity.
+                    if let (Some(history), Ok(report)) = (&history, &result) {
+                        let record = dag_core::dag::history::RunRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            ref_name: "flow".into(),
+                            snapshot_id: None,
+                            manifest_hash: flow_content_hash(&flow),
+                            trigger: trigger.clone(),
+                            started_at: started_at.clone(),
+                            finished_at: chrono::Utc::now().to_rfc3339(),
+                            ok: report.ok,
+                            cancelled: report
+                                .processes
+                                .values()
+                                .any(|summary| summary.cancelled > 0),
+                            error: None,
+                            message: Some("stage-model flow run".into()),
+                            engine_version: dag_core::engine_version().to_string(),
+                            source_revision: dag_core::source_revision().to_string(),
+                            run_report_json: serde_json::to_string(report).ok(),
+                        };
+                        if let Err(error) = history.record_run(&record).await {
+                            tracing::warn!(%error, "flow run record could not be persisted");
+                        }
+                    }
                     running.store(false, Ordering::SeqCst);
                     let _ = reply.send(result);
-                });
-            }
-
-            // ── DAG execution (fire-and-forget) ──────────────────────────
-            DataEngineCmd::RunDag {
-                event_tx,
-                commit_message,
-                trigger,
-                options,
-                reply,
-                cancel_token,
-            } => {
-                if self.closing.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "engine actor is shutting down; reconnect to start a new run".to_string(),
-                    )));
-                    return;
-                }
-                if self.running.swap(true, Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is already running for this agent; wait for the current run to complete"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                // Seed matching file outputs from the manager-wide fingerprint
-                // cache before the run task takes the engine lock. DataFrame
-                // results intentionally remain agent-local.
-                {
-                    let entries = self.result_cache.snapshot();
-                    if !entries.is_empty() {
-                        let mut engine = self.engine.lock().await;
-                        let restored = engine.restore_cached_file_outputs(&entries).await;
-                        if restored > 0 {
-                            tracing::debug!(
-                                agent_id = %self.agent_id,
-                                restored,
-                                "restored cross-agent file outputs"
-                            );
-                        }
-                    }
-                }
-                let engine = Arc::clone(&self.engine);
-                let running = Arc::clone(&self.running);
-                let agent_id = self.agent_id.clone();
-                let result_cache = Arc::clone(&self.result_cache);
-                let storage = Arc::clone(&self.storage);
-                tokio::spawn(async move {
-                    // Race the DAG run against cancellation. When the caller
-                    // drops the reply receiver (e.g. the agent task is
-                    // cancelled), `cancel_token` fires and we abort early —
-                    // releasing the engine mutex and resetting `running`
-                    // instead of leaving the actor stuck.
-                    let run_fut = AssertUnwindSafe(async {
-                        let mut engine = engine.lock().await;
-                        engine.set_commit_message(commit_message);
-                        engine.set_run_trigger(trigger);
-                        if let Some(resume) = options.resume {
-                            engine.set_incremental(resume);
-                        }
-                        if let Some(input_hashing) = options.input_hashing {
-                            engine.set_input_hashing(input_hashing);
-                        }
-                        if let Some(wave_size) = options.wave_size {
-                            engine.set_wave_size(wave_size)?;
-                        }
-                        match event_tx {
-                            Some(sink) => {
-                                engine
-                                    .run_with_events_and_cancel(sink, Some(cancel_token.clone()))
-                                    .await
-                            }
-                            None => {
-                                let (sink, _dropped_sink) = mpsc::channel(1);
-                                engine
-                                    .run_with_events_and_cancel(sink, Some(cancel_token.clone()))
-                                    .await
-                            }
-                        }
-                    });
-
-                    let result = tokio::select! {
-                        r = run_fut.catch_unwind() => r,
-                        _ = cancel_token.cancelled() => {
-                            tracing::info!(
-                                "DAG run cancelled by caller; releasing engine lock"
-                            );
-                            running.store(false, Ordering::SeqCst);
-                            // reply receiver is already gone — send fails silently.
-                            let _ = reply.send(Err(crate::error::Error::Custom(
-                                "DAG run cancelled".to_string(),
-                            )));
-                            return;
-                        }
-                    };
-
-                    running.store(false, Ordering::SeqCst);
-
-                    match result {
-                        Ok(res) => {
-                            if let Ok(report) = &res {
-                                if report.ok {
-                                    let (cached, displaced) =
-                                        result_cache.record_report_collected(&agent_id, report);
-                                    if !cached.is_empty() {
-                                        storage.retain_cache_owner(&cached);
-                                    }
-                                    if !displaced.is_empty() {
-                                        storage.release_cache_owner(&displaced);
-                                    }
-                                }
-                                storage.retain_report(&agent_id, report);
-                            }
-                            let _ = reply.send(res);
-                        }
-                        Err(panic) => {
-                            let _ = reply.send(Err(crate::error::Error::Custom(format!(
-                                "DAG run panicked: {:?}",
-                                panic
-                            ))));
-                        }
-                    }
                 });
             }
 
@@ -379,20 +345,6 @@ impl AgentEngineActor {
                     .try_lock()
                     .expect("uncontended: running flag is false");
                 let _ = reply.send(engine.add_node_from_registry(id, &kind, spec));
-            }
-            DataEngineCmd::AddLogicalGraph { graph, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for it to complete before installing a logical graph"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.add_logical_graph(graph));
             }
             DataEngineCmd::UpdateNode { id, spec, reply } => {
                 if self.running.load(Ordering::SeqCst) {
@@ -756,6 +708,14 @@ impl AgentEngineActor {
     }
 }
 
+/// Stable content hash of an authored flow, used as the run record's
+/// manifest identity (canonical JSON of the serialized graph).
+fn flow_content_hash(flow: &dag_engine::FlowGraph) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(flow).unwrap_or_default();
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Session workspace auto-restore
 // ═══════════════════════════════════════════════════════════════════════
@@ -938,22 +898,22 @@ impl DataEngineClient {
         .await
     }
 
-    /// Remove the matching edge. Both endpoints and ports must identify an
-    /// existing edge.
-    pub async fn delete_edge(
+
+
+    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    /// `format` is `prov` or `crate`; `out_dir` must be absolute.
+    pub async fn export_run(
         &self,
-        from: String,
-        from_port: u8,
-        to: String,
-        to_port: u8,
-    ) -> Result<()> {
+        run_id: String,
+        format: String,
+        out_dir: std::path::PathBuf,
+    ) -> Result<crate::dag::ExportSummary> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
-            DataEngineCmd::DeleteEdge {
-                from,
-                from_port,
-                to,
-                to_port,
+            DataEngineCmd::ExportRun {
+                run_id,
+                format,
+                out_dir,
                 reply: reply_tx,
             },
             reply_rx,
@@ -961,43 +921,89 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn run_dag(&self, trigger: Option<String>) -> Result<crate::dag::RunReport> {
-        self.run_dag_with_options(trigger, RunDagOptions::default())
-            .await
-    }
-
-    pub async fn run_dag_with_options(
-        &self,
-        trigger: Option<String>,
-        options: RunDagOptions,
-    ) -> Result<crate::dag::RunReport> {
+    pub async fn checkout_dag(&self, snapshot_id: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let cancel = CancellationToken::new();
-        let wrapped = CancelOnDropReceiver {
-            rx: reply_rx,
-            cancel: cancel.clone(),
-        };
         self.request(
-            DataEngineCmd::RunDag {
-                event_tx: None,
-                commit_message: None,
-                trigger,
-                options,
+            DataEngineCmd::CheckoutDag {
+                snapshot_id,
                 reply: reply_tx,
-                cancel_token: cancel,
             },
-            wrapped,
+            reply_rx,
         )
         .await
     }
 
+    pub async fn get_dag_ref(&self) -> Result<String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
+            .await
+    }
+
+    pub async fn get_snapshot(&self, snapshot_id: String) -> Result<Option<crate::dag::Snapshot>> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetSnapshot {
+                snapshot_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    pub async fn diff_snapshots(&self, old_id: String, new_id: String) -> Result<String> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::DiffSnapshots {
+                old_id,
+                new_id,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    pub async fn add_node(&self, id: String, kind: String, spec: serde_json::Value) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::AddNode {
+                id,
+                kind,
+                spec,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
+
+    pub async fn run_dag_shell(
+        &self,
+        script: String,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+    ) -> Result<crate::dag_shell::DagShellOutcome> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::RunDagShell {
+                script,
+                dry_run,
+                timeout_ms,
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+        .await
+    }
 
     /// Execute a stage-model flow: resolve sources through the VFS, build
-    /// the instance plan, and run it through the executor stack. The reply
-    /// receiver cancels the run when dropped, aborting instances promptly.
+    /// the instance plan, and run it through the executor stack. `flow` of
+    /// `None` runs the session's stored flow. The reply receiver cancels the
+    /// run when dropped, aborting instances promptly.
     pub async fn run_flow(
         &self,
-        flow: dag_engine::FlowGraph,
+        flow: Option<dag_engine::FlowGraph>,
         options: crate::flow::FlowOptions,
     ) -> Result<dag_engine::FlowRunReport> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -1018,57 +1024,56 @@ impl DataEngineClient {
         .await
     }
 
-    /// Kick off a DAG run with live per-node event streaming.
-    ///
-    /// Returns `(event_rx, reply_rx)`: the caller drains `event_rx`
-    /// concurrently with awaiting `reply_rx` (the final [`RunReport`]).
-    /// Events are lightweight observations (status/progress/log/finished) and
-    /// may be dropped on a full channel — they never affect the run's outcome.
-    ///
-    /// `reply_rx` is a [`CancelOnDropReceiver`]: dropping it (e.g. when the
-    /// agent task is cancelled) cancels the DAG run and releases the engine
-    /// lock promptly.
-    pub fn run_dag_stream(
-        &self,
-        commit_message: Option<String>,
-        trigger: Option<String>,
-    ) -> (
-        mpsc::Receiver<crate::dag::node_event::NodeEvent>,
-        CancelOnDropReceiver<crate::dag::RunReport>,
-    ) {
-        self.run_dag_stream_with_options(commit_message, trigger, RunDagOptions::default())
+    /// Replace the session's authored flow. Validated atomically: an
+    /// invalid graph is rejected and leaves the previous flow intact.
+    pub async fn set_flow(&self, flow: dag_engine::FlowGraph) -> Result<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::SetFlow { flow, reply: reply_tx },
+            reply_rx,
+        )
+        .await
     }
 
-    pub fn run_dag_stream_with_options(
+    /// Read the session's current authored flow.
+    /// Create a ref pointing at an existing snapshot.
+    pub async fn branch_from_snapshot(
         &self,
-        commit_message: Option<String>,
-        trigger: Option<String>,
-        options: RunDagOptions,
-    ) -> (
-        mpsc::Receiver<crate::dag::node_event::NodeEvent>,
-        CancelOnDropReceiver<crate::dag::RunReport>,
-    ) {
-        let (event_tx, event_rx) = mpsc::channel::<crate::dag::node_event::NodeEvent>(128);
+        snapshot_id: String,
+        ref_name: String,
+    ) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let cancel = CancellationToken::new();
-        let _ = self.tx.send(EngineMsg {
-            cmd: DataEngineCmd::RunDag {
-                event_tx: Some(event_tx),
-                commit_message,
-                trigger,
-                options,
+        self.request(
+            DataEngineCmd::BranchFromSnapshot {
+                snapshot_id,
+                ref_name,
                 reply: reply_tx,
-                cancel_token: cancel.clone(),
             },
-        });
-        (
-            event_rx,
-            CancelOnDropReceiver {
-                rx: reply_rx,
-                cancel,
-            },
+            reply_rx,
         )
+        .await
     }
+
+    pub async fn get_flow(&self) -> Result<dag_engine::FlowGraph> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetFlow { reply: reply_tx },
+            reply_rx,
+        )
+        .await
+    }
+
+    /// Read the flow view: the authored flow plus the last run's grouped
+    /// report, for TUI / GUI / gateway surfaces.
+    pub async fn get_flow_view(&self) -> Result<crate::flow::FlowView> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.request(
+            DataEngineCmd::GetFlowView { reply: reply_tx },
+            reply_rx,
+        )
+        .await
+    }
+
 
     pub async fn get_output(&self, id: String) -> Result<Option<crate::dag::graph::PortOutputs>> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -1253,130 +1258,6 @@ impl DataEngineClient {
     }
 
     /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
-    /// `format` is `prov` or `crate`; `out_dir` must be absolute.
-    pub async fn export_run(
-        &self,
-        run_id: String,
-        format: String,
-        out_dir: std::path::PathBuf,
-    ) -> Result<crate::dag::ExportSummary> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ExportRun {
-                run_id,
-                format,
-                out_dir,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn checkout_dag(&self, snapshot_id: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::CheckoutDag {
-                snapshot_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn branch_from_snapshot(&self, snapshot_id: String, ref_name: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::BranchFromSnapshot {
-                snapshot_id,
-                ref_name,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn get_dag_ref(&self) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
-            .await
-    }
-
-    pub async fn get_snapshot(&self, snapshot_id: String) -> Result<Option<crate::dag::Snapshot>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetSnapshot {
-                snapshot_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn diff_snapshots(&self, old_id: String, new_id: String) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::DiffSnapshots {
-                old_id,
-                new_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn add_node(&self, id: String, kind: String, spec: serde_json::Value) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::AddNode {
-                id,
-                kind,
-                spec,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn run_dag_shell(
-        &self,
-        script: String,
-        dry_run: bool,
-        timeout_ms: Option<u64>,
-    ) -> Result<crate::dag_shell::DagShellOutcome> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::RunDagShell {
-                script,
-                dry_run,
-                timeout_ms,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn add_logical_graph(
-        &self,
-        graph: crate::dag::LogicalGraph,
-    ) -> Result<crate::data_engine::LogicalInstallReport> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::AddLogicalGraph {
-                graph,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
     pub async fn update_node(&self, id: String, spec: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
@@ -1813,42 +1694,6 @@ mod tests {
         }
     }
 
-    /// A brand-new session must already see the ref's head snapshot in its
-    /// first command: `AgentEngineActor` restores the workspace before entering
-    /// its recv loop, so nothing can race ahead of it.
-    #[tokio::test]
-    async fn session_start_restores_history_ref_head() {
-        use crate::dag::DagHistory;
-
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history);
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let csv_path = std::path::Path::new(&manifest_dir)
-            .join("test_datasets/Iris.csv")
-            .to_string_lossy()
-            .into_owned();
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({ "path": csv_path }),
-            )
-            .unwrap();
-        let report = engine.run().await.unwrap();
-        assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
-
-        let manager = DataEngineManager::new(engine);
-        let client = manager.client_for_agent_with_ref("agent-restore", "main");
-
-        let dot = client.view_dag().await.unwrap();
-        assert!(
-            dot.contains("src"),
-            "restored DAG should contain `src`: {dot}"
-        );
-    }
 
     #[tokio::test]
     async fn add_node_client_rejects_generic_container_kind() {
@@ -1872,117 +1717,9 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn dag_shell_reports_structured_running_error() {
-        let mut engine = DataEngine::builder().build();
-        let meta = NodePorts::new().add_output_port(None);
-        engine
-            .add_node("slow".to_string(), LongSleepNode(meta))
-            .unwrap();
-        let (client, _handle) = spawn_with_engine(engine);
 
-        let (_event_rx, reply_rx) = client.run_dag_stream(None, None);
-        let mut outcome = None;
-        for _ in 0..20 {
-            outcome = Some(
-                client
-                    .run_dag_shell("graph_summary()".into(), false, Some(100))
-                    .await
-                    .unwrap(),
-            );
-            if !outcome.as_ref().unwrap().ok {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-        let outcome = outcome.unwrap();
-        println!("dag_shell outcome: {outcome:?}");
-        assert!(!outcome.ok);
-        assert!(!outcome.applied);
-        assert_eq!(outcome.error.as_ref().unwrap().code, "dag_running");
-
-        drop(_event_rx);
-        drop(reply_rx);
-    }
-
-    /// Dropping the `CancelOnDropReceiver` must:
-    /// 1. Fire the `CancellationToken`
-    /// 2. Abort the spawned DAG run task
-    /// 3. Reset `running` to `false`
-    /// 4. Release the engine mutex so the next `run_dag` succeeds
-    #[tokio::test]
-    async fn dropping_receiver_cancels_dag_and_frees_session() {
-        let mut engine = DataEngine::builder().build();
-        let meta = NodePorts::new().add_output_port(None);
-        engine
-            .add_node("slow".to_string(), LongSleepNode(meta))
-            .unwrap();
-
-        let (client, _handle) = spawn_with_engine(engine);
-
-        // Start a streaming DAG run, then immediately drop the receiver —
-        // simulating agent task cancellation.
-        let (_event_rx, reply_rx) = client.run_dag_stream(None, None);
-        drop(reply_rx);
-
-        // Give the actor + spawned task a moment to process the cancellation.
-        // The DAG run task selects on the cancel token, so this should be
-        // nearly instant once the token fires.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-        // The session must be usable again — the `running` flag is reset and
-        // the mutex is released. A second run should not get "already running".
-        let result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), client.run_dag(None)).await;
-
-        assert!(
-            result.is_ok(),
-            "second run_dag timed out — session was not freed after cancellation"
-        );
-    }
 
     #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn memory_guard_returns_report_to_client() {
-        let engine = DataEngine::builder()
-            .build()
-            .with_config(crate::dag::SchedulerConfig {
-                memory_guard: dag_core::resource::MemoryGuardConfig::new(
-                    f64::MIN_POSITIVE,
-                    std::time::Duration::from_millis(1),
-                ),
-                ..crate::dag::SchedulerConfig::default()
-            });
-        let (client, _handle) = spawn_with_engine(engine);
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        let csv_path = std::path::Path::new(&manifest_dir)
-            .join("test_datasets/Iris.csv")
-            .to_string_lossy()
-            .into_owned();
-        client
-            .add_node(
-                "source".to_string(),
-                "file_to_dataframe".to_string(),
-                serde_json::json!({ "path": csv_path }),
-            )
-            .await
-            .unwrap();
-
-        let report = client.run_dag(None).await.unwrap();
-
-        assert!(!report.ok, "{report:?}");
-        assert_eq!(
-            report.status("source"),
-            Some(crate::dag::runtime::RuntimeStatus::Cancelled)
-        );
-        assert!(report.resource.memory.trigger.is_some());
-        assert!(
-            report
-                .warnings
-                .iter()
-                .any(|warning| warning.contains("memory guard"))
-        );
-    }
     fn zero_idle_policy() -> MaintenancePolicy {
         MaintenancePolicy {
             agent_idle: std::time::Duration::ZERO,
@@ -2040,262 +1777,9 @@ mod tests {
             .unwrap_or_else(|| panic!("run report must contain `{id}`: {report:?}"))
     }
 
-    #[tokio::test]
-    async fn idle_output_cache_releases_and_session_evicts() {
-        let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("result.txt");
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            zero_idle_policy(),
-            directory.path().join("work"),
-            directory.path().join("receipts"),
-        );
-        let client = manager.client_for_agent("idle");
-        install_file_pipeline(&client, &output).await;
-        let report = client.run_dag(None).await.unwrap();
-        assert!(report.ok, "{report:?}");
-        assert!(
-            client
-                .get_output("src".to_string())
-                .await
-                .unwrap()
-                .is_some()
-        );
 
-        let (released, evicted, clean) = manager.maintain_once().await.unwrap();
-        assert_eq!(released, 1, "idle output cache must be released once");
-        assert_eq!(evicted, 1);
-        assert!(clean.is_none(), "budget disabled by default");
-        assert_eq!(manager.agent_count(), 0);
-        assert!(client.get_output("src".to_string()).await.is_err());
-    }
 
-    #[tokio::test]
-    async fn cross_session_file_results_reuse_by_fingerprint() {
-        let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("shared.csv");
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            MaintenancePolicy {
-                output_cache_idle: std::time::Duration::from_secs(3600),
-                ..zero_idle_policy()
-            },
-            directory.path().join("work"),
-            directory.path().join("receipts"),
-        );
 
-        let first = manager.client_for_agent("first");
-        install_file_pipeline(&first, &output).await;
-        let first_report = first.run_dag(None).await.unwrap();
-        assert!(first_report.ok, "{first_report:?}");
-        assert!(!node_report(&first_report, "sink").reused);
 
-        let second = manager.client_for_agent("second");
-        install_file_pipeline(&second, &output).await;
-        let second_report = second
-            .run_dag_with_options(
-                None,
-                RunDagOptions {
-                    resume: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(second_report.ok, "{second_report:?}");
-        assert!(
-            node_report(&second_report, "sink").reused,
-            "second session should consume the central file-result cache"
-        );
-    }
 
-    /// A session recreated while its previous generation is shutting down must
-    /// not have the new generation's storage references released by the old
-    /// actor.
-    #[tokio::test]
-    async fn eviction_recreate_same_session_keeps_new_generation_refs() {
-        let directory = tempfile::tempdir().unwrap();
-        let work = directory.path().join("work");
-        let output = work.join("aa").join("b".repeat(62)).join("out.csv");
-        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            zero_idle_policy(),
-            &work,
-            directory.path().join("receipts"),
-        );
-
-        let first = manager.client_for_agent("dup");
-        install_file_pipeline(&first, &output).await;
-        assert!(first.run_dag(None).await.unwrap().ok);
-
-        let (_, evicted, _) = manager.maintain_once().await.unwrap();
-        assert_eq!(evicted, 1);
-        assert_eq!(manager.agent_count(), 0);
-
-        // Recreate under the same id: a brand-new generation whose storage
-        // references must survive the old actor's shutdown bookkeeping.
-        let second = manager.client_for_agent("dup");
-        assert_eq!(manager.agent_count(), 1);
-        install_file_pipeline(&second, &output).await;
-        assert!(second.run_dag(None).await.unwrap().ok);
-
-        let status = manager.storage_status();
-        assert!(
-            status
-                .references
-                .iter()
-                .any(|entry| entry.agents == 1 && entry.path == output.parent().unwrap()),
-            "the recreated generation must own its storage references: {:?}",
-            status.references
-        );
-    }
-
-    /// Once a generation is marked closing, queued runs are rejected instead
-    /// of executing on a session the manager has already removed.
-    #[tokio::test]
-    async fn closing_generation_rejects_queued_runs() {
-        let directory = tempfile::tempdir().unwrap();
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            MaintenancePolicy {
-                agent_idle: std::time::Duration::from_secs(3600),
-                output_cache_idle: std::time::Duration::from_secs(3600),
-                ..zero_idle_policy()
-            },
-            directory.path().join("work"),
-            directory.path().join("receipts"),
-        );
-        let client = manager.client_for_agent("closing");
-        install_file_pipeline(&client, &directory.path().join("out.csv")).await;
-
-        // Simulate the eviction pass marking this generation closing.
-        {
-            let actors = manager.actors.lock().expect("actors mutex poisoned");
-            actors
-                .get("closing")
-                .expect("actor must exist")
-                .closing
-                .store(true, Ordering::SeqCst);
-        }
-
-        let error = client.run_dag(None).await.unwrap_err();
-        assert!(
-            error.to_string().contains("engine actor is shutting down"),
-            "unexpected error: {error}"
-        );
-
-        // The next client for the same id transparently gets a new generation.
-        let fresh = manager.client_for_agent("closing");
-        assert!(fresh.run_dag(None).await.unwrap().ok);
-    }
-
-    /// Result-cache TTL expiry must also drop the cache-owner storage
-    /// references so run-aware cleanup can reclaim the local files later.
-    #[tokio::test]
-    async fn expired_result_cache_frees_local_references() {
-        let directory = tempfile::tempdir().unwrap();
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            MaintenancePolicy {
-                agent_idle: std::time::Duration::from_secs(3600),
-                output_cache_idle: std::time::Duration::from_secs(3600),
-                result_cache_ttl: std::time::Duration::ZERO,
-                ..zero_idle_policy()
-            },
-            directory.path().join("work"),
-            directory.path().join("receipts"),
-        );
-        let client = manager.client_for_agent("ttl");
-        install_file_pipeline(&client, &directory.path().join("out.csv")).await;
-        assert!(client.run_dag(None).await.unwrap().ok);
-        // TTL=0 expires entries the moment they are recorded, and the same
-        // pass must release the cache-owner storage reference that the entry
-        // would otherwise hold.
-        assert_eq!(
-            manager.result_cache.len(),
-            0,
-            "TTL=0 expires entries immediately"
-        );
-        let status = manager.storage_status();
-        assert!(
-            status
-                .references
-                .iter()
-                .all(|entry| entry.cache_owners == 0),
-            "expired cache entries must release their storage references: {:?}",
-            status.references
-        );
-    }
-
-    /// Cross-session restore must skip entries whose local files disappeared
-    /// or changed on disk — the node re-executes instead of reusing stale
-    /// bytes.
-    #[tokio::test]
-    async fn result_cache_restore_skips_missing_or_changed_files() {
-        let directory = tempfile::tempdir().unwrap();
-        let output = directory.path().join("reuse.csv");
-        let engine = DataEngine::builder().build();
-        let manager = DataEngineManager::with_policy_and_roots(
-            engine,
-            MaintenancePolicy {
-                agent_idle: std::time::Duration::from_secs(3600),
-                output_cache_idle: std::time::Duration::from_secs(3600),
-                ..zero_idle_policy()
-            },
-            directory.path().join("work"),
-            directory.path().join("receipts"),
-        );
-
-        let first = manager.client_for_agent("origin");
-        install_file_pipeline(&first, &output).await;
-        assert!(first.run_dag(None).await.unwrap().ok);
-        assert_eq!(manager.result_cache.len(), 1);
-
-        // Missing file: restore must skip, the node re-executes (and
-        // recreates the file).
-        std::fs::remove_file(&output).unwrap();
-        let second = manager.client_for_agent("missing");
-        install_file_pipeline(&second, &output).await;
-        let report = second
-            .run_dag_with_options(
-                None,
-                RunDagOptions {
-                    resume: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(report.ok, "{report:?}");
-        assert!(
-            !node_report(&report, "sink").reused,
-            "a deleted output file must not be reused across agents"
-        );
-
-        // Changed file: a different on-disk fingerprint is also skipped.
-        std::fs::write(&output, "tampered with much longer content").unwrap();
-        let third = manager.client_for_agent("changed");
-        install_file_pipeline(&third, &output).await;
-        let report = third
-            .run_dag_with_options(
-                None,
-                RunDagOptions {
-                    resume: Some(true),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-        assert!(report.ok, "{report:?}");
-        assert!(
-            !node_report(&report, "sink").reused,
-            "a fingerprint-mismatched output file must not be reused across agents"
-        );
-    }
 }

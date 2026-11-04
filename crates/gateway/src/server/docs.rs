@@ -33,6 +33,7 @@ use crate::proto::*;
         agents::get_agent_config,
         agents::set_agent_config,
         agents::get_agent_dag,
+        agents::get_agent_flow,
         context::request_context_list,
         storage::list_storage_agents,
         storage::rename_storage_agent,

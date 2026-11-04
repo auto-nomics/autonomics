@@ -1417,14 +1417,6 @@ impl<'a> Interp<'a> {
                 api::stage(&self.state, operation, offset)?;
                 Ok(Value::None)
             }
-            "add_logical_graph" => {
-                arity(1, 1)?;
-                no_kwargs()?;
-                let graph_json = api::spec_to_json(&args[0], offset)?;
-                let graph = api::parse_logical_graph(graph_json, offset)?;
-                api::stage(&self.state, GraphEditOp::AddLogicalGraph { graph }, offset)?;
-                Ok(Value::None)
-            }
             "commit" => {
                 arity(0, 0)?;
                 no_kwargs()?;

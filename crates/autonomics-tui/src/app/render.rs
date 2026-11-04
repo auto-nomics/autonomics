@@ -426,6 +426,9 @@ impl App {
             Overlay::DagView => {
                 self.render_dag_view(frame.area(), frame.buffer_mut());
             }
+            Overlay::FlowView => {
+                self.render_flow_view(frame.area(), frame.buffer_mut());
+            }
             Overlay::Bibliography => {
                 self.render_bibliography(frame.area(), frame.buffer_mut());
             }

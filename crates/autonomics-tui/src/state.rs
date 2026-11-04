@@ -997,6 +997,14 @@ pub struct AppState {
     pub dag_view_state: crate::widgets::dag_view::DagViewState,
     /// Last DAG snapshot load error, shown inside the DAG overlay.
     pub dag_view_error: Option<String>,
+    /// Stage-model flow overlay visibility (Ctrl+G).
+    pub flow_view_visible: bool,
+    /// Latest flow view (authored flow + last run summary), if loaded.
+    pub flow_view: Option<data_engine::flow::FlowView>,
+    /// Last flow view load error.
+    pub flow_view_error: Option<String>,
+    /// Scroll offset of the flow overlay.
+    pub flow_view_scroll: usize,
     /// Global display preferences (collapse thinking/tool blocks).
     pub display_settings: DisplaySettings,
     /// Active default model as `provider:model`. Resolved and built by the

@@ -371,6 +371,15 @@ impl App {
                     self.state.dag_view_error = Some(error);
                 }
             },
+            crate::app_event::AppEvent::FlowViewLoaded(result) => match result {
+                Ok(view) => {
+                    self.state.flow_view = Some(view);
+                    self.state.flow_view_error = None;
+                }
+                Err(error) => {
+                    self.state.flow_view_error = Some(error);
+                }
+            },
             crate::app_event::AppEvent::HpcConfigLoaded(result) => match result {
                 Ok(reply) => self.apply_hpc_config_reply(reply),
                 Err(error) => self.apply_hpc_config_failed(error),

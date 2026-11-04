@@ -17,14 +17,11 @@
 //! - [`memory`] — memory-guard sampling helpers for the scheduler.
 //! - [`PortOutputs`] — per-port output values.
 
-mod fanout;
 mod manifest;
 mod memory;
 mod mutation;
 mod port_outputs;
 mod reports;
-mod scheduler;
-mod streaming;
 mod topology;
 mod validation;
 

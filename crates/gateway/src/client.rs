@@ -362,6 +362,13 @@ impl GatewayClient {
             .await
     }
 
+    /// Stage-model flow view: the agent session's authored flow plus the
+    /// last run's per-process summary.
+    pub async fn flow_view(&self, agent: &str) -> Result<data_engine::flow::FlowView> {
+        self.get(&format!("/agents/{}/flow", encode_segment(agent)))
+            .await
+    }
+
     // ── context ──
 
     /// Request a fresh session list (arrives as `ContextList` agent frames

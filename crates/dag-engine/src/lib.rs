@@ -33,6 +33,7 @@
 //! every instance of that process; an item-set change affects only the
 //! added/removed keys.
 
+pub mod cache;
 pub mod error;
 pub mod instance;
 pub mod model;
@@ -40,14 +41,15 @@ pub mod plan;
 pub mod scheduler;
 pub mod source;
 
+pub use cache::{CachedInstance, CachedOutput, InstanceCache, plan_fingerprint};
 pub use error::{Error, Result};
 pub use instance::{
     Instance, InstanceId, UpstreamBinding, INSTANCE_ID_SEPARATOR, instance_fingerprint, item_key,
     render_spec,
 };
 pub use model::{
-    Cardinality, FlowGraph, FlowGraphBuilder, PortIndex, Process, ProcessName, Source, Wire,
-    WireOp,
+    Cardinality, ErrorMode, ErrorStrategy, FlowGraph, FlowGraphBuilder, PortIndex, Process,
+    ProcessName, Source, Wire, WireOp,
 };
 pub use plan::{
     ExecutionPlan, InstanceRoute, ProcessPlan, SourceResolution, build_plan,
