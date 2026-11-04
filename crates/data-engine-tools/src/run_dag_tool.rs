@@ -422,6 +422,8 @@ mod tests {
     #[test]
     fn report_json_exposes_history_snapshot_result() {
         let report = RunReport {
+            execution_binding: None,
+            runtime_output_projection: None,
             ok: true,
             warnings: vec!["no DAG history store attached; run snapshot was not persisted".into()],
             snapshot_id: None,
@@ -557,6 +559,7 @@ mod tests {
             fingerprint: Some(fingerprint.clone()),
         };
         let node = NodeReport {
+            output_files: Vec::new(),
             id: "sink".into(),
             status: RuntimeStatus::Success,
             node_type: "dataframe_to_file".into(),
@@ -590,6 +593,8 @@ mod tests {
             fingerprint: None,
         };
         let report = RunReport {
+            execution_binding: None,
+            runtime_output_projection: None,
             ok: true,
             warnings: Vec::new(),
             snapshot_id: None,
@@ -630,6 +635,7 @@ mod tests {
             fingerprint: None,
         };
         let node = NodeReport {
+            output_files: Vec::new(),
             id: "sink".into(),
             status: RuntimeStatus::Failed,
             node_type: "container_command".into(),
@@ -674,6 +680,7 @@ mod tests {
             fingerprint: Some("fp".into()),
         };
         let skipped = NodeReport {
+            output_files: Vec::new(),
             id: "downstream".into(),
             status: RuntimeStatus::Skipped,
             node_type: "sql".into(),
@@ -700,6 +707,8 @@ mod tests {
             fingerprint: None,
         };
         let report = RunReport {
+            execution_binding: None,
+            runtime_output_projection: None,
             ok: false,
             warnings: Vec::new(),
             snapshot_id: None,
@@ -771,6 +780,8 @@ mod tests {
             errors,
         };
         let report = RunReport {
+            execution_binding: None,
+            runtime_output_projection: None,
             ok: false,
             warnings: Vec::new(),
             snapshot_id: None,

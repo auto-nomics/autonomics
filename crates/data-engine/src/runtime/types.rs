@@ -34,6 +34,16 @@ pub struct RunDagOptions {
 }
 
 pub enum DataEngineCmd {
+    RunFlow {
+        /// Authored stage-model graph (processes + wires). Serialized from
+        /// the caller's JSON; validated before any dispatch.
+        flow: dag_engine::FlowGraph,
+        options: crate::flow::FlowOptions,
+        reply: oneshot::Sender<EngineResult<dag_engine::FlowRunReport>>,
+        /// Fires when the caller drops the reply receiver; aborts the flow
+        /// run instead of leaving instances executing unowned.
+        cancel_token: CancellationToken,
+    },
     RunDagShell {
         script: String,
         dry_run: bool,

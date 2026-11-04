@@ -15,6 +15,7 @@ mod list_dag_refs_tool;
 mod list_node_factories_tool;
 mod new_dag_ref_tool;
 mod run_dag_tool;
+mod run_flow_tool;
 mod show_snapshot_tool;
 mod switch_dag_ref_tool;
 mod view_dag_tool;
@@ -90,6 +91,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(dag_shell_tool::DagShellTool::new(client.clone())),
         // ── DAG execution & inspection ────────────────────────────────────
         ToolRegistration::from(run_dag_tool::RunDagTool::new(client.clone())),
+        ToolRegistration::from(run_flow_tool::RunFlowTool::new(client.clone())),
         ToolRegistration::from(get_output_tool::GetOutputTool::new(client.clone())),
         ToolRegistration::from(view_dag_tool::ViewDagTool::new(client.clone())),
         // ── history / ref management ──────────────────────────────────────

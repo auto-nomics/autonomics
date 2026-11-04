@@ -3138,6 +3138,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dag-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "futures",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "vfs",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3271,6 +3288,7 @@ dependencies = [
  "container-runtime",
  "csv",
  "dag-core",
+ "dag-engine",
  "datafusion",
  "evalue",
  "futures",
@@ -3321,6 +3339,7 @@ dependencies = [
  "async-trait",
  "bib-base",
  "bib-types",
+ "dag-engine",
  "data-engine",
  "datafusion",
  "nodes-sql",

@@ -53,12 +53,12 @@ pub struct DataEngine {
     /// `run` so each node `execute` can build a fresh isolated `SessionContext`
     /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
     /// mutable `SessionContext` state can never accumulate across runs.
-    engine_ctx: crate::node_registry::registry::NodeCtx,
-    dag: DAG,
+    pub(crate) engine_ctx: crate::node_registry::registry::NodeCtx,
+    pub(crate) dag: DAG,
     /// Shared, immutable after construction. Wrapped in `Arc` so that
     /// [`DataEngine::new_isolated_engine`] can share it across per-agent engines
     /// without rebuilding the ~70 factories.
-    node_registry: Arc<NodeRegistry>,
+    pub(crate) node_registry: Arc<NodeRegistry>,
     /// Process-wide container execution resources, injected by the runtime
     /// host and shared with the IO node registry.
     container_execution: Arc<ContainerExecutionInfra>,

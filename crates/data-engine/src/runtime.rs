@@ -110,6 +110,51 @@ impl AgentEngineActor {
         let EngineMsg { cmd } = msg;
 
         match cmd {
+            // ── Stage-model flow execution ────────────────────────────────
+            //
+            // Flow runs never touch engine mutable state (the authored graph
+            // arrives with the request), so the engine lock is taken only to
+            // assemble the runner and is released for the whole execution.
+            DataEngineCmd::RunFlow {
+                flow,
+                options,
+                reply,
+                cancel_token,
+            } => {
+                if self.closing.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "engine actor is shutting down; reconnect to start a new run".to_string(),
+                    )));
+                    return;
+                }
+                if self.running.swap(true, Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom(
+                        "a run is already active for this agent; wait for it to complete".to_string(),
+                    )));
+                    return;
+                }
+                let engine = Arc::clone(&self.engine);
+                let running = Arc::clone(&self.running);
+                tokio::spawn(async move {
+                    let runner = {
+                        let engine = engine.lock().await;
+                        engine.flow_runner()
+                    };
+                    let result = AssertUnwindSafe(
+                        runner.run(&flow, &options, Some(cancel_token.clone())),
+                    )
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|panic| {
+                        Err(crate::error::Error::Custom(format!(
+                            "flow run panicked: {panic:?}"
+                        )))
+                    });
+                    running.store(false, Ordering::SeqCst);
+                    let _ = reply.send(result);
+                });
+            }
+
             // ── DAG execution (fire-and-forget) ──────────────────────────
             DataEngineCmd::RunDag {
                 event_tx,
@@ -746,16 +791,14 @@ fn agent_workspace_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
 /// DAG run task in `AgentEngineActor` listens on via `select!`. Without this
 /// guard the DAG task would continue running in the background, holding the
 /// engine mutex and leaving `running = true` forever.
-pub struct CancelOnDropReceiver {
-    rx: tokio::sync::oneshot::Receiver<
-        std::result::Result<crate::dag::RunReport, crate::error::Error>,
-    >,
+pub struct CancelOnDropReceiver<T> {
+    rx: tokio::sync::oneshot::Receiver<std::result::Result<T, crate::error::Error>>,
     cancel: CancellationToken,
 }
 
-impl std::future::Future for CancelOnDropReceiver {
+impl<T> std::future::Future for CancelOnDropReceiver<T> {
     type Output = std::result::Result<
-        std::result::Result<crate::dag::RunReport, crate::error::Error>,
+        std::result::Result<T, crate::error::Error>,
         tokio::sync::oneshot::error::RecvError,
     >;
 
@@ -764,7 +807,7 @@ impl std::future::Future for CancelOnDropReceiver {
     }
 }
 
-impl Drop for CancelOnDropReceiver {
+impl<T> Drop for CancelOnDropReceiver<T> {
     fn drop(&mut self) {
         self.cancel.cancel();
     }
@@ -948,6 +991,33 @@ impl DataEngineClient {
         .await
     }
 
+
+    /// Execute a stage-model flow: resolve sources through the VFS, build
+    /// the instance plan, and run it through the executor stack. The reply
+    /// receiver cancels the run when dropped, aborting instances promptly.
+    pub async fn run_flow(
+        &self,
+        flow: dag_engine::FlowGraph,
+        options: crate::flow::FlowOptions,
+    ) -> Result<dag_engine::FlowRunReport> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+        let wrapped = CancelOnDropReceiver {
+            rx: reply_rx,
+            cancel: cancel.clone(),
+        };
+        self.request(
+            DataEngineCmd::RunFlow {
+                flow,
+                options,
+                reply: reply_tx,
+                cancel_token: cancel,
+            },
+            wrapped,
+        )
+        .await
+    }
+
     /// Kick off a DAG run with live per-node event streaming.
     ///
     /// Returns `(event_rx, reply_rx)`: the caller drains `event_rx`
@@ -964,7 +1034,7 @@ impl DataEngineClient {
         trigger: Option<String>,
     ) -> (
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
-        CancelOnDropReceiver,
+        CancelOnDropReceiver<crate::dag::RunReport>,
     ) {
         self.run_dag_stream_with_options(commit_message, trigger, RunDagOptions::default())
     }
@@ -976,7 +1046,7 @@ impl DataEngineClient {
         options: RunDagOptions,
     ) -> (
         mpsc::Receiver<crate::dag::node_event::NodeEvent>,
-        CancelOnDropReceiver,
+        CancelOnDropReceiver<crate::dag::RunReport>,
     ) {
         let (event_tx, event_rx) = mpsc::channel::<crate::dag::node_event::NodeEvent>(128);
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
