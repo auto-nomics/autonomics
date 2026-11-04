@@ -55,8 +55,17 @@ impl LiveDagView {
         let mut view = self.0.write().unwrap_or_else(|e| e.into_inner());
         if let Some(previous) = view.as_ref() {
             snapshot.run_id = previous.run_id.clone();
+            // Linear merge: index prior executions once instead of a linear
+            // find per node (which made each publish O(N^2)).
+            let prior: std::collections::HashMap<&str, &super::view::DagNodeView> = previous
+                .nodes
+                .iter()
+                .map(|node| (node.id.as_str(), node))
+                .collect();
             for node in &mut snapshot.nodes {
-                node.execution = previous.node(&node.id).and_then(|n| n.execution.clone());
+                node.execution = prior
+                    .get(node.id.as_str())
+                    .and_then(|n| n.execution.clone());
             }
         }
         snapshot.observed_at_ms = observation_time_ms();

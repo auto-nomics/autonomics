@@ -397,6 +397,11 @@ impl DAG {
 
         let sem = (cfg.max_concurrency != 0).then(|| Arc::new(Semaphore::new(cfg.max_concurrency)));
         let run_cancel = CancellationToken::new();
+        // Live-view publication is UI telemetry; rebuilding the full snapshot
+        // per dispatch iteration is O(N) work that made scheduling O(N^2).
+        // Throttle to a fixed cadence and always publish at run end.
+        let mut last_live_publish = tokio::time::Instant::now();
+        const LIVE_VIEW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
         if let Some(external_cancel) = &external_cancel {
             let internal_cancel = run_cancel.clone();
             let external_cancel = external_cancel.clone();
@@ -867,7 +872,11 @@ impl DAG {
                 }
             }
 
-            self.publish_live_statuses();
+            let now = tokio::time::Instant::now();
+            if now.saturating_duration_since(last_live_publish) >= LIVE_VIEW_MIN_INTERVAL {
+                last_live_publish = now;
+                self.publish_live_statuses();
+            }
             let streaming_active = stream
                 .node_counts
                 .keys()
