@@ -169,7 +169,11 @@ pub struct TypedWorkerSettings {
 impl TypedWorkerSettings {
     pub fn validate(&self) -> Result<(), DagError> {
         if let Some(environment) = &self.native_environment {
-            if environment.network_policy_sha256.as_ref().is_some_and(|pin| !valid_sha256(pin)) {
+            if environment
+                .network_policy_sha256
+                .as_ref()
+                .is_some_and(|pin| !valid_sha256(pin))
+            {
                 return Err(failure("native worker network policy requires SHA256"));
             }
             for path in [&environment.python, &environment.file] {
@@ -315,16 +319,26 @@ pub(super) fn lower_worker_task(
     settings: &TypedWorkerSettings,
     binding: Option<&super::private_native::PrivateNativeBinding>,
 ) -> Result<(), DagError> {
+    execution
+        .node
+        .prepare_task_inputs(&mut execution.submission.inputs)?;
     if let Some(reason) = execution.node.remote_execution_blocker() {
         return Err(failure(format!("remote_service_unavailable: {reason}")));
     }
     settings.validate()?;
-    if matches!(execution.node.kind(), "http_fetch" | "http_head" | "file_download")
-        && execution.node.plugin_identity().is_none()
-        && settings.native_environment.as_ref()
-            .and_then(|environment| environment.network_policy_sha256.as_ref()).is_none()
+    if matches!(
+        execution.node.kind(),
+        "http_fetch" | "http_head" | "file_download"
+    ) && execution.node.plugin_identity().is_none()
+        && settings
+            .native_environment
+            .as_ref()
+            .and_then(|environment| environment.network_policy_sha256.as_ref())
+            .is_none()
     {
-        return Err(failure("worker_network_policy_unconfigured: enroll an approved policy SHA256 and private environment before remote HTTP execution"));
+        return Err(failure(
+            "worker_network_policy_unconfigured: enroll an approved policy SHA256 and private environment before remote HTTP execution",
+        ));
     }
     if let Some(binding) = binding {
         binding.validate_for_task(execution, settings)?;
@@ -369,7 +383,10 @@ pub(super) fn lower_worker_task(
             .iter()
             .find(|input| input.port == binding.port)
         {
-            binding.payload = input.data.data_type().to_string();
+            binding.payload = match &input.data {
+                NodeValue::Structured(_) => "structured_channel".into(),
+                _ => input.data.data_type().to_string(),
+            };
         }
     }
     if execution.submission.spec.kind == "logical_gather" {
@@ -380,6 +397,7 @@ pub(super) fn lower_worker_task(
                     NodeValue::File(_) => "file",
                     NodeValue::FileSet(_) => "file_set",
                     NodeValue::Channel(_) => "channel",
+                    NodeValue::Structured(_) => "structured_channel",
                 },
             ))?;
         if execution.submission.spec.outputs.len() != 1
@@ -423,6 +441,9 @@ pub(super) fn lower_worker_task(
             .filter_map(|input| match &input.data {
                 NodeValue::File(file) => Some((input.port, vec![file.clone()])),
                 NodeValue::FileSet(files) => Some((input.port, files.clone())),
+                NodeValue::Structured(value) => {
+                    Some((input.port, value.artifacts().into_iter().cloned().collect()))
+                }
                 _ => None,
             })
             .collect(),
@@ -550,7 +571,9 @@ pub(super) fn lower_worker_task(
     let executable = quote(&settings.executable.to_string_lossy());
     let hash = quote(&settings.executable_sha256.to_ascii_lowercase());
     let invocation = if let Some(environment) = &settings.native_environment {
-        let policy = environment.network_policy_sha256.as_ref()
+        let policy = environment
+            .network_policy_sha256
+            .as_ref()
             .map(|pin| format!("--network-policy-sha256 {} ", quote(pin)))
             .unwrap_or_default();
         format!(
@@ -571,7 +594,8 @@ pub(super) fn lower_worker_task(
         "set -euo pipefail\nactual=$(sha256sum -- {executable})\n[ \"${{actual%% *}}\" = {hash} ] || {{ echo 'typed worker executable SHA256 mismatch' >&2; exit 126; }}\nexec {invocation} {entry} \"$AUTONOMICS_WORKSPACE/task.json\"\n"
     );
     let outputs = execution.submission.spec.outputs.iter().map(|binding| {
-            serde_json::json!({"port": binding.port, "pattern": format!("typed-outputs/port-{}/*", binding.port)})
+            let optional = execution.node.ports().output_port(binding.port).is_some_and(|port| !port.required);
+            serde_json::json!({"port": binding.port, "pattern": format!("typed-outputs/port-{}/*", binding.port), "optional": optional})
         }).collect::<Vec<_>>();
     execution.submission.spec.kind = "process".into();
     execution.submission.spec.spec = serde_json::json!({
@@ -954,7 +978,7 @@ pub(super) async fn execute_typed_worker_core(
     if let Some(reason) = node.remote_execution_blocker() {
         return Err(failure(format!("remote_service_unavailable: {reason}")));
     }
-    let declared = node.ports();
+    let declared = node.ports().clone();
     let expected = declared
         .output_ports()
         .iter()
@@ -996,11 +1020,17 @@ pub(super) async fn execute_typed_worker_core(
             .enumerate()
             .map(|(index, path)| {
                 let mut artifact = FileRef::local(path, None)?;
-                if let Some(source) = envelope
-                    .input_files
-                    .get(&binding.port)
-                    .and_then(|files| files.get(index))
-                {
+                let source_index = if binding.payload == "structured_channel" {
+                    index.checked_sub(1)
+                } else {
+                    Some(index)
+                };
+                if let Some(source) = source_index.and_then(|index| {
+                    envelope
+                        .input_files
+                        .get(&binding.port)
+                        .and_then(|files| files.get(index))
+                }) {
                     artifact.format = source.format.clone();
                     artifact.fingerprint = source.fingerprint.clone();
                 }
@@ -1064,19 +1094,23 @@ pub(super) async fn execute_typed_worker_core(
     }
     let reporter = NodeReporter::noop();
     let outputs = node.execute(ctx, &inputs, &reporter).await?;
-    if outputs.len() != requested.len() {
-        return Err(failure(
-            "typed worker output count differs from task contract",
-        ));
+    if outputs.iter().any(|(port, _)| !requested.contains_key(port)) {
+        return Err(failure("typed worker returned an undeclared output port"));
     }
     let output_root = workspace.join("typed-outputs");
     // An attempt must never accidentally collect outputs left by another run.
     std::fs::create_dir(&output_root)
         .map_err(|e| failure(format!("cannot create fresh typed output directory: {e}")))?;
     for contract in &task.outputs {
-        let value = outputs
-            .get(&contract.port)
-            .ok_or_else(|| failure("typed worker omitted an output port"))?;
+        let Some(value) = outputs.get(&contract.port) else {
+            if declared
+                .output_port(contract.port)
+                .is_some_and(|port| !port.required)
+            {
+                continue;
+            }
+            return Err(failure("typed worker omitted a required output port"));
+        };
         if value.data_type().to_string() != contract.payload {
             return Err(failure("typed worker produced an unexpected output type"));
         }
@@ -1125,6 +1159,21 @@ pub(super) async fn execute_typed_worker_core(
                         contract.port,
                         files,
                     )?;
+                }
+            }
+            NodeValue::Structured(value) => {
+                value.validate(64, 100_000).map_err(failure)?;
+                let manifest = serde_json::to_vec(value).map_err(|e| failure(e.to_string()))?;
+                if manifest.len() > 16 * 1024 * 1024 {
+                    return Err(failure("structured channel manifest exceeds byte limit"));
+                }
+                // Process transport sorts output paths. Reserve index zero for the
+                // manifest so the coordinator can reconstruct artifact order.
+                std::fs::write(root.join("00000000.json"), manifest)
+                    .map_err(|e| failure(e.to_string()))?;
+                for (index, file) in value.artifacts().into_iter().enumerate() {
+                    copy_worker_file(file, &root.join(worker_output_name(file, index + 1)?), ctx)
+                        .await?;
                 }
             }
         }

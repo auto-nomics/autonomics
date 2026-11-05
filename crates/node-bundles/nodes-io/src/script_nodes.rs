@@ -17,7 +17,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::container_command::{
-    ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
+    ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec, TupleInput,
+    TupleInputElement,
 };
 use crate::file_to_dataframe::{
     FileFormat, FileToDataFrameNode, FileToDataFrameNodeFactory, TabularReadOptions,
@@ -78,6 +79,7 @@ pub enum ScriptRuntime {
 pub enum ScriptValueKind {
     Dataframe,
     File,
+    Tuple,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -90,6 +92,9 @@ pub struct ScriptInputSpec {
     /// DataFrame staging format: csv, tsv, or parquet.
     #[serde(default = "default_csv_format")]
     pub format: String,
+    /// Tuple qualifiers, e.g. `[{"val":"sample"},{"path":"reads"}]`.
+    #[serde(default)]
+    pub tuple: Vec<TupleInputElement>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -200,6 +205,7 @@ fn generic_port_layout(spec: &ScriptNodeSpec) -> Result<NodePorts, String> {
         let data_type = match input.kind {
             ScriptValueKind::Dataframe => PortType::DataFrame,
             ScriptValueKind::File => PortType::File,
+            ScriptValueKind::Tuple => PortType::Any,
         };
         if input.required {
             ports = ports.add_input_port_of_type_with_label(None, data_type, input.name.clone());
@@ -211,6 +217,9 @@ fn generic_port_layout(spec: &ScriptNodeSpec) -> Result<NodePorts, String> {
         let data_type = match output.kind {
             ScriptValueKind::Dataframe => PortType::DataFrame,
             ScriptValueKind::File => PortType::File,
+            ScriptValueKind::Tuple => {
+                return Err("tuple script outputs are not yet supported".into());
+            }
         };
         ports = ports.add_output_port_of_type(None, data_type);
     }
@@ -316,8 +325,33 @@ fn validate(spec: &ScriptNodeSpec) -> Result<(), String> {
                 input.name
             ));
         }
+        if (input.kind == ScriptValueKind::Tuple) != !input.tuple.is_empty() {
+            return Err(format!(
+                "input `{}` must declare tuple qualifiers exactly when kind is tuple",
+                input.name
+            ));
+        }
+        if input.kind == ScriptValueKind::Tuple && !input.required {
+            return Err(format!("tuple input `{}` must be required", input.name));
+        }
+        for element in &input.tuple {
+            let name = match element {
+                TupleInputElement::Val(name)
+                | TupleInputElement::Path(name)
+                | TupleInputElement::PathWithArity { path: name, .. } => name,
+            };
+            if !valid_identifier(name)
+                || name.starts_with("AUTONOMICS_")
+                || !names.insert(name.clone())
+            {
+                return Err(format!("invalid or duplicate tuple element name `{name}`"));
+            }
+        }
     }
     for output in &spec.outputs {
+        if output.kind == ScriptValueKind::Tuple {
+            return Err("tuple script outputs are not yet supported".into());
+        }
         if !valid_identifier(&output.name) {
             return Err(format!(
                 "output name `{}` must be a valid Python/R identifier",
@@ -385,9 +419,37 @@ utils::write.table(
 
 fn python_generic_wrapper(spec: &ScriptNodeSpec) -> String {
     let mut script = String::from(
-        "import contextlib\nimport io\nimport os\nimport sys\nimport pandas as pd\n\nscript_inputs = {}\nscript_outputs = {}\n",
+        "import contextlib\nimport io\nimport os\nimport sys\nimport json\nimport pandas as pd\n\nscript_inputs = {}\nscript_outputs = {}\n",
     );
     for (index, input) in spec.inputs.iter().enumerate() {
+        if input.kind == ScriptValueKind::Tuple {
+            for element in &input.tuple {
+                let name = match element {
+                    TupleInputElement::Val(name)
+                    | TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. } => name,
+                };
+                script.push_str(&format!(
+                    "{name} = json.loads(os.environ[{env:?}])\n",
+                    env = format!("AUTONOMICS_TUPLE_JSON_{name}")
+                ));
+            }
+            let names = input
+                .tuple
+                .iter()
+                .map(|element| match element {
+                    TupleInputElement::Val(name)
+                    | TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. } => name.as_str(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            script.push_str(&format!(
+                "{name} = ({names},)\nscript_inputs[{name:?}] = {name}\n",
+                name = input.name
+            ));
+            continue;
+        }
         let env = format!("AUTONOMICS_INPUT{index}");
         let path_expr = if input.required {
             format!("os.environ[{env:?}]")
@@ -415,6 +477,7 @@ fn python_generic_wrapper(spec: &ScriptNodeSpec) -> String {
             ScriptValueKind::File => {
                 script.push_str(&format!("{name} = {name}_path\n", name = input.name));
             }
+            ScriptValueKind::Tuple => unreachable!(),
         }
         script.push_str(&format!(
             "script_inputs[{name:?}] = {name}\n",
@@ -458,6 +521,34 @@ fn python_generic_wrapper(spec: &ScriptNodeSpec) -> String {
 fn r_generic_wrapper(spec: &ScriptNodeSpec) -> String {
     let mut script = String::from("script_inputs <- list()\nscript_outputs <- list()\n");
     for (index, input) in spec.inputs.iter().enumerate() {
+        if input.kind == ScriptValueKind::Tuple {
+            for element in &input.tuple {
+                let name = match element {
+                    TupleInputElement::Val(name)
+                    | TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. } => name,
+                };
+                script.push_str(&format!(
+                    "{name} <- jsonlite::fromJSON(Sys.getenv({env:?}), simplifyVector = FALSE)\n",
+                    env = format!("AUTONOMICS_TUPLE_JSON_{name}")
+                ));
+            }
+            let names = input
+                .tuple
+                .iter()
+                .map(|element| match element {
+                    TupleInputElement::Val(name)
+                    | TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. } => name.as_str(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            script.push_str(&format!(
+                "{name} <- list({names})\nscript_inputs${name} <- {name}\n",
+                name = input.name
+            ));
+            continue;
+        }
         script.push_str(&format!(
             "{name}_path <- Sys.getenv(\"AUTONOMICS_INPUT{index}\", unset = \"\")\n",
             name = input.name
@@ -490,6 +581,7 @@ fn r_generic_wrapper(spec: &ScriptNodeSpec) -> String {
                     name = input.name
                 ));
             }
+            ScriptValueKind::Tuple => unreachable!(),
         }
         script.push_str(&format!(
             "script_inputs${name} <- {name}\n",
@@ -568,12 +660,16 @@ pub fn container_spec(
             .map(|output| ContainerCommandOutputSpec {
                 path: output_path(output),
                 format: Some(output.format.clone()),
+                tuple: Vec::new(),
+                optional: false,
             })
             .collect()
     } else {
         vec![ContainerCommandOutputSpec {
             path: "output.csv".into(),
             format: Some("csv".into()),
+            tuple: Vec::new(),
+            optional: false,
         }]
     };
     Ok(ContainerCommandSpec {
@@ -582,6 +678,16 @@ pub fn container_spec(
         script: Some(script),
         files: BTreeMap::from([(user_file.into(), spec.code.clone())]),
         env: Default::default(),
+        tuple_inputs: spec
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, input)| input.kind == ScriptValueKind::Tuple)
+            .map(|(index, input)| TupleInput {
+                port: index as u8,
+                tuple: input.tuple.clone(),
+            })
+            .collect(),
         outputs,
         workdir: None,
         stage_in_mode: Default::default(),
@@ -674,6 +780,7 @@ impl ScriptNode {
                 continue;
             };
             match input_spec.kind {
+                ScriptValueKind::Tuple => container_inputs.push(input.clone()),
                 ScriptValueKind::File => {
                     container_inputs.push(NodeInput::file(index as u8, input.file_value()?.clone()))
                 }
@@ -760,6 +867,11 @@ impl ScriptNode {
                     ))
                 })?;
             match output_spec.kind {
+                ScriptValueKind::Tuple => {
+                    return Err(DagError::Schedule(
+                        "tuple script outputs are not yet supported".into(),
+                    ));
+                }
                 ScriptValueKind::File => {
                     outputs.insert_file(index as u8, file);
                 }
@@ -782,6 +894,9 @@ impl ScriptNode {
 
 #[async_trait]
 impl DagNode for ScriptNode {
+    fn prepare_task_inputs(&self, inputs: &mut [NodeInput]) -> Result<(), DagError> {
+        self.inner.prepare_task_inputs(inputs)
+    }
     fn ports(&self) -> &NodePorts {
         &self.ports
     }
@@ -890,7 +1005,10 @@ impl NodeFactory for ScriptNodeFactory {
         Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
         Generic mode is selected by a non-empty outputs array: each input or output \
         spec creates a DAG port and exposes `<name>` plus `<name>_path` variables \
-        to user code. DataFrame inputs are materialized as csv/tsv/parquet; \
+        to user code. A required `kind: tuple` input declares `tuple` elements \
+        such as `[{\"val\":\"sample\"},{\"path\":\"reads\"}]`; each name and the \
+        complete tuple are available to the script. \
+        DataFrame inputs are materialized as csv/tsv/parquet; \
         DataFrame outputs may be returned as `<name>` or written to \
         `<name>_path`; File outputs must be written to `<name>_path`. Packages are \
         preinstalled declarations only; runtime installation and network are disabled."
@@ -899,7 +1017,9 @@ impl NodeFactory for ScriptNodeFactory {
                 "Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
         Generic mode is selected by a non-empty outputs array: each input or output \
         spec creates a DAG port and exposes `<name>` plus `<name>_path` variables \
-        to user code. DataFrame inputs are materialized as csv/tsv/parquet; \
+        to user code. A required `kind: tuple` input declares `tuple` elements \
+        such as `[{\"val\":\"sample\"},{\"path\":\"reads\"}]`; each name and the \
+        complete tuple are available to the script. DataFrame inputs are materialized as csv/tsv/parquet; \
         DataFrame outputs may be returned as `<name>` or written to \
         `<name>_path`; File outputs must be written to `<name>_path`. Packages are \
         preinstalled declarations only; runtime installation and network are disabled."
@@ -1020,6 +1140,177 @@ mod tests {
     }
 
     #[test]
+    fn script_tuple_input_prepares_paths_and_preserves_typed_values() {
+        use dag_core::dag::execution::ChannelTransportValue as Value;
+        let spec = serde_json::json!({
+            "code": "open(out_path, 'w').write(str(sample))",
+            "inputs": [{"name":"pair", "kind":"tuple", "tuple":[{"val":"sample"},{"path":"reads"}]}],
+            "outputs": [{"name":"out", "kind":"file", "format":"txt"}]
+        });
+        let parsed: ScriptNodeSpec = serde_json::from_value(spec.clone()).unwrap();
+        for runtime in [ScriptRuntime::Python, ScriptRuntime::R] {
+            let container = container_spec(runtime, &parsed).unwrap();
+            assert_eq!(container.tuple_inputs.len(), 1);
+            let wrapper = container.script.unwrap();
+            assert!(wrapper.contains("AUTONOMICS_TUPLE_JSON_sample"));
+            assert!(wrapper.contains("AUTONOMICS_TUPLE_JSON_reads"));
+        }
+        let factory =
+            ScriptNodeFactory::python(Arc::new(NoopConnection), Arc::new(PanelCache::new("/tmp")));
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let node = factory.build(spec, ctx).unwrap();
+        assert_eq!(node.ports().input_port(0).unwrap().data_type, PortType::Any);
+        let mut inputs = vec![NodeInput {
+            port: 0,
+            data: dag_core::value::NodeValue::Channel(dag_core::value::ChannelValue {
+                items: vec![serde_json::json!([42, "vfs:///reads.fastq"])],
+            }),
+        }];
+        node.prepare_task_inputs(&mut inputs).unwrap();
+        let dag_core::value::NodeValue::Structured(Value::Tuple(items)) = &inputs[0].data else {
+            panic!("tuple expected")
+        };
+        assert!(matches!(&items[0], Value::Json(value) if value == 42));
+        assert!(matches!(&items[1], Value::File(file) if file.path == "vfs:///reads.fastq"));
+    }
+
+    #[test]
+    fn script_tuple_input_path_arity_checks_and_shapes_files() {
+        use dag_core::dag::execution::ChannelTransportValue as Value;
+        use dag_core::value::{ChannelValue, NodeValue};
+
+        let factory =
+            ScriptNodeFactory::python(Arc::new(NoopConnection), Arc::new(PanelCache::new("/tmp")));
+        let build = |arity: &str| {
+            let spec = serde_json::json!({
+                "code": "pass",
+                "inputs": [{"name":"pair", "kind":"tuple", "tuple":[{"path":"reads", "arity":arity}]}],
+                "outputs": [{"name":"out", "kind":"file", "format":"txt"}]
+            });
+            let ctx = NodeCtx::new(
+                datafusion::prelude::SessionContext::new().runtime_env(),
+                None,
+            );
+            factory.build(spec, ctx).unwrap()
+        };
+        let input = |value: serde_json::Value| {
+            vec![NodeInput {
+                port: 0,
+                data: NodeValue::Channel(ChannelValue {
+                    items: vec![serde_json::json!([value])],
+                }),
+            }]
+        };
+
+        let two = build("2");
+        let mut wrong = input(serde_json::json!("vfs:///a"));
+        assert!(
+            two.prepare_task_inputs(&mut wrong)
+                .unwrap_err()
+                .to_string()
+                .contains("incorrect number of input files")
+        );
+        let mut pair = input(serde_json::json!(["vfs:///a", "vfs:///b"]));
+        two.prepare_task_inputs(&mut pair).unwrap();
+        assert!(
+            matches!(&pair[0].data, NodeValue::Structured(Value::Tuple(items)) if matches!(&items[0], Value::List(files) if files.len() == 2))
+        );
+
+        let mut one = input(serde_json::json!(["vfs:///a"]));
+        build("1").prepare_task_inputs(&mut one).unwrap();
+        assert!(
+            matches!(&one[0].data, NodeValue::Structured(Value::Tuple(items)) if matches!(&items[0], Value::File(_)))
+        );
+
+        let mut empty = input(serde_json::json!([]));
+        build("0..*").prepare_task_inputs(&mut empty).unwrap();
+        assert!(
+            matches!(&empty[0].data, NodeValue::Structured(Value::Tuple(items)) if matches!(&items[0], Value::List(files) if files.is_empty()))
+        );
+    }
+
+    #[tokio::test]
+    async fn script_tuple_reaches_the_container_backend() {
+        struct FakeRuntime(std::path::PathBuf);
+        #[async_trait::async_trait]
+        impl PodmanConnection for FakeRuntime {
+            async fn run(
+                &self,
+                request: container_runtime::ContainerRunRequest,
+            ) -> Result<
+                container_runtime::ContainerRunResult,
+                container_runtime::ContainerRuntimeError,
+            > {
+                let value = |name: &str| {
+                    request
+                        .env
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .unwrap()
+                        .1
+                        .clone()
+                };
+                assert_eq!(value("AUTONOMICS_TUPLE_JSON_sample"), "42");
+                let path: String =
+                    serde_json::from_str(&value("AUTONOMICS_TUPLE_JSON_reads")).unwrap();
+                let relative = std::path::Path::new(&path).strip_prefix("/work").unwrap();
+                assert_eq!(
+                    std::fs::read(request.workspace.host_path.join(relative)).unwrap(),
+                    b"reads"
+                );
+                let output = value("AUTONOMICS_OUTPUT0");
+                let relative = std::path::Path::new(&output).strip_prefix("/work").unwrap();
+                std::fs::write(request.workspace.host_path.join(relative), b"ok").unwrap();
+                Ok(container_runtime::ContainerRunResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
+            }
+            fn name(&self) -> &'static str {
+                "test"
+            }
+            fn workspace_root(&self) -> &std::path::Path {
+                &self.0
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("reads.fastq");
+        std::fs::write(&file, b"reads").unwrap();
+        let spec = serde_json::json!({"code":"open(out_path, 'w').write(str(sample))", "inputs":[{"name":"pair","kind":"tuple","tuple":[{"val":"sample"},{"path":"reads"}]}], "outputs":[{"name":"out","kind":"file","format":"txt"}]});
+        let factory = ScriptNodeFactory::python(
+            Arc::new(FakeRuntime(root.path().into())),
+            Arc::new(PanelCache::new(root.path().join("cache"))),
+        );
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut node = factory.build(spec, ctx.clone()).unwrap();
+        let inputs = vec![NodeInput {
+            port: 0,
+            data: dag_core::value::NodeValue::Channel(dag_core::value::ChannelValue {
+                items: vec![serde_json::json!([42, file.to_str().unwrap()])],
+            }),
+        }];
+        let outputs = node
+            .execute(
+                &ctx,
+                &inputs,
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(&outputs.get(&0).unwrap().as_file().unwrap().path).unwrap(),
+            b"ok"
+        );
+    }
+
+    #[test]
     fn builds_isolated_python_contract() {
         let spec = ScriptNodeSpec {
             code: "output_table = input_table".into(),
@@ -1067,12 +1358,14 @@ mod tests {
                     kind: ScriptValueKind::Dataframe,
                     required: true,
                     format: "tsv".into(),
+                    tuple: Vec::new(),
                 },
                 ScriptInputSpec {
                     name: "reference".into(),
                     kind: ScriptValueKind::File,
                     required: false,
                     format: "csv".into(),
+                    tuple: Vec::new(),
                 },
             ],
             outputs: vec![

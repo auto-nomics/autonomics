@@ -109,7 +109,13 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
     );
     let store = store(directory.path());
     let file = FileRef::new("vfs:///data/archive/input.tsv", Some("tsv".into()));
-    assert!(store.remote_input(file.clone(), Some(&storage)).await.unwrap().is_none());
+    assert!(
+        store
+            .remote_input(file.clone(), Some(&storage))
+            .await
+            .unwrap()
+            .is_none()
+    );
     // An authorized source on the same server can still live outside the
     // compute target's shared data home. Stage it through its source mount.
     if let vfs::BackendConfig::Ssh { alias, .. } = &mut manifest.backend[0].config {
@@ -119,7 +125,13 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
         directory.path(),
         Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
     );
-    assert!(store.remote_input(file.clone(), Some(&storage)).await.unwrap().is_none());
+    assert!(
+        store
+            .remote_input(file.clone(), Some(&storage))
+            .await
+            .unwrap()
+            .is_none()
+    );
     // Even the same alias cannot authorize zero-copy access to a different
     // pinned endpoint. The source bytes must be staged through its own VFS.
     if let vfs::BackendConfig::Ssh { root, endpoint, .. } = &mut manifest.backend[0].config {
@@ -135,7 +147,13 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
         directory.path(),
         Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
     );
-    assert!(store.remote_input(file, Some(&storage)).await.unwrap().is_none());
+    assert!(
+        store
+            .remote_input(file, Some(&storage))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

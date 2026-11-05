@@ -69,6 +69,9 @@ struct AgentEngineActor {
 
 impl AgentEngineActor {
     async fn run(mut self) {
+        Self::restore_flow_cache(&self.engine, &self.agent_id).await;
+        Self::restore_flow_workspace(&self.engine, &self.agent_id).await;
+        Self::restore_flow_report(&self.engine, &self.agent_id).await;
         Self::restore_agent_workspace(&self.engine, &self.agent_id).await;
         while let Some(msg) = self.rx.recv().await {
             if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
@@ -83,6 +86,92 @@ impl AgentEngineActor {
             }
         }
         tracing::debug!(agent_id = %self.agent_id, "engine actor exited");
+    }
+
+    async fn restore_flow_cache(engine: &tokio::sync::Mutex<DataEngine>, agent_id: &str) {
+        let (history, cache) = {
+            let engine = engine.lock().await;
+            (engine.history.clone(), Arc::clone(&engine.flow_cache))
+        };
+        let Some(history) = history else {
+            return;
+        };
+        match history.load_flow_cache(agent_id).await {
+            Ok(Some(serialized)) => {
+                let restored = serde_json::from_str::<serde_json::Value>(&serialized)
+                    .ok()
+                    .and_then(dag_engine::InstanceCache::from_json);
+                if let Some(restored) = restored {
+                    *cache.lock().await = restored;
+                } else {
+                    tracing::warn!(
+                        agent_id,
+                        "invalid persisted flow cache; starting with an empty cache"
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(agent_id, %error, "could not load flow cache; starting empty")
+            }
+        }
+    }
+
+    async fn restore_flow_workspace(engine: &tokio::sync::Mutex<DataEngine>, agent_id: &str) {
+        let engine = engine.lock().await;
+        let Some(history) = &engine.history else {
+            return;
+        };
+        match history.load_flow_workspace(agent_id).await {
+            Ok(Some(json)) => match serde_json::from_str::<dag_engine::FlowGraph>(&json) {
+                Ok(flow) if dag_engine::dataflow::Dataflow::<()>::new(&flow).is_ok() => {
+                    *engine.flow.write().expect("flow lock") = flow;
+                }
+                _ => tracing::warn!(agent_id, "invalid persisted flow workspace; starting empty"),
+            },
+            Ok(None) => {}
+            Err(error) => tracing::warn!(agent_id, %error, "could not load flow workspace"),
+        }
+    }
+
+    async fn restore_flow_report(engine: &tokio::sync::Mutex<DataEngine>, agent_id: &str) {
+        let engine = engine.lock().await;
+        let Some(history) = &engine.history else {
+            return;
+        };
+        let hash = flow_content_hash(&engine.flow.read().expect("flow lock"));
+        match history.latest_flow_run(agent_id, &hash).await {
+            Ok(Some(run)) => {
+                if let Some(json) = run.run_report_json {
+                    match serde_json::from_str::<crate::flow::FlowRunReportSummary>(&json) {
+                        Ok(summary) => {
+                            *engine.flow_report.write().expect("flow report lock") = Some(summary)
+                        }
+                        Err(error) => {
+                            tracing::warn!(agent_id, %error, "invalid persisted flow report")
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => tracing::warn!(agent_id, %error, "could not restore flow report"),
+        }
+    }
+
+    async fn persist_flow_workspace(
+        engine: &DataEngine,
+        agent_id: &str,
+        flow: &dag_engine::FlowGraph,
+    ) -> crate::error::Result<()> {
+        if let Some(history) = &engine.history {
+            let json = serde_json::to_string(flow)
+                .map_err(|e| crate::error::Error::Custom(e.to_string()))?;
+            history
+                .store_flow_workspace(agent_id, &json)
+                .await
+                .map_err(|e| crate::error::Error::Custom(e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Materialize the history ref's head snapshot into a freshly created
@@ -112,14 +201,24 @@ impl AgentEngineActor {
         match cmd {
             // ── Stage-model flow session state ───────────────────────────
             DataEngineCmd::SetFlow { flow, reply } => {
+                if self.running.load(Ordering::SeqCst) {
+                    let _ = reply.send(Err(crate::error::Error::Custom("a flow is running; wait before editing it".into())));
+                    return;
+                }
                 let engine = self.engine.lock().await;
-                let result = flow
-                    .validate()
-                    .map_err(|error| crate::error::Error::Custom(error.to_string()))
-                    .and_then(|()| {
-                        *engine.flow.write().expect("flow lock") = flow;
-                        Ok(())
-                    });
+                let result = match dag_engine::dataflow::Dataflow::<()>::new(&flow) {
+                    Err(error) => Err(crate::error::Error::Custom(error)),
+                    Ok(_) => match Self::persist_flow_workspace(&engine, &self.agent_id, &flow).await {
+                        Ok(()) => {
+                            if flow_content_hash(&engine.flow.read().expect("flow lock")) != flow_content_hash(&flow) {
+                                *engine.flow_report.write().expect("flow report lock") = None;
+                            }
+                            *engine.flow.write().expect("flow lock") = flow;
+                            Ok(())
+                        },
+                        Err(error) => Err(error),
+                    },
+                };
                 let _ = reply.send(result);
             }
             DataEngineCmd::GetFlow { reply } => {
@@ -135,8 +234,7 @@ impl AgentEngineActor {
                         .flow_report
                         .read()
                         .expect("flow report lock")
-                        .as_ref()
-                        .map(crate::flow::FlowRunReportSummary::from),
+                        .clone(),
                 };
                 let _ = reply.send(Ok(view));
             }
@@ -170,16 +268,24 @@ impl AgentEngineActor {
                 let running = Arc::clone(&self.running);
                 let agent_id = self.agent_id.clone();
                 tokio::spawn(async move {
-                    let (runner, flow, history) = {
+                    let (runner, flow, history, flow_cache) = {
                         let engine = engine.lock().await;
                         let flow = match flow {
                             Some(flow) => {
-                                if let Err(error) = flow.validate() {
+                                if let Err(error) = dag_engine::dataflow::Dataflow::<()>::new(&flow) {
                                     let _ = reply.send(Err(crate::error::Error::Custom(
                                         error.to_string(),
                                     )));
                                     running.store(false, Ordering::SeqCst);
                                     return;
+                                }
+                                if let Err(error) = Self::persist_flow_workspace(&engine, &agent_id, &flow).await {
+                                    let _ = reply.send(Err(error));
+                                    running.store(false, Ordering::SeqCst);
+                                    return;
+                                }
+                                if flow_content_hash(&engine.flow.read().expect("flow lock")) != flow_content_hash(&flow) {
+                                    *engine.flow_report.write().expect("flow report lock") = None;
                                 }
                                 *engine.flow.write().expect("flow lock") = flow.clone();
                                 flow
@@ -196,7 +302,13 @@ impl AgentEngineActor {
                                 stored
                             }
                         };
-                        (engine.flow_runner(), flow, engine.history.clone())
+                        *engine.flow_report.write().expect("flow report lock") = None;
+                        (
+                            engine.flow_runner(),
+                            flow,
+                            engine.history.clone(),
+                            Arc::clone(&engine.flow_cache),
+                        )
                     };
                     let started_at = chrono::Utc::now().to_rfc3339();
                     let trigger = Some(format!("agent:{agent_id}"));
@@ -210,11 +322,23 @@ impl AgentEngineActor {
                             "flow run panicked: {panic:?}"
                         )))
                     });
-                    // Audit trail: flow runs append to the same `runs` table
-                    // as DAG runs. Flow snapshots (the DagManifest-backed ref
-                    // machinery) are a follow-up; the flow JSON itself is
-                    // recoverable from the report's identity.
-                    if let (Some(history), Ok(report)) = (&history, &result) {
+                    if let Ok(report) = &result {
+                        let engine = engine_for_report.lock().await;
+                        *engine.flow_report.write().expect("flow report lock") = Some(crate::flow::FlowRunReportSummary::from(report));
+                    }
+                    if let Some(history) = &history {
+                        let cache_json = {
+                            let cache = flow_cache.lock().await;
+                            cache.to_json().to_string()
+                        };
+                        if let Err(error) = history.store_flow_cache(&agent_id, &cache_json).await {
+                            tracing::warn!(agent_id, %error, "flow cache could not be persisted");
+                        }
+                    }
+                    // Audit completed runs and top-level execution errors.
+                    // The hash identifies the flow but does not reconstruct it.
+                    if let Some(history) = &history {
+                        let report = result.as_ref().ok();
                         let record = dag_core::dag::history::RunRecord {
                             id: uuid::Uuid::new_v4().to_string(),
                             ref_name: "flow".into(),
@@ -223,16 +347,13 @@ impl AgentEngineActor {
                             trigger: trigger.clone(),
                             started_at: started_at.clone(),
                             finished_at: chrono::Utc::now().to_rfc3339(),
-                            ok: report.ok,
-                            cancelled: report
-                                .processes
-                                .values()
-                                .any(|summary| summary.cancelled > 0),
-                            error: None,
+                            ok: report.is_some_and(|report| report.ok),
+                            cancelled: report.map_or_else(|| cancel_token.is_cancelled(), |report| report.cancelled),
+                            error: result.as_ref().err().map(ToString::to_string),
                             message: Some("stage-model flow run".into()),
                             engine_version: dag_core::engine_version().to_string(),
                             source_revision: dag_core::source_revision().to_string(),
-                            run_report_json: serde_json::to_string(report).ok(),
+                            run_report_json: report.and_then(|report| serde_json::to_string(report).ok()),
                         };
                         if let Err(error) = history.record_run(&record).await {
                             tracing::warn!(%error, "flow run record could not be persisted");
@@ -277,7 +398,20 @@ impl AgentEngineActor {
                     .engine
                     .try_lock()
                     .expect("uncontended: running flag is false");
-                let _ = reply.send(Ok(engine.run_dag_shell(&script, dry_run, timeout_ms)));
+                let old = engine.flow.read().expect("flow lock").clone();
+                let outcome = engine.run_flow_shell(&script, dry_run, timeout_ms);
+                if outcome.applied {
+                    let flow = engine.flow.read().expect("flow lock").clone();
+                    if let Err(error) = Self::persist_flow_workspace(&engine, &self.agent_id, &flow).await {
+                        *engine.flow.write().expect("flow lock") = old;
+                        let _ = reply.send(Err(error));
+                        return;
+                    }
+                    if flow_content_hash(&old) != flow_content_hash(&flow) {
+                        *engine.flow_report.write().expect("flow report lock") = None;
+                    }
+                }
+                let _ = reply.send(Ok(outcome));
             }
             DataEngineCmd::AddEdge {
                 from,
@@ -803,11 +937,14 @@ impl DataEngineClient {
     /// Reads directly from the shared `NodeRegistry` — never blocks on a
     /// running DAG.
     pub fn list_node_factories(&self) -> Result<Vec<crate::node_registry::NodeInfo>> {
-        Ok(self.node_registry.list_nodes())
+        let mut nodes = self.node_registry.list_nodes();
+        nodes.push(crate::data_engine::channel_info());
+        Ok(nodes)
     }
 
     /// Get the JSON Schema for a specific node kind. Synchronous, never blocks.
     pub fn get_node_spec(&self, kind: &str) -> Result<schemars::Schema> {
+        if kind == "channel" { return crate::data_engine::channel_schema().map_err(ClientError::Engine); }
         self.node_registry
             .get_node_spec(kind)
             .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
@@ -815,6 +952,7 @@ impl DataEngineClient {
 
     /// Get the input/output port layout of a node kind. Synchronous, never blocks.
     pub fn get_node_ports(&self, kind: &str) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" { return crate::data_engine::channel_ports(None).map_err(ClientError::Engine); }
         self.node_registry
             .get_node_ports(kind)
             .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
@@ -827,6 +965,7 @@ impl DataEngineClient {
         kind: &str,
         spec: serde_json::Value,
     ) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" { return crate::data_engine::channel_ports(Some(&spec)).map_err(ClientError::Engine); }
         self.node_registry
             .get_node_ports_for_spec(kind, spec)
             .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
@@ -834,6 +973,7 @@ impl DataEngineClient {
 
     /// Get the documentation string for a node kind. Synchronous, never blocks.
     pub fn get_node_doc(&self, kind: &str) -> Result<String> {
+        if kind == "channel" { return Ok(crate::data_engine::CHANNEL_DOC.into()); }
         self.node_registry
             .get_node_doc(kind)
             .map_err(|e| ClientError::Engine(crate::error::Error::from(e)))
@@ -1651,6 +1791,350 @@ mod tests {
     use crate::dag::graph::PortOutputs;
     use crate::data_engine::DataEngine;
     use crate::nodes::meta::NodePorts;
+
+    struct RendezvousExecutor {
+        barrier: Arc<tokio::sync::Barrier>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        inner: Arc<dyn dag_core::TaskExecutor>,
+    }
+    #[async_trait::async_trait]
+    impl dag_core::TaskExecutor for RendezvousExecutor {
+        fn name(&self) -> &'static str {
+            "rendezvous-test"
+        }
+        async fn run(
+            &self,
+            execution: dag_core::TaskExecution,
+        ) -> dag_core::dag::node_event::JobResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.barrier.wait().await;
+            self.inner.run(execution).await
+        }
+    }
+
+    #[tokio::test]
+    async fn agents_run_concurrently_through_the_shared_configured_executor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.txt");
+        std::fs::write(&path, "payload").unwrap();
+        let graph = dag_engine::FlowGraph::builder()
+            .process(dag_engine::Process::new(
+                "file",
+                "file_reference",
+                serde_json::json!({"path":path.to_string_lossy()}),
+            ))
+            .build()
+            .unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut template = DataEngine::builder().build();
+        template.set_task_executor(Arc::new(RendezvousExecutor {
+            barrier: Arc::new(tokio::sync::Barrier::new(2)),
+            calls: Arc::clone(&calls),
+            inner: dag_core::local_task_executor(),
+        }));
+        let manager = DataEngineManager::with_policy_and_roots(
+            template,
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let first = manager.client_for_agent("flow-concurrency-a");
+        let second = manager.client_for_agent("flow-concurrency-b");
+        let options = crate::flow::FlowOptions::default();
+        let (first_report, second_report) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            async {
+                tokio::join!(
+                    first.run_flow(Some(graph.clone()), options.clone()),
+                    second.run_flow(Some(graph), options)
+                )
+            },
+        )
+        .await
+        .expect("agent runs must reach the executor concurrently");
+        assert!(first_report.unwrap().ok);
+        assert!(second_report.unwrap().ok);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn flow_resume_cache_survives_new_manager_and_is_isolated_by_agent() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("history.db");
+        let file = directory.path().join("input.txt");
+        std::fs::write(&file, "input").unwrap();
+        let graph = dag_engine::FlowGraph::builder()
+            .source(dag_engine::Source::items(
+                "files",
+                vec![serde_json::json!(file.to_string_lossy())],
+            ))
+            .process(dag_engine::Process::new(
+                "file",
+                "file_reference",
+                serde_json::json!({"path":"{{item}}"}),
+            ))
+            .wire(dag_engine::Wire::direct("files", 0, "file", 0))
+            .build()
+            .unwrap();
+        let history = dag_core::dag::history::DagHistory::open(&db).await.unwrap();
+        let manager = DataEngineManager::with_policy_and_roots(
+            DataEngine::builder().build().with_history(history),
+            zero_idle_policy(),
+            directory.path().join("work-a"),
+            directory.path().join("receipts-a"),
+        );
+        let first = manager.client_for_agent("resume-agent-a");
+        let opts = crate::flow::FlowOptions {
+            resume: Some(true),
+            ..Default::default()
+        };
+        let initial = first
+            .run_flow(Some(graph.clone()), opts.clone())
+            .await
+            .unwrap();
+        assert_eq!(initial.processes["file"].reused, 0);
+        assert_eq!(manager.evict_idle_actors().await, 1);
+        let recreated = manager.client_for_agent("resume-agent-a");
+        let restored_view = recreated.get_flow_view().await.unwrap();
+        assert_eq!(restored_view.last_run.unwrap().processes["file"].succeeded, 1);
+        let after_eviction = recreated
+            .run_flow(None, opts.clone())
+            .await
+            .unwrap();
+        assert_eq!(after_eviction.processes["file"].reused, 1);
+        let reopened = dag_core::dag::history::DagHistory::open(&db).await.unwrap();
+        let restarted = DataEngineManager::with_policy_and_roots(
+            DataEngine::builder().build().with_history(reopened),
+            zero_idle_policy(),
+            directory.path().join("work-b"),
+            directory.path().join("receipts-b"),
+        );
+        let same = restarted.client_for_agent("resume-agent-a");
+        let other = restarted.client_for_agent("resume-agent-b");
+        assert_eq!(same.get_flow_view().await.unwrap().last_run.unwrap().processes["file"].succeeded, 1);
+        assert!(other.get_flow_view().await.unwrap().last_run.is_none());
+        let restored = same
+            .run_flow(None, opts.clone())
+            .await
+            .unwrap();
+        assert_eq!(restored.processes["file"].reused, 1);
+        std::fs::write(&file, "changed input bytes").unwrap();
+        let changed = same
+            .run_flow(Some(graph.clone()), opts.clone())
+            .await
+            .unwrap();
+        assert_eq!(changed.processes["file"].reused, 0);
+        let isolated = other.run_flow(Some(graph), opts).await.unwrap();
+        assert_eq!(isolated.processes["file"].reused, 0);
+    }
+
+    #[tokio::test]
+    async fn channel_metadata_describes_runtime_operators() {
+        let (client, _handle) = spawn_with_engine(DataEngine::builder().build());
+        assert!(
+            client
+                .list_node_factories()
+                .unwrap()
+                .iter()
+                .any(|node| node.kind == "channel")
+        );
+        let schema = serde_json::to_value(client.get_node_spec("channel").unwrap()).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        for operator in [
+            "collect",
+            "transpose",
+            "buffer",
+            "if_empty",
+            "concat",
+            "to_sorted_list",
+        ] {
+            assert!(
+                variants
+                    .iter()
+                    .any(|v| v["properties"]["operator"]["const"] == operator),
+                "{operator}"
+            );
+        }
+        let ports = client
+            .get_node_ports_for_spec("channel", serde_json::json!({"operator":"join"}))
+            .unwrap();
+        assert_eq!(ports.input_ports().len(), 2);
+        assert_eq!(ports.output_ports().len(), 1);
+        let branch = client
+            .get_node_ports_for_spec(
+                "channel",
+                serde_json::json!({"operator":"branch", "branches":[{"name":"a"}, {"name":"b"}]}),
+            )
+            .unwrap();
+        assert_eq!(branch.output_ports().len(), 2);
+        assert!(
+            client
+                .get_node_ports_for_spec("channel", serde_json::json!({"operator":"missing"}))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_failed_run_does_not_restore_an_older_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let history =
+            dag_core::dag::history::DagHistory::open(&directory.path().join("history.db"))
+                .await
+                .unwrap();
+        let manager = DataEngineManager::with_policy_and_roots(
+            DataEngine::builder().build().with_history(history.clone()),
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_agent("a");
+        let graph = dag_engine::FlowGraph::builder()
+            .process(dag_engine::Process::new(
+                "hello",
+                "echo",
+                serde_json::json!({}),
+            ))
+            .build()
+            .unwrap();
+        assert!(
+            client
+                .run_flow(Some(graph), crate::flow::FlowOptions::default())
+                .await
+                .unwrap()
+                .ok
+        );
+        let mut failed = history
+            .list_runs(1, Some("flow"))
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        failed.id = uuid::Uuid::new_v4().to_string();
+        failed.started_at = "9999-01-01T00:00:00Z".into();
+        failed.ok = false;
+        failed.error = Some("execution failed".into());
+        failed.run_report_json = None;
+        history.record_run(&failed).await.unwrap();
+        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert!(
+            manager
+                .client_for_agent("a")
+                .get_flow_view()
+                .await
+                .unwrap()
+                .last_run
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_flow_run_is_recorded_in_history() {
+        let history = dag_core::dag::history::DagHistory::open_in_memory().await.unwrap();
+        let (client, _handle) = spawn_with_engine(DataEngine::builder().build().with_history(history.clone()));
+        let graph = dag_engine::FlowGraph::builder()
+            .process(dag_engine::Process::new("broken", "missing_kind", serde_json::json!({})))
+            .build().unwrap();
+        let error = client.run_flow(Some(graph), crate::flow::FlowOptions::default()).await.unwrap_err();
+        assert!(error.to_string().contains("missing_kind"));
+        let runs = history.list_runs(10, Some("flow")).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].ok && !runs[0].cancelled);
+        assert!(runs[0].error.as_deref().unwrap().contains("missing_kind"));
+        assert!(runs[0].run_report_json.is_none());
+    }
+
+    #[tokio::test]
+    async fn flow_view_tracks_last_run_and_clears_after_edit() {
+        let (client, _handle) = spawn_with_engine(DataEngine::builder().build());
+        let graph = dag_engine::FlowGraph::builder()
+            .process(dag_engine::Process::new(
+                "hello",
+                "echo",
+                serde_json::json!({}),
+            ))
+            .build()
+            .unwrap();
+        client.set_flow(graph.clone()).await.unwrap();
+        assert!(client.get_flow_view().await.unwrap().last_run.is_none());
+        let report = client
+            .run_flow(None, crate::flow::FlowOptions::default())
+            .await
+            .unwrap();
+        assert!(report.ok);
+        let view = client.get_flow_view().await.unwrap();
+        let summary = view.last_run.unwrap();
+        assert!(summary.ok);
+        assert_eq!(summary.processes["hello"].succeeded, 1);
+        let preview = client
+            .run_dag_shell("node('more', 'echo', {})\ncommit()".into(), true, None)
+            .await
+            .unwrap();
+        assert!(preview.ok && !preview.applied);
+        assert!(client.get_flow_view().await.unwrap().last_run.is_some());
+        client.set_flow(graph).await.unwrap();
+        assert!(client.get_flow_view().await.unwrap().last_run.is_some());
+        let edit = client
+            .run_dag_shell("node('more', 'echo', {})\ncommit()".into(), false, None)
+            .await
+            .unwrap();
+        assert!(edit.applied);
+        assert!(client.get_flow_view().await.unwrap().last_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn flow_shell_commits_survive_eviction_and_dry_run_does_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let history =
+            dag_core::dag::history::DagHistory::open(&directory.path().join("history.db"))
+                .await
+                .unwrap();
+        let manager = DataEngineManager::with_policy_and_roots(
+            DataEngine::builder().build().with_history(history),
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_agent("shell-agent");
+        let outcome = client
+            .run_dag_shell("from_list('reads', ['a'])\ncommit()".into(), false, None)
+            .await
+            .unwrap();
+        assert!(outcome.applied);
+        let dry = client
+            .run_dag_shell("from_list('preview', ['b'])\ncommit()".into(), true, None)
+            .await
+            .unwrap();
+        assert!(dry.ok && !dry.applied);
+        assert_eq!(manager.evict_idle_actors().await, 1);
+        let reopened = manager.client_for_agent("shell-agent");
+        let restored = reopened.get_flow().await.unwrap();
+        assert!(restored.source("reads").is_some());
+        assert!(restored.source("preview").is_none());
+        let changed = reopened
+            .run_dag_shell("from_list('extra', ['c'])\ncommit()".into(), false, None)
+            .await
+            .unwrap();
+        assert!(changed.applied);
+        assert_eq!(manager.evict_idle_actors().await, 1);
+        let again = manager
+            .client_for_agent("shell-agent")
+            .get_flow()
+            .await
+            .unwrap();
+        assert!(again.source("reads").is_some() && again.source("extra").is_some());
+        let other = manager.client_for_agent("other-agent");
+        assert!(other.get_flow().await.unwrap().is_empty());
+        other.set_flow(again.clone()).await.unwrap();
+        assert_eq!(manager.evict_idle_actors().await, 2);
+        let restored_other = manager
+            .client_for_agent("other-agent")
+            .get_flow()
+            .await
+            .unwrap();
+        assert!(
+            restored_other.source("reads").is_some() && restored_other.source("extra").is_some()
+        );
+    }
 
     /// A node that sleeps for 2s — long enough to be interrupted by cancellation.
     #[derive(Clone)]

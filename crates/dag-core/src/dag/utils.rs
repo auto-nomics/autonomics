@@ -84,6 +84,7 @@ fn value_kind(value: &NodeValue) -> &'static str {
         NodeValue::File(_) => "File",
         NodeValue::FileSet(_) => "FileSet",
         NodeValue::Channel(_) => "Channel",
+        NodeValue::Structured(_) => "Channel",
     }
 }
 
@@ -95,6 +96,7 @@ fn bound_path(value: &NodeValue) -> Option<String> {
         NodeValue::FileSet(files) => files.first().map(|file| file.path.clone()),
         NodeValue::DataFrame(_) => None,
         NodeValue::Channel(_) => None,
+        NodeValue::Structured(value) => value.artifacts().first().map(|file| file.path.clone()),
     }
 }
 
@@ -105,6 +107,11 @@ fn bound_fingerprint(value: &NodeValue) -> Option<&FileFingerprint> {
         NodeValue::FileSet(files) => files.first().and_then(|file| file.fingerprint.as_ref()),
         NodeValue::DataFrame(_) => None,
         NodeValue::Channel(_) => None,
+        NodeValue::Structured(value) => value
+            .artifacts()
+            .into_iter()
+            .next()
+            .and_then(|file| file.fingerprint.as_ref()),
     }
 }
 

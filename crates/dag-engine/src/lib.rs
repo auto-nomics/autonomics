@@ -12,49 +12,42 @@
 //! 1. **Authored state** is process-granular: a [`FlowGraph`] holds processes
 //!    (one node per workflow process) and wires (routing between stages).
 //!    It is the only editable, persisted, snapshotted representation.
-//! 2. **Instance state** is run-scoped: item instances (`process#key`)
-//!    materialize at run start (or on data arrival, later) and die with
-//!    the run. Only their fingerprints/outputs survive, in a per-stage
-//!    instance result cache keyed by stable `stage#key` ids — enabling
-//!    incremental reuse without polluting the authored graph.
+//! 2. **Instance state** is run-scoped: tasks materialize from channel
+//!    deliveries and never modify the authored graph. Eligible results can
+//!    be cached for later runs.
 //!
-//! # Cardinality and routing
+//! # Planning and routing
 //!
-//! - A stage is either `Singleton` (one instance) or a `Fanout` over a
-//!   [`Source`] resolved at run start (glob / explicit items; channel
-//!   streams later).
-//! - `Direct` wires: fanout→fanout zips by item key; singleton→any
-//!   broadcasts to every target instance.
-//! - `Collect` wires: fanout→singleton collapses all instances into the
-//!   target's single input port (Nextflow's `collect` as an edge op).
-//!
-//! Incremental identity: `fingerprint(process definition revision, rendered
-//! spec, item, upstream instance fingerprints)`. A spec edit invalidates
-//! every instance of that process; an item-set change affects only the
-//! added/removed keys.
+//! The reactive scheduler consumes sources incrementally, creates tasks as
+//! inputs arrive, and closes downstream channels after producers finish. The
+//! older batch planner remains available for its existing callers.
 
 pub mod cache;
+pub mod channel;
+pub mod dataflow;
 pub mod error;
 pub mod instance;
 pub mod model;
 pub mod plan;
+mod reactive;
 pub mod scheduler;
 pub mod source;
 
 pub use cache::{CachedInstance, CachedOutput, InstanceCache, plan_fingerprint};
 pub use error::{Error, Result};
 pub use instance::{
-    Instance, InstanceId, UpstreamBinding, INSTANCE_ID_SEPARATOR, instance_fingerprint, item_key,
+    INSTANCE_ID_SEPARATOR, Instance, InstanceId, UpstreamBinding, instance_fingerprint, item_key,
     render_spec,
 };
 pub use model::{
-    Cardinality, ErrorMode, ErrorStrategy, FlowGraph, FlowGraphBuilder, PortIndex, Process,
-    ProcessName, Source, Wire, WireOp,
+    ErrorMode, ErrorStrategy, FlowGraph, FlowGraphBuilder, PathPatterns, PortIndex, Process,
+    ProcessName, Source, SourceSpec, Wire, WireOp,
 };
-pub use plan::{
-    ExecutionPlan, InstanceRoute, ProcessPlan, SourceResolution, build_plan,
-};
+pub use plan::{ExecutionPlan, InstanceRoute, ProcessPlan, SourceResolution, build_plan};
 pub use scheduler::{
-    FlowRunConfig, FlowRunReport, FlowScheduler, InstanceRecord, NodeBuilder, ProcessRunSummary,
+    ChannelBinaryFunction, ChannelFunction, FlowRunConfig, FlowRunReport, FlowScheduler,
+    InstanceRecord, NodeBuilder, ProcessRunSummary,
 };
-pub use source::{enumerate_glob, resolve_sources};
+pub use source::{
+    SourceStreams, enumerate_glob, resolve_sources, stream_sources, stream_sources_with_functions,
+};

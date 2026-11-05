@@ -167,15 +167,52 @@ pub(crate) fn literal_prefix(path: &str) -> Option<String> {
 ///
 /// Literal paths keep the exactly-one-file contract. Glob patterns collect
 /// sorted matches (skipping the `.autonomics` control directory) and must
-/// match exactly one file — Nextflow single-`path` strictness.
+/// match exactly one file under the legacy scalar-output contract.
 pub(crate) fn resolve_output(
     pattern: &str,
     workdir: &Path,
 ) -> Result<PathBuf, super::error::ContainerCommandError> {
+    let mut files = resolve_output_matches(pattern, workdir)?;
+    if files.len() == 1 {
+        return Ok(files.remove(0));
+    }
+    let matches = files
+        .iter()
+        .map(|path| {
+            path.strip_prefix(workdir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    Err(super::error::ContainerCommandError::AmbiguousOutput {
+        pattern: pattern.to_string(),
+        matches,
+    })
+}
+
+/// Resolve a required path output in deterministic order. Unlike the legacy
+/// scalar output, a tuple path may contain multiple matching files.
+pub(crate) fn resolve_output_matches(
+    pattern: &str,
+    workdir: &Path,
+) -> Result<Vec<PathBuf>, super::error::ContainerCommandError> {
+    resolve_output_matches_with_options(pattern, workdir, false, None)
+}
+
+pub(crate) fn resolve_output_matches_with_options(
+    pattern: &str,
+    workdir: &Path,
+    allow_empty: bool,
+    hidden: Option<bool>,
+) -> Result<Vec<PathBuf>, super::error::ContainerCommandError> {
     if !contains_glob(pattern) {
         let path = workdir.join(pattern);
         if path.is_file() {
-            return Ok(path);
+            return Ok(vec![path]);
+        }
+        if allow_empty {
+            return Ok(Vec::new());
         }
         return Err(super::error::ContainerCommandError::MissingOutput {
             path: pattern.to_string(),
@@ -184,7 +221,13 @@ pub(crate) fn resolve_output(
 
     let full = workdir.join(pattern);
     let pattern_str = full.to_string_lossy().into_owned();
-    let matches = glob::glob(&pattern_str)
+    // Nextflow excludes hidden matches by default unless the pattern itself
+    // starts with a dot; literal hidden paths are handled above.
+    let options = glob::MatchOptions {
+        require_literal_leading_dot: !hidden.unwrap_or_else(|| pattern.starts_with('.')),
+        ..glob::MatchOptions::new()
+    };
+    let matches = glob::glob_with(&pattern_str, options)
         .map_err(|error| {
             super::error::ContainerCommandError::Invalid(format!(
                 "invalid output pattern `{pattern}`: {error}"
@@ -206,26 +249,12 @@ pub(crate) fn resolve_output(
         })
         .collect();
     files.sort();
-    match files.len() {
-        0 => Err(super::error::ContainerCommandError::MissingOutput {
+    if files.is_empty() && !allow_empty {
+        Err(super::error::ContainerCommandError::MissingOutput {
             path: pattern.to_string(),
-        }),
-        1 => Ok(files.remove(0)),
-        _ => {
-            let matches = files
-                .iter()
-                .map(|path| {
-                    path.strip_prefix(workdir)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect();
-            Err(super::error::ContainerCommandError::AmbiguousOutput {
-                pattern: pattern.to_string(),
-                matches,
-            })
-        }
+        })
+    } else {
+        Ok(files)
     }
 }
 
@@ -260,7 +289,7 @@ pub(crate) fn input_path(value: &NodeValue) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join(",")),
         NodeValue::FileSet(_) => Err("an empty FileSet cannot be bound to a command input".into()),
-        NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
+        NodeValue::DataFrame(_) | NodeValue::Channel(_) | NodeValue::Structured(_) => {
             Err("container_command inputs must be File or FileSet values".into())
         }
     }

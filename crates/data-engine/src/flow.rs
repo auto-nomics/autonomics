@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use dag_engine::{
     FlowGraph, FlowRunConfig, FlowRunReport, FlowScheduler, InstanceCache, NodeBuilder,
-    SourceResolution, build_plan, resolve_sources,
+    stream_sources_with_functions,
 };
 use tokio_util::sync::CancellationToken;
 use vfs::OpendalFileStorage;
@@ -48,6 +48,8 @@ pub struct FlowView {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FlowRunReportSummary {
     pub ok: bool,
+    #[serde(default)]
+    pub cancelled: bool,
     pub processes: std::collections::BTreeMap<String, dag_engine::ProcessRunSummary>,
 }
 
@@ -55,6 +57,7 @@ impl From<&FlowRunReport> for FlowRunReportSummary {
     fn from(report: &FlowRunReport) -> Self {
         Self {
             ok: report.ok,
+            cancelled: report.cancelled,
             processes: report
                 .processes
                 .iter()
@@ -69,9 +72,9 @@ impl From<&FlowRunReport> for FlowRunReportSummary {
 pub struct FlowRunner {
     scheduler: FlowScheduler,
     storage: Option<Arc<OpendalFileStorage>>,
+    source_function: dag_engine::ChannelFunction,
     /// Cross-run instance results, shared with every other runner this
-    /// engine assembles (behind a lock; runs are serialized per agent by
-    /// the actor's `running` flag anyway).
+    /// session assembles. Each isolated agent has its own cache.
     cache: Arc<tokio::sync::Mutex<InstanceCache>>,
 }
 
@@ -80,34 +83,58 @@ impl DataEngine {
     /// and executor stack. The authored flow graph is supplied per run, so
     /// the engine's own (legacy) DAG state is never consulted or mutated.
     pub fn flow_runner(&self) -> FlowRunner {
+        let function_registry = Arc::clone(&self.node_registry);
+        let function_snapshot = crate::dag_shell::DagShellSnapshot::from_dag(&self.dag);
+        let binary_registry = Arc::clone(&function_registry);
+        let binary_snapshot = function_snapshot.clone();
+        let channel_binary_function: dag_engine::ChannelBinaryFunction =
+            Arc::new(move |function, first, second| {
+                crate::dag_shell::run_channel_function_with_inputs(
+                    function,
+                    Some(first),
+                    Some(second),
+                    &binary_snapshot,
+                    &binary_registry,
+                )
+            });
+        let channel_function: dag_engine::ChannelFunction = Arc::new(move |function, input| {
+            crate::dag_shell::run_channel_function(
+                function,
+                input,
+                &function_snapshot,
+                &function_registry,
+            )
+        });
         let registry = Arc::clone(&self.node_registry);
         let node_builder: NodeBuilder = Arc::new(move |kind, spec| {
-            registry
-                .build_node(kind, spec)
-                .map_err(|error| {
-                    dag_engine::Error::Execution(format!(
-                        "cannot build node `{kind}`: {error}"
-                    ))
-                })
+            if kind == "channel" {
+                return dag_core::dag::ChannelNode::from_spec(&spec)
+                    .map(|node| Box::new(node) as Box<dyn dag_core::node::DagNode>)
+                    .map_err(|error| dag_engine::Error::Execution(error.to_string()));
+            }
+            registry.build_node(kind, spec).map_err(|error| {
+                dag_engine::Error::Execution(format!("cannot build node `{kind}`: {error}"))
+            })
         });
         FlowRunner {
             scheduler: FlowScheduler::new(
                 self.dag.task_executor(),
                 node_builder,
                 Arc::new(self.engine_ctx.clone()),
-            ),
+            )
+            .with_channel_function(channel_function.clone())
+            .with_channel_binary_function(channel_binary_function),
             storage: self.engine_ctx.opendal.clone(),
+            source_function: channel_function,
             cache: Arc::clone(&self.flow_cache),
         }
     }
 }
 
 impl FlowRunner {
-    /// Resolve sources through the VFS, build the plan, and execute it.
-    ///
-    /// Failure semantics follow the flow engine: source/plan failures (no
-    /// storage configured for a glob, mismatched item sets, broken
-    /// templates, unknown kinds) abort before anything dispatches.
+    /// Execute a reactive flow, enumerating file sources through the VFS.
+    /// Source errors encountered during enumeration fail the run; tasks may
+    /// already have started when a later source item or error arrives.
     pub async fn run(
         &self,
         flow: &FlowGraph,
@@ -127,21 +154,20 @@ impl FlowRunner {
         options: &FlowOptions,
         cancel: Option<CancellationToken>,
     ) -> Result<FlowRunReport, dag_engine::Error> {
-        let resolution: SourceResolution =
-            resolve_sources(flow, self.storage.as_deref()).await?;
-        let plan = build_plan(flow, &resolution)?;
+        let streams = stream_sources_with_functions(
+            flow,
+            self.storage.clone(),
+            Some(self.source_function.clone()),
+        )?;
         let config = FlowRunConfig {
             max_concurrency: options
                 .max_concurrency
                 .unwrap_or_else(|| FlowRunConfig::default().max_concurrency),
             resume: options.resume.unwrap_or(false),
         };
-        // A shared, long-lived cache: the manager hands the same host to
-        // every run of this agent session, so the second batch reuses the
-        // first batch's instances.
         let mut cache = self.cache.lock().await;
         self.scheduler
-            .run(&plan, &config, Some(&mut cache), cancel)
+            .run_dataflow_streamed_cached(flow, streams, &config, Some(&mut cache), cancel)
             .await
     }
 }
@@ -158,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn singleton_echo_flow_runs_through_the_real_registry() {
         let flow = FlowGraph::builder()
-            .process(Process::singleton("hello", "echo", serde_json::json!({})))
+            .process(Process::new("hello", "echo", serde_json::json!({})))
             .build()
             .unwrap();
         let report = engine()
@@ -171,19 +197,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fanout_over_items_executes_one_instance_per_item() {
+    async fn source_driven_flow_executes_one_instance_per_item() {
+        // file_reference resolves each delivered path — one real node per item.
+        let directory = tempfile::tempdir().unwrap();
+        let items: Vec<serde_json::Value> = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                let path = directory.path().join(format!("{name}.txt"));
+                std::fs::write(&path, name).unwrap();
+                serde_json::json!(path.display().to_string())
+            })
+            .collect();
         let flow = FlowGraph::builder()
-            .process(Process::fanout(
+            .source(Source::items("reads", items))
+            .process(Process::new(
                 "batch",
-                "echo",
-                serde_json::json!({}),
-                Source::items(vec![
-                    serde_json::json!(1),
-                    serde_json::json!(2),
-                    serde_json::json!(3),
-                ]),
-                "item",
+                "file_reference",
+                serde_json::json!({ "path": "{{item}}" }),
             ))
+            .wire(Wire::direct("reads", 0, "batch", 0))
             .build()
             .unwrap();
         let report = engine()
@@ -201,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_kind_fails_before_dispatch() {
         let flow = FlowGraph::builder()
-            .process(Process::singleton(
+            .process(Process::new(
                 "broken",
                 "no_such_kind",
                 serde_json::json!({}),
@@ -221,13 +253,9 @@ mod tests {
         // A default engine has no opendal storage registered; a glob source
         // must fail with the explicit no-storage error, not a panic.
         let flow = FlowGraph::builder()
-            .process(Process::fanout(
-                "scan",
-                "echo",
-                serde_json::json!({}),
-                Source::glob("data/*.fastq"),
-                "sample",
-            ))
+            .source(Source::glob("reads", "data/*.fastq"))
+            .process(Process::new("scan", "echo", serde_json::json!({})))
+            .wire(Wire::direct("reads", 0, "scan", 0))
             .build()
             .unwrap();
         let error = engine()
@@ -236,5 +264,168 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("no VFS storage"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn glob_stream_runs_real_nodes_through_vfs() {
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        for path in ["data/a.fastq", "data/b.fastq", "data/c.txt"] {
+            storage
+                .write_bytes(path, b"payload".to_vec())
+                .await
+                .unwrap();
+        }
+        let engine = DataEngine::builder()
+            .register_opendal_fs(storage)
+            .unwrap()
+            .build();
+        let graph = FlowGraph::builder()
+            .source(Source::glob("reads", "data/*.fastq"))
+            .process(Process::new(
+                "read",
+                "file_reference",
+                serde_json::json!({"path":"{{item}}"}),
+            ))
+            .wire(Wire::direct("reads", 0, "read", 0))
+            .build()
+            .unwrap();
+        let report = engine
+            .flow_runner()
+            .run(&graph, &FlowOptions::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["read"].succeeded, 2);
+    }
+    #[tokio::test]
+    async fn reactive_resume_reuses_file_outputs_through_runner() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.txt");
+        std::fs::write(&path, "test").unwrap();
+        let flow = FlowGraph::builder()
+            .source(Source::items(
+                "files",
+                vec![serde_json::json!(path.to_string_lossy())],
+            ))
+            .process(Process::new(
+                "file",
+                "file_reference",
+                serde_json::json!({"path": "{{item}}"}),
+            ))
+            .wire(Wire::direct("files", 0, "file", 0))
+            .build()
+            .unwrap();
+        let engine = engine();
+        let runner = engine.flow_runner();
+        let opts = FlowOptions {
+            resume: Some(true),
+            ..Default::default()
+        };
+        let first = runner.run(&flow, &opts, None).await.unwrap();
+        assert_eq!(first.processes["file"].reused, 0);
+        let second = runner.run(&flow, &opts, None).await.unwrap();
+        assert_eq!(second.processes["file"].reused, 1);
+    }
+
+    #[tokio::test]
+    async fn isolated_agents_do_not_share_run_locks_or_cached_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.txt");
+        std::fs::write(&path, "test").unwrap();
+        let flow = FlowGraph::builder()
+            .process(Process::new(
+                "file",
+                "file_reference",
+                serde_json::json!({"path": path.to_string_lossy()}),
+            ))
+            .build()
+            .unwrap();
+        let template = engine();
+        let first_agent = template.new_isolated_engine();
+        let second_agent = template.new_isolated_engine();
+        assert!(!Arc::ptr_eq(
+            &first_agent.flow_cache,
+            &second_agent.flow_cache
+        ));
+        assert!(!Arc::ptr_eq(&template.flow_cache, &first_agent.flow_cache));
+        let first = first_agent.flow_runner();
+        let second = second_agent.flow_runner();
+        let options = FlowOptions {
+            resume: Some(true),
+            ..Default::default()
+        };
+        let report = first.run(&flow, &options, None).await.unwrap();
+        assert_eq!(report.processes["file"].reused, 0);
+        let report = first.run(&flow, &options, None).await.unwrap();
+        assert_eq!(report.processes["file"].reused, 1);
+        let lock = first_agent.flow_cache.lock().await;
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            second.run(&flow, &options, None),
+        )
+        .await
+        .expect("another agent must not wait for this session's run lock")
+        .unwrap();
+        assert_eq!(
+            report.processes["file"].reused, 0,
+            "another agent must not reuse this session's result"
+        );
+        drop(lock);
+    }
+
+    struct TrackingExecutor {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        inner: Arc<dyn dag_core::TaskExecutor>,
+    }
+    #[async_trait::async_trait]
+    impl dag_core::TaskExecutor for TrackingExecutor {
+        fn name(&self) -> &'static str {
+            "tracking-test"
+        }
+        fn execution_binding(&self) -> Option<serde_json::Value> {
+            Some(serde_json::json!({"target":"configured"}))
+        }
+        async fn run(
+            &self,
+            execution: dag_core::TaskExecution,
+        ) -> dag_core::dag::node_event::JobResult {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.run(execution).await
+        }
+    }
+
+    #[tokio::test]
+    async fn isolated_agent_runs_through_configured_executor() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.txt");
+        std::fs::write(&path, "test").unwrap();
+        let flow = FlowGraph::builder()
+            .process(Process::new(
+                "file",
+                "file_reference",
+                serde_json::json!({"path":path.to_string_lossy()}),
+            ))
+            .build()
+            .unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let executor: Arc<dyn dag_core::TaskExecutor> = Arc::new(TrackingExecutor {
+            calls: Arc::clone(&calls),
+            inner: dag_core::local_task_executor(),
+        });
+        let mut template = engine();
+        template.set_task_executor(Arc::clone(&executor));
+        let agent = template.new_isolated_engine();
+        assert!(Arc::ptr_eq(&agent.dag.task_executor(), &executor));
+        let report = agent
+            .flow_runner()
+            .run(&flow, &FlowOptions::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            report.execution_binding,
+            Some(serde_json::json!({"target":"configured"}))
+        );
     }
 }

@@ -10,11 +10,19 @@ use std::sync::{Arc, Mutex};
 
 use rustpython_ast::TextSize;
 
-use super::interp::{ErrKind, EvalError, EvalResult, Value, json_to_value, value_to_json};
+use super::interp::{ErrKind, EvalError, EvalResult, Value, json_to_value};
 use super::{GraphEditOp, MAX_API_OPERATIONS, MAX_MAP_SIZE, ScriptState};
 
 pub(crate) const HOST_FUNCTIONS: &[&str] = &[
     "node",
+    "process",
+    "output",
+    "bind_inputs",
+    "from_path",
+    "from_file_pairs",
+    "from_list",
+    "channel_value",
+    "collect_edge",
     "update_node",
     "remove_node",
     "edge",
@@ -108,7 +116,7 @@ pub(crate) fn json_map_property_count(value: &serde_json::Value) -> usize {
 /// graphs). Oversized/unsupported values surface as limit errors, matching the
 /// previous `require_json` behavior.
 pub(crate) fn spec_to_json(value: &Value, offset: Offset) -> EvalResult<serde_json::Value> {
-    value_to_json(value, 0).ok_or_else(|| limit_error(offset, API_LIMIT_MESSAGE))
+    super::interp::value_to_spec_json(value).ok_or_else(|| limit_error(offset, API_LIMIT_MESSAGE))
 }
 
 /// Convert snapshot/registry JSON into script values.

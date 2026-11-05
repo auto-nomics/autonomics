@@ -21,8 +21,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::execution::{TaskExecution, TaskExecutor, TaskSubmission};
+use dag_core::dag::graph::PortOutputs;
 use dag_core::dag::node_event::{JobResult, NodeEvent, NodeReporter};
 use dag_core::dag::{DagError, NodeInput, RuntimeStatus};
 use dag_core::node::DagNode;
@@ -44,6 +44,13 @@ use crate::plan::ExecutionPlan;
 /// install their own.
 pub type NodeBuilder =
     Arc<dyn Fn(&str, serde_json::Value) -> Result<Box<dyn DagNode>, Error> + Send + Sync>;
+
+/// Host-provided evaluator for persisted channel functions.
+pub type ChannelFunction =
+    Arc<dyn Fn(&serde_json::Value, Option<&NodeValue>) -> Result<NodeValue, String> + Send + Sync>;
+pub type ChannelBinaryFunction = Arc<
+    dyn Fn(&serde_json::Value, &NodeValue, &NodeValue) -> Result<NodeValue, String> + Send + Sync,
+>;
 
 /// Tuning knobs for one flow run.
 #[derive(Debug, Clone)]
@@ -111,6 +118,8 @@ pub struct FlowRunReport {
     /// for a run whose fanouts resolved to zero items — matching the "no
     /// data, nothing to do" posture).
     pub ok: bool,
+    /// The caller requested cancellation, even if no task was instantiated.
+    pub cancelled: bool,
     /// Frozen executor binding for this invocation (from `bind_run`), when
     /// the executor provides one.
     pub execution_binding: Option<serde_json::Value>,
@@ -122,9 +131,11 @@ pub struct FlowRunReport {
 /// One flow scheduler: executor stack + node builder + engine context. Cheap
 /// to construct; holds no mutable graph state.
 pub struct FlowScheduler {
-    executor: Arc<dyn TaskExecutor>,
-    node_builder: NodeBuilder,
-    engine_ctx: Arc<NodeCtx>,
+    pub(crate) executor: Arc<dyn TaskExecutor>,
+    pub(crate) node_builder: NodeBuilder,
+    pub(crate) engine_ctx: Arc<NodeCtx>,
+    pub(crate) channel_function: Option<ChannelFunction>,
+    pub(crate) channel_binary_function: Option<ChannelBinaryFunction>,
 }
 
 impl FlowScheduler {
@@ -137,7 +148,19 @@ impl FlowScheduler {
             executor,
             node_builder,
             engine_ctx,
+            channel_function: None,
+            channel_binary_function: None,
         }
+    }
+
+    pub fn with_channel_function(mut self, evaluator: ChannelFunction) -> Self {
+        self.channel_function = Some(evaluator);
+        self
+    }
+
+    pub fn with_channel_binary_function(mut self, evaluator: ChannelBinaryFunction) -> Self {
+        self.channel_binary_function = Some(evaluator);
+        self
     }
 
     /// Execute a plan. Fails (before any dispatch) when a node cannot be
@@ -156,8 +179,7 @@ impl FlowScheduler {
         let mut nodes = BTreeMap::new();
         for process_plan in plan.processes.values() {
             for instance in &process_plan.instances {
-                let node =
-                    (self.node_builder)(&process_plan.kind, instance.rendered_spec.clone())?;
+                let node = (self.node_builder)(&process_plan.kind, instance.rendered_spec.clone())?;
                 nodes.insert(instance.id.clone(), node);
             }
         }
@@ -243,6 +265,32 @@ impl FlowScheduler {
             .filter(|(_, count)| **count == 0)
             .map(|(id, _)| id.clone())
             .collect();
+        // Source deliveries are pre-settled: sources never execute — the
+        // item IS the output (Nextflow: a channel value arriving).
+        for source_plan in plan.sources.values() {
+            for item in &source_plan.items {
+                let mut delivery = PortOutputs::new();
+                delivery.insert_file(
+                    0,
+                    FileRef {
+                        path: item.path.clone(),
+                        format: None,
+                        fingerprint: None,
+                    },
+                );
+                statuses.insert(item.id.clone(), RuntimeStatus::Success);
+                outputs.insert(item.id.clone(), delivery);
+                effective.insert(item.id.clone(), item.fingerprint.clone());
+                release_successors(
+                    &item.id,
+                    &successors,
+                    &mut pending,
+                    &mut statuses,
+                    &mut ready,
+                );
+            }
+        }
+
         let mut in_flight = 0usize;
         let limit = cfg.max_concurrency;
 
@@ -255,7 +303,15 @@ impl FlowScheduler {
                 if cfg.resume
                     && let Some(cache) = cache.as_deref_mut()
                     && let Some(fingerprint) = self
-                        .try_reuse(plan, &id, cache, &effective, &mut statuses, &mut outputs, &mut records)
+                        .try_reuse(
+                            plan,
+                            &id,
+                            cache,
+                            &effective,
+                            &mut statuses,
+                            &mut outputs,
+                            &mut records,
+                        )
                         .await
                 {
                     effective.insert(id.clone(), fingerprint);
@@ -332,6 +388,10 @@ impl FlowScheduler {
             }
         }
         for (id, status) in &statuses {
+            // Source pseudo-instances are deliveries, not runs.
+            if plan.is_source_item(id) {
+                continue;
+            }
             let record = records.entry(id.clone()).or_insert_with(|| InstanceRecord {
                 reused: false,
                 ignored: false,
@@ -355,9 +415,13 @@ impl FlowScheduler {
         // A run is ok when nothing fatal happened: every instance either
         // succeeded or was an explicitly tolerated failure (Nextflow: an
         // `ignore`d error does not fail the pipeline).
-        let ok = fatal.is_empty();
+        let cancelled = external_cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled);
+        let ok = fatal.is_empty() && !cancelled;
         let mut report = FlowRunReport {
             ok,
+            cancelled,
             execution_binding: run_executor.execution_binding(),
             processes: plan
                 .processes
@@ -475,7 +539,10 @@ impl FlowScheduler {
                 plan,
                 id,
                 RuntimeStatus::Success,
-                outputs[id].iter().map(|(port, value)| (*port, value.clone())).collect(),
+                outputs[id]
+                    .iter()
+                    .map(|(port, value)| (*port, value.clone()))
+                    .collect(),
                 None,
                 std::time::Duration::ZERO,
                 true,
@@ -528,7 +595,11 @@ impl FlowScheduler {
                 data: value.clone(),
             });
             bindings.push(dag_core::dag::execution::TaskInputBinding {
-                name: format!("port_{}", route.to_port),
+                name: node
+                    .ports()
+                    .input_port(route.to_port)
+                    .and_then(|port| port.label.clone())
+                    .unwrap_or_else(|| format!("port_{}", route.to_port)),
                 port: route.to_port,
                 source: dag_core::dag::execution::TaskInputSource::UpstreamPort {
                     from: route.from.as_str().to_string(),
@@ -610,17 +681,34 @@ impl FlowScheduler {
                 let id = InstanceId::adopt(id);
                 statuses.insert(id.clone(), RuntimeStatus::Success);
                 outputs.insert(id.clone(), outs);
-                records.insert(id.clone(), record_for(
-                    plan, &id, RuntimeStatus::Success,
-                    outputs[&id].iter().map(|(port, value)| (*port, value.clone())).collect(),
-                    None, duration, false, false, *attempts.get(&id).unwrap_or(&1),
-                ));
+                records.insert(
+                    id.clone(),
+                    record_for(
+                        plan,
+                        &id,
+                        RuntimeStatus::Success,
+                        outputs[&id]
+                            .iter()
+                            .map(|(port, value)| (*port, value.clone()))
+                            .collect(),
+                        None,
+                        duration,
+                        false,
+                        false,
+                        *attempts.get(&id).unwrap_or(&1),
+                    ),
+                );
                 // Identity settles after execution: reused and freshly
                 // executed instances are indistinguishable downstream.
                 if let Some(fingerprint) = plan_fingerprint(plan, &id, effective) {
                     if let Some(cache) = cache.as_deref_mut() {
                         let (process, item_key) = provenance(plan, &id);
-                        cache.record(&process, item_key.as_deref(), fingerprint.clone(), &outputs[&id]);
+                        cache.record(
+                            &process,
+                            item_key.as_deref(),
+                            fingerprint.clone(),
+                            &outputs[&id],
+                        );
                     }
                     effective.insert(id.clone(), fingerprint);
                 }
@@ -649,8 +737,7 @@ impl FlowScheduler {
                         ready.push_back(id);
                     } else {
                         *delayed_retries += 1;
-                        let delay =
-                            std::time::Duration::from_millis(strategy.retry_delay_ms);
+                        let delay = std::time::Duration::from_millis(strategy.retry_delay_ms);
                         let requeue_tx = requeue_tx.clone();
                         tokio::spawn(async move {
                             tokio::time::sleep(delay).await;
@@ -662,10 +749,20 @@ impl FlowScheduler {
 
                 let ignored = strategy.mode == ErrorMode::Ignore;
                 statuses.insert(id.clone(), RuntimeStatus::Failed);
-                records.insert(id.clone(), record_for(
-                    plan, &id, RuntimeStatus::Failed, BTreeMap::new(),
-                    Some(error.to_string()), duration, false, ignored, made_attempts,
-                ));
+                records.insert(
+                    id.clone(),
+                    record_for(
+                        plan,
+                        &id,
+                        RuntimeStatus::Failed,
+                        BTreeMap::new(),
+                        Some(error.to_string()),
+                        duration,
+                        false,
+                        ignored,
+                        made_attempts,
+                    ),
+                );
                 // A failed re-execution must never leave an older success
                 // servable.
                 if let Some(cache) = cache {
@@ -790,10 +887,20 @@ fn cascade_skip(
             statuses.insert(successor.clone(), RuntimeStatus::Skipped);
             pending.remove(&successor);
             fatal.insert(successor.clone());
-            records.insert(successor.clone(), record_for(
-                plan, &successor, RuntimeStatus::Skipped, BTreeMap::new(), None,
-                std::time::Duration::ZERO, false, false, 0,
-            ));
+            records.insert(
+                successor.clone(),
+                record_for(
+                    plan,
+                    &successor,
+                    RuntimeStatus::Skipped,
+                    BTreeMap::new(),
+                    None,
+                    std::time::Duration::ZERO,
+                    false,
+                    false,
+                    0,
+                ),
+            );
             queue.push_back(successor);
         }
     }
@@ -817,7 +924,11 @@ fn release_ignored(
 ) {
     let mut direct_skips = VecDeque::from([id.clone()]);
     // Collect successors of the failed instance settle immediately.
-    for route in plan.routes.iter().filter(|route| &route.from == id && route.op == WireOp::Collect) {
+    for route in plan
+        .routes
+        .iter()
+        .filter(|route| &route.from == id && route.op == WireOp::Collect)
+    {
         if let Some(count) = pending.get_mut(&route.to) {
             *count = count.saturating_sub(1);
             if *count == 0 {
@@ -828,11 +939,7 @@ fn release_ignored(
     // Direct successors skip, and their own successors inherit the same
     // semantics (a skipped instance delivers nothing on its edges).
     while let Some(current) = direct_skips.pop_front() {
-        for route in plan
-            .routes
-            .iter()
-            .filter(|route| route.from == current)
-        {
+        for route in plan.routes.iter().filter(|route| route.from == current) {
             let successor = &route.to;
             match route.op {
                 WireOp::Direct => {
@@ -841,10 +948,20 @@ fn release_ignored(
                     }
                     statuses.insert(successor.clone(), RuntimeStatus::Skipped);
                     pending.remove(successor);
-                    records.insert(successor.clone(), record_for(
-                        plan, successor, RuntimeStatus::Skipped, BTreeMap::new(), None,
-                        std::time::Duration::ZERO, false, false, 0,
-                    ));
+                    records.insert(
+                        successor.clone(),
+                        record_for(
+                            plan,
+                            successor,
+                            RuntimeStatus::Skipped,
+                            BTreeMap::new(),
+                            None,
+                            std::time::Duration::ZERO,
+                            false,
+                            false,
+                            0,
+                        ),
+                    );
                     direct_skips.push_back(successor.clone());
                 }
                 WireOp::Collect => {
@@ -853,9 +970,7 @@ fn release_ignored(
                     }
                     if let Some(count) = pending.get_mut(successor) {
                         *count = count.saturating_sub(1);
-                        if *count == 0
-                            && statuses.get(successor) == Some(&RuntimeStatus::Pending)
-                        {
+                        if *count == 0 && statuses.get(successor) == Some(&RuntimeStatus::Pending) {
                             ready.push_back(successor.clone());
                         }
                     }
@@ -878,7 +993,7 @@ fn file_value(path: impl Into<String>) -> NodeValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Cardinality, FlowGraph, FlowGraphBuilder, Process, Source, Wire};
+    use crate::model::{FlowGraph, FlowGraphBuilder, Process, Source, Wire};
     use crate::plan::{SourceResolution, build_plan};
 
     /// Echo node writing REAL files (the cache validates size/mtime, so
@@ -983,9 +1098,9 @@ mod tests {
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("in");
                 name_parts.push(base.to_string());
-                if let Ok(text) = std::fs::read_to_string(
-                    file.path.strip_prefix("vfs://").unwrap_or(&file.path),
-                ) {
+                if let Ok(text) =
+                    std::fs::read_to_string(file.path.strip_prefix("vfs://").unwrap_or(&file.path))
+                {
                     content.push_str(&text);
                 }
             }
@@ -1024,6 +1139,150 @@ mod tests {
     /// Pass-through executor running the node inline — the local executor
     /// minus resource admission, receipts and workspaces.
     struct InlineExecutor;
+
+    #[derive(Clone)]
+    struct ContractExecutor {
+        specs: Arc<std::sync::Mutex<Vec<dag_core::TaskSpec>>>,
+        bind_count: Arc<std::sync::atomic::AtomicUsize>,
+        preflights: Arc<std::sync::atomic::AtomicUsize>,
+        bound: bool,
+    }
+    #[async_trait::async_trait]
+    impl TaskExecutor for ContractExecutor {
+        fn name(&self) -> &'static str {
+            "contract-test"
+        }
+        async fn bind_run(&self) -> Result<Option<Arc<dyn TaskExecutor>>, DagError> {
+            self.bind_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut bound = self.clone();
+            bound.bound = true;
+            Ok(Some(Arc::new(bound)))
+        }
+        fn execution_binding(&self) -> Option<serde_json::Value> {
+            self.bound.then(|| serde_json::json!({"target":"test"}))
+        }
+        fn preflight(&self, nodes: &[(&str, &dyn DagNode)]) -> Result<(), DagError> {
+            assert!(self.bound);
+            self.preflights
+                .fetch_add(nodes.len(), std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        async fn run(&self, execution: TaskExecution) -> JobResult {
+            assert!(self.bound);
+            self.specs
+                .lock()
+                .unwrap()
+                .push(execution.submission.spec.clone());
+            InlineExecutor.run(execution).await
+        }
+    }
+
+    #[derive(Clone)]
+    struct NamedPortNode {
+        ports: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for NamedPortNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "named_port"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_submits_named_ports_and_channel_provenance_to_bound_executor() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "reads",
+                vec![serde_json::json!("a"), serde_json::json!("b")],
+            ))
+            .source(Source::value("config", serde_json::json!(42)))
+            .process(Process::new("worker", "named_port", serde_json::json!({})))
+            .wire(Wire::collect("reads", 0, "worker", 0))
+            .wire(Wire::direct("config", 0, "worker", 1))
+            .build()
+            .unwrap();
+        let specs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let binds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let preflights = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let executor = ContractExecutor {
+            specs: Arc::clone(&specs),
+            bind_count: Arc::clone(&binds),
+            preflights: Arc::clone(&preflights),
+            bound: false,
+        };
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(NamedPortNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type_with_label(
+                        None,
+                        dag_core::value::PortType::Channel,
+                        "reads",
+                    )
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel)
+                    .add_output_port_of_type_with_label(
+                        None,
+                        dag_core::value::PortType::File,
+                        "result",
+                    ),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(executor), builder, engine_ctx());
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok);
+        assert_eq!(
+            report.execution_binding,
+            Some(serde_json::json!({"target":"test"}))
+        );
+        assert_eq!(binds.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(preflights.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let specs = specs.lock().unwrap();
+        assert_eq!(specs.len(), 1);
+        let task = &specs[0];
+        assert_eq!(task.inputs[0].name, "reads");
+        assert_eq!(
+            task.inputs[0].source,
+            dag_core::TaskInputSource::Channel {
+                from: "reads".into(),
+                from_port: 0,
+                collected: true
+            }
+        );
+        assert_eq!(task.inputs[1].name, "port_1");
+        assert_eq!(
+            task.inputs[1].source,
+            dag_core::TaskInputSource::Channel {
+                from: "config".into(),
+                from_port: 0,
+                collected: false
+            }
+        );
+        assert_eq!(task.outputs[0].name, "result");
+        let restored: dag_core::TaskSpec =
+            serde_json::from_value(serde_json::to_value(task).unwrap()).unwrap();
+        assert_eq!(restored.inputs[0].source, task.inputs[0].source);
+        assert_eq!(restored.inputs[1].source, task.inputs[1].source);
+    }
 
     #[async_trait::async_trait]
     impl TaskExecutor for InlineExecutor {
@@ -1073,55 +1332,86 @@ mod tests {
         )
     }
 
-    /// Builds the canonical qc -> align -> multiqc flow with globally
-    /// unique tags, so parallel tests never share temp output files.
+    /// Builds the canonical reads -> qc -> align -> multiqc flow with
+    /// globally unique source/process ids so parallel tests never share
+    /// temp output files. The source drives qc; align consumes qc's items
+    /// (NOT re-declared); multiqc collects.
     fn flow(fail_first_item: bool) -> FlowGraphBuilder {
-        flow_with_strategy(fail_first_item, crate::model::ErrorStrategy::default())
+        let tag = unique_tag("qc");
+        let fail_on = fail_first_item.then(|| format!("{tag}:a"));
+        FlowGraphBuilder::default()
+            .source(Source::items(
+                "reads",
+                vec![serde_json::json!("a"), serde_json::json!("b")],
+            ))
+            .process(Process::new(
+                "qc",
+                "echo",
+                serde_json::json!({ "tag": format!("{tag}:{{{{item}}}}"), "fail_on": fail_on }),
+            ))
+            .process(Process::new(
+                "align",
+                "echo",
+                serde_json::json!({ "tag": tag }),
+            ))
+            .process(Process::new(
+                "multiqc",
+                "echo",
+                serde_json::json!({ "tag": tag }),
+            ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
+            .wire(Wire::direct("qc", 0, "align", 0))
+            .wire(Wire::collect("qc", 0, "multiqc", 0))
     }
 
     fn flow_with_strategy(
         fail_first_item: bool,
         qc_strategy: crate::model::ErrorStrategy,
     ) -> FlowGraphBuilder {
-        let qc = unique_tag("qc");
-        let align = unique_tag("align");
-        let multiqc = unique_tag("multiqc");
-        let fail_on = fail_first_item.then(|| format!("{qc}:a"));
-        let items = vec![serde_json::json!("a"), serde_json::json!("b")];
-        let mut qc_process = Process::fanout(
+        let qc_tag = unique_tag("qc");
+        let mut qc = Process::new(
             "qc",
             "echo",
-            serde_json::json!({ "tag": format!("{}:{{{{item}}}}", qc), "fail_on": fail_on }),
-            Source::items(items.clone()),
-            "sample",
+            serde_json::json!({
+                "tag": format!("{qc_tag}:{{{{item}}}}"),
+                "fail_on": fail_first_item.then(|| format!("{qc_tag}:a")),
+            }),
         );
-        qc_process.error_strategy = qc_strategy;
-        let builder = FlowGraphBuilder::default()
-            .process(qc_process)
-            .process(Process::fanout(
+        qc.error_strategy = qc_strategy;
+        let tag = unique_tag("echo");
+        FlowGraphBuilder::default()
+            .source(Source::items(
+                "reads",
+                vec![serde_json::json!("a"), serde_json::json!("b")],
+            ))
+            .process(qc)
+            .process(Process::new(
                 "align",
                 "echo",
-                serde_json::json!({ "tag": align }),
-                Source::items(items),
-                "sample",
+                serde_json::json!({ "tag": tag }),
             ))
-            .process(Process::singleton(
+            .process(Process::new(
                 "multiqc",
                 "echo",
-                serde_json::json!({ "tag": multiqc }),
+                serde_json::json!({ "tag": tag }),
             ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
             .wire(Wire::direct("qc", 0, "align", 0))
-            .wire(Wire::collect("qc", 0, "multiqc", 0));
-        builder
+            .wire(Wire::collect("qc", 0, "multiqc", 0))
     }
 
     fn resolved(graph: &FlowGraph) -> SourceResolution {
         let mut resolution = SourceResolution::new();
-        for process in graph.processes() {
-            if let Cardinality::Fanout { source, .. } = &process.cardinality {
-                if let Source::Items { values } = source {
-                    resolution.resolve(process.id.clone(), values.clone());
+        for source in graph.sources() {
+            match &source.spec {
+                crate::model::SourceSpec::Items { values } => {
+                    resolution.resolve(source.id.clone(), values.clone())
                 }
+                crate::model::SourceSpec::Value { value } => {
+                    resolution.resolve(source.id.clone(), vec![value.clone()])
+                }
+                crate::model::SourceSpec::Glob { .. }
+                | crate::model::SourceSpec::FilePairs { .. } => {}
             }
         }
         resolution
@@ -1130,10 +1420,8 @@ mod tests {
     fn content_of(record: &InstanceRecord) -> String {
         match record.outputs.get(&0) {
             Some(NodeValue::File(file)) => {
-                std::fs::read_to_string(
-                    file.path.strip_prefix("vfs://").unwrap_or(&file.path),
-                )
-                .unwrap_or_else(|error| panic!("read {}: {error}", file.path))
+                std::fs::read_to_string(file.path.strip_prefix("vfs://").unwrap_or(&file.path))
+                    .unwrap_or_else(|error| panic!("read {}: {error}", file.path))
             }
             other => panic!("expected a file output, got {other:?}"),
         }
@@ -1152,7 +1440,15 @@ mod tests {
         let graph = flow(false).build().unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         let report = scheduler()
-            .run(&plan, &FlowRunConfig { max_concurrency: 2, resume: false }, None, None)
+            .run(
+                &plan,
+                &FlowRunConfig {
+                    max_concurrency: 2,
+                    resume: false,
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1253,7 +1549,9 @@ mod tests {
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         let broken = FlowScheduler::new(
             Arc::new(InlineExecutor),
-            Arc::new(|kind, _| Err(crate::model::Error::Invalid(format!("unknown kind `{kind}`")).into())),
+            Arc::new(|kind, _| {
+                Err(crate::model::Error::Invalid(format!("unknown kind `{kind}`")).into())
+            }),
             engine_ctx(),
         );
         let error = broken
@@ -1263,24 +1561,32 @@ mod tests {
         assert!(error.to_string().contains("unknown kind"), "{error}");
     }
 
-
     #[tokio::test]
     async fn resume_reuses_every_unchanged_instance() {
         reset_executions();
         let graph = flow(false).build().unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         let mut cache = InstanceCache::new();
-        let cfg = FlowRunConfig { resume: true, ..FlowRunConfig::default() };
+        let cfg = FlowRunConfig {
+            resume: true,
+            ..FlowRunConfig::default()
+        };
 
         let before = executions();
-        let first = scheduler().run(&plan, &cfg, Some(&mut cache), None).await.unwrap();
+        let first = scheduler()
+            .run(&plan, &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
         let first_executions = executions() - before;
         assert_eq!(first_executions, 5, "qc x2 + align x2 + multiqc");
         assert_eq!(first.processes["qc"].reused, 0);
         assert_eq!(cache.len(), 5);
 
         let before = executions();
-        let second = scheduler().run(&plan, &cfg, Some(&mut cache), None).await.unwrap();
+        let second = scheduler()
+            .run(&plan, &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
         assert_eq!(
             executions() - before,
             0,
@@ -1295,10 +1601,18 @@ mod tests {
         // Reused outputs are byte-identical to the first run's.
         for id in ["qc#a", "align#b", "multiqc#0"] {
             let first_content = content_of(
-                first.instances.iter().find(|r| r.id.as_str() == id).unwrap(),
+                first
+                    .instances
+                    .iter()
+                    .find(|r| r.id.as_str() == id)
+                    .unwrap(),
             );
             let second_content = content_of(
-                second.instances.iter().find(|r| r.id.as_str() == id).unwrap(),
+                second
+                    .instances
+                    .iter()
+                    .find(|r| r.id.as_str() == id)
+                    .unwrap(),
             );
             assert_eq!(first_content, second_content, "{id}");
         }
@@ -1310,8 +1624,14 @@ mod tests {
         let graph = flow(false).build().unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         let mut cache = InstanceCache::new();
-        let cfg = FlowRunConfig { resume: true, ..FlowRunConfig::default() };
-        scheduler().run(&plan, &cfg, Some(&mut cache), None).await.unwrap();
+        let cfg = FlowRunConfig {
+            resume: true,
+            ..FlowRunConfig::default()
+        };
+        scheduler()
+            .run(&plan, &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
 
         // Rebuild the flow with an edited qc spec template.
         let mut edited = flow(false);
@@ -1319,6 +1639,7 @@ mod tests {
             let rebuilt = edited.build().unwrap();
             // Rebuild via builder mutation is not exposed; construct a fresh
             // graph by cloning processes and editing the qc spec directly.
+            let sources: Vec<Source> = rebuilt.sources().to_vec();
             let mut processes: Vec<Process> = rebuilt.processes().to_vec();
             for process in &mut processes {
                 if process.id == "qc" {
@@ -1327,6 +1648,9 @@ mod tests {
             }
             let wires: Vec<Wire> = rebuilt.wires().to_vec();
             let mut builder = FlowGraphBuilder::default();
+            for source in sources {
+                builder = builder.source(source);
+            }
             for process in processes {
                 builder = builder.process(process);
             }
@@ -1357,8 +1681,14 @@ mod tests {
         let graph = flow(false).build().unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         let mut cache = InstanceCache::new();
-        let cfg = FlowRunConfig { resume: true, ..FlowRunConfig::default() };
-        let first = scheduler().run(&plan, &cfg, Some(&mut cache), None).await.unwrap();
+        let cfg = FlowRunConfig {
+            resume: true,
+            ..FlowRunConfig::default()
+        };
+        let first = scheduler()
+            .run(&plan, &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
 
         // Delete one align instance's output file on disk.
         let align_a = first
@@ -1373,7 +1703,10 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
 
         let before = executions();
-        let second = scheduler().run(&plan, &cfg, Some(&mut cache), None).await.unwrap();
+        let second = scheduler()
+            .run(&plan, &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
         // Only align#a re-executed: its cached file vanished. Everything
         // else — including multiqc, whose upstream identities are unchanged —
         // is served from the cache.
@@ -1384,7 +1717,6 @@ mod tests {
         assert_eq!(second.processes["multiqc"].reused, 1);
         assert!(second.ok);
     }
-
 
     #[tokio::test]
     async fn ignore_tolerates_item_failures_and_collects_survivors() {
@@ -1423,12 +1755,9 @@ mod tests {
 
     #[tokio::test]
     async fn retry_exhaustion_degrades_to_fail_closed() {
-        let graph = flow_with_strategy(
-            true,
-            crate::model::ErrorStrategy::retry(2, 0),
-        )
-        .build()
-        .unwrap();
+        let graph = flow_with_strategy(true, crate::model::ErrorStrategy::retry(2, 0))
+            .build()
+            .unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
         reset_executions();
         let report = scheduler()
@@ -1454,31 +1783,31 @@ mod tests {
     #[tokio::test]
     async fn retry_recovers_from_transient_failures() {
         // qc#a fails once (transient budget), succeeds on the second attempt.
-        let (qc_tag, align_tag, multiqc_tag) =
-            (unique_tag("qc"), unique_tag("align"), unique_tag("multiqc"));
-        let items = vec![serde_json::json!("a"), serde_json::json!("b")];
-        let mut qc = Process::fanout(
+        let qc_tag = unique_tag("qc");
+        let tag = unique_tag("echo");
+        let mut qc = Process::new(
             "qc",
             "echo",
             serde_json::json!({ "tag": format!("{}:{{{{item}}}}", qc_tag), "fail_times": 1 }),
-            Source::items(items.clone()),
-            "sample",
         );
         qc.error_strategy = crate::model::ErrorStrategy::retry(2, 0);
         let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "reads",
+                vec![serde_json::json!("a"), serde_json::json!("b")],
+            ))
             .process(qc)
-            .process(Process::fanout(
+            .process(Process::new(
                 "align",
                 "echo",
-                serde_json::json!({ "tag": align_tag }),
-                Source::items(items),
-                "sample",
+                serde_json::json!({ "tag": tag }),
             ))
-            .process(Process::singleton(
+            .process(Process::new(
                 "multiqc",
                 "echo",
-                serde_json::json!({ "tag": multiqc_tag }),
+                serde_json::json!({ "tag": tag }),
             ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
             .wire(Wire::direct("qc", 0, "align", 0))
             .wire(Wire::collect("qc", 0, "multiqc", 0))
             .build()
@@ -1500,27 +1829,32 @@ mod tests {
         assert_eq!(qc_a.status, RuntimeStatus::Success);
         assert_eq!(report.processes["align"].succeeded, 2);
         assert_eq!(report.processes["multiqc"].succeeded, 1);
-        assert_eq!(executions(), 7, "2 qc#a + 1 qc#b + 2 align + 1 multiqc + 1 (qc#a first fail)");
+        assert_eq!(
+            executions(),
+            7,
+            "2 qc#a + 1 qc#b + 2 align + 1 multiqc + 1 (qc#a first fail)"
+        );
     }
 
     #[tokio::test]
     async fn delayed_retry_uses_the_backoff_channel() {
-        let (qc_tag, multiqc_tag) = (unique_tag("qc"), unique_tag("multiqc"));
-        let mut qc = Process::fanout(
+        let qc_tag = unique_tag("qc");
+        let tag = unique_tag("echo");
+        let mut qc = Process::new(
             "qc",
             "echo",
             serde_json::json!({ "tag": qc_tag, "fail_times": 1 }),
-            Source::items(vec![serde_json::json!("a")]),
-            "sample",
         );
         qc.error_strategy = crate::model::ErrorStrategy::retry(1, 20);
         let graph = FlowGraphBuilder::default()
+            .source(Source::items("reads", vec![serde_json::json!("a")]))
             .process(qc)
-            .process(Process::singleton(
+            .process(Process::new(
                 "multiqc",
                 "echo",
-                serde_json::json!({ "tag": multiqc_tag }),
+                serde_json::json!({ "tag": tag }),
             ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
             .wire(Wire::collect("qc", 0, "multiqc", 0))
             .build()
             .unwrap();
@@ -1539,15 +1873,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_fanout_run_is_ok() {
+    async fn empty_source_run_is_ok() {
         let graph = FlowGraphBuilder::default()
-            .process(Process::fanout(
+            .source(Source::items("reads", vec![]))
+            .process(Process::new(
                 "qc",
                 "echo",
                 serde_json::json!({ "tag": "qc" }),
-                Source::items(vec![]),
-                "sample",
             ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
             .build()
             .unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
@@ -1557,5 +1891,2495 @@ mod tests {
             .unwrap();
         assert!(report.ok);
         assert_eq!(report.processes["qc"].total, 0);
+    }
+    #[tokio::test]
+    async fn dataflow_dispatches_actual_output_to_downstream() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "reads",
+                vec![serde_json::json!("a"), serde_json::json!("b")],
+            ))
+            .process(Process::new(
+                "qc",
+                "echo",
+                serde_json::json!({"tag":"qc-{{item}}"}),
+            ))
+            .process(Process::new(
+                "next",
+                "echo",
+                serde_json::json!({"tag":"next"}),
+            ))
+            .wire(Wire::direct("reads", 0, "qc", 0))
+            .wire(Wire::direct("qc", 0, "next", 0))
+            .build()
+            .unwrap();
+        let report = scheduler()
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok);
+        assert_eq!(report.processes["qc"].succeeded, 2);
+        assert_eq!(report.processes["next"].succeeded, 2);
+        assert!(report.instances.iter().filter(|r| r.process == "next").all(
+            |r| match &r.outputs[&0] {
+                NodeValue::File(f) => f.path.contains("qc-"),
+                _ => false,
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn dataflow_empty_queue_does_not_trigger_collect() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("reads", vec![]))
+            .process(Process::new("qc", "echo", serde_json::json!({})))
+            .process(Process::new("sink", "echo", serde_json::json!({})))
+            .wire(Wire::direct("reads", 0, "qc", 0))
+            .wire(Wire::collect("qc", 0, "sink", 0))
+            .build()
+            .unwrap();
+        let report = scheduler()
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok);
+        assert_eq!(report.processes["qc"].total, 0);
+        assert_eq!(report.processes["sink"].total, 0);
+    }
+
+    #[derive(Clone)]
+    struct StreamingTestNode {
+        ports: dag_core::NodePorts,
+        producer: bool,
+        consumed: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for StreamingTestNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            let mut out = PortOutputs::new();
+            if self.producer {
+                reporter
+                    .emit_channel_item(0, 0, serde_json::json!("streamed-file"))
+                    .await;
+                tokio::time::timeout(std::time::Duration::from_secs(2), self.consumed.notified())
+                    .await
+                    .map_err(|_| {
+                        DagError::Schedule(
+                            "consumer did not start while producer was running".into(),
+                        )
+                    })?;
+                reporter.close_channel(0, 1).await;
+                out.insert(
+                    0,
+                    NodeValue::Channel(dag_core::value::ChannelValue {
+                        items: vec![serde_json::json!("streamed-file")],
+                    }),
+                );
+            } else {
+                self.consumed.notify_one();
+            }
+            Ok(out)
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "stream_test"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_streamed_item_starts_consumer_before_producer_finishes() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("one")]))
+            .process(Process::new(
+                "producer",
+                "stream_test",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "stream_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let consumed = Arc::new(tokio::sync::Notify::new());
+        let builder: NodeBuilder = Arc::new(move |_, spec| {
+            Ok(Box::new(StreamingTestNode {
+                ports: dag_core::NodePorts::new(),
+                producer: spec["producer"].as_bool().unwrap_or(false),
+                consumed: Arc::clone(&consumed),
+            }))
+        });
+        let sched = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let cfg = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = sched
+            .run_dataflow(&graph, &resolved(&graph), &cfg, None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["producer"].succeeded, 1);
+        assert_eq!(report.processes["consumer"].succeeded, 1);
+    }
+
+    #[derive(Clone)]
+    struct BackpressureNode {
+        ports: dag_core::NodePorts,
+        producer: bool,
+        sent: Arc<std::sync::atomic::AtomicUsize>,
+        consumer_started: Arc<tokio::sync::Notify>,
+        gate: Arc<tokio::sync::Semaphore>,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for BackpressureNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            if self.producer {
+                for index in 0..500 {
+                    reporter
+                        .emit_channel_item(0, index, serde_json::json!(index))
+                        .await;
+                    self.sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                reporter.close_channel(0, 500).await;
+            } else {
+                self.consumer_started.notify_one();
+                self.gate
+                    .acquire()
+                    .await
+                    .map_err(|e| DagError::Schedule(e.to_string()))?
+                    .forget();
+            }
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "backpressure_test"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_applies_backpressure_to_streaming_task_outputs() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("start")]))
+            .process(Process::new(
+                "producer",
+                "backpressure_test",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let builder: NodeBuilder = {
+            let sent = Arc::clone(&sent);
+            let started = Arc::clone(&started);
+            let gate = Arc::clone(&gate);
+            Arc::new(move |_, spec| {
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: spec["producer"].as_bool().unwrap_or(false),
+                    sent: Arc::clone(&sent),
+                    consumer_started: Arc::clone(&started),
+                    gate: Arc::clone(&gate),
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let run = tokio::spawn(async move {
+            let config = FlowRunConfig {
+                max_concurrency: 2,
+                resume: false,
+            };
+            scheduler
+                .run_dataflow(&graph, &resolved(&graph), &config, None)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            sent.load(std::sync::atomic::Ordering::SeqCst) < 500,
+            "producer must wait for the slow consumer"
+        );
+        gate.add_permits(500);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 500);
+    }
+
+    #[tokio::test]
+    async fn first_function_stops_open_source_after_match() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new("first", "channel", serde_json::json!({"operator":"first", "criteria":{"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}}})))
+            .wire(Wire::direct("s", 0, "first", 0)).build().unwrap();
+        let (sender, reader) = tokio::sync::mpsc::channel(2);
+        sender.send(Ok(serde_json::json!(1))).await.unwrap();
+        sender.send(Ok(serde_json::json!(2))).await.unwrap();
+        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let builder: NodeBuilder = Arc::new(|_, _| panic!("channel-only graph"));
+        let evaluator: ChannelFunction = Arc::new(|_, item| {
+            Ok(channel_value(serde_json::json!(
+                matches!(item, Some(NodeValue::Channel(channel)) if channel.items == vec![serde_json::json!(2)])
+            )))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler.run_dataflow_streamed_cached(
+                &graph,
+                streams,
+                &FlowRunConfig::default(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn until_emits_prior_items_and_detaches_an_open_source() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new("until", "channel", serde_json::json!({"operator":"until", "function":{"__dag_shell_function__":{"source":"def f(x): return x == 2", "captures":{}}}})))
+            .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "until", 0)).wire(Wire::direct("until", 0, "sink", 0)).build().unwrap();
+        let (sender, reader) = tokio::sync::mpsc::channel(4);
+        for n in 1..=3 {
+            sender.send(Ok(serde_json::json!(n))).await.unwrap();
+        }
+        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!(1),
+            }))
+        });
+        let evaluator: ChannelFunction = Arc::new(|_, input| {
+            Ok(channel_value(serde_json::json!(
+                matches!(input, Some(NodeValue::Channel(channel)) if channel.items == vec![serde_json::json!(2)])
+            )))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler.run_dataflow_streamed_cached(
+                &graph,
+                streams,
+                &FlowRunConfig::default(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["sink"].succeeded, 1);
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn first_matching_item_detaches_an_open_source() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new(
+                "first",
+                "channel",
+                serde_json::json!({"operator":"first", "criteria":2}),
+            ))
+            .wire(Wire::direct("s", 0, "first", 0))
+            .build()
+            .unwrap();
+        let (sender, reader) = tokio::sync::mpsc::channel(2);
+        sender.send(Ok(serde_json::json!(1))).await.unwrap();
+        sender.send(Ok(serde_json::json!(2))).await.unwrap();
+        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let builder: NodeBuilder = Arc::new(|_, _| panic!("first is a channel operator"));
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler.run_dataflow_streamed_cached(
+                &graph,
+                streams,
+                &FlowRunConfig::default(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn take_stops_map_and_detaches_an_open_source() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new(
+                "map",
+                "channel",
+                serde_json::json!({"operator":"map", "template":"{{item}}"}),
+            ))
+            .process(Process::new(
+                "take",
+                "channel",
+                serde_json::json!({"operator":"take", "count":1}),
+            ))
+            .wire(Wire::direct("s", 0, "map", 0))
+            .wire(Wire::direct("map", 0, "take", 0))
+            .build()
+            .unwrap();
+        let (sender, reader) = tokio::sync::mpsc::channel(1);
+        sender.send(Ok(serde_json::json!("first"))).await.unwrap();
+        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let builder: NodeBuilder = Arc::new(|_, spec| {
+            dag_core::ChannelNode::from_spec(&spec)
+                .map(|node| Box::new(node) as Box<dyn DagNode>)
+                .map_err(|error| crate::Error::Execution(error.to_string()))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler.run_dataflow_streamed_cached(
+                &graph,
+                streams,
+                &FlowRunConfig::default(),
+                None,
+                None,
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn take_stops_transpose_and_detaches_an_open_source() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new(
+                "transpose",
+                "channel",
+                serde_json::json!({"operator":"transpose"}),
+            ))
+            .process(Process::new(
+                "take",
+                "channel",
+                serde_json::json!({"operator":"take", "count":1}),
+            ))
+            .wire(Wire::direct("s", 0, "transpose", 0))
+            .wire(Wire::direct("transpose", 0, "take", 0))
+            .build()
+            .unwrap();
+        let (sender, reader) = tokio::sync::mpsc::channel(1);
+        sender
+            .send(Ok(serde_json::json!([
+                "sample",
+                (0..500).collect::<Vec<_>>()
+            ])))
+            .await
+            .unwrap();
+        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let builder: NodeBuilder = Arc::new(|_, _| panic!("all stages are channel operators"));
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let config = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler.run_dataflow_streamed_cached(&graph, streams, &config, None, None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok);
+        assert!(sender.is_closed());
+    }
+
+    #[tokio::test]
+    async fn group_finalization_resumes_after_slow_downstream() {
+        let values: Vec<_> = (0..500).map(|n| serde_json::json!([n, n])).collect();
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", values))
+            .process(Process::new(
+                "group",
+                "channel",
+                serde_json::json!({"operator":"group_tuple"}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "group", 0))
+            .wire(Wire::direct("group", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let builder: NodeBuilder = {
+            let started = Arc::clone(&started);
+            let gate = Arc::clone(&gate);
+            Arc::new(move |_, _| {
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: false,
+                    sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    consumer_started: Arc::clone(&started),
+                    gate: Arc::clone(&gate),
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let run = tokio::spawn(async move {
+            scheduler
+                .run_dataflow(
+                    &graph,
+                    &resolved(&graph),
+                    &FlowRunConfig {
+                        max_concurrency: 2,
+                        resume: false,
+                    },
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        gate.add_permits(500);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 500);
+    }
+
+    #[tokio::test]
+    async fn transpose_resumes_after_slow_downstream_and_closes() {
+        let values: Vec<_> = (0..500).collect();
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "s",
+                vec![serde_json::json!(["sample", values])],
+            ))
+            .process(Process::new(
+                "transpose",
+                "channel",
+                serde_json::json!({"operator":"transpose"}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "transpose", 0))
+            .wire(Wire::direct("transpose", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let builder: NodeBuilder = {
+            let started = Arc::clone(&started);
+            let gate = Arc::clone(&gate);
+            Arc::new(move |_, _| {
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: false,
+                    sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    consumer_started: Arc::clone(&started),
+                    gate: Arc::clone(&gate),
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let run = tokio::spawn(async move {
+            scheduler
+                .run_dataflow(
+                    &graph,
+                    &resolved(&graph),
+                    &FlowRunConfig {
+                        max_concurrency: 2,
+                        resume: false,
+                    },
+                    None,
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        gate.add_permits(500);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 500);
+    }
+
+    #[tokio::test]
+    async fn streaming_producer_completes_when_concurrency_is_one() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("start")]))
+            .process(Process::new(
+                "producer",
+                "backpressure_test",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let gate = Arc::new(tokio::sync::Semaphore::new(500));
+        let builder: NodeBuilder = {
+            let sent = Arc::clone(&sent);
+            Arc::new(move |_, spec| {
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: spec["producer"].as_bool().unwrap_or(false),
+                    sent: Arc::clone(&sent),
+                    consumer_started: Arc::clone(&started),
+                    gate: Arc::clone(&gate),
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let config = FlowRunConfig {
+            max_concurrency: 1,
+            resume: false,
+        };
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scheduler.run_dataflow(&graph, &resolved(&graph), &config, None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), 500);
+        assert_eq!(report.processes["consumer"].succeeded, 500);
+    }
+
+    #[derive(Clone)]
+    struct TwoPortStreamNode {
+        ports: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for TwoPortStreamNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            for port in [0, 1] {
+                for index in 0..300 {
+                    reporter
+                        .emit_channel_item(port, index, serde_json::json!(index))
+                        .await;
+                }
+                reporter.close_channel(port, 300).await;
+            }
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "two_port_stream"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn backpressure_does_not_deadlock_sequential_outputs_joined_by_one_consumer() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("start")]))
+            .process(Process::new(
+                "producer",
+                "two_port_stream",
+                serde_json::json!({}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .wire(Wire::direct("producer", 1, "consumer", 1))
+            .build()
+            .unwrap();
+        let gate = Arc::new(tokio::sync::Semaphore::new(300));
+        let builder: NodeBuilder = Arc::new(move |kind, _| {
+            if kind == "two_port_stream" {
+                return Ok(Box::new(TwoPortStreamNode {
+                    ports: dag_core::NodePorts::new(),
+                }));
+            }
+            Ok(Box::new(BackpressureNode {
+                ports: dag_core::NodePorts::new(),
+                producer: false,
+                sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                consumer_started: Arc::new(tokio::sync::Notify::new()),
+                gate: Arc::clone(&gate),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let cfg = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            scheduler.run_dataflow(&graph, &resolved(&graph), &cfg, None),
+        )
+        .await
+        .expect("outputs needed for an input tuple must not block each other")
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 300);
+    }
+
+    #[tokio::test]
+    async fn blocked_stream_does_not_block_an_independent_producer() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("start")]))
+            .process(Process::new(
+                "slow_producer",
+                "backpressure_test",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "slow_consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .process(Process::new(
+                "fast_producer",
+                "two_port_stream",
+                serde_json::json!({}),
+            ))
+            .process(Process::new(
+                "fast_consumer",
+                "backpressure_test",
+                serde_json::json!({"fast":true}),
+            ))
+            .wire(Wire::direct("s", 0, "slow_producer", 0))
+            .wire(Wire::direct("s", 0, "fast_producer", 0))
+            .wire(Wire::direct("slow_producer", 0, "slow_consumer", 0))
+            .wire(Wire::direct("fast_producer", 0, "fast_consumer", 0))
+            .build()
+            .unwrap();
+        let slow_gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let fast_gate = Arc::new(tokio::sync::Semaphore::new(300));
+        let fast_started = Arc::new(tokio::sync::Notify::new());
+        let builder: NodeBuilder = {
+            let slow_gate = Arc::clone(&slow_gate);
+            let fast_started = Arc::clone(&fast_started);
+            Arc::new(move |kind, spec| {
+                if kind == "two_port_stream" {
+                    return Ok(Box::new(TwoPortStreamNode {
+                        ports: dag_core::NodePorts::new(),
+                    }));
+                }
+                let fast = spec["fast"].as_bool().unwrap_or(false);
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: spec["producer"].as_bool().unwrap_or(false),
+                    sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    consumer_started: if fast {
+                        Arc::clone(&fast_started)
+                    } else {
+                        Arc::new(tokio::sync::Notify::new())
+                    },
+                    gate: if fast {
+                        Arc::clone(&fast_gate)
+                    } else {
+                        Arc::clone(&slow_gate)
+                    },
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let run = tokio::spawn(async move {
+            let config = FlowRunConfig {
+                max_concurrency: 4,
+                resume: false,
+            };
+            scheduler
+                .run_dataflow(&graph, &resolved(&graph), &config, None)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), fast_started.notified())
+            .await
+            .expect("independent producer must progress while another stream is blocked");
+        slow_gate.add_permits(500);
+        let report = tokio::time::timeout(std::time::Duration::from_secs(10), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["slow_consumer"].succeeded, 500);
+        assert_eq!(report.processes["fast_consumer"].succeeded, 300);
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_backpressured_producer() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("start")]))
+            .process(Process::new(
+                "producer",
+                "backpressure_test",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "backpressure_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let builder: NodeBuilder = {
+            let started = Arc::clone(&started);
+            let sent = Arc::clone(&sent);
+            Arc::new(move |_, spec| {
+                Ok(Box::new(BackpressureNode {
+                    ports: dag_core::NodePorts::new(),
+                    producer: spec["producer"].as_bool().unwrap_or(false),
+                    sent: Arc::clone(&sent),
+                    consumer_started: Arc::clone(&started),
+                    gate: Arc::new(tokio::sync::Semaphore::new(0)),
+                }))
+            })
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let token = CancellationToken::new();
+        let run_token = token.clone();
+        let run = tokio::spawn(async move {
+            let config = FlowRunConfig {
+                max_concurrency: 2,
+                resume: false,
+            };
+            scheduler
+                .run_dataflow(&graph, &resolved(&graph), &config, Some(run_token))
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(sent.load(std::sync::atomic::Ordering::SeqCst) < 500);
+        token.cancel();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+            .await
+            .expect("cancellation must not wait for downstream capacity")
+            .unwrap()
+            .unwrap();
+        assert!(!report.ok);
+    }
+
+    #[tokio::test]
+    async fn dataflow_runs_tasks_before_source_enumeration_finishes() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new(
+                "consumer",
+                "stream_test",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let consumed = Arc::new(tokio::sync::Notify::new());
+        let notify = Arc::clone(&consumed);
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let producer = tokio::spawn(async move {
+            tx.send(Ok(serde_json::json!("first"))).await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), notify.notified())
+                .await
+                .expect("consumer must run before the source finishes");
+            tx.send(Ok(serde_json::json!("second"))).await.unwrap();
+        });
+        let builder: NodeBuilder = Arc::new(move |_, _| {
+            Ok(Box::new(StreamingTestNode {
+                ports: dag_core::NodePorts::new(),
+                producer: false,
+                consumed: Arc::clone(&consumed),
+            }))
+        });
+        let sched = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let report = sched
+            .run_dataflow_streamed_cached(&graph, streams, &FlowRunConfig::default(), None, None)
+            .await
+            .unwrap();
+        producer.await.unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 2);
+    }
+
+    #[tokio::test]
+    async fn dataflow_reports_source_errors() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new("consumer", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(Err(crate::Error::Execution("source failed".into())))
+            .await
+            .unwrap();
+        drop(tx);
+        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let error = scheduler()
+            .run_dataflow_streamed_cached(&graph, streams, &FlowRunConfig::default(), None, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("source failed"), "{error}");
+    }
+
+    struct CancellationObservingExecutor {
+        started: Arc<tokio::sync::Notify>,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl TaskExecutor for CancellationObservingExecutor {
+        fn name(&self) -> &'static str {
+            "cancel-observer"
+        }
+        async fn run(&self, execution: TaskExecution) -> JobResult {
+            self.started.notify_one();
+            execution.cancellation.cancelled().await;
+            self.cancelled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            JobResult::Failed {
+                id: execution.submission.spec.id,
+                error: DagError::Schedule("cancelled".into()),
+                duration: std::time::Duration::ZERO,
+                details: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn source_error_cancels_and_joins_inflight_task_without_cancelling_caller() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new("consumer", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let executor = CancellationObservingExecutor {
+            started: Arc::clone(&started),
+            cancelled: Arc::clone(&cancelled),
+        };
+        let scheduler =
+            FlowScheduler::new(Arc::new(executor), Arc::new(EchoNode::build), engine_ctx());
+        let caller = CancellationToken::new();
+        let task_token = caller.clone();
+        let run = tokio::spawn(async move {
+            scheduler
+                .run_dataflow_streamed_cached(
+                    &graph,
+                    streams,
+                    &FlowRunConfig::default(),
+                    None,
+                    Some(task_token),
+                )
+                .await
+        });
+        tx.send(Ok(serde_json::json!("first"))).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        tx.send(Err(crate::Error::Execution("source failed".into())))
+            .await
+            .unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("source failed"));
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!caller.is_cancelled());
+    }
+
+    struct FailingAndWaitingExecutor {
+        ready: Arc<tokio::sync::Barrier>,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait::async_trait]
+    impl TaskExecutor for FailingAndWaitingExecutor {
+        fn name(&self) -> &'static str {
+            "failure-and-wait"
+        }
+        async fn run(&self, execution: TaskExecution) -> JobResult {
+            self.ready.wait().await;
+            if execution.submission.spec.logical_node.as_deref() != Some("fail") {
+                execution.cancellation.cancelled().await;
+                self.cancelled
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            JobResult::Failed {
+                id: execution.submission.spec.id,
+                error: DagError::Schedule("failed".into()),
+                duration: std::time::Duration::ZERO,
+                details: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn fatal_task_failure_notifies_running_peers_without_cancelling_caller() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("item")]))
+            .process(Process::new("fail", "echo", serde_json::json!({})))
+            .process(Process::new("wait", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "fail", 0))
+            .wire(Wire::direct("s", 0, "wait", 0))
+            .build()
+            .unwrap();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let executor = FailingAndWaitingExecutor {
+            ready: Arc::new(tokio::sync::Barrier::new(2)),
+            cancelled: Arc::clone(&cancelled),
+        };
+        let scheduler =
+            FlowScheduler::new(Arc::new(executor), Arc::new(EchoNode::build), engine_ctx());
+        let caller = CancellationToken::new();
+        let config = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            scheduler.run_dataflow(&graph, &resolved(&graph), &config, Some(caller.clone())),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.processes["fail"].failed, 1);
+        assert!(
+            !report.cancelled,
+            "internal failure is distinct from user cancellation"
+        );
+        assert_eq!(report.processes["wait"].cancelled, 1);
+        assert_eq!(report.processes["wait"].total, 1);
+        assert!(
+            report
+                .instances
+                .iter()
+                .any(|r| r.process == "wait" && r.status == RuntimeStatus::Cancelled)
+        );
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!caller.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancelled_inflight_instance_is_in_flow_report() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("item")]))
+            .process(Process::new("worker", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "worker", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let scheduler = FlowScheduler::new(
+            Arc::new(CancellationObservingExecutor {
+                started: Arc::clone(&started),
+                cancelled: Arc::clone(&cancelled),
+            }),
+            Arc::new(EchoNode::build),
+            engine_ctx(),
+        );
+        let token = CancellationToken::new();
+        let child = token.clone();
+        let run = tokio::spawn(async move {
+            scheduler
+                .run_dataflow(
+                    &graph,
+                    &resolved(&graph),
+                    &FlowRunConfig::default(),
+                    Some(child),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        token.cancel();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.processes["worker"].total, 1);
+        assert_eq!(report.processes["worker"].cancelled, 1);
+        assert_eq!(report.instances[0].status, RuntimeStatus::Cancelled);
+        assert_eq!(report.instances[0].attempts, 1);
+        assert!(cancelled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn dataflow_cancellation_interrupts_waiting_for_source() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![]))
+            .process(Process::new("consumer", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+        let streams = crate::source::SourceStreams::from_test_reader("s", receiver);
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            cancel.cancel();
+        });
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            scheduler().run_dataflow_streamed_cached(
+                &graph,
+                streams,
+                &FlowRunConfig::default(),
+                None,
+                Some(token),
+            ),
+        )
+        .await
+        .expect("cancellation must interrupt source wait")
+        .unwrap();
+        assert!(!report.ok);
+        assert!(report.cancelled);
+        assert_eq!(report.processes["consumer"].total, 0);
+    }
+
+    #[derive(Clone)]
+    struct FailingStreamNode {
+        ports: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for FailingStreamNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            reporter
+                .emit_channel_item(0, 0, serde_json::json!("already-delivered"))
+                .await;
+            Err(DagError::Schedule("producer failed".into()))
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "failing_stream"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_does_not_retry_after_stream_delivery() {
+        let mut producer = Process::new("producer", "failing_stream", serde_json::json!({}));
+        producer.error_strategy = crate::model::ErrorStrategy::retry(3, 0);
+        let graph = FlowGraphBuilder::default()
+            .process(producer)
+            .build()
+            .unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(FailingStreamNode {
+                ports: dag_core::NodePorts::new(),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let report = scheduler
+            .run_dataflow(
+                &graph,
+                &SourceResolution::new(),
+                &FlowRunConfig::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.instances.len(), 1);
+        assert_eq!(report.instances[0].attempts, 1);
+        assert!(
+            report.instances[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("cannot retry")
+        );
+    }
+
+    #[tokio::test]
+    async fn dataflow_resume_uses_actual_input_files_and_invalidates_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("a.txt");
+        std::fs::write(&input, "first").unwrap();
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "s",
+                vec![serde_json::json!(input.to_string_lossy())],
+            ))
+            .process(Process::new(
+                "qc",
+                "echo",
+                serde_json::json!({"tag":unique_tag("cache")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let mut cache = InstanceCache::new();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        let scheduler = scheduler();
+        let first = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(first.processes["qc"].reused, 0);
+        let second = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(second.processes["qc"].reused, 1);
+        std::fs::write(&input, "a changed input").unwrap();
+        let third = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(third.processes["qc"].reused, 0);
+    }
+
+    #[tokio::test]
+    async fn dataflow_resume_tracks_files_nested_in_channel_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("a.txt");
+        std::fs::write(&input, "first").unwrap();
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "s",
+                vec![serde_json::json!({"sample":"x", "reads":[{"path":input.to_string_lossy()}]})],
+            ))
+            .process(Process::new(
+                "qc",
+                "echo",
+                serde_json::json!({"tag":unique_tag("nested-cache")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let mut cache = InstanceCache::new();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        let scheduler = scheduler();
+        let first = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(first.processes["qc"].reused, 0);
+        let second = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(second.processes["qc"].reused, 1);
+        std::fs::write(&input, "changed input size").unwrap();
+        let third = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(third.processes["qc"].reused, 0);
+    }
+
+    #[tokio::test]
+    async fn dataflow_resume_does_not_cache_unverifiable_nested_remote_paths() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "s",
+                vec![serde_json::json!({"reads":["vfs://data/a.fastq"]})],
+            ))
+            .process(Process::new(
+                "qc",
+                "echo",
+                serde_json::json!({"tag":unique_tag("remote-cache")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let mut cache = InstanceCache::new();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        let scheduler = scheduler();
+        for _ in 0..2 {
+            let report = scheduler
+                .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+                .await
+                .unwrap();
+            assert!(report.ok);
+            assert_eq!(report.processes["qc"].reused, 0);
+        }
+    }
+
+    #[derive(Clone)]
+    struct CacheContractNode {
+        inner: Box<dyn DagNode>,
+        allow: bool,
+        dependency: std::path::PathBuf,
+        referenced: std::path::PathBuf,
+        plugin: Option<dag_core::fingerprint::PluginIdentity>,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for CacheContractNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            self.inner.ports()
+        }
+        async fn execute(
+            &mut self,
+            ctx: &NodeCtx,
+            inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            self.inner.execute(ctx, inputs, reporter).await
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "cache_contract"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn allows_cache_reuse(&self) -> bool {
+            self.allow
+        }
+        fn referenced_file_paths(&self) -> Vec<String> {
+            vec![self.referenced.to_string_lossy().into_owned()]
+        }
+        fn plugin_identity(&self) -> Option<&dag_core::fingerprint::PluginIdentity> {
+            self.plugin.as_ref()
+        }
+        async fn cache_dependency_state(
+            &self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+        ) -> Result<Option<serde_json::Value>, DagError> {
+            let value = std::fs::read_to_string(&self.dependency)
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
+            Ok(Some(serde_json::json!(value)))
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_resume_honors_node_cache_contracts() {
+        let directory = tempfile::tempdir().unwrap();
+        let dependency = directory.path().join("dependency");
+        let referenced = directory.path().join("reference");
+        std::fs::write(&dependency, "version-a").unwrap();
+        std::fs::write(&referenced, "ref-a").unwrap();
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1)]))
+            .process(Process::new(
+                "qc",
+                "cache_contract",
+                serde_json::json!({"tag":unique_tag("contract")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        for allow in [true, false] {
+            let dependency = dependency.clone();
+            let referenced = referenced.clone();
+            let builder: NodeBuilder = Arc::new(move |_, spec| {
+                Ok(Box::new(CacheContractNode {
+                    inner: EchoNode::build("echo", spec)?,
+                    allow,
+                    dependency: dependency.clone(),
+                    referenced: referenced.clone(),
+                    plugin: None,
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let mut cache = InstanceCache::new();
+            let first = scheduler
+                .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+                .await
+                .unwrap();
+            assert_eq!(first.processes["qc"].reused, 0);
+            let second = scheduler
+                .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+                .await
+                .unwrap();
+            assert_eq!(second.processes["qc"].reused, usize::from(allow));
+            if allow {
+                std::fs::write(directory.path().join("dependency"), "version-b").unwrap();
+                let changed = scheduler
+                    .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+                    .await
+                    .unwrap();
+                assert_eq!(changed.processes["qc"].reused, 0);
+                std::fs::write(directory.path().join("reference"), "changed-reference-size")
+                    .unwrap();
+                let changed = scheduler
+                    .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+                    .await
+                    .unwrap();
+                assert_eq!(changed.processes["qc"].reused, 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_resume_invalidates_when_plugin_identity_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let dependency = directory.path().join("dependency");
+        let referenced = directory.path().join("reference");
+        std::fs::write(&dependency, "same").unwrap();
+        std::fs::write(&referenced, "same").unwrap();
+        let revision = Arc::new(std::sync::atomic::AtomicUsize::new(1));
+        let builder: NodeBuilder = {
+            let revision = Arc::clone(&revision);
+            Arc::new(move |_, spec| {
+                Ok(Box::new(CacheContractNode {
+                    inner: EchoNode::build("echo", spec)?,
+                    allow: true,
+                    dependency: dependency.clone(),
+                    referenced: referenced.clone(),
+                    plugin: Some(dag_core::fingerprint::PluginIdentity {
+                        manifest_sha256: format!(
+                            "sha256:{}",
+                            revision.load(std::sync::atomic::Ordering::SeqCst)
+                        ),
+                        script_sha256: None,
+                        image_reference: "image@sha256:abc".into(),
+                        panels: vec![],
+                    }),
+                }))
+            })
+        };
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1)]))
+            .process(Process::new(
+                "qc",
+                "cache_contract",
+                serde_json::json!({"tag":unique_tag("plugin")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let mut cache = InstanceCache::new();
+        scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        let reused = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(reused.processes["qc"].reused, 1);
+        revision.store(2, std::sync::atomic::Ordering::SeqCst);
+        let changed = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap();
+        assert_eq!(changed.processes["qc"].reused, 0);
+    }
+
+    #[tokio::test]
+    async fn cache_dependency_errors_abort_instead_of_reusing() {
+        let directory = tempfile::tempdir().unwrap();
+        let dependency = directory.path().join("missing");
+        let referenced = directory.path().join("reference");
+        std::fs::write(&referenced, "valid").unwrap();
+        let builder: NodeBuilder = Arc::new(move |_, spec| {
+            Ok(Box::new(CacheContractNode {
+                inner: EchoNode::build("echo", spec)?,
+                allow: true,
+                dependency: dependency.clone(),
+                referenced: referenced.clone(),
+                plugin: None,
+            }))
+        });
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1)]))
+            .process(Process::new(
+                "qc",
+                "cache_contract",
+                serde_json::json!({"tag":unique_tag("error")}),
+            ))
+            .wire(Wire::direct("s", 0, "qc", 0))
+            .build()
+            .unwrap();
+        let cfg = FlowRunConfig {
+            resume: true,
+            max_concurrency: 2,
+        };
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let mut cache = InstanceCache::new();
+        let error = scheduler
+            .run_dataflow_cached(&graph, &resolved(&graph), &cfg, Some(&mut cache), None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("cache dependency for `qc`"),
+            "{error}"
+        );
+        assert!(cache.is_empty());
+    }
+
+    #[derive(Clone)]
+    struct BatchChannelNode {
+        ports: dag_core::NodePorts,
+        producer: bool,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for BatchChannelNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            let mut outputs = PortOutputs::new();
+            if self.producer {
+                outputs.insert(
+                    0,
+                    NodeValue::Channel(dag_core::value::ChannelValue {
+                        items: vec![serde_json::json!("one"), serde_json::json!("two")],
+                    }),
+                );
+            }
+            Ok(outputs)
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "batch_channel"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    #[tokio::test]
+    async fn dataflow_batch_channel_output_fires_per_emitted_item() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("trigger")]))
+            .process(Process::new(
+                "producer",
+                "batch",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new("consumer", "batch", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let builder: NodeBuilder = Arc::new(|_, spec| {
+            Ok(Box::new(BatchChannelNode {
+                ports: dag_core::NodePorts::new(),
+                producer: spec["producer"].as_bool().unwrap_or(false),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["producer"].succeeded, 1);
+        assert_eq!(report.processes["consumer"].succeeded, 2);
+    }
+
+    #[derive(Clone)]
+    struct FileCollectionInspectNode {
+        ports: dag_core::NodePorts,
+    }
+
+    #[async_trait::async_trait]
+    impl DagNode for FileCollectionInspectNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _: &NodeCtx,
+            inputs: &[NodeInput],
+            _: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            match &inputs[0].data {
+                NodeValue::FileSet(files)
+                    if files
+                        .iter()
+                        .map(|file| file.path.as_str())
+                        .collect::<Vec<_>>()
+                        == ["a.fastq", "b.fastq"] =>
+                {
+                    Ok(PortOutputs::new())
+                }
+                other => Err(DagError::Schedule(format!(
+                    "expected collected files, got {other:?}"
+                ))),
+            }
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "inspect_files"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[tokio::test]
+    async fn collected_file_channel_reaches_a_file_port() {
+        for operator in ["collect", "to_list"] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::glob("reads", "*.fastq"))
+                .process(Process::new(
+                    "batch",
+                    "channel",
+                    serde_json::json!({"operator":operator}),
+                ))
+                .process(Process::new("sink", "inspect_files", serde_json::json!({})))
+                .wire(Wire::direct("reads", 0, "batch", 0))
+                .wire(Wire::direct("batch", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let mut resolution = SourceResolution::new();
+            resolution.resolve(
+                "reads",
+                vec![serde_json::json!("a.fastq"), serde_json::json!("b.fastq")],
+            );
+            let builder: NodeBuilder = Arc::new(|_, _| {
+                Ok(Box::new(FileCollectionInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::File),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolution, &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{operator}: {:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
+    }
+
+    #[derive(Clone)]
+    struct ValueInspectNode {
+        ports: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for ValueInspectNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            match &inputs[0].data {
+                NodeValue::Channel(value)
+                    if value.items == vec![serde_json::json!("literal-value")] =>
+                {
+                    Ok(PortOutputs::new())
+                }
+                other => Err(DagError::Schedule(format!("unexpected input: {other:?}"))),
+            }
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "inspect_value"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    #[tokio::test]
+    async fn dataflow_list_string_remains_a_value_on_channel_port() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("literal-value")]))
+            .process(Process::new(
+                "check",
+                "inspect_value",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "check", 0))
+            .build()
+            .unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ValueInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+    }
+
+    #[derive(Clone)]
+    struct GroupStreamNode {
+        ports: dag_core::NodePorts,
+        producer: bool,
+        consumed: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for GroupStreamNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            inputs: &[NodeInput],
+            reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            if self.producer {
+                reporter
+                    .emit_channel_item(0, 0, serde_json::json!(["g", "a"]))
+                    .await;
+                reporter
+                    .emit_channel_item(0, 1, serde_json::json!(["g", "b"]))
+                    .await;
+                tokio::time::timeout(std::time::Duration::from_secs(2), self.consumed.notified())
+                    .await
+                    .map_err(|_| {
+                        DagError::Schedule("group consumer did not run before source closed".into())
+                    })?;
+                reporter.close_channel(0, 2).await;
+            } else {
+                match &inputs[0].data {
+                    NodeValue::Channel(v)
+                        if v.items == vec![serde_json::json!(["g", ["a", "b"]])] =>
+                    {
+                        self.consumed.notify_one()
+                    }
+                    other => {
+                        return Err(DagError::Schedule(format!("unexpected group: {other:?}")));
+                    }
+                }
+            }
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "group_stream"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    #[tokio::test]
+    async fn dataflow_group_tuple_size_emits_before_source_closes() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("trigger")]))
+            .process(Process::new(
+                "producer",
+                "group_stream",
+                serde_json::json!({"producer":true}),
+            ))
+            .process(Process::new(
+                "group",
+                "channel",
+                serde_json::json!({"operator":"group_tuple", "size":2}),
+            ))
+            .process(Process::new(
+                "consumer",
+                "group_stream",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "producer", 0))
+            .wire(Wire::direct("producer", 0, "group", 0))
+            .wire(Wire::direct("group", 0, "consumer", 0))
+            .build()
+            .unwrap();
+        let consumed = Arc::new(tokio::sync::Notify::new());
+        let builder: NodeBuilder = Arc::new(move |_, spec| {
+            Ok(Box::new(GroupStreamNode {
+                ports: dag_core::NodePorts::new(),
+                producer: spec["producer"].as_bool().unwrap_or(false),
+                consumed: Arc::clone(&consumed),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+        let cfg = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &cfg, None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["consumer"].succeeded, 1);
+    }
+
+    #[derive(Clone)]
+    struct ListInspectNode {
+        ports: dag_core::NodePorts,
+        expected: serde_json::Value,
+    }
+
+    fn channel_value(value: serde_json::Value) -> NodeValue {
+        NodeValue::Channel(dag_core::value::ChannelValue { items: vec![value] })
+    }
+
+    fn is_one(value: &NodeValue) -> bool {
+        matches!(value, NodeValue::Channel(channel) if channel.items == vec![serde_json::json!(1)])
+    }
+    #[async_trait::async_trait]
+    impl DagNode for ListInspectNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            match &inputs[0].data {
+                NodeValue::Channel(value) if value.items == vec![self.expected.clone()] => {
+                    Ok(PortOutputs::new())
+                }
+                other => Err(DagError::Schedule(format!(
+                    "unexpected list input: {other:?}"
+                ))),
+            }
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "inspect_list"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+    #[tokio::test]
+    async fn channel_functions_preserve_input_order_when_first_evaluation_is_slow() {
+        let function = serde_json::json!({"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}});
+        for spec in [
+            serde_json::json!({"operator":"map", "function":function}),
+            serde_json::json!({"operator":"filter", "function":function}),
+            serde_json::json!({"operator":"branch", "branches":[{"name":"out", "function":function}]}),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items(
+                    "s",
+                    vec![serde_json::json!(1), serde_json::json!(2)],
+                ))
+                .process(Process::new("operator", "channel", spec.clone()))
+                .process(Process::new(
+                    "list",
+                    "channel",
+                    serde_json::json!({"operator":"to_list"}),
+                ))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "operator", 0))
+                .wire(Wire::direct("operator", 0, "list", 0))
+                .wire(Wire::direct("list", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(|_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: serde_json::json!([1, 2]),
+                }))
+            });
+            let map = spec["operator"] == "map";
+            let evaluator: ChannelFunction = Arc::new(move |_, input| {
+                let input = input.expect("operator input");
+                if matches!(input, NodeValue::Channel(channel) if channel.items == vec![serde_json::json!(1)])
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(75));
+                }
+                Ok(if map {
+                    input.clone()
+                } else {
+                    channel_value(serde_json::json!(true))
+                })
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+                .with_channel_function(evaluator);
+            let cfg = FlowRunConfig {
+                max_concurrency: 4,
+                ..FlowRunConfig::default()
+            };
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &cfg, None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{:?}: {:?}", spec, report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn if_empty_function_runs_only_for_an_empty_channel() {
+        for (items, expected, calls) in [(vec![], 42, 1), (vec![serde_json::json!(7)], 7, 0)] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items("s", items))
+                .process(Process::new("default", "channel", serde_json::json!({"operator":"if_empty", "value":{"__dag_shell_function__":{"source":"def f(): return 42", "captures":{}}}})))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "default", 0)).wire(Wire::direct("default", 0, "sink", 0)).build().unwrap();
+            let builder: NodeBuilder = Arc::new(move |_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: serde_json::json!(expected),
+                }))
+            });
+            let called = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let observed = Arc::clone(&called);
+            let evaluator: ChannelFunction = Arc::new(move |_, input| {
+                assert!(input.is_none());
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(channel_value(serde_json::json!(42)))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+                .with_channel_function(evaluator);
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+            assert_eq!(called.load(std::sync::atomic::Ordering::SeqCst), calls);
+        }
+    }
+
+    #[tokio::test]
+    async fn first_and_count_accept_function_predicates() {
+        let predicate = serde_json::json!({"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}});
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items(
+                "s",
+                vec![
+                    serde_json::json!(1),
+                    serde_json::json!(2),
+                    serde_json::json!(2),
+                ],
+            ))
+            .process(Process::new(
+                "first",
+                "channel",
+                serde_json::json!({"operator":"first", "criteria":predicate}),
+            ))
+            .process(Process::new(
+                "count",
+                "channel",
+                serde_json::json!({"operator":"count", "criteria":predicate}),
+            ))
+            .process(Process::new(
+                "first_sink",
+                "inspect_list",
+                serde_json::json!({}),
+            ))
+            .process(Process::new(
+                "count_sink",
+                "inspect_list",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("s", 0, "first", 0))
+            .wire(Wire::direct("s", 0, "count", 0))
+            .wire(Wire::direct("first", 0, "first_sink", 0))
+            .wire(Wire::direct("count", 0, "count_sink", 0))
+            .build()
+            .unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!(2),
+            }))
+        });
+        let evaluator: ChannelFunction = Arc::new(|_, item| {
+            Ok(channel_value(serde_json::json!(
+                matches!(item, Some(NodeValue::Channel(channel)) if channel.items == vec![serde_json::json!(2)])
+            )))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["first_sink"].succeeded, 1);
+        assert_eq!(report.processes["count_sink"].succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn dataflow_flat_map_function_expands_with_backpressure() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1)]))
+            .process(Process::new("flat", "channel", serde_json::json!({"operator":"flat_map", "function":{"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}}})))
+            .process(Process::new("list", "channel", serde_json::json!({"operator":"to_list"})))
+            .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "flat", 0))
+            .wire(Wire::direct("flat", 0, "list", 0))
+            .wire(Wire::direct("list", 0, "sink", 0))
+            .build().unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!((0..500).collect::<Vec<_>>()),
+            }))
+        });
+        let evaluator: ChannelFunction = Arc::new(|_, _| {
+            Ok(channel_value(serde_json::json!(
+                (0..500).collect::<Vec<_>>()
+            )))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            scheduler.run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["sink"].succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn dataflow_filter_function_preserves_matching_input() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1), serde_json::json!(2)]))
+            .process(Process::new("filter", "channel", serde_json::json!({"operator":"filter", "function":{"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}}})))
+            .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "filter", 0))
+            .wire(Wire::direct("filter", 0, "sink", 0))
+            .build().unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!(2),
+            }))
+        });
+        let evaluator: ChannelFunction = Arc::new(|_, item| {
+            Ok(channel_value(if is_one(item.expect("input")) {
+                serde_json::json!([])
+            } else {
+                serde_json::json!("nonempty")
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["sink"].succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn channel_functions_do_not_block_independent_processes() {
+        let spec = serde_json::json!({"operator":"map", "function":{"__dag_shell_function__":{"source":"def f(x): return x", "captures":{}}}});
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("a", vec![serde_json::json!(1)]))
+            .source(Source::items("b", vec![serde_json::json!(1)]))
+            .process(Process::new("map_a", "channel", spec.clone()))
+            .process(Process::new("map_b", "channel", spec))
+            .process(Process::new(
+                "sink_a",
+                "inspect_list",
+                serde_json::json!({}),
+            ))
+            .process(Process::new(
+                "sink_b",
+                "inspect_list",
+                serde_json::json!({}),
+            ))
+            .wire(Wire::direct("a", 0, "map_a", 0))
+            .wire(Wire::direct("b", 0, "map_b", 0))
+            .wire(Wire::direct("map_a", 0, "sink_a", 0))
+            .wire(Wire::direct("map_b", 0, "sink_b", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let evaluator: ChannelFunction = Arc::new(move |_, item| {
+            started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while started.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                if std::time::Instant::now() >= deadline {
+                    return Err("independent function was blocked".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Ok(item.expect("input").clone())
+        });
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!(1),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let config = FlowRunConfig {
+            max_concurrency: 2,
+            resume: false,
+        };
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &config, None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["sink_a"].succeeded, 1);
+        assert_eq!(report.processes["sink_b"].succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn dataflow_map_executes_persisted_function_and_skips_null() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!(1), serde_json::json!(2)]))
+            .process(Process::new("map", "channel", serde_json::json!({"operator":"map", "function":{"__dag_shell_function__":{"source":"def transform(x): return x", "captures":{}}}})))
+            .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "map", 0))
+            .wire(Wire::direct("map", 0, "sink", 0))
+            .build().unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(ListInspectNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                expected: serde_json::json!(20),
+            }))
+        });
+        let evaluator: ChannelFunction = Arc::new(|_, item| {
+            Ok(channel_value(if is_one(item.expect("input")) {
+                serde_json::Value::Null
+            } else {
+                serde_json::json!(20)
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx())
+            .with_channel_function(evaluator);
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok, "{:?}", report.instances);
+        assert_eq!(report.processes["sink"].succeeded, 1);
+    }
+
+    #[tokio::test]
+    async fn dataflow_count_matches_nextflow_literal_criteria() {
+        for (criteria, expected) in [
+            (serde_json::json!(2), 2),
+            (serde_json::json!([1, 3]), 2),
+            (serde_json::json!(null), 4),
+            (serde_json::json!(9), 0),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items(
+                    "s",
+                    vec![
+                        serde_json::json!(1),
+                        serde_json::json!(2),
+                        serde_json::json!(2),
+                        serde_json::json!(3),
+                    ],
+                ))
+                .process(Process::new(
+                    "count",
+                    "channel",
+                    serde_json::json!({"operator":"count", "criteria":criteria}),
+                ))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "count", 0))
+                .wire(Wire::direct("count", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(move |_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: serde_json::json!(expected),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_to_list_emits_empty_and_preserves_nested_items() {
+        for values in [
+            vec![],
+            vec![serde_json::json!([1, 2]), serde_json::json!(3)],
+            vec![serde_json::json!([]), serde_json::json!(3)],
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items("s", values.clone()))
+                .process(Process::new(
+                    "list",
+                    "channel",
+                    serde_json::json!({"operator":"to_list"}),
+                ))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "list", 0))
+                .wire(Wire::direct("list", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let expected = serde_json::Value::Array(values);
+            let builder: NodeBuilder = Arc::new(move |_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: expected.clone(),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_collect_flattens_empty_lists_before_deciding_whether_to_emit() {
+        for (values, expected_count) in [
+            (vec![serde_json::json!([]), serde_json::json!([])], 0),
+            (vec![serde_json::json!([]), serde_json::json!([1])], 1),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items("s", values))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::collect("s", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(|_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: serde_json::json!(1),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, expected_count);
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_unique_and_distinct_follow_stream_order() {
+        for (operator, expected) in [
+            ("unique", serde_json::json!(["a", "b", null])),
+            ("distinct", serde_json::json!(["a", "b", "a", null])),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items(
+                    "s",
+                    vec![
+                        serde_json::json!("a"),
+                        serde_json::json!("a"),
+                        serde_json::json!("b"),
+                        serde_json::json!("a"),
+                        serde_json::json!(null),
+                        serde_json::json!(null),
+                    ],
+                ))
+                .process(Process::new(
+                    "dedup",
+                    "channel",
+                    serde_json::json!({"operator":operator}),
+                ))
+                .process(Process::new(
+                    "list",
+                    "channel",
+                    serde_json::json!({"operator":"to_list"}),
+                ))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "dedup", 0))
+                .wire(Wire::direct("dedup", 0, "list", 0))
+                .wire(Wire::direct("list", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(move |_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: expected.clone(),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{operator}: {:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_first_and_take_close_without_affecting_other_subscribers() {
+        for (spec, selected) in [
+            (
+                serde_json::json!({"operator":"first"}),
+                serde_json::json!(["a"]),
+            ),
+            (
+                serde_json::json!({"operator":"take", "count":0}),
+                serde_json::json!([]),
+            ),
+            (
+                serde_json::json!({"operator":"take", "count":2}),
+                serde_json::json!(["a", "b"]),
+            ),
+            (
+                serde_json::json!({"operator":"take", "count":-1}),
+                serde_json::json!(["a", "b", "c"]),
+            ),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items(
+                    "s",
+                    vec![
+                        serde_json::json!("a"),
+                        serde_json::json!("b"),
+                        serde_json::json!("c"),
+                    ],
+                ))
+                .process(Process::new("limit", "channel", spec.clone()))
+                .process(Process::new(
+                    "selected",
+                    "channel",
+                    serde_json::json!({"operator":"to_list"}),
+                ))
+                .process(Process::new(
+                    "all",
+                    "channel",
+                    serde_json::json!({"operator":"to_list"}),
+                ))
+                .process(Process::new(
+                    "selected_sink",
+                    "inspect_list",
+                    serde_json::json!({"expected":selected}),
+                ))
+                .process(Process::new(
+                    "all_sink",
+                    "inspect_list",
+                    serde_json::json!({"expected":["a", "b", "c"]}),
+                ))
+                .wire(Wire::direct("s", 0, "limit", 0))
+                .wire(Wire::direct("limit", 0, "selected", 0))
+                .wire(Wire::direct("s", 0, "all", 0))
+                .wire(Wire::direct("selected", 0, "selected_sink", 0))
+                .wire(Wire::direct("all", 0, "all_sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(|_, spec| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: spec["expected"].clone(),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{spec}: {:?}", report.instances);
+            assert_eq!(report.processes["selected_sink"].succeeded, 1);
+            assert_eq!(report.processes["all_sink"].succeeded, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn dataflow_last_and_count_bind_after_closure_including_empty_input() {
+        for (operator, values, expected) in [
+            ("last", vec![], serde_json::json!(null)),
+            (
+                "last",
+                vec![serde_json::json!(1), serde_json::json!(2)],
+                serde_json::json!(2),
+            ),
+            ("count", vec![], serde_json::json!(0)),
+            (
+                "count",
+                vec![serde_json::json!(1), serde_json::json!(2)],
+                serde_json::json!(2),
+            ),
+        ] {
+            let graph = FlowGraphBuilder::default()
+                .source(Source::items("s", values))
+                .process(Process::new(
+                    "reduce",
+                    "channel",
+                    serde_json::json!({"operator":operator}),
+                ))
+                .process(Process::new("sink", "inspect_list", serde_json::json!({})))
+                .wire(Wire::direct("s", 0, "reduce", 0))
+                .wire(Wire::direct("reduce", 0, "sink", 0))
+                .build()
+                .unwrap();
+            let builder: NodeBuilder = Arc::new(move |_, _| {
+                Ok(Box::new(ListInspectNode {
+                    ports: dag_core::NodePorts::new()
+                        .add_input_port_of_type(None, dag_core::value::PortType::Channel),
+                    expected: expected.clone(),
+                }))
+            });
+            let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
+            let report = scheduler
+                .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                .await
+                .unwrap();
+            assert!(report.ok, "{operator}: {:?}", report.instances);
+            assert_eq!(report.processes["sink"].succeeded, 1);
+        }
     }
 }

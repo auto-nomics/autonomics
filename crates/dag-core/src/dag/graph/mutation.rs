@@ -501,6 +501,21 @@ impl DAG {
                     }
                     NodeValue::DataFrame(_) => {}
                     NodeValue::Channel(_) => {}
+                    NodeValue::Structured(value) => {
+                        for file in value.artifacts() {
+                            index += 1;
+                            if crate::fingerprint::cached_file_changed_observed(
+                                file,
+                                storage,
+                                Some(&reporter),
+                                &format!("verifying_cache:{index}"),
+                            )
+                            .await
+                            {
+                                changed = true;
+                            }
+                        }
+                    }
                 }
                 if changed {
                     break;

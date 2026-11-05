@@ -84,6 +84,8 @@ pub fn compile_container_spec(
             |output| nodes_io::container_command::ContainerCommandOutputSpec {
                 path: output.path.clone(),
                 format: output.format.clone(),
+                tuple: output.tuple.clone(),
+                optional: output.optional,
             },
         )
         .collect();
@@ -121,6 +123,21 @@ pub fn compile_container_spec(
         script,
         files,
         env,
+        tuple_inputs: node
+            .ports
+            .inputs
+            .iter()
+            .enumerate()
+            .filter(|(_, input)| input.r#type == crate::node_definition::PortKind::Tuple)
+            .map(|(index, input)| {
+                Ok(nodes_io::container_command::TupleInput {
+                    port: u8::try_from(index).map_err(|_| {
+                        Error::Other(format!("node `{}` has too many input ports", node.kind))
+                    })?,
+                    tuple: input.tuple.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
         outputs,
         workdir: None,
         stage_in_mode: Default::default(),
@@ -182,6 +199,54 @@ RENDER_LABEL = "{{ label }}"
         let node: NodeDefinition = toml::from_str(NODE_TOML).unwrap();
         crate::node_definition::validate(&node).unwrap();
         compile_container_spec(&node, &ImageMetadata::default(), &[], &values).unwrap()
+    }
+
+    #[test]
+    fn tuple_input_manifest_compiles_to_named_worker_bindings() {
+        let text = r#"
+kind = "tuple_tool"
+desc = "Tuple input"
+doc = "Tuple input"
+[ports]
+inputs = [{ type = "tuple", label = "sample_reads", tuple = [{ val = "sample" }, { path = "reads" }] }]
+outputs = [{ path = "out.txt", tuple = [{val="sample"}, {path="out.txt"}, {path="extra.txt"}] }]
+[command]
+interpreter = "sh"
+script = "printf '%s' \"$sample\"; cat \"$reads\" > /work/out.txt"
+"#;
+        let node: NodeDefinition = toml::from_str(text).unwrap();
+        crate::node_definition::validate(&node).unwrap();
+        let ports = crate::node_definition::compile_ports(&node.ports);
+        assert_eq!(
+            ports.input_port(0).unwrap().data_type,
+            dag_core::value::PortType::Any
+        );
+        assert_eq!(
+            ports.output_port(0).unwrap().data_type,
+            dag_core::value::PortType::Channel
+        );
+        let spec =
+            compile_container_spec(&node, &ImageMetadata::default(), &[], &json!({})).unwrap();
+        assert_eq!(spec.tuple_inputs.len(), 1);
+        assert_eq!(spec.tuple_inputs[0].port, 0);
+        assert!(
+            matches!(&spec.tuple_inputs[0].tuple[0], nodes_io::container_command::TupleInputElement::Val(name) if name == "sample")
+        );
+        assert!(
+            matches!(&spec.tuple_inputs[0].tuple[1], nodes_io::container_command::TupleInputElement::Path(name) if name == "reads")
+        );
+        let mut invalid = node.clone();
+        invalid.ports.inputs[0].tuple.clear();
+        assert!(crate::node_definition::validate(&invalid).is_err());
+        let mut invalid = node.clone();
+        invalid.ports.outputs[0].tuple.push(
+            nodes_io::container_command::TupleOutputElement::Path {
+                path: "../escape".into(),
+                arity: None,
+                hidden: None,
+            },
+        );
+        assert!(crate::node_definition::validate(&invalid).is_err());
     }
 
     #[test]

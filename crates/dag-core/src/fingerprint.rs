@@ -105,9 +105,12 @@ pub enum IdentityValue {
     /// when the upstream fingerprint is unavailable (first incremental run
     /// after an upgrade, spec-less test nodes) — encoded as an explicit
     /// `pending` marker, stable but visibly not content-level.
-    DataFrame { upstream: Option<String> },
+    DataFrame {
+        upstream: Option<String>,
+    },
     /// Canonical JSON content of all channel items, preserving order.
     Channel(Vec<serde_json::Value>),
+    Structured(crate::dag::execution::ChannelTransportValue),
 }
 
 /// Gather a node's input identities from the wiring edges, mirroring
@@ -146,6 +149,7 @@ pub fn collect_input_identities(
                 upstream: fingerprints.get(from).cloned(),
             },
             NodeValue::Channel(channel) => IdentityValue::Channel(channel.items.clone()),
+            NodeValue::Structured(value) => IdentityValue::Structured(value.clone()),
         };
         identities.push(InputIdentity {
             from: from.clone(),
@@ -367,6 +371,13 @@ fn encode_value(feed: &mut dyn FnMut(&[u8]), identity: &InputIdentity) {
                 feed(&[0]);
             }
         }
+        IdentityValue::Structured(value) => {
+            feed(b"structured-channel:");
+            match serde_json::to_vec(value) {
+                Ok(bytes) => feed(&bytes),
+                Err(_) => feed(format!("{value:?}").as_bytes()),
+            }
+        }
     }
 }
 
@@ -539,6 +550,23 @@ pub async fn upgrade_identities_with_content_hashes_observed(
             }
             IdentityValue::DataFrame { .. } => {}
             IdentityValue::Channel { .. } => {}
+            IdentityValue::Structured(value) => {
+                let mut files: Vec<_> = value.artifacts().into_iter().cloned().collect();
+                for file in &mut files {
+                    upgrade_one(
+                        &file.path,
+                        &mut file.fingerprint,
+                        storage,
+                        reporter,
+                        &format!("hashing_input:{index}"),
+                    )
+                    .await;
+                    index += 1;
+                }
+                value
+                    .replace_artifacts(files)
+                    .expect("artifact count preserved");
+            }
         }
     }
 }
@@ -627,6 +655,21 @@ pub async fn require_content_hashes_observed(
             }
             IdentityValue::Channel(_) => {
                 return Err("live channels cannot satisfy required content identity".into());
+            }
+            IdentityValue::Structured(value) => {
+                let mut files: Vec<_> = value.artifacts().into_iter().cloned().collect();
+                for file in &mut files {
+                    verify(
+                        &file.path,
+                        &mut file.fingerprint,
+                        storage,
+                        reporter,
+                        &format!("hashing_input:{index}"),
+                    )
+                    .await?;
+                    index += 1;
+                }
+                value.replace_artifacts(files)?;
             }
             IdentityValue::DataFrame { upstream: Some(_) } => {}
         }
@@ -727,10 +770,8 @@ pub async fn cached_file_changed_observed(
 
 #[cfg(test)]
 #[path = "content_cache_regressions.rs"]
-
 #[cfg(test)]
 #[path = "cache_dependency_tests.rs"]
-
 #[cfg(test)]
 mod tests {
     use super::*;

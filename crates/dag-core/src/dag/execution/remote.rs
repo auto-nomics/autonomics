@@ -260,6 +260,63 @@ impl RemoteTaskExecutor {
         engine_ctx: &NodeCtx,
     ) -> Result<NodeValue, DagError> {
         match payload {
+            "channel" => {
+                use std::io::Read;
+                let first = artifacts.first().ok_or_else(|| {
+                    DagError::Schedule("remote channel output is missing its artifact".into())
+                })?;
+                let file = std::fs::File::open(&first.path).map_err(|e| {
+                    DagError::Schedule(format!("cannot open remote Channel artifact: {e}"))
+                })?;
+                // Ordinary channel payloads are JSON arrays. Structured payloads
+                // are tagged JSON objects followed by their ordered artifacts.
+                let first_byte = std::io::BufReader::new(file)
+                    .bytes()
+                    .find(|byte| byte.as_ref().map_or(true, |b| !b.is_ascii_whitespace()))
+                    .transpose()
+                    .map_err(|e| {
+                        DagError::Schedule(format!("cannot read remote Channel artifact: {e}"))
+                    })?;
+                if first_byte == Some(b'{') {
+                    Box::pin(Self::load_output(
+                        artifacts,
+                        "structured_channel",
+                        engine_ctx,
+                    ))
+                    .await
+                } else {
+                    let [artifact] = artifacts else {
+                        return Err(DagError::Schedule(format!(
+                            "remote channel output expects one artifact, got {}",
+                            artifacts.len()
+                        )));
+                    };
+                    Self::load_artifact(artifact, "channel", engine_ctx).await
+                }
+            }
+            "structured_channel" => {
+                use std::io::Read;
+                const MAX_BYTES: u64 = 16 * 1024 * 1024;
+                let (manifest, artifacts) = artifacts.split_first().ok_or_else(|| {
+                    DagError::Schedule("structured channel input is missing its manifest".into())
+                })?;
+                let file = std::fs::File::open(&manifest.path).map_err(|e| {
+                    DagError::Schedule(format!("cannot open structured channel manifest: {e}"))
+                })?;
+                let mut bytes = Vec::new();
+                file.take(MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| {
+                        DagError::Schedule(format!("cannot read structured channel manifest: {e}"))
+                    })?;
+                let mut value =
+                    super::ChannelTransportValue::decode(&bytes, MAX_BYTES as usize, 64, 100_000)
+                        .map_err(DagError::Schedule)?;
+                value
+                    .replace_artifacts(artifacts.to_vec())
+                    .map_err(DagError::Schedule)?;
+                Ok(NodeValue::Structured(value))
+            }
             "file" => {
                 let [artifact] = artifacts else {
                     return Err(DagError::Schedule(format!(
@@ -368,6 +425,21 @@ impl TaskExecutor for RemoteTaskExecutor {
         };
 
         let output_contracts = dispatch.spec.outputs.clone();
+        let optional_output_ports = if dispatch.spec.kind == "process" {
+            super::process::parse_process_task(&dispatch)
+                .ok()
+                .map(|process| {
+                    process
+                        .outputs
+                        .into_iter()
+                        .filter(|output| output.optional)
+                        .map(|output| output.port)
+                        .collect::<std::collections::BTreeSet<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
         let timeout = task_timeout(&dispatch.resources);
         let submission_result = async {
             let mut uploaded_inputs = Vec::new();
@@ -670,6 +742,11 @@ impl TaskExecutor for RemoteTaskExecutor {
 
             let mut outputs = PortOutputs::new();
             for contract in &output_contracts {
+                if !local_outputs.contains_key(&contract.port)
+                    && optional_output_ports.contains(&contract.port)
+                {
+                    continue;
+                }
                 let artifacts = local_outputs
                     .get(&contract.port)
                     .ok_or_else(|| {

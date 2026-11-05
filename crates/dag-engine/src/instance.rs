@@ -38,7 +38,9 @@ pub const INSTANCE_ID_SEPARATOR: char = '#';
 
 /// Stable identity of one instance: `"{process}#{item_key}"`, or
 /// `"{process}#0"` for singletons.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct InstanceId(pub(crate) String);
 
 impl InstanceId {
@@ -104,19 +106,13 @@ pub fn item_key(item: &serde_json::Value) -> String {
         serde_json::Value::String(text) => {
             let mut key = String::with_capacity(text.len());
             for character in text.chars().take(KEY_MAX_CHARS) {
-                if character.is_ascii_alphanumeric()
-                    || matches!(character, '.' | '_' | '-')
-                {
+                if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
                     key.push(character);
                 } else {
                     key.push('_');
                 }
             }
-            if key.is_empty() {
-                "_".into()
-            } else {
-                key
-            }
+            if key.is_empty() { "_".into() } else { key }
         }
         serde_json::Value::Number(number) => number.to_string(),
         serde_json::Value::Bool(flag) => flag.to_string(),
@@ -124,10 +120,7 @@ pub fn item_key(item: &serde_json::Value) -> String {
         structured => {
             let bytes = serde_json::to_vec(structured).unwrap_or_default();
             let digest = Sha256::digest(&bytes);
-            format!(
-                "hash-{}",
-                hex_prefix(&digest, KEY_HASH_CHARS)
-            )
+            format!("hash-{}", hex_prefix(&digest, KEY_HASH_CHARS))
         }
     }
 }
@@ -158,14 +151,9 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// Materialize the single instance of a singleton process.
+    /// Materialize the single instance of a process with no driving input
+    /// (derived singleton — see [`crate::plan`]).
     pub fn singleton(process: &Process) -> Result<Self, Error> {
-        if process.cardinality.is_fanout() {
-            return Err(Error::Invalid(format!(
-                "process `{}` is a fanout; materialize per item instead",
-                process.id
-            )));
-        }
         Ok(Self {
             id: InstanceId::new(&process.id, None),
             process: process.id.clone(),
@@ -175,14 +163,23 @@ impl Instance {
         })
     }
 
-    /// Materialize one instance of a fanout process for `item`.
+    /// Materialize the pseudo-instance of one source item. Sources do not
+    /// execute; the item IS the delivery. Rendered spec carries the raw
+    /// item (never built into a node).
+    pub fn for_item_source(source: &str, item: &serde_json::Value) -> Result<Self, Error> {
+        let item_key = item_key(item);
+        Ok(Self {
+            id: InstanceId::new(source, Some(&item_key)),
+            process: source.to_string(),
+            item_key: Some(item_key),
+            item: Some(item.clone()),
+            rendered_spec: item.clone(),
+        })
+    }
+
+    /// Materialize one instance of a process for `item` (the item that
+    /// arrived on its driving channel, propagated from a source).
     pub fn for_item(process: &Process, item: &serde_json::Value) -> Result<Self, Error> {
-        if !process.cardinality.is_fanout() {
-            return Err(Error::Invalid(format!(
-                "process `{}` is a singleton; it takes no items",
-                process.id
-            )));
-        }
         let item_key = item_key(item);
         Ok(Self {
             id: InstanceId::new(&process.id, Some(&item_key)),
@@ -232,9 +229,8 @@ pub fn render_spec(
 }
 
 fn render_string(template: &str, item: &serde_json::Value) -> Result<serde_json::Value, Error> {
-    let invalid = |reason: &str| {
-        Error::Invalid(format!("item template `{template}` is invalid: {reason}"))
-    };
+    let invalid =
+        |reason: &str| Error::Invalid(format!("item template `{template}` is invalid: {reason}"));
     if let Some(value) = resolve_whole_token(template, item)? {
         return Ok(value);
     }
@@ -265,7 +261,9 @@ fn resolve_whole_token(
     template: &str,
     item: &serde_json::Value,
 ) -> Result<Option<serde_json::Value>, Error> {
-    let Some(body) = template.strip_prefix("{{").and_then(|rest| rest.strip_suffix("}}"))
+    let Some(body) = template
+        .strip_prefix("{{")
+        .and_then(|rest| rest.strip_suffix("}}"))
     else {
         return Ok(None);
     };
@@ -300,7 +298,11 @@ fn resolve_item_pointer(body: &str, item: &serde_json::Value) -> Option<serde_js
             pointer.push(character);
         }
     }
-    Some(item.pointer(&pointer).cloned().unwrap_or(serde_json::Value::Null))
+    Some(
+        item.pointer(&pointer)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+    )
 }
 
 fn stringify(value: &serde_json::Value) -> String {
@@ -387,10 +389,10 @@ pub fn instance_fingerprint_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Cardinality, Source};
+    use crate::model::Source;
 
-    fn fanout_process() -> Process {
-        Process::fanout(
+    fn item_process() -> Process {
+        Process::new(
             "qc",
             "fastqc",
             serde_json::json!({
@@ -398,8 +400,6 @@ mod tests {
                 "threads": "{{item.threads}}",
                 "meta": "{{item}}",
             }),
-            Source::items(vec![]),
-            "sample",
         )
     }
 
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn render_spec_walks_nested_spec_and_dotted_pointers() {
-        let process = fanout_process();
+        let process = item_process();
         let item = serde_json::json!({"path": "a.fastq", "threads": 8});
         let instance = Instance::for_item(&process, &item).unwrap();
         // Whole-token `{{item}}` preserves the item's JSON type.
@@ -487,17 +487,15 @@ mod tests {
     }
 
     #[test]
-    fn singleton_materialization_is_guarded() {
-        let mut process = fanout_process();
-        assert!(Instance::singleton(&process).is_err());
-        process.cardinality = Cardinality::Singleton;
+    fn singleton_materialization_needs_no_items() {
+        let process = item_process();
         assert!(Instance::singleton(&process).is_ok());
-        assert!(Instance::for_item(&process, &serde_json::json!(1)).is_err());
+        assert!(Instance::for_item(&process, &serde_json::json!(1)).is_ok());
     }
 
     #[test]
     fn fingerprint_is_stable_and_sensitivity_is_scoped() {
-        let process = fanout_process();
+        let process = item_process();
         let item = serde_json::json!("a.fastq");
         let instance = Instance::for_item(&process, &item).unwrap();
         let upstream = vec![UpstreamBinding {

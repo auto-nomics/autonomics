@@ -42,7 +42,8 @@ pub trait DagNode: Send + Sync {
 
     /// Images required by this compiled payload, never inferred from caller metadata.
     fn required_container_images(&self) -> Vec<&str> {
-        self.plugin_identity().map(|identity| vec![identity.image_reference.as_str()])
+        self.plugin_identity()
+            .map(|identity| vec![identity.image_reference.as_str()])
             .unwrap_or_default()
     }
 
@@ -128,6 +129,12 @@ pub trait DagNode: Send + Sync {
     /// Omit fallback spec inputs when a connected port takes precedence.
     fn file_input_spec_pointers(&self, _inputs: &[NodeInput]) -> Vec<&'static str> {
         Vec::new()
+    }
+
+    /// Resolve declared input qualifiers before fingerprinting or transport.
+    /// Implementations must be deterministic and safe to call more than once.
+    fn prepare_task_inputs(&self, _inputs: &mut [NodeInput]) -> Result<(), DagError> {
+        Ok(())
     }
 
     /// Output directory spec pointers and their FileSet ports. Remote workers

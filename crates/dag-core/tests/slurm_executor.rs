@@ -476,6 +476,7 @@ fn echo_process() -> ProcessTaskSpec {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.json".into(),
+            optional: false,
         }],
     }
 }
@@ -2457,7 +2458,10 @@ async fn submission_authentication_failure_delivers_no_payload_or_intent() {
         if metadata.is_dir() {
             for entry in std::fs::read_dir(path).unwrap() {
                 let entry = entry.unwrap();
-                entries.insert(entry.file_name().into_string().unwrap(), fixture_tree(&entry.path()));
+                entries.insert(
+                    entry.file_name().into_string().unwrap(),
+                    fixture_tree(&entry.path()),
+                );
             }
         }
         serde_json::json!({
@@ -2479,22 +2483,43 @@ async fn submission_authentication_failure_delivers_no_payload_or_intent() {
     let before = fixture_tree(cluster.path());
     let error = transport.submit(dispatch, artifacts).await.unwrap_err();
     assert!(error.to_string().contains("payload NOT_SENT"), "{error}");
-    assert!(error.to_string().contains("synthetic SSH connection rejected"));
-    assert!(matches!(&error, DagError::SubmissionNotSent { local_ssh_stopped: true, .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("synthetic SSH connection rejected")
+    );
+    assert!(matches!(
+        &error,
+        DagError::SubmissionNotSent {
+            local_ssh_stopped: true,
+            ..
+        }
+    ));
     assert_eq!(error.to_report().kind, "submission_not_sent");
     assert!(!fixture.calls_log().contains("--parsable"));
     assert_eq!(fixture_tree(cluster.path()), before);
-    assert!(!task_dir(cluster.path(), "slurm-auth-denied").join("submission.identity").exists());
+    assert!(
+        !task_dir(cluster.path(), "slurm-auth-denied")
+            .join("submission.identity")
+            .exists()
+    );
 }
 
 #[tokio::test]
 async fn submission_handshake_orders_durable_admission_before_payload() {
     let fixture = Fixture::new();
     let marker = fixture.path().join("durable-admission");
-    let output = fixture.ssh_target().run_submission_once(
-        &format!("test -f '{}' && printf submitted\n", marker.display()),
-        || { std::fs::write(&marker, "admitted").unwrap(); Ok(()) },
-    ).await.unwrap();
+    let output = fixture
+        .ssh_target()
+        .run_submission_once(
+            &format!("test -f '{}' && printf submitted\n", marker.display()),
+            || {
+                std::fs::write(&marker, "admitted").unwrap();
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"submitted");
 }
@@ -2504,28 +2529,61 @@ async fn lost_submission_reply_with_empty_listings_retains_identity_without_repl
     let fixture = Fixture::new();
     let cluster = tempfile::tempdir().unwrap();
     let task = "slurm-lost-reply";
-    std::fs::write(fixture.path().join("discard_submission_records"), format!(
-        "{}\n", task_dir(cluster.path(), task).join("submission.job-id").display(),
-    )).unwrap();
+    std::fs::write(
+        fixture.path().join("discard_submission_records"),
+        format!(
+            "{}\n",
+            task_dir(cluster.path(), task)
+                .join("submission.job-id")
+                .display(),
+        ),
+    )
+    .unwrap();
     std::fs::write(fixture.path().join("ssh_fail_255_after_run_once"), "").unwrap();
     let transport = transport_of(&fixture, cluster.path());
     let (dispatch, artifacts) = simple_dispatch(cluster.path(), task);
     let error = transport.submit(dispatch, artifacts).await.unwrap_err();
     assert!(!matches!(&error, DagError::SubmissionNotSent { .. }));
-    assert!(error.to_string().contains("empty listings do not authorize replay"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("empty listings do not authorize replay"),
+        "{error}"
+    );
     let calls = fixture.calls_log();
-    assert_eq!(calls.lines().filter(|line| line.starts_with("--parsable ")).count(), 1);
-    assert!(calls.lines().any(|line| line.contains("-u ") && line.contains("-o JobID")));
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("--parsable "))
+            .count(),
+        1
+    );
+    assert!(
+        calls
+            .lines()
+            .any(|line| line.contains("-u ") && line.contains("-o JobID"))
+    );
     assert!(!calls.contains("--me"));
     let intent_dir = cluster.path().join(task);
-    let intents: Vec<_> = std::fs::read_dir(&intent_dir).unwrap()
+    let intents: Vec<_> = std::fs::read_dir(&intent_dir)
+        .unwrap()
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.file_name().unwrap().to_string_lossy().starts_with(".intent-"))
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".intent-")
+        })
         .collect();
     assert_eq!(intents.len(), 1);
-    let intent: serde_json::Value = serde_json::from_slice(&std::fs::read(&intents[0]).unwrap()).unwrap();
-    let diagnostic = intent_dir.join(format!(".submission-response-{}.json", intent["nonce"].as_str().unwrap()));
-    let response: serde_json::Value = serde_json::from_slice(&std::fs::read(&diagnostic).unwrap()).unwrap();
+    let intent: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&intents[0]).unwrap()).unwrap();
+    let diagnostic = intent_dir.join(format!(
+        ".submission-response-{}.json",
+        intent["nonce"].as_str().unwrap()
+    ));
+    let response: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&diagnostic).unwrap()).unwrap();
     for field in ["nonce", "submission_identity", "manifest_sha256"] {
         assert_eq!(response[field], intent[field]);
     }
@@ -2534,9 +2592,17 @@ async fn lost_submission_reply_with_empty_listings_retains_identity_without_repl
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&diagnostic).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&diagnostic).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
-    for field in ["attempted_at_unix_ms", "dispatch_sha256", "job_name", "transport_binding"] {
+    for field in [
+        "attempted_at_unix_ms",
+        "dispatch_sha256",
+        "job_name",
+        "transport_binding",
+    ] {
         assert!(intent.get(field).is_some());
     }
 }
@@ -2545,10 +2611,13 @@ async fn lost_submission_reply_with_empty_listings_retains_identity_without_repl
 async fn submission_handshake_refuses_payload_when_admission_fails() {
     let fixture = Fixture::new();
     let marker = fixture.path().join("payload-must-not-run");
-    let error = fixture.ssh_target().run_submission_once(
-        &format!("touch '{}'\n", marker.display()),
-        || Err(DagError::Schedule("synthetic admission rejected".into())),
-    ).await.unwrap_err();
+    let error = fixture
+        .ssh_target()
+        .run_submission_once(&format!("touch '{}'\n", marker.display()), || {
+            Err(DagError::Schedule("synthetic admission rejected".into()))
+        })
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("payload NOT_SENT"));
     assert!(!marker.exists());
 }
@@ -2556,13 +2625,20 @@ async fn submission_handshake_refuses_payload_when_admission_fails() {
 #[tokio::test]
 async fn submission_handshake_rejects_stdout_pollution_without_admission() {
     let fixture = Fixture::new();
-    std::fs::write(fixture.path().join("ssh"),
-        "#!/bin/sh\nprintf 'unexpected server banner\\n'; exit 255\n").unwrap();
+    std::fs::write(
+        fixture.path().join("ssh"),
+        "#!/bin/sh\nprintf 'unexpected server banner\\n'; exit 255\n",
+    )
+    .unwrap();
     let mut admitted = false;
-    let error = fixture.ssh_target().run_submission_once("echo forbidden\n", || {
-        admitted = true;
-        Ok(())
-    }).await.unwrap_err();
+    let error = fixture
+        .ssh_target()
+        .run_submission_once("echo forbidden\n", || {
+            admitted = true;
+            Ok(())
+        })
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("payload NOT_SENT"));
     assert!(!admitted);
 }
@@ -2571,12 +2647,25 @@ async fn submission_handshake_rejects_stdout_pollution_without_admission() {
 async fn submission_handshake_deadline_reaps_child_without_admitting_payload() {
     let fixture = Fixture::new();
     let pid_path = fixture.path().join("blocked-ssh.pid");
-    std::fs::write(fixture.path().join("ssh"), format!(
-        "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec python3 -c 'import time;time.sleep(10)'\n", pid_path.display(),
-    )).unwrap();
-    let target = fixture.ssh_target().with_command_timeout(Duration::from_millis(100));
+    std::fs::write(
+        fixture.path().join("ssh"),
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec python3 -c 'import time;time.sleep(10)'\n",
+            pid_path.display(),
+        ),
+    )
+    .unwrap();
+    let target = fixture
+        .ssh_target()
+        .with_command_timeout(Duration::from_millis(100));
     let mut admitted = false;
-    let error = target.run_submission_once("echo forbidden\n", || { admitted = true; Ok(()) }).await.unwrap_err();
+    let error = target
+        .run_submission_once("echo forbidden\n", || {
+            admitted = true;
+            Ok(())
+        })
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("payload NOT_SENT"));
     assert!(!admitted);
     let pid = std::fs::read_to_string(pid_path).unwrap();

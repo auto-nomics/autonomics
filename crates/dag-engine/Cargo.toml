@@ -8,6 +8,9 @@ description = "Stage-grade workflow engine: authored state stays at stage granul
 
 [dependencies]
 dag-core = { path = "../dag-core" }
+datafusion.workspace = true
+glob = "0.3"
+regex = "1"
 vfs = { path = "../vfs" }
 futures.workspace = true
 sha2.workspace = true
@@ -20,5 +23,4 @@ tokio = { workspace = true }
 [dev-dependencies]
 async-trait.workspace = true
 tempfile = "3.27.0"
-datafusion.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }

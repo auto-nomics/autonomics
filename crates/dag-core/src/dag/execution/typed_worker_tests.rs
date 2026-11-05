@@ -28,6 +28,7 @@ fn settings() -> TypedWorkerSettings {
 #[derive(Clone)]
 struct EchoNode {
     ports: NodePorts,
+    omit_output: bool,
     path: Option<String>,
     container_dispatch: bool,
     host_service: bool,
@@ -51,6 +52,9 @@ impl crate::DagNode for EchoNode {
         _: &NodeReporter,
     ) -> Result<PortOutputs, DagError> {
         let mut outputs = PortOutputs::new();
+        if self.omit_output {
+            return Ok(outputs);
+        }
         if let Some(path) = &self.path {
             assert!(inputs.is_empty(), "spec file must not become a node port");
             outputs.insert_file(
@@ -120,12 +124,20 @@ impl NodeFactory for EchoFactory {
             _ => panic!("invalid test type"),
         };
         Ok(Box::new(EchoNode {
+            omit_output: spec["omit_output"].as_bool().unwrap_or(false),
             container_dispatch: false,
             host_service: spec["host_service"].as_bool().unwrap_or(false),
             path: spec["path"].as_str().map(str::to_owned),
-            ports: NodePorts::new()
-                .add_input_port_of_type(None, ty.clone())
-                .add_output_port_of_type(None, ty),
+            ports: if spec["optional_output"].as_bool().unwrap_or(false) {
+                NodePorts::new()
+                    .add_input_port_of_type(None, ty.clone())
+                    .add_output_port_of_type(None, ty)
+                    .with_optional_output(0)
+            } else {
+                NodePorts::new()
+                    .add_input_port_of_type(None, ty.clone())
+                    .add_output_port_of_type(None, ty)
+            },
         }))
     }
 }
@@ -313,17 +325,28 @@ struct CaptureExecutor {
 async fn host_service_node_fails_before_remote_submission() {
     let calls = Arc::new(AtomicUsize::new(0));
     let executor = TypedRemoteTaskExecutor::new(
-        Arc::new(CaptureExecutor { calls: calls.clone(), capture: false }),
+        Arc::new(CaptureExecutor {
+            calls: calls.clone(),
+            capture: false,
+        }),
         settings(),
-    ).unwrap();
+    )
+    .unwrap();
     let mut invocation = execution();
     invocation.submission.spec.spec["host_service"] = serde_json::json!(true);
-    invocation.node = registry().build_node(
-        &invocation.submission.spec.kind, invocation.submission.spec.spec.clone(),
-    ).unwrap();
+    invocation.node = registry()
+        .build_node(
+            &invocation.submission.spec.kind,
+            invocation.submission.spec.spec.clone(),
+        )
+        .unwrap();
     let result = executor.run(invocation).await;
     assert!(matches!(result, JobResult::Failed { .. }));
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "a known missing service must not stage or submit");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a known missing service must not stage or submit"
+    );
 }
 
 #[tokio::test]
@@ -332,13 +355,19 @@ async fn worker_rejects_host_service_even_if_coordinator_admission_was_skipped()
     let mut spec = task("channel");
     spec.spec["host_service"] = serde_json::json!(true);
     let envelope = TypedWorkerEnvelope {
-        protocol: 1, worker: settings(), task: spec,
-        original_vfs_principal: None, spec_files: BTreeMap::new(),
-        output_directories: BTreeMap::new(), input_files: BTreeMap::new(),
-        bundles: vec![], plugin_identity: None,
+        protocol: 1,
+        worker: settings(),
+        task: spec,
+        original_vfs_principal: None,
+        spec_files: BTreeMap::new(),
+        output_directories: BTreeMap::new(),
+        input_files: BTreeMap::new(),
+        bundles: vec![],
+        plugin_identity: None,
     };
     let error = execute_typed_worker(&envelope, &registry(), BTreeMap::new(), temp.path())
-        .await.unwrap_err();
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("remote_service_unavailable"));
     assert!(!temp.path().join("typed-outputs").exists());
 }
@@ -347,9 +376,12 @@ async fn worker_rejects_host_service_even_if_coordinator_admission_was_skipped()
 fn host_service_admission_applies_to_shared_transport_lowering() {
     let mut invocation = execution();
     invocation.submission.spec.spec["host_service"] = serde_json::json!(true);
-    invocation.node = registry().build_node(
-        &invocation.submission.spec.kind, invocation.submission.spec.spec.clone(),
-    ).unwrap();
+    invocation.node = registry()
+        .build_node(
+            &invocation.submission.spec.kind,
+            invocation.submission.spec.spec.clone(),
+        )
+        .unwrap();
     let original = invocation.submission.spec.spec.clone();
     let error = lower_worker_task(&mut invocation, &settings(), None).unwrap_err();
     assert!(error.to_string().contains("remote_service_unavailable"));
@@ -512,17 +544,25 @@ async fn worker_roundtrips_channel_files_and_arrow_without_coordinator_memory() 
                 vec![input]
             }
         };
+        let mut task = task(payload);
+        task.inputs[0].source = TaskInputSource::Channel {
+            from: "reads".into(),
+            from_port: 0,
+            collected: false,
+        };
         let envelope = TypedWorkerEnvelope {
             spec_files: BTreeMap::new(),
             output_directories: BTreeMap::new(),
             original_vfs_principal: None,
             protocol: 1,
             worker: settings(),
-            task: task(payload),
+            task,
             input_files: BTreeMap::new(),
             bundles: vec![],
             plugin_identity: None,
         };
+        let envelope: TypedWorkerEnvelope =
+            serde_json::from_value(serde_json::to_value(envelope).unwrap()).unwrap();
         execute_typed_worker(
             &envelope,
             &registry(),
@@ -717,6 +757,229 @@ fn file_publication_preserves_format_in_the_artifact_protocol() {
 }
 
 struct AlreadyRemoteStore;
+
+#[test]
+fn structured_input_is_declared_in_worker_envelope() {
+    let remote = TypedRemoteTaskExecutor::new(
+        Arc::new(CaptureExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+            capture: false,
+        }),
+        settings(),
+    )
+    .unwrap();
+    let mut invocation = execution();
+    invocation.submission.inputs[0].data =
+        NodeValue::Structured(crate::dag::execution::ChannelTransportValue::Tuple(vec![
+            crate::dag::execution::ChannelTransportValue::Json(serde_json::json!("sample")),
+            crate::dag::execution::ChannelTransportValue::File(FileRef::new(
+                "vfs:///research/input.tsv",
+                Some("tsv".into()),
+            )),
+        ]));
+    remote.prepare(&mut invocation).unwrap();
+    let envelope: TypedWorkerEnvelope =
+        serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone()).unwrap();
+    assert_eq!(envelope.task.inputs[0].payload, "structured_channel");
+    assert_eq!(
+        envelope.input_files[&0][0].path,
+        "vfs:///research/input.tsv"
+    );
+}
+
+#[derive(Clone)]
+struct PreparedTupleEcho(EchoNode);
+
+#[async_trait::async_trait]
+impl crate::DagNode for PreparedTupleEcho {
+    fn ports(&self) -> &NodePorts {
+        &self.0.ports
+    }
+    fn prepare_task_inputs(&self, inputs: &mut [NodeInput]) -> Result<(), DagError> {
+        use crate::dag::execution::ChannelTransportValue as Value;
+        inputs[0].data = NodeValue::Structured(Value::Tuple(vec![
+            Value::Json(serde_json::json!("sample")),
+            Value::File(FileRef::new(
+                "vfs:///research/input.tsv",
+                Some("tsv".into()),
+            )),
+        ]));
+        Ok(())
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        reporter: &NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        self.0.execute(ctx, inputs, reporter).await
+    }
+    fn clone_box(&self) -> Box<dyn crate::DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "worker_echo"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[test]
+fn remote_lowering_prepares_tuple_before_recording_file_artifacts() {
+    let remote = TypedRemoteTaskExecutor::new(
+        Arc::new(CaptureExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+            capture: false,
+        }),
+        settings(),
+    )
+    .unwrap();
+    let mut invocation = execution();
+    invocation.node = Box::new(PreparedTupleEcho(EchoNode {
+        omit_output: false,
+        ports: NodePorts::new()
+            .add_input_port_of_type(None, PortType::Channel)
+            .add_output_port_of_type(None, PortType::Channel),
+        path: None,
+        container_dispatch: false,
+        host_service: false,
+    }));
+    remote.prepare(&mut invocation).unwrap();
+    let envelope: TypedWorkerEnvelope =
+        serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone()).unwrap();
+    assert_eq!(envelope.task.inputs[0].payload, "structured_channel");
+    assert_eq!(
+        envelope.input_files[&0][0].path,
+        "vfs:///research/input.tsv"
+    );
+}
+
+#[tokio::test]
+async fn typed_worker_skips_only_declared_optional_outputs() {
+    let remote = TypedRemoteTaskExecutor::new(
+        Arc::new(CaptureExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+            capture: false,
+        }),
+        settings(),
+    )
+    .unwrap();
+    for optional in [true, false] {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.json");
+        std::fs::write(&input, b"[1]").unwrap();
+        let mut invocation = execution();
+        invocation.submission.spec.spec["optional_output"] = serde_json::json!(optional);
+        invocation.submission.spec.spec["omit_output"] = serde_json::json!(true);
+        invocation.node = registry()
+            .build_node(
+                &invocation.submission.spec.kind,
+                invocation.submission.spec.spec.clone(),
+            )
+            .unwrap();
+        remote.prepare(&mut invocation).unwrap();
+        assert_eq!(
+            invocation.submission.spec.spec["outputs"][0]["optional"],
+            optional
+        );
+        let envelope: TypedWorkerEnvelope =
+            serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone())
+                .unwrap();
+        let result = execute_typed_worker(
+            &envelope,
+            &registry(),
+            [("value".into(), vec![input])].into(),
+            temp.path(),
+        )
+        .await;
+        if optional {
+            result.unwrap();
+            assert!(!temp.path().join("typed-outputs/port-0").exists());
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("omitted a required output")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn structured_channel_round_trips_through_typed_worker_output() {
+    use crate::dag::execution::ChannelTransportValue as Value;
+    let temp = tempfile::tempdir().unwrap();
+    let a = temp.path().join("a.txt");
+    let b = temp.path().join("b.txt");
+    std::fs::write(&a, b"first").unwrap();
+    std::fs::write(&b, b"second").unwrap();
+    let value = Value::Tuple(vec![
+        Value::Json(serde_json::json!("sample")),
+        Value::List(vec![
+            Value::File(FileRef::local(&a, Some("txt".into())).unwrap()),
+            Value::File(FileRef::local(&b, Some("txt".into())).unwrap()),
+        ]),
+    ]);
+    let manifest = temp.path().join("input.json");
+    std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    let remote = TypedRemoteTaskExecutor::new(
+        Arc::new(CaptureExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+            capture: false,
+        }),
+        settings(),
+    )
+    .unwrap();
+    let mut invocation = execution();
+    invocation.submission.inputs[0].data = NodeValue::Structured(value);
+    remote.prepare(&mut invocation).unwrap();
+    let envelope: TypedWorkerEnvelope =
+        serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone()).unwrap();
+    let paths = BTreeMap::from([("value".into(), vec![manifest, a, b])]);
+    execute_typed_worker(&envelope, &registry(), paths, temp.path())
+        .await
+        .unwrap();
+    let root = temp.path().join("typed-outputs/port-0");
+    let artifacts = ["00000000.json", "00000001.txt", "00000002.txt"]
+        .into_iter()
+        .map(|name| FileRef::local(root.join(name), None).unwrap())
+        .collect::<Vec<_>>();
+    let restored = crate::dag::execution::remote::RemoteTaskExecutor::load_output(
+        &artifacts,
+        "channel",
+        invocation.engine_ctx.as_ref(),
+    )
+    .await
+    .unwrap();
+    let NodeValue::Structured(Value::Tuple(items)) = restored else {
+        panic!("tuple expected")
+    };
+    assert!(matches!(&items[0], Value::Json(value) if value == "sample"));
+    let Value::List(files) = &items[1] else {
+        panic!("list expected")
+    };
+    for (file, expected) in files
+        .iter()
+        .zip([b"first".as_slice(), b"second".as_slice()])
+    {
+        let Value::File(file) = file else {
+            panic!("file expected")
+        };
+        assert_eq!(std::fs::read(&file.path).unwrap(), expected);
+    }
+    assert!(
+        crate::dag::execution::remote::RemoteTaskExecutor::load_output(
+            &artifacts[..2],
+            "channel",
+            invocation.engine_ctx.as_ref(),
+        )
+        .await
+        .is_err()
+    );
+}
+
 #[async_trait::async_trait]
 impl crate::TaskArtifactStore for AlreadyRemoteStore {
     async fn remote_input(

@@ -37,10 +37,14 @@ use super::StageInMode;
 use super::error::ContainerCommandError;
 use super::utils::{
     capture_declared_output_logs, capture_input_manifest, container_path, contains_glob, hex,
-    input_path, literal_prefix, mount_safe_parent, resolve_output, staged_path, virtual_path,
-    write_failure_logs, write_strictly_within,
+    input_path, literal_prefix, mount_safe_parent, resolve_output,
+    resolve_output_matches_with_options, staged_path, virtual_path, write_failure_logs,
+    write_strictly_within,
 };
-use super::{ContainerCommandSpec, ContainerPanelBundleSpec, validate};
+use super::{
+    ContainerCommandSpec, ContainerPanelBundleSpec, TupleInput, TupleInputElement,
+    TupleOutputElement, parse_path_arity, validate,
+};
 
 pub struct ContainerCommandNode {
     kind: &'static str,
@@ -50,6 +54,7 @@ pub struct ContainerCommandNode {
     script: Option<String>,
     files: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
+    tuple_inputs: Vec<TupleInput>,
     outputs: Vec<ContainerCommandOutputSpec>,
     workdir: Option<String>,
     stage_in_mode: StageInMode,
@@ -104,12 +109,14 @@ impl ContainerCommandNode {
         let mut ports = NodePorts::new()
             .set_fixed_input(false)
             .add_optional_input_port_of_type(PortType::File);
-        for output in &spec.outputs {
+        for (index, output) in spec.outputs.iter().enumerate() {
             let label = Path::new(&output.path)
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .unwrap_or("output");
-            if let Some(format) = &output.format {
+            if !output.tuple.is_empty() {
+                ports = ports.add_output_port_of_type_with_label(None, PortType::Channel, label);
+            } else if let Some(format) = &output.format {
                 ports = ports.add_output_port_of_type_with_label_and_format(
                     None,
                     PortType::File,
@@ -118,6 +125,9 @@ impl ContainerCommandNode {
                 );
             } else {
                 ports = ports.add_output_port_of_type(None, PortType::File);
+            }
+            if output.optional {
+                ports = ports.with_optional_output(index as u8);
             }
         }
         Ok(Self {
@@ -128,6 +138,7 @@ impl ContainerCommandNode {
             script: spec.script,
             files: spec.files,
             env: spec.env,
+            tuple_inputs: spec.tuple_inputs,
             outputs: spec.outputs,
             workdir: spec.workdir,
             stage_in_mode: spec.stage_in_mode,
@@ -206,9 +217,25 @@ impl ContainerCommandNode {
             feed(&mut hasher, name);
             feed(&mut hasher, value);
         }
+        if !self.tuple_inputs.is_empty() {
+            feed(&mut hasher, "tuple-inputs");
+            feed(
+                &mut hasher,
+                &serde_json::to_string(&self.tuple_inputs).expect("tuple inputs serialize"),
+            );
+        }
         for output in &self.outputs {
             feed(&mut hasher, &output.path);
             feed(&mut hasher, output.format.as_deref().unwrap_or(""));
+            if output.optional {
+                feed(&mut hasher, "optional-output");
+            }
+            if !output.tuple.is_empty() {
+                feed(
+                    &mut hasher,
+                    &serde_json::to_string(&output.tuple).expect("tuple output serializes"),
+                );
+            }
         }
         feed(
             &mut hasher,
@@ -246,6 +273,15 @@ impl ContainerCommandNode {
                     for file in files {
                         feed_file(&mut hasher, file);
                     }
+                }
+                NodeValue::Structured(value) => {
+                    feed(&mut hasher, "structured-channel");
+                    // Includes both tuple values and file identities; distinct
+                    // tasks must never share a mutable staging directory.
+                    feed(
+                        &mut hasher,
+                        &serde_json::to_string(value).expect("channel value serializes"),
+                    );
                 }
                 NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
                     feed(&mut hasher, "<unsupported>")
@@ -550,6 +586,26 @@ pub(super) async fn stage_inputs(
                 }
                 NodeValue::FileSet(staged_files)
             }
+            NodeValue::Structured(value) => {
+                value.validate(64, 100_000)?;
+                let mut result = value.clone();
+                let mut replacements = Vec::new();
+                for file in value.artifacts() {
+                    let (path, mount) =
+                        stage_input_file(ctx, &staging_dir, index, file, mode).await?;
+                    index += 1;
+                    if let Some(dir) = mount
+                        && dir != workdir
+                    {
+                        mount_dirs.insert(dir);
+                    }
+                    let mut staged_file = file.clone();
+                    staged_file.path = path.to_string_lossy().into_owned();
+                    replacements.push(staged_file);
+                }
+                result.replace_artifacts(replacements)?;
+                NodeValue::Structured(result)
+            }
             NodeValue::DataFrame(_) | NodeValue::Channel(_) => {
                 return Err("container_command inputs must be File or FileSet values".into());
             }
@@ -566,8 +622,210 @@ pub(super) async fn stage_inputs(
     Ok((staged, input_mounts))
 }
 
+fn tuple_bindings(
+    input: &NodeValue,
+    declaration: &TupleInput,
+    workspace: &Path,
+) -> Result<Vec<(String, String)>, String> {
+    use dag_core::dag::execution::ChannelTransportValue as T;
+    let NodeValue::Structured(T::Tuple(items) | T::List(items)) = input else {
+        return Err(format!("input port {} expects a tuple", declaration.port));
+    };
+    if items.len() != declaration.tuple.len() {
+        return Err(format!(
+            "input port {} expects {} tuple elements, got {}",
+            declaration.port,
+            declaration.tuple.len(),
+            items.len()
+        ));
+    }
+    let bindings = items
+        .iter()
+        .zip(&declaration.tuple)
+        .map(|(value, qualifier)| {
+            let (name, value, typed) = match (qualifier, value) {
+                (TupleInputElement::Val(name), T::Json(value)) => (
+                    name,
+                    match value {
+                        serde_json::Value::String(value) => value.clone(),
+                        other => other.to_string(),
+                    },
+                    value.clone(),
+                ),
+                (
+                    TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. },
+                    T::File(file),
+                ) => {
+                    let path = container_path(workspace, &file.path);
+                    (name, path.clone(), serde_json::Value::String(path))
+                }
+                (
+                    TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. },
+                    T::List(files),
+                ) => {
+                    let paths = files
+                        .iter()
+                        .map(|file| match file {
+                            T::File(file) => Ok(container_path(workspace, &file.path)),
+                            _ => Err(format!("tuple path `{name}` expects files")),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    (name, paths.join(" "), serde_json::json!(paths))
+                }
+                (TupleInputElement::Val(name), _) => {
+                    return Err(format!("tuple val `{name}` expects a value"));
+                }
+                (
+                    TupleInputElement::Path(name)
+                    | TupleInputElement::PathWithArity { path: name, .. },
+                    _,
+                ) => {
+                    return Err(format!("tuple path `{name}` expects a file or file list"));
+                }
+            };
+            if value.contains('\0') {
+                return Err(format!("tuple binding `{name}` contains a NUL byte"));
+            }
+            Ok((name.clone(), value, typed))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flat_map(|(name, value, typed)| {
+            [
+                (name.clone(), value),
+                (format!("AUTONOMICS_TUPLE_JSON_{name}"), typed.to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    Ok(bindings)
+}
+
+fn prepare_tuple_input(input: &NodeValue, declaration: &TupleInput) -> Result<NodeValue, String> {
+    use dag_core::dag::execution::ChannelTransportValue as T;
+    match input {
+        NodeValue::Structured(value) => value.validate(64, 100_000)?,
+        NodeValue::Channel(channel) if channel.items.len() == 1 => {
+            T::Json(channel.items[0].clone()).validate(64, 100_000)?
+        }
+        _ => {}
+    }
+    fn as_value(value: T) -> serde_json::Value {
+        match value {
+            T::Json(value) => value,
+            T::File(file) | T::Arrow(file) => serde_json::Value::String(file.path),
+            T::List(items) | T::Tuple(items) => {
+                serde_json::Value::Array(items.into_iter().map(as_value).collect())
+            }
+            T::Map(items) => serde_json::Value::Object(
+                items
+                    .into_iter()
+                    .map(|(key, value)| (key, as_value(value)))
+                    .collect(),
+            ),
+        }
+    }
+    fn as_path(value: T, name: &str) -> Result<T, String> {
+        match value {
+            T::File(file) => Ok(T::File(file)),
+            T::Json(serde_json::Value::String(path)) if !path.is_empty() => {
+                Ok(T::File(FileRef::new(path, None)))
+            }
+            T::Json(serde_json::Value::Array(items)) => Ok(T::List(
+                items
+                    .into_iter()
+                    .map(|item| as_path(T::Json(item), name))
+                    .collect::<Result<_, _>>()?,
+            )),
+            T::List(items) => Ok(T::List(
+                items
+                    .into_iter()
+                    .map(|item| as_path(item, name))
+                    .collect::<Result<_, _>>()?,
+            )),
+            _ => Err(format!("tuple path `{name}` expects a file or file list")),
+        }
+    }
+    let items = match input {
+        NodeValue::Structured(T::Tuple(items) | T::List(items)) => items.clone(),
+        NodeValue::Structured(T::Json(serde_json::Value::Array(items))) => {
+            items.iter().cloned().map(T::Json).collect()
+        }
+        NodeValue::Channel(channel) if channel.items.len() == 1 => match &channel.items[0] {
+            serde_json::Value::Array(items) => items.iter().cloned().map(T::Json).collect(),
+            _ => return Err(format!("input port {} expects a tuple", declaration.port)),
+        },
+        _ => return Err(format!("input port {} expects a tuple", declaration.port)),
+    };
+    if items.len() != declaration.tuple.len() {
+        return Err(format!(
+            "input port {} expects {} tuple elements, got {}",
+            declaration.port,
+            declaration.tuple.len(),
+            items.len()
+        ));
+    }
+    let items = items
+        .into_iter()
+        .zip(&declaration.tuple)
+        .map(|(value, qualifier)| match qualifier {
+            TupleInputElement::Val(_) => Ok(T::Json(as_value(value))),
+            TupleInputElement::Path(name) => as_path(value, name),
+            TupleInputElement::PathWithArity { path: name, arity } => {
+                let value = as_path(value, name)?;
+                let (min, max) = parse_path_arity(arity)?;
+                let files = match value {
+                    T::File(file) => vec![T::File(file)],
+                    T::List(files) => files,
+                    _ => unreachable!(),
+                };
+                if files.iter().any(|file| !matches!(file, T::File(_))) {
+                    return Err(format!("tuple path `{name}` expects a flat file list"));
+                }
+                if files.len() < min || max.is_some_and(|max| files.len() > max) {
+                    return Err(format!(
+                        "incorrect number of input files for `{name}`: expected {arity}, found {}",
+                        files.len()
+                    ));
+                }
+                Ok(if max == Some(1) {
+                    files.into_iter().next().expect("arity 1 validated")
+                } else {
+                    T::List(files)
+                })
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let value = T::Tuple(items);
+    value.validate(64, 100_000)?;
+    Ok(NodeValue::Structured(value))
+}
+
 #[async_trait]
 impl DagNode for ContainerCommandNode {
+    fn prepare_task_inputs(&self, inputs: &mut [NodeInput]) -> Result<(), DagError> {
+        for declaration in &self.tuple_inputs {
+            let mut matching = inputs
+                .iter_mut()
+                .filter(|input| input.port == declaration.port);
+            let input = matching.next().ok_or_else(|| {
+                DagError::Schedule(format!(
+                    "tuple input port {} is disconnected",
+                    declaration.port
+                ))
+            })?;
+            if matching.next().is_some() {
+                return Err(DagError::Schedule(format!(
+                    "multiple values for tuple input port {}",
+                    declaration.port
+                )));
+            }
+            input.data =
+                prepare_tuple_input(&input.data, declaration).map_err(DagError::Schedule)?;
+        }
+        Ok(())
+    }
     fn ports(&self) -> &NodePorts {
         &self.ports
     }
@@ -581,6 +839,7 @@ impl DagNode for ContainerCommandNode {
             script: self.script.clone(),
             files: self.files.clone(),
             env: self.env.clone(),
+            tuple_inputs: self.tuple_inputs.clone(),
             outputs: self.outputs.clone(),
             workdir: self.workdir.clone(),
             stage_in_mode: self.stage_in_mode,
@@ -621,6 +880,9 @@ impl DagNode for ContainerCommandNode {
         inputs: &[NodeInput],
         reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
+        let mut prepared_inputs = inputs.to_vec();
+        self.prepare_task_inputs(&mut prepared_inputs)?;
+        let inputs = prepared_inputs.as_slice();
         // Canonicalize the root before any use: workdirs are canonicalized
         // (create + resolve symlinks), so containment checks, workspace_ref
         // mapping, and the VFS identity mount must all share the canonical
@@ -691,16 +953,41 @@ impl DagNode for ContainerCommandNode {
                 .map_err(ContainerCommandError::Invalid)
                 .map_err(|error| error.into_dag_error(self.kind))?;
         staged_inputs.sort_by_key(|input| input.port);
-        let host_input_paths = staged_inputs
-            .iter()
-            .map(|input| input_path(&input.data))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(ContainerCommandError::Invalid)
-            .map_err(|error| error.into_dag_error(self.kind))?;
-        let container_input_paths = host_input_paths
-            .iter()
-            .map(|path| container_path(&workspace_path, path))
-            .collect::<Vec<_>>();
+        let mut tuple_env = Vec::new();
+        let mut matched_tuple_ports = std::collections::BTreeSet::new();
+        let mut container_input_paths = Vec::with_capacity(staged_inputs.len());
+        for input in &staged_inputs {
+            if let Some(tuple) = self
+                .tuple_inputs
+                .iter()
+                .find(|tuple| tuple.port == input.port)
+            {
+                if !matched_tuple_ports.insert(tuple.port) {
+                    return Err(ContainerCommandError::Invalid(format!(
+                        "multiple values for tuple input port {}",
+                        tuple.port
+                    ))
+                    .into_dag_error(self.kind));
+                }
+                tuple_env.extend(
+                    tuple_bindings(&input.data, tuple, &workspace_path)
+                        .map_err(ContainerCommandError::Invalid)
+                        .map_err(|e| e.into_dag_error(self.kind))?,
+                );
+                container_input_paths.push(None);
+            } else {
+                let path = input_path(&input.data)
+                    .map_err(ContainerCommandError::Invalid)
+                    .map_err(|e| e.into_dag_error(self.kind))?;
+                container_input_paths.push(Some(container_path(&workspace_path, &path)));
+            }
+        }
+        if matched_tuple_ports.len() != self.tuple_inputs.len() {
+            return Err(ContainerCommandError::Invalid(
+                "a declared tuple input is disconnected".into(),
+            )
+            .into_dag_error(self.kind));
+        }
 
         // Literal outputs resolve to concrete paths before the run; glob
         // outputs cannot (the files do not exist yet), so they substitute
@@ -722,27 +1009,36 @@ impl DagNode for ContainerCommandNode {
             })
             .collect::<Vec<_>>();
         for (spec, _) in &declared_outputs {
-            let mkdir_target = if contains_glob(&spec.path) {
-                literal_prefix(&spec.path)
-            } else {
-                workspace_path.join(&spec.path).parent().map(|parent| {
-                    parent
-                        .strip_prefix(&workspace_path)
-                        .unwrap_or(parent)
-                        .to_string_lossy()
-                        .into_owned()
-                })
-            };
-            if let Some(relative) = mkdir_target
-                && !relative.is_empty()
-            {
-                std::fs::create_dir_all(workspace_path.join(&relative))
-                    .map_err(|e| {
-                        ContainerCommandError::Invalid(format!(
-                            "cannot create output directory `{relative}`: {e}"
-                        ))
+            let paths =
+                std::iter::once(&spec.path).chain(spec.tuple.iter().filter_map(
+                    |item| match item {
+                        TupleOutputElement::Path { path, .. } => Some(path),
+                        _ => None,
+                    },
+                ));
+            for path in paths {
+                let mkdir_target = if contains_glob(path) {
+                    literal_prefix(path)
+                } else {
+                    workspace_path.join(path).parent().map(|parent| {
+                        parent
+                            .strip_prefix(&workspace_path)
+                            .unwrap_or(parent)
+                            .to_string_lossy()
+                            .into_owned()
                     })
-                    .map_err(|error| error.into_dag_error(self.kind))?;
+                };
+                if let Some(relative) = mkdir_target
+                    && !relative.is_empty()
+                {
+                    std::fs::create_dir_all(workspace_path.join(&relative))
+                        .map_err(|e| {
+                            ContainerCommandError::Invalid(format!(
+                                "cannot create output directory `{relative}`: {e}"
+                            ))
+                        })
+                        .map_err(|error| error.into_dag_error(self.kind))?;
+                }
             }
         }
         // Glob outputs substitute their `/work`-relative pattern into
@@ -778,7 +1074,7 @@ impl DagNode for ContainerCommandNode {
 
         let replacements = |index: usize| -> Vec<(String, String)> {
             let mut vars = Vec::new();
-            if let Some(path) = container_input_paths.get(index) {
+            if let Some(Some(path)) = container_input_paths.get(index) {
                 vars.push(("$input".to_string(), path.clone()));
             }
             if let Some(path) = container_output_paths.get(index) {
@@ -799,8 +1095,11 @@ impl DagNode for ContainerCommandNode {
         }
 
         let mut env = self.env.clone().into_iter().collect::<Vec<_>>();
+        env.extend(tuple_env);
         for (index, path) in container_input_paths.iter().enumerate() {
-            env.push((format!("AUTONOMICS_INPUT{index}"), path.clone()));
+            if let Some(path) = path {
+                env.push((format!("AUTONOMICS_INPUT{index}"), path.clone()));
+            }
         }
         for (index, path) in container_output_paths.iter().enumerate() {
             env.push((format!("AUTONOMICS_OUTPUT{index}"), path.clone()));
@@ -925,7 +1224,155 @@ impl DagNode for ContainerCommandNode {
         // `FileRef`s (mtime fingerprints, existence-checked on incremental
         // reuse). With a prefix, immutable VFS copies travel downstream.
         let mut outputs = PortOutputs::new();
-        for (index, (spec, _)) in declared_outputs.iter().enumerate() {
+        'output: for (index, (spec, _)) in declared_outputs.iter().enumerate() {
+            if spec.optional {
+                let mut missing = false;
+                for (path, arity, hidden) in spec
+                    .tuple
+                    .iter()
+                    .filter_map(|element| match element {
+                        TupleOutputElement::Path {
+                            path,
+                            arity,
+                            hidden,
+                        } => Some((path.as_str(), arity.as_deref(), *hidden)),
+                        _ => None,
+                    })
+                    .chain(
+                        spec.tuple
+                            .is_empty()
+                            .then_some((spec.path.as_str(), None, None)),
+                    )
+                {
+                    let matches =
+                        resolve_output_matches_with_options(path, &workspace_path, true, hidden)
+                            .map_err(|error| error.into_dag_error(self.kind))?;
+                    if let Some(arity) = arity {
+                        let (min, max) = parse_path_arity(arity).map_err(DagError::Schedule)?;
+                        if matches.len() < min || max.is_some_and(|max| matches.len() > max) {
+                            return Err(DagError::Schedule(format!(
+                                "incorrect number of output files for `{path}`: expected {arity}, found {}",
+                                matches.len()
+                            )));
+                        }
+                    }
+                    missing |= matches.is_empty();
+                }
+                if missing {
+                    continue 'output;
+                }
+            }
+            if !spec.tuple.is_empty() {
+                use dag_core::dag::execution::ChannelTransportValue as T;
+                let mut tuple = Vec::with_capacity(spec.tuple.len());
+                let mut files: BTreeMap<(String, Option<bool>), Vec<FileRef>> = BTreeMap::new();
+                for element in &spec.tuple {
+                    match element {
+                        TupleOutputElement::Path {
+                            path,
+                            arity,
+                            hidden,
+                        } => {
+                            let bounds = arity
+                                .as_deref()
+                                .map(parse_path_arity)
+                                .transpose()
+                                .map_err(DagError::Schedule)?;
+                            let key = (path.clone(), *hidden);
+                            if !files.contains_key(&key) {
+                                let matched = resolve_output_matches_with_options(
+                                    path,
+                                    &workspace_path,
+                                    true,
+                                    *hidden,
+                                )
+                                .map_err(|e| e.into_dag_error(self.kind))?;
+                                if matched.is_empty() && !bounds.is_some_and(|(min, _)| min == 0) {
+                                    return Err(DagError::Schedule(format!(
+                                        "missing output file(s) `{path}`"
+                                    )));
+                                }
+                                if let Some((min, max)) = bounds
+                                    && (matched.len() < min
+                                        || max.is_some_and(|max| matched.len() > max))
+                                {
+                                    return Err(DagError::Schedule(format!(
+                                        "incorrect number of output files for `{path}`: expected {}, found {}",
+                                        arity.as_deref().unwrap(),
+                                        matched.len()
+                                    )));
+                                }
+                                let mut collected = Vec::with_capacity(matched.len());
+                                for host_path in matched {
+                                    let mut output_spec = (*spec).clone();
+                                    output_spec.path = host_path.strip_prefix(&workspace_path).ok().and_then(|p| p.to_str()).ok_or_else(|| DagError::Schedule("output path is not a UTF-8 path inside the workspace".into()))?.to_owned();
+                                    if path != &spec.path {
+                                        output_spec.format = None;
+                                    }
+                                    let file = if let Some(prefix) = &self.artifact_prefix {
+                                        publish_output(
+                                            ctx,
+                                            prefix,
+                                            &request_name,
+                                            &output_spec,
+                                            &host_path,
+                                        )
+                                        .await
+                                        .map_err(ContainerCommandError::Invalid)
+                                        .map_err(|e| e.into_dag_error(self.kind))?
+                                    } else {
+                                        FileRef::local(&host_path, output_spec.format).map_err(
+                                            |e| {
+                                                DagError::Schedule(format!(
+                                                    "cannot fingerprint output `{}`: {e}",
+                                                    host_path.display()
+                                                ))
+                                            },
+                                        )?
+                                    };
+                                    collected.push(file);
+                                }
+                                files.insert(key.clone(), collected);
+                            }
+                            let matched = &files[&key];
+                            if let Some((min, max)) = bounds
+                                && (matched.len() < min
+                                    || max.is_some_and(|max| matched.len() > max))
+                            {
+                                return Err(DagError::Schedule(format!(
+                                    "incorrect number of output files for `{path}`: expected {}, found {}",
+                                    arity.as_deref().unwrap(),
+                                    matched.len()
+                                )));
+                            }
+                            if matched.is_empty() && bounds.is_none() {
+                                return Err(DagError::Schedule(format!(
+                                    "missing output file(s) `{path}`"
+                                )));
+                            }
+                            tuple.push(
+                                if matched.len() == 1
+                                    && bounds.is_none_or(|(_, max)| max == Some(1))
+                                {
+                                    T::File(matched[0].clone())
+                                } else {
+                                    T::List(matched.iter().cloned().map(T::File).collect())
+                                },
+                            );
+                        }
+                        TupleOutputElement::Val { val: name } => {
+                            let value = self.tuple_inputs.iter().find_map(|declaration| {
+                                let index = declaration.tuple.iter().position(|element| matches!(element, TupleInputElement::Val(candidate) if candidate == name))?;
+                                let input = inputs.iter().find(|input| input.port == declaration.port)?;
+                                match &input.data { NodeValue::Structured(T::Tuple(items) | T::List(items)) => items.get(index).cloned(), _ => None }
+                            }).ok_or_else(|| DagError::Schedule(format!("tuple output val `{name}` is unavailable")))?;
+                            tuple.push(value);
+                        }
+                    }
+                }
+                outputs.insert(index as u8, NodeValue::Structured(T::Tuple(tuple)));
+                continue;
+            }
             let host_path = resolve_output(&spec.path, &workspace_path)
                 .map_err(|error| error.into_dag_error(self.kind))?;
             // Keep the three storage roles explicit. The work-dir file is the

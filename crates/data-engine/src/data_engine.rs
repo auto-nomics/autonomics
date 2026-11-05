@@ -13,8 +13,8 @@ use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{
     ChannelNode, DAG, DagError, DagHistory, GatherNode, LogicalEdge, LogicalExecutionStrategy,
-    LogicalGraph, LogicalNodeDefinition, PhysicalJobRef, RunRecord,
-    RunReport, RuntimeStatus, SchedulerConfig,
+    LogicalGraph, LogicalNodeDefinition, PhysicalJobRef, RunRecord, RunReport, RuntimeStatus,
+    SchedulerConfig,
 };
 use crate::dag_shell::{
     DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, execute_script, graph_summary,
@@ -35,7 +35,6 @@ pub struct ClearDagOutcome {
     pub warnings: Vec<String>,
 }
 
-
 /// `DataEngine` is the core object that implements the data analysis engine.
 /// It orchestrates ingestion, transformation, and querying of datasets via a
 /// [`DAG`] of nodes executed by an async scheduler.
@@ -55,10 +54,8 @@ pub struct DataEngine {
     /// host and shared with the IO node registry.
     container_execution: Arc<ContainerExecutionInfra>,
     config: SchedulerConfig,
-    /// Cross-run instance results for stage-model flows (`run_flow`), shared
-    /// by every `FlowRunner` this engine assembles.
-    pub(crate) flow_cache:
-        std::sync::Arc<tokio::sync::Mutex<dag_engine::InstanceCache>>,
+    /// Cross-run instance results shared by runners of this session only.
+    pub(crate) flow_cache: std::sync::Arc<tokio::sync::Mutex<dag_engine::InstanceCache>>,
     /// The session's authored flow (`run_flow`). Interior mutability so flow
     /// execution — which never needs the engine lock — can read the current
     /// graph while other commands edit it. Isolated engines start with their
@@ -67,7 +64,7 @@ pub struct DataEngine {
     /// The most recent flow run's grouped report, for view surfaces (TUI /
     /// GUI / gateway). `None` until the session runs a flow.
     pub(crate) flow_report:
-        std::sync::Arc<std::sync::RwLock<Option<dag_engine::FlowRunReport>>>,
+        std::sync::Arc<std::sync::RwLock<Option<crate::flow::FlowRunReportSummary>>>,
     /// Optional DAG history store. When `Some`, every `run()` automatically
     /// commits a snapshot of the current DAG manifest + run report.
     /// `DagHistory` wraps a `turso::Connection` (Arc-backed, `Clone`), so
@@ -86,6 +83,75 @@ pub struct DataEngine {
     /// `run()`; consumed (cleared) on each `run()`.
     run_trigger: Option<String>,
 }
+
+pub(crate) fn channel_info() -> crate::node_registry::NodeInfo {
+    crate::node_registry::NodeInfo {
+        address: "channel".into(),
+        plugin: "core".into(),
+        kind: "channel".into(),
+        desc: "Built-in dataflow channel operators; see get_node_spec for options".into(),
+        deprecated: false,
+        data_bundles: vec![],
+        resident_plugin: None,
+    }
+}
+pub(crate) fn channel_schema() -> Result<schemars::Schema> {
+    serde_json::from_value(dag_engine::dataflow::channel_operator_schema())
+        .map_err(|e| Error::Custom(e.to_string()))
+}
+pub(crate) fn channel_ports(
+    spec: Option<&serde_json::Value>,
+) -> Result<crate::nodes::meta::NodePorts> {
+    use crate::value::PortType;
+    let op = spec
+        .and_then(|value| value.get("operator"))
+        .and_then(|value| value.as_str());
+    if let Some(value) = spec {
+        let valid = op.is_some_and(|op| {
+            dag_engine::dataflow::channel_operator_schema()["oneOf"]
+                .as_array()
+                .is_some_and(|variants| {
+                    variants
+                        .iter()
+                        .any(|variant| variant["properties"]["operator"]["const"] == op)
+                })
+        });
+        if !valid {
+            return Err(Error::Custom(format!(
+                "unknown channel operator in {value}"
+            )));
+        }
+    }
+    let inputs = match op {
+        Some("of_items") => 0,
+        Some("mix" | "concat" | "combine" | "join") => 2,
+        _ => 1,
+    };
+    let mut ports = crate::nodes::meta::NodePorts::new();
+    for _ in 0..inputs {
+        ports = ports.add_input_port_of_type(None, PortType::Any);
+    }
+    if op.is_none() || matches!(op, Some("mix" | "concat")) {
+        ports = ports.set_fixed_input(false);
+    }
+    if op == Some("branch") {
+        let branches = spec
+            .and_then(|v| v.get("branches"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| Error::Custom("branch requires branches".into()))?;
+        for branch in branches {
+            let name = branch
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| Error::Custom("branch requires name".into()))?;
+            ports = ports.add_output_port_of_type_with_label(None, PortType::Any, name);
+        }
+    } else {
+        ports = ports.add_output_port_of_type(None, PortType::Any);
+    }
+    Ok(ports)
+}
+pub(crate) const CHANNEL_DOC: &str = "Built-in dataflow channel operator. Configure with an operator from get_node_spec. Unary operators use input 0; join/combine use inputs 0 and 1; mix/concat accept multiple inputs; branch emits on its branch ports. Channel sources are constructed with from_list, from_path, from_file_pairs or channel_value. Supported operators accept persisted dag_shell functions as documented in their schemas.";
 
 impl DataEngine {
     const DISABLED_NODE_KIND: &str = "container_command";
@@ -208,6 +274,7 @@ impl DataEngine {
         opendal: Option<Arc<OpendalFileStorage>>,
         bundle_registry: Arc<BundleRegistry>,
         container_execution: Arc<ContainerExecutionInfra>,
+        plugins_root: Option<std::path::PathBuf>,
     ) -> Self {
         let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
         // Global concurrency limiter shared across all agents.
@@ -233,7 +300,7 @@ impl DataEngine {
                 opendal.clone(),
                 bundle_registry,
                 Arc::clone(&container_execution),
-                None,
+                plugins_root,
             );
         let node_registry = Arc::new(node_registry);
         let mut dag = DAG::default();
@@ -249,9 +316,7 @@ impl DataEngine {
                 ..SchedulerConfig::default()
             },
             flow_cache: std::default::Default::default(),
-            flow: std::sync::Arc::new(std::sync::RwLock::new(
-                dag_engine::FlowGraph::empty(),
-            )),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
             flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: None,
             history_ref: "main".to_string(),
@@ -443,6 +508,9 @@ impl DataEngine {
                     .add_edge(from.clone(), to.clone(), *from_port, *to_port)
                     .map(|_| ())
                     .map_err(Error::from),
+                GraphEditOp::AddCollectEdge { .. } => Err(Error::Custom(
+                    "collect_edge is only supported for flow graphs".into(),
+                )),
                 GraphEditOp::RemoveEdge {
                     from,
                     from_port,
@@ -551,13 +619,187 @@ impl DataEngine {
         }
     }
 
+    /// Evaluate the existing sandbox against a snapshot, then apply the staged
+    /// operations atomically to the authored process/channel graph.
+    pub fn run_flow_shell(
+        &mut self,
+        script: &str,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+    ) -> DagShellOutcome {
+        let timeout = match normalize_timeout(timeout_ms) {
+            Ok(t) => t,
+            Err(e) => return shell_failure(dry_run, e),
+        };
+        let old = self.flow.read().expect("flow lock").clone();
+        let snapshot = DagShellSnapshot::from_flow(&old);
+        let execution = match execute_script(script, timeout, &snapshot, &self.node_registry) {
+            Ok(e) => e,
+            Err(e) => return shell_failure(dry_run, e),
+        };
+        let traces = operation_traces(&execution.operations);
+        let summary = |g: &dag_engine::FlowGraph| serde_json::json!({"process_count":g.processes().len(), "source_count":g.sources().len(), "wire_count":g.wires().len()});
+        if !execution.committed {
+            return DagShellOutcome {
+                ok: true,
+                applied: false,
+                dry_run,
+                committed: false,
+                result: Some(execution.result),
+                operations: traces,
+                graph: summary(&old),
+                error: None,
+            };
+        }
+        let result = (|| -> Result<dag_engine::FlowGraph> {
+            let mut json = serde_json::to_value(&old).map_err(|e| Error::Custom(e.to_string()))?;
+            for (index, op) in execution.operations.iter().enumerate() {
+                let edit = (|| -> Result<()> {
+                    match op {
+                        GraphEditOp::AddNode { id, kind, spec } => {
+                            if kind == "__channel_source" {
+                                json["sources"]
+                                    .as_array_mut()
+                                    .expect("source array")
+                                    .push(serde_json::json!({"id":id,"spec":spec}));
+                            } else {
+                                Self::ensure_node_kind_allowed(kind)?;
+                                json["processes"]
+                                    .as_array_mut()
+                                    .expect("process array")
+                                    .push(serde_json::json!({"id":id,"kind":kind,"spec":spec}));
+                            }
+                        }
+                        GraphEditOp::UpdateNode { id, spec } => {
+                            let process = json["processes"]
+                                .as_array_mut()
+                                .expect("process array")
+                                .iter_mut()
+                                .find(|p| p["id"] == *id)
+                                .ok_or_else(|| Error::Custom(format!("unknown process `{id}`")))?;
+                            process["spec"] = spec.clone();
+                        }
+                        GraphEditOp::RemoveNode { id, cascade } => {
+                            let connected = json["wires"]
+                                .as_array()
+                                .expect("wires")
+                                .iter()
+                                .any(|w| w["from"] == *id || w["to"] == *id);
+                            if connected && !cascade {
+                                return Err(Error::Custom(format!(
+                                    "node `{id}` has connected wires"
+                                )));
+                            }
+                            let mut removed = false;
+                            for field in ["processes", "sources"] {
+                                let list = json[field].as_array_mut().expect("graph array");
+                                let before = list.len();
+                                list.retain(|v| v["id"] != *id);
+                                removed |= before != list.len();
+                            }
+                            if !removed {
+                                return Err(Error::Custom(format!("unknown node `{id}`")));
+                            }
+                            if *cascade {
+                                json["wires"]
+                                    .as_array_mut()
+                                    .expect("wires")
+                                    .retain(|w| w["from"] != *id && w["to"] != *id);
+                            }
+                        }
+                        GraphEditOp::AddEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        }
+                        | GraphEditOp::AddCollectEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } => {
+                            let mode = if matches!(op, GraphEditOp::AddCollectEdge { .. }) {
+                                "collect"
+                            } else {
+                                "direct"
+                            };
+                            json["wires"].as_array_mut().expect("wires").push(serde_json::json!({"from":from,"from_port":from_port,"to":to,"to_port":to_port,"op":mode}));
+                        }
+                        GraphEditOp::RemoveEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } => {
+                            let wires = json["wires"].as_array_mut().expect("wires");
+                            let before = wires.len();
+                            wires.retain(|w| {
+                                !(w["from"] == *from
+                                    && w["from_port"] == *from_port
+                                    && w["to"] == *to
+                                    && w["to_port"] == *to_port)
+                            });
+                            if before == wires.len() {
+                                return Err(Error::Custom("unknown wire".into()));
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                edit.map_err(|e| {
+                    Error::Custom(format!("operation {index} ({}) failed: {e}", op.kind()))
+                })?;
+            }
+            let graph: dag_engine::FlowGraph =
+                serde_json::from_value(json).map_err(|e| Error::Custom(e.to_string()))?;
+            graph.validate().map_err(|e| Error::Custom(e.to_string()))?;
+            dag_engine::dataflow::Dataflow::<()>::new(&graph).map_err(Error::Custom)?;
+            Ok(graph)
+        })();
+        match result {
+            Ok(candidate) => {
+                let graph = summary(&candidate);
+                if !dry_run {
+                    *self.flow.write().expect("flow lock") = candidate;
+                }
+                DagShellOutcome {
+                    ok: true,
+                    applied: !dry_run,
+                    dry_run,
+                    committed: !dry_run,
+                    result: Some(execution.result),
+                    operations: traces,
+                    graph,
+                    error: None,
+                }
+            }
+            Err(error) => DagShellOutcome {
+                ok: false,
+                applied: false,
+                dry_run,
+                committed: false,
+                result: None,
+                operations: traces,
+                graph: summary(&old),
+                error: Some(transaction_error(error)),
+            },
+        }
+    }
+
     /// Query the JSON Schema of a registered node kind.
     pub fn get_node_spec(&self, kind: &str) -> Result<schemars::Schema> {
+        if kind == "channel" {
+            return channel_schema();
+        }
         Ok(self.node_registry.get_node_spec(kind)?)
     }
 
     /// Query the input/output port layout of a registered node kind.
     pub fn get_node_ports(&self, kind: &str) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" {
+            return channel_ports(None);
+        }
         Ok(self.node_registry.get_node_ports(kind)?)
     }
 
@@ -567,11 +809,17 @@ impl DataEngine {
         kind: &str,
         spec: serde_json::Value,
     ) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" {
+            return channel_ports(Some(&spec));
+        }
         Ok(self.node_registry.get_node_ports_for_spec(kind, spec)?)
     }
 
     /// Query the documentation string of a registered node kind.
     pub fn get_node_doc(&self, kind: &str) -> Result<String> {
+        if kind == "channel" {
+            return Ok(CHANNEL_DOC.into());
+        }
         Ok(self.node_registry.get_node_doc(kind)?)
     }
 
@@ -1189,7 +1437,7 @@ impl DataEngine {
     ///
     /// The new engine starts with `history_ref = "main"`.
     pub fn new_isolated_engine(&self) -> Self {
-        let mut dag = DAG::default();
+        let mut dag = self.dag.empty_with_execution_policy();
         dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
         Self {
             ctx: self.ctx.clone(),
@@ -1198,10 +1446,8 @@ impl DataEngine {
             node_registry: Arc::clone(&self.node_registry),
             container_execution: Arc::clone(&self.container_execution),
             config: self.config.clone(),
-            flow_cache: Arc::clone(&self.flow_cache),
-            flow: std::sync::Arc::new(std::sync::RwLock::new(
-                dag_engine::FlowGraph::empty(),
-            )),
+            flow_cache: std::default::Default::default(),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
             flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: self.history.clone(),
             history_ref: "main".to_string(),
@@ -1257,9 +1503,6 @@ impl DataEngine {
     pub fn container_execution(&self) -> &Arc<ContainerExecutionInfra> {
         &self.container_execution
     }
-
-
-
 
     /// Append this execution's audit record to the history `runs` table.
     ///
@@ -1530,6 +1773,7 @@ pub struct DataEngineBuilder {
     opendal: Option<Arc<OpendalFileStorage>>,
     bundle_registry: Arc<BundleRegistry>,
     container_execution: Arc<ContainerExecutionInfra>,
+    plugins_root: Option<std::path::PathBuf>,
 }
 
 impl Default for DataEngineBuilder {
@@ -1541,11 +1785,17 @@ impl Default for DataEngineBuilder {
             opendal: None,
             bundle_registry: Arc::new(BundleRegistry::new()),
             container_execution: Arc::new(ContainerExecutionInfra::from_env()),
+            plugins_root: None,
         }
     }
 }
 
 impl DataEngineBuilder {
+    /// Use an explicit host-owned plugin root for this engine instance.
+    pub fn with_plugins_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.plugins_root = Some(root.into());
+        self
+    }
     pub fn register_opendal_fs(self, file_session: Arc<OpendalFileStorage>) -> Result<Self> {
         let object_url = ObjectStoreUrl::parse("file://")
             .map_err(|e| Error::Custom(format!("cannot parse datafusion url: {e}")))?;
@@ -1621,6 +1871,7 @@ impl DataEngineBuilder {
             self.opendal,
             self.bundle_registry,
             self.container_execution,
+            self.plugins_root,
         )
     }
 }
@@ -1875,7 +2126,6 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("mounted"), "{error}");
     }
-
 
     #[tokio::test]
     async fn clear_dag_commits_a_recoverable_pre_clear_snapshot() {

@@ -13,24 +13,20 @@ use crate::ExecError;
 /// per process), so the whole graph fits any context comfortably.
 fn flow_summary(flow: &dag_engine::FlowGraph) -> Value {
     serde_json::json!({
+        "sources": flow
+            .sources()
+            .iter()
+            .map(|source| {
+                serde_json::json!({"id": source.id, "spec": source.spec})
+            })
+            .collect::<Vec<_>>(),
         "processes": flow
             .processes()
             .iter()
             .map(|process| {
-                let cardinality = match &process.cardinality {
-                    dag_engine::Cardinality::Singleton => {
-                        serde_json::json!({"type": "singleton"})
-                    }
-                    dag_engine::Cardinality::Fanout { source, axis } => serde_json::json!({
-                        "type": "fanout",
-                        "axis": axis,
-                        "source": source,
-                    }),
-                };
                 serde_json::json!({
                     "id": process.id,
                     "kind": process.kind,
-                    "cardinality": cardinality,
                     "error_strategy": process.error_strategy,
                 })
             })
@@ -59,14 +55,12 @@ fn parse_flow(value: Value) -> Result<dag_engine::FlowGraph, ToolError> {
 
 #[tool(
     name = "set_flow",
-    description = "Replace the session's stage-model workflow (the flow run by run_flow) \
-                  with the given graph. Editing is whole-graph replacement — authored \
-                  flows are process-granular and stay small (a 100-file pipeline is \
-                  ~3 processes), so resending the complete graph is the intended \
-                  editing model, unlike node-granular DAGs. The graph is validated \
-                  atomically: an invalid submission is rejected and leaves the \
-                  previous flow untouched. Rules: process ids unique and free of `#`; \
-                  direct fanout->singleton is invalid — use op collect; no cycles."
+    description = "Replace the session workflow run by run_flow with the given graph. \
+                  Validation is atomic: an invalid submission leaves the previous flow untouched. \
+                  For incremental transactional edits use dag_shell. During execution, sources \
+                  emit items incrementally, queue inputs pair by arrival, value inputs broadcast, \
+                  and collect emits a value when a nonempty input closes. \
+                  No cycles; ids unique and free of `#`."
 )]
 pub struct SetFlowInput {
     /// The complete flow graph (processes + wires arrays).
@@ -101,7 +95,7 @@ impl ToolFunction for SetFlowTool {
 #[tool(
     name = "view_flow",
     description = "Read the session's current stage-model workflow: the process list \
-                  (kind, cardinality, error strategy) and the wires, plus the full \
+                  (kind and error strategy), sources and wires, plus the full \
                   graph JSON under `graph` for exact re-editing. Pair with set_flow \
                   for edit cycles and run_flow (omit `flow`) to execute it."
 )]
@@ -124,10 +118,9 @@ impl ToolFunction for ViewFlowTool {
     async fn run(&self, _input: Self::Input) -> Result<ToolResult, ToolError> {
         let flow = self.client.get_flow().await.map_err(ExecError::from)?;
         let empty = flow.is_empty();
-        let graph = serde_json::to_value(&flow)
-            .map_err(|error| ToolError::ValidationFailed {
-                message: format!("cannot serialize flow: {error}"),
-            })?;
+        let graph = serde_json::to_value(&flow).map_err(|error| ToolError::ValidationFailed {
+            message: format!("cannot serialize flow: {error}"),
+        })?;
         Ok(ToolResult::success_json(serde_json::json!({
             "empty": empty,
             "flow": flow_summary(&flow),
@@ -161,8 +154,7 @@ mod tests {
             .run(SetFlowInput {
                 flow: serde_json::json!({
                     "processes": [
-                        {"id": "hello", "kind": "echo", "spec": {},
-                         "cardinality": {"type": "singleton"}}
+                        {"id": "hello", "kind": "echo", "spec": {}}
                     ],
                     "wires": []
                 }),
@@ -205,38 +197,65 @@ mod tests {
             .run(SetFlowInput {
                 flow: serde_json::json!({
                     "processes": [
-                        {"id": "ok", "kind": "echo", "spec": {},
-                         "cardinality": {"type": "singleton"}}
+                        {"id": "ok", "kind": "echo", "spec": {}}
                     ],
                     "wires": []
                 }),
             })
             .await
             .unwrap();
-        // A direct fanout->singleton wire is invalid.
+        // A wire cannot target a source.
         let error = SetFlowTool::new(Arc::clone(&client))
             .run(SetFlowInput {
                 flow: serde_json::json!({
+                    "sources": [
+                        {"id": "reads", "spec": {"type": "items", "values": ["x"]}}
+                    ],
                     "processes": [
-                        {"id": "a", "kind": "echo", "spec": {},
-                         "cardinality": {"type": "fanout", "axis": "x",
-                                          "source": {"type": "items", "values": [1]}}},
-                        {"id": "b", "kind": "echo", "spec": {},
-                         "cardinality": {"type": "singleton"}}
+                        {"id": "a", "kind": "echo", "spec": {}}
                     ],
                     "wires": [
-                        {"from": "a", "from_port": 0, "to": "b", "to_port": 0,
+                        // Invalid: a wire may not target a source (sources
+                        // only produce).
+                        {"from": "a", "from_port": 0, "to": "reads", "to_port": 0,
                          "op": "direct"}
                     ]
                 }),
             })
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("use a Collect wire"), "{error}");
-        let view = ViewFlowTool::new(client).run(ViewFlowInput {}).await.unwrap();
+        assert!(error.to_string().contains("must be a process"), "{error}");
+        let view = ViewFlowTool::new(client)
+            .run(ViewFlowInput {})
+            .await
+            .unwrap();
         let agentik_sdk::types::ToolResultContent::Json(view) = view.content else {
             panic!("view_flow should be JSON");
         };
         assert_eq!(view["flow"]["processes"][0]["id"], "ok");
+    }
+    #[tokio::test]
+    async fn all_flow_entrypoints_reject_invalid_channel_graph_without_replacing_session() {
+        let (client, _handle) = data_engine::runtime::spawn_with_engine(
+            data_engine::data_engine::DataEngine::builder().build(),
+        );
+        let valid: dag_engine::FlowGraph = serde_json::from_value(serde_json::json!({
+            "processes":[{"id":"saved","kind":"echo","spec":{}}], "wires":[]
+        }))
+        .unwrap();
+        client.set_flow(valid).await.unwrap();
+        let invalid: dag_engine::FlowGraph = serde_json::from_value(serde_json::json!({
+            "sources":[{"id":"a","spec":{"type":"items","values":[1]}}, {"id":"b","spec":{"type":"items","values":[2]}}],
+            "processes":[{"id":"join","kind":"channel","spec":{"operator":"join"}}],
+            "wires":[{"from":"a","from_port":0,"to":"join","to_port":0,"op":"direct"}, {"from":"b","from_port":0,"to":"join","to_port":0,"op":"direct"}]
+        })).unwrap();
+        assert!(client.set_flow(invalid.clone()).await.is_err());
+        assert!(
+            client
+                .run_flow(Some(invalid), data_engine::flow::FlowOptions::default())
+                .await
+                .is_err()
+        );
+        assert_eq!(client.get_flow().await.unwrap().processes()[0].id, "saved");
     }
 }

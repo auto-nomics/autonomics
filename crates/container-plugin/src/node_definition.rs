@@ -62,8 +62,7 @@ pub struct PortLayout {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PortSpec {
-    /// Closed vocabulary: container nodes are File-to-File by policy, so v0
-    /// accepts only `file`. Unknown values fail at parse time.
+    /// File inputs or a tuple of explicitly qualified values and files.
     pub r#type: PortKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -71,12 +70,16 @@ pub struct PortSpec {
     /// format implied by the node contract.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted_formats: Vec<String>,
+    /// Qualifiers for a tuple input, e.g. `[{ val = "sample" }, { path = "reads" }]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tuple: Vec<nodes_io::container_command::TupleInputElement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum PortKind {
     File,
+    Tuple,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -90,6 +93,11 @@ pub struct OutputSpec {
     pub format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Emit an ordered tuple of input `val` bindings and this output `path`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tuple: Vec<nodes_io::container_command::TupleOutputElement>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 /// One parameter of the node's spec DSL.
@@ -250,6 +258,15 @@ impl Default for Resources {
 pub fn compile_ports(layout: &PortLayout) -> NodePorts {
     let mut ports = NodePorts::new();
     for input in &layout.inputs {
+        if input.r#type == PortKind::Tuple {
+            ports = match &input.label {
+                Some(label) => {
+                    ports.add_input_port_of_type_with_label(None, PortType::Any, label.clone())
+                }
+                None => ports.add_input_port_of_type(None, PortType::Any),
+            };
+            continue;
+        }
         // Three tiers, matching the builder surface: bare port, labeled
         // port, or a labeled port accepting alternate payload formats.
         ports = match (&input.label, input.accepted_formats.first()) {
@@ -266,20 +283,27 @@ pub fn compile_ports(layout: &PortLayout) -> NodePorts {
             ),
         };
     }
-    for output in &layout.outputs {
+    for (index, output) in layout.outputs.iter().enumerate() {
         let label = output
             .label
             .clone()
             .unwrap_or_else(|| default_label(&output.path));
-        ports = match &output.format {
-            Some(format) => ports.add_output_port_of_type_with_label_and_format(
-                None,
-                PortType::File,
-                label,
-                format.clone(),
-            ),
-            None => ports.add_output_port_of_type(None, PortType::File),
-        };
+        if !output.tuple.is_empty() {
+            ports = ports.add_output_port_of_type_with_label(None, PortType::Channel, label);
+        } else {
+            ports = match &output.format {
+                Some(format) => ports.add_output_port_of_type_with_label_and_format(
+                    None,
+                    PortType::File,
+                    label,
+                    format.clone(),
+                ),
+                None => ports.add_output_port_of_type(None, PortType::File),
+            };
+        }
+        if output.optional {
+            ports = ports.with_optional_output(index as u8);
+        }
     }
     ports
 }
@@ -295,6 +319,53 @@ fn default_label(path: &str) -> String {
 /// Cross-field validation over one node entry. Pure: reused by the M4
 /// loader and the `nodedev validate` subcommand.
 pub fn validate(node: &NodeDefinition) -> Result<(), String> {
+    if node.ports.inputs.len() > u8::MAX as usize + 1 {
+        return Err(format!("node `{}` has too many input ports", node.kind));
+    }
+    let mut tuple_names = std::collections::BTreeSet::new();
+    for input in &node.ports.inputs {
+        if (input.r#type == PortKind::Tuple) != !input.tuple.is_empty() {
+            return Err(format!(
+                "node `{}` must declare tuple qualifiers exactly for tuple ports",
+                node.kind
+            ));
+        }
+        if input.r#type == PortKind::Tuple && !input.accepted_formats.is_empty() {
+            return Err(format!(
+                "node `{}` cannot assign file formats to a tuple port",
+                node.kind
+            ));
+        }
+        for qualifier in &input.tuple {
+            let name = match qualifier {
+                nodes_io::container_command::TupleInputElement::Val(name)
+                | nodes_io::container_command::TupleInputElement::Path(name)
+                | nodes_io::container_command::TupleInputElement::PathWithArity {
+                    path: name,
+                    ..
+                } => name,
+            };
+            if let nodes_io::container_command::TupleInputElement::PathWithArity { arity, .. } =
+                qualifier
+            {
+                nodes_io::container_command::parse_path_arity(arity)?;
+            }
+            let mut chars = name.chars();
+            if !chars
+                .next()
+                .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                || !chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+                || name.starts_with("AUTONOMICS_")
+                || node.command.env.contains_key(name)
+                || !tuple_names.insert(name)
+            {
+                return Err(format!(
+                    "node `{}` has invalid or duplicate tuple name `{name}`",
+                    node.kind
+                ));
+            }
+        }
+    }
     if node.kind.is_empty()
         || !node
             .kind
@@ -326,6 +397,27 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
     for output in &node.ports.outputs {
         validate_workspace_relative_glob(&output.path)
             .map_err(|error| format!("node `{}` output `{}`: {error}", node.kind, output.path))?;
+        if !output.tuple.is_empty() {
+            let mut has_path = false;
+            for element in &output.tuple {
+                match element {
+                    nodes_io::container_command::TupleOutputElement::Val { val: name }
+                        if node.ports.inputs.iter().any(|input| input.tuple.iter().any(|item| matches!(item, nodes_io::container_command::TupleInputElement::Val(value) if value == name))) => {},
+                    nodes_io::container_command::TupleOutputElement::Val { val: name } => return Err(format!("node `{}` tuple output references unknown val `{name}`", node.kind)),
+                    nodes_io::container_command::TupleOutputElement::Path { path, arity, .. } => {
+                        validate_workspace_relative_glob(path).map_err(|error| format!("node `{}` tuple output `{path}`: {error}", node.kind))?;
+                        if let Some(arity) = arity { nodes_io::container_command::parse_path_arity(arity)?; }
+                        has_path |= path == &output.path;
+                    },
+                }
+            }
+            if !has_path {
+                return Err(format!(
+                    "node `{}` tuple output must contain its output path",
+                    node.kind
+                ));
+            }
+        }
     }
     for (name, spec) in &node.params {
         // min_len/max_len measure arrays only (check_bounds reads them via

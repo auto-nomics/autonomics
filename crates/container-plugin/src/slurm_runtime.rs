@@ -42,10 +42,17 @@ fn mapped(error: impl std::fmt::Display) -> ContainerRuntimeError {
     invalid(error.to_string())
 }
 
-fn record_submission_failure(journal: &Path, state: &mut Value, error: &dag_core::dag::DagError) -> Result<()> {
+fn record_submission_failure(
+    journal: &Path,
+    state: &mut Value,
+    error: &dag_core::dag::DagError,
+) -> Result<()> {
     // Classify only the transport's typed protocol evidence. Diagnostic text
     // (including historical authentication errors) cannot prove NOT_SENT.
-    if let dag_core::dag::DagError::SubmissionNotSent { local_ssh_stopped, .. } = error {
+    if let dag_core::dag::DagError::SubmissionNotSent {
+        local_ssh_stopped, ..
+    } = error
+    {
         state["state"] = json!("SUBMISSION_NOT_SENT");
         state["local_ssh_stopped"] = json!(local_ssh_stopped);
     } else {
@@ -205,26 +212,36 @@ fn stopped_worker_projection(proof: &Value) -> Result<Value> {
     if proof["full_subtree_terminal"] != true {
         return Err(invalid("cannot publish an unconfirmed worker stop"));
     }
-    let rows = proof["accounting"]["stdout"].as_str()
+    let rows = proof["accounting"]["stdout"]
+        .as_str()
         .ok_or_else(|| invalid("stop accounting evidence missing"))?
-        .lines().filter(|line| !line.trim().is_empty()).map(|line| {
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
             let fields = line.split('|').collect::<Vec<_>>();
             if fields.len() != 4 {
                 return Err(invalid("invalid stop accounting record"));
             }
             Ok(json!({"job_id":fields[0],"state":fields[1],"exit_code":fields[2],"end":fields[3]}))
-        }).collect::<Result<Vec<_>>>()?;
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut control = serde_json::Map::new();
-    for token in proof["control"]["stdout"].as_str().unwrap_or_default().split_whitespace() {
+    for token in proof["control"]["stdout"]
+        .as_str()
+        .unwrap_or_default()
+        .split_whitespace()
+    {
         if let Some((key, value)) = token.split_once('=') {
             if matches!(key, "JobId" | "JobState" | "ExitCode" | "EndTime") {
                 control.insert(key.into(), value.into());
             }
         }
     }
-    Ok(json!({"schema":"SLURM_WORKER_STOP_V1","job_id":proof["job_id"],
+    Ok(
+        json!({"schema":"SLURM_WORKER_STOP_V1","job_id":proof["job_id"],
         "full_subtree_terminal":true,"queue_absent":true,"accounting":rows,"control":control,
-        "raw_proof_sha256":bytes_hash(&serde_json::to_vec_pretty(proof).map_err(mapped)?)}))
+        "raw_proof_sha256":bytes_hash(&serde_json::to_vec_pretty(proof).map_err(mapped)?)}),
+    )
 }
 
 fn report_stopped_worker(
@@ -236,8 +253,10 @@ fn report_stopped_worker(
     record(&root.join("STOP_PROOF.json"), proof)?;
     reporter.execution(dag_core::dag::live::ExecutionObservation {
         phase: "checking_worker_stop".into(),
-        worker: Some(json!({"evidence":"verified_stop","backend":"slurm-apptainer",
-            "id":proof["job_id"],"proof":projection})),
+        worker: Some(
+            json!({"evidence":"verified_stop","backend":"slurm-apptainer",
+            "id":proof["job_id"],"proof":projection}),
+        ),
         ..Default::default()
     });
     Ok(())
@@ -868,6 +887,7 @@ impl SlurmContainerRuntime {
             outputs: vec![ProcessTaskOutput {
                 port: 0,
                 pattern: "container-result.json".into(),
+                optional: false,
             }],
         };
         let dispatch = TaskDispatch {
@@ -999,33 +1019,48 @@ impl SlurmContainerRuntime {
             return Err(invalid("unrecognized container result"));
         }
         if let Some(value) = result.get("worker_software") {
-            let manifest_sha256 = receipt.task_manifest.fingerprint.as_ref()
+            let manifest_sha256 = receipt
+                .task_manifest
+                .fingerprint
+                .as_ref()
                 .and_then(|fingerprint| fingerprint.content_hash.as_deref())
-                .ok_or_else(|| invalid("worker software evidence requires the submitted manifest SHA256"))?;
+                .ok_or_else(|| {
+                    invalid("worker software evidence requires the submitted manifest SHA256")
+                })?;
             let software = crate::worker_software::verify(
                 value,
                 crate::worker_software::ExpectedWorkerSoftware {
                     task_id: &task,
                     job_id: &lease.lease_id,
-                    manifest_sha256: manifest_sha256.strip_prefix("sha256:").unwrap_or(manifest_sha256),
+                    manifest_sha256: manifest_sha256
+                        .strip_prefix("sha256:")
+                        .unwrap_or(manifest_sha256),
                     request_sha256: &bytes_hash(&request_bytes),
                     worker_sha256: &bytes_hash(WORKER.as_bytes()),
-                    sif_path: image.path.to_str().ok_or_else(|| invalid("UTF-8 SIF path required"))?,
+                    sif_path: image
+                        .path
+                        .to_str()
+                        .ok_or_else(|| invalid("UTF-8 SIF path required"))?,
                     sif_sha256: &image.sha256,
                     succeeded: result["exit_code"] == 0,
                 },
-            ).map_err(invalid)?;
+            )
+            .map_err(invalid)?;
             record(&root.join("WORKER_SOFTWARE.json"), &software)?;
             state["worker_software"] = software.clone();
             record(&journal, &state)?;
             reporter.execution(dag_core::dag::live::ExecutionObservation {
                 phase: "collecting_outputs".into(),
-                worker: Some(json!({"evidence":"verified_software", "backend":"slurm-apptainer",
-                    "id":lease.lease_id,"software":software})),
+                worker: Some(
+                    json!({"evidence":"verified_software", "backend":"slurm-apptainer",
+                    "id":lease.lease_id,"software":software}),
+                ),
                 ..Default::default()
             });
         } else if result["exit_code"] == 0 {
-            return Err(invalid("worker software evidence missing on a successful result"));
+            return Err(invalid(
+                "worker software evidence missing on a successful result",
+            ));
         }
         if let Some(workspace) = result.get("node_workspace") {
             // This is the worker's local scratch disposition, distinct from
@@ -1150,7 +1185,10 @@ impl SlurmContainerRuntime {
 
 #[async_trait]
 impl PodmanConnection for SlurmContainerRuntime {
-    fn image_resolution(&self, reference: &str) -> Result<container_runtime::ContainerImageResolution> {
+    fn image_resolution(
+        &self,
+        reference: &str,
+    ) -> Result<container_runtime::ContainerImageResolution> {
         let (key, image) = self.image_binding(reference)?;
         Ok(container_runtime::ContainerImageResolution {
             requested_reference: reference.into(),
@@ -1350,9 +1388,15 @@ mod tests {
         let journal = fixture.path().join("STATE.json");
         for stopped in [true, false] {
             let mut state = json!({"state":"SUBMITTING", "dispatch":{"id":"original"}});
-            record_submission_failure(&journal, &mut state, &dag_core::dag::DagError::SubmissionNotSent {
-                message: "synthetic authentication denial".into(), local_ssh_stopped: stopped,
-            }).unwrap();
+            record_submission_failure(
+                &journal,
+                &mut state,
+                &dag_core::dag::DagError::SubmissionNotSent {
+                    message: "synthetic authentication denial".into(),
+                    local_ssh_stopped: stopped,
+                },
+            )
+            .unwrap();
             let saved: Value = serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
             assert_eq!(saved["state"], "SUBMISSION_NOT_SENT");
             assert_eq!(saved["local_ssh_stopped"], stopped);
@@ -1360,9 +1404,14 @@ mod tests {
             assert_eq!(saved["dispatch"]["id"], "original");
         }
         let mut state = json!({"state":"SUBMITTING"});
-        record_submission_failure(&journal, &mut state, &dag_core::dag::DagError::Schedule(
-            "Permission denied; payload NOT_SENT; initial SSH exit 255".into(),
-        )).unwrap();
+        record_submission_failure(
+            &journal,
+            &mut state,
+            &dag_core::dag::DagError::Schedule(
+                "Permission denied; payload NOT_SENT; initial SSH exit 255".into(),
+            ),
+        )
+        .unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
         assert_eq!(saved["state"], "SUBMISSION_UNKNOWN");
         assert_eq!(saved["automatic_replay_authorized"], false);
@@ -1376,7 +1425,10 @@ mod tests {
         let projected = stopped_worker_projection(&proof).unwrap();
         assert_eq!(projected["accounting"].as_array().unwrap().len(), 3);
         assert_eq!(projected["control"]["JobId"], "123");
-        assert_eq!(projected["raw_proof_sha256"], bytes_hash(&serde_json::to_vec_pretty(&proof).unwrap()));
+        assert_eq!(
+            projected["raw_proof_sha256"],
+            bytes_hash(&serde_json::to_vec_pretty(&proof).unwrap())
+        );
         assert!(!projected.to_string().contains("private"));
         let mut unknown = proof;
         unknown["full_subtree_terminal"] = false.into();

@@ -21,6 +21,146 @@ fn result_json(script: &str) -> serde_json::Value {
 }
 
 #[test]
+fn file_channel_type_option_survives_shell_translation() {
+    for source in ["from_path", "from_file_pairs"] {
+        let script = format!("{source}('input', 'data/*', type='dir')\ncommit()\n");
+        let execution = eval(&script).unwrap();
+        let GraphEditOp::AddNode { spec, .. } = &execution.operations[0] else {
+            panic!("expected source");
+        };
+        assert_eq!(spec["pathType"], "dir");
+        let parsed: dag_engine::SourceSpec = serde_json::from_value(spec.clone()).unwrap();
+        assert!(matches!(
+            parsed,
+            dag_engine::SourceSpec::Glob {
+                path_type: dag_engine::model::PathType::Dir,
+                ..
+            } | dag_engine::SourceSpec::FilePairs {
+                path_type: dag_engine::model::PathType::Dir,
+                ..
+            }
+        ));
+        let bad = format!("{source}('input', 'data/*', type='device')\ncommit()\n");
+        assert!(eval(&bad).is_err());
+    }
+}
+
+#[test]
+fn channel_function_uses_captures_and_cannot_edit_graph() {
+    let (registry, snapshot) = sandbox();
+    let captures = serde_json::json!({"factor": 3})
+        .as_object()
+        .unwrap()
+        .clone();
+    let result = interp::run_pure_function(
+        "def transform(item):\n    return item * factor\n",
+        &captures,
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(result, serde_json::json!(21));
+    let error = interp::run_pure_function(
+        "def transform(item):\n    commit()\n    return item\n",
+        &captures,
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap_err();
+    assert!(error.message.contains("graph operations are not available"));
+}
+
+#[test]
+fn channel_function_preserves_file_metadata_when_returned() {
+    use dag_core::value::{FileFingerprint, FileRef, NodeValue};
+    let (registry, snapshot) = sandbox();
+    let input = NodeValue::File(FileRef {
+        path: "/tmp/sample.fastq".into(),
+        format: Some("fastq".into()),
+        fingerprint: Some(FileFingerprint {
+            size: 5,
+            mtime_ns: 10,
+            content_hash: Some("hash".into()),
+            immutable_remote: false,
+        }),
+    });
+    let output = interp::run_pure_node_function(
+        "def identity(item):\n    return item\n",
+        &serde_json::Map::new(),
+        None,
+        Some(&input),
+        None,
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    let NodeValue::File(file) = output else {
+        panic!("expected a file")
+    };
+    assert_eq!(file.path, "/tmp/sample.fastq");
+    assert_eq!(file.format.as_deref(), Some("fastq"));
+    assert_eq!(
+        file.fingerprint.unwrap().content_hash.as_deref(),
+        Some("hash")
+    );
+}
+
+#[test]
+fn channel_function_preserves_file_sets_and_their_fingerprints() {
+    use dag_core::value::{FileFingerprint, FileRef, NodeValue};
+    let (registry, snapshot) = sandbox();
+    let fingerprint = FileFingerprint {
+        size: 5,
+        mtime_ns: 10,
+        content_hash: Some("hash".into()),
+        immutable_remote: false,
+    };
+    let input = NodeValue::FileSet(vec![FileRef {
+        path: "/tmp/sample.fastq".into(),
+        format: Some("fastq".into()),
+        fingerprint: Some(fingerprint.clone()),
+    }]);
+    let output = interp::run_pure_node_function(
+        "def copy(item):\n    return item[:]\n",
+        &serde_json::Map::new(),
+        None,
+        Some(&input),
+        None,
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    let NodeValue::FileSet(files) = output else {
+        panic!("expected a file set")
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].fingerprint.as_ref(), Some(&fingerprint));
+}
+
+#[test]
+fn node_spec_persists_a_channel_function_and_its_captures() {
+    let script = "factor = 3\ndef transform(item):\n    return item * factor\nnode('mapped', 'channel', {'operator': 'map', 'function': transform})\ncommit()\n";
+    let execution = eval(script).unwrap();
+    let GraphEditOp::AddNode { spec, .. } = &execution.operations[0] else {
+        panic!("expected node")
+    };
+    let function = &spec["function"]["__dag_shell_function__"];
+    assert_eq!(function["captures"]["factor"], 3);
+    let (registry, snapshot) = sandbox();
+    let result = interp::run_pure_function(
+        function["source"].as_str().unwrap(),
+        function["captures"].as_object().unwrap(),
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(result, serde_json::json!(21));
+}
+
+#[test]
 fn timeout_is_normalized() {
     assert_eq!(
         normalize_timeout(None).unwrap(),
@@ -48,8 +188,6 @@ fn rejects_oversized_script_before_compilation() {
         execute_script(&script, Duration::from_millis(10), &snapshot, &registry).unwrap_err();
     assert_eq!(error.code, "script_too_large");
 }
-
-
 
 #[test]
 fn times_out_unbounded_scripts() {

@@ -155,13 +155,13 @@ impl InstanceCache {
                 _ => {}
             }
         }
-        self.entries
-            .entry(process.to_string())
-            .or_default()
-            .insert(item_key.unwrap_or("0").to_string(), CachedInstance {
+        self.entries.entry(process.to_string()).or_default().insert(
+            item_key.unwrap_or("0").to_string(),
+            CachedInstance {
                 fingerprint,
                 outputs: cached,
-            });
+            },
+        );
     }
 
     /// Drop one instance's entry — used when a re-execution fails so a stale
@@ -199,9 +199,7 @@ pub fn plan_fingerprint(
     let instance = plan
         .processes
         .get(&process)
-        .and_then(|process_plan| {
-            process_plan.instances.iter().find(|i| &i.id == id)
-        })?
+        .and_then(|process_plan| process_plan.instances.iter().find(|i| &i.id == id))?
         .clone();
     let mut upstream = Vec::new();
     for route in plan.routes_to(id) {
@@ -270,7 +268,12 @@ mod tests {
     #[test]
     fn singletons_live_under_the_zero_key() {
         let mut cache = InstanceCache::new();
-        cache.record("multiqc", None, "fp".into(), &outputs_with_file(0, "vfs://m"));
+        cache.record(
+            "multiqc",
+            None,
+            "fp".into(),
+            &outputs_with_file(0, "vfs://m"),
+        );
         assert!(cache.lookup("multiqc", None).is_some());
         assert!(cache.lookup("multiqc", Some("0")).is_some());
     }
@@ -310,7 +313,10 @@ mod tests {
         let mut cache = InstanceCache::new();
         cache.record("qc", Some("a"), "fp".into(), &outputs);
         let cached = cache.lookup("qc", Some("a")).unwrap();
-        assert!(cached.still_valid(None).await, "file exists with recorded size");
+        assert!(
+            cached.still_valid(None).await,
+            "file exists with recorded size"
+        );
 
         std::fs::write(&real, b"12345678").unwrap();
         assert!(
@@ -331,7 +337,12 @@ mod tests {
     #[tokio::test]
     async fn vfs_paths_require_storage() {
         let mut cache = InstanceCache::new();
-        cache.record("qc", Some("a"), "fp".into(), &outputs_with_file(0, "vfs://data/a.out"));
+        cache.record(
+            "qc",
+            Some("a"),
+            "fp".into(),
+            &outputs_with_file(0, "vfs://data/a.out"),
+        );
         let cached = cache.lookup("qc", Some("a")).unwrap();
         assert!(
             !cached.still_valid(None).await,

@@ -41,6 +41,9 @@ pub(crate) enum Value {
     Int(i64),
     Float(f64),
     Str(Rc<str>),
+    Path(Rc<dag_core::value::FileRef>),
+    Channel(Rc<ChannelRef>),
+    ProcessOutputs(Rc<ProcessOutputs>),
     List(Rc<RefCell<ListData>>),
     Tuple(Rc<TupleData>),
     Dict(Rc<RefCell<DictData>>),
@@ -50,6 +53,17 @@ pub(crate) enum Value {
     /// Transient carrier for dict-comprehension pairs; `value_to_json`
     /// rejects it, so it can never leak into results or staged specs.
     Pair(Box<Value>, Box<Value>),
+}
+
+pub(crate) struct ChannelRef {
+    producer: String,
+    port: u8,
+    label: Option<String>,
+}
+
+pub(crate) struct ProcessOutputs {
+    producer: String,
+    ports: Vec<(u8, Option<String>)>,
 }
 
 pub(crate) struct ListData {
@@ -76,6 +90,8 @@ pub(crate) struct RangeData {
 
 pub(crate) struct FunctionData {
     name: String,
+    source: String,
+    ast_source: Rc<str>,
     params: Vec<Param>,
     body: Rc<Vec<ast::Stmt>>,
     closure: ScopeRef,
@@ -215,6 +231,9 @@ impl Value {
             Self::Int(_) => "int",
             Self::Float(_) => "float",
             Self::Str(_) => "str",
+            Self::Path(_) => "path",
+            Self::Channel(_) => "channel",
+            Self::ProcessOutputs(_) => "process outputs",
             Self::List(_) => "list",
             Self::Tuple(_) => "tuple",
             Self::Dict(_) => "dict",
@@ -270,11 +289,16 @@ fn truthy(value: &Value) -> bool {
         Value::Int(i) => *i != 0,
         Value::Float(f) => *f != 0.0,
         Value::Str(s) => !s.is_empty(),
+        Value::Path(_) => true,
         Value::List(list) => !list.borrow().items.is_empty(),
         Value::Tuple(tuple) => !tuple.items.is_empty(),
         Value::Dict(dict) => !dict.borrow().entries.is_empty(),
         Value::Range(range) => range_len(range) > 0,
-        Value::Function(_) | Value::Builtin(_) | Value::Pair(_, _) => true,
+        Value::Function(_)
+        | Value::Builtin(_)
+        | Value::Pair(_, _)
+        | Value::Channel(_)
+        | Value::ProcessOutputs(_) => true,
     }
 }
 
@@ -510,6 +534,477 @@ struct Interp<'a> {
     ops: u64,
     deadline: Instant,
     depth: usize,
+    pure: bool,
+    source: Rc<str>,
+}
+
+/// Execute a persisted Python function with JSON captures and arguments.
+/// The interpreter is recreated per call so runtime values never cross threads.
+#[cfg(test)]
+pub(crate) fn run_pure_function(
+    source: &str,
+    captures: &serde_json::Map<String, serde_json::Value>,
+    args: &[serde_json::Value],
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<serde_json::Value, DagShellError> {
+    let args: Vec<_> = args.iter().map(json_to_value).collect();
+    let result = execute_pure_function(source, captures, &args, snapshot, registry)?;
+    value_to_json(&result, 0).ok_or_else(|| DagShellError {
+        code: "invalid_operation".into(),
+        message: "channel function returned a non-JSON value".into(),
+        operation_index: None,
+        line: None,
+        column: None,
+    })
+}
+
+pub(crate) fn run_pure_node_function(
+    source: &str,
+    captures: &serde_json::Map<String, serde_json::Value>,
+    functions: Option<&serde_json::Value>,
+    input: Option<&dag_core::value::NodeValue>,
+    second_input: Option<&dag_core::value::NodeValue>,
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<dag_core::value::NodeValue, DagShellError> {
+    use dag_core::value::{ChannelValue, NodeValue};
+    let convert = |input: Option<&NodeValue>| -> Result<Option<Value>, DagShellError> {
+        Ok(match input {
+            Some(NodeValue::File(file)) => Some(Value::Path(Rc::new(file.clone()))),
+            Some(NodeValue::FileSet(files)) => {
+                if files.len() > MAX_ARRAY_SIZE {
+                    return Err(DagShellError {
+                        code: "limit_exceeded".into(),
+                        message: "file set exceeds channel function list limit".into(),
+                        operation_index: None,
+                        line: None,
+                        column: None,
+                    });
+                }
+                Some(Value::List(Rc::new(RefCell::new(ListData {
+                    items: files
+                        .iter()
+                        .cloned()
+                        .map(|file| Value::Path(Rc::new(file)))
+                        .collect(),
+                    depth: 1,
+                }))))
+            }
+            Some(NodeValue::Channel(channel)) if channel.items.len() == 1 => {
+                Some(json_to_value(&channel.items[0]))
+            }
+            Some(NodeValue::Channel(channel)) => {
+                Some(json_to_value(&serde_json::json!(channel.items)))
+            }
+            Some(NodeValue::Structured(value)) => {
+                value
+                    .validate(MAX_VALUE_DEPTH, MAX_MAP_SIZE)
+                    .map_err(|message| DagShellError {
+                        code: "limit_exceeded".into(),
+                        message,
+                        operation_index: None,
+                        line: None,
+                        column: None,
+                    })?;
+                Some(transport_to_value(value, 0).ok_or_else(|| DagShellError {
+                    code: "invalid_operation".into(),
+                    message: "unsupported structured channel input".into(),
+                    operation_index: None,
+                    line: None,
+                    column: None,
+                })?)
+            }
+            None => None,
+            Some(_) => {
+                return Err(DagShellError {
+                    code: "invalid_operation".into(),
+                    message: "unsupported channel function input type".into(),
+                    operation_index: None,
+                    line: None,
+                    column: None,
+                });
+            }
+        })
+    };
+    let arg = convert(input)?;
+    let second_arg = convert(second_input)?;
+    let original_lists = [(arg.as_ref(), input), (second_arg.as_ref(), second_input)]
+        .into_iter()
+        .filter_map(|(arg, input)| match (arg, input) {
+            (Some(Value::List(list)), Some(NodeValue::FileSet(_))) => Some(Rc::clone(list)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let args: Vec<_> = arg.into_iter().chain(second_arg).collect();
+    let result = if let Some(functions) = functions {
+        execute_pure_graph(functions, &args, snapshot, registry)?
+    } else {
+        execute_pure_function(source, captures, &args, snapshot, registry)?
+    };
+    match result {
+        Value::Path(file) => Ok(NodeValue::File((*file).clone())),
+        Value::List(list)
+            if (!list.borrow().items.is_empty()
+                || original_lists
+                    .iter()
+                    .any(|original| Rc::ptr_eq(original, &list)))
+                && list
+                    .borrow()
+                    .items
+                    .iter()
+                    .all(|item| matches!(item, Value::Path(_))) =>
+        {
+            Ok(NodeValue::FileSet(
+                list.borrow()
+                    .items
+                    .iter()
+                    .map(|item| match item {
+                        Value::Path(file) => (**file).clone(),
+                        _ => unreachable!(),
+                    })
+                    .collect(),
+            ))
+        }
+        other if contains_path(&other, 0) => value_to_transport(&other, 0)
+            .map(NodeValue::Structured)
+            .ok_or_else(|| DagShellError {
+                code: "invalid_operation".into(),
+                message: "unsupported structured channel output".into(),
+                operation_index: None,
+                line: None,
+                column: None,
+            }),
+        other => value_to_json(&other, 0)
+            .map(|value| NodeValue::Channel(ChannelValue { items: vec![value] }))
+            .ok_or_else(|| DagShellError {
+                code: "invalid_operation".into(),
+                message: "channel function returned an unsupported value".into(),
+                operation_index: None,
+                line: None,
+                column: None,
+            }),
+    }
+}
+
+fn contains_path(value: &Value, depth: usize) -> bool {
+    if depth > MAX_VALUE_DEPTH {
+        return false;
+    }
+    match value {
+        Value::Path(_) => true,
+        Value::List(items) => items
+            .borrow()
+            .items
+            .iter()
+            .any(|item| contains_path(item, depth + 1)),
+        Value::Tuple(items) => items
+            .items
+            .iter()
+            .any(|item| contains_path(item, depth + 1)),
+        Value::Dict(items) => items
+            .borrow()
+            .entries
+            .iter()
+            .any(|(_, item)| contains_path(item, depth + 1)),
+        _ => false,
+    }
+}
+
+fn value_to_transport(
+    value: &Value,
+    depth: usize,
+) -> Option<dag_core::dag::execution::ChannelTransportValue> {
+    use dag_core::dag::execution::ChannelTransportValue as T;
+    if depth > MAX_VALUE_DEPTH {
+        return None;
+    }
+    Some(match value {
+        Value::Path(file) => T::File((**file).clone()),
+        Value::List(items) => T::List(
+            items
+                .borrow()
+                .items
+                .iter()
+                .map(|v| value_to_transport(v, depth + 1))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Value::Tuple(items) => T::Tuple(
+            items
+                .items
+                .iter()
+                .map(|v| value_to_transport(v, depth + 1))
+                .collect::<Option<Vec<_>>>()?,
+        ),
+        Value::Dict(items) => {
+            let mut map = std::collections::BTreeMap::new();
+            for (key, value) in &items.borrow().entries {
+                let DictKey::Str(key) = key else {
+                    return None;
+                };
+                map.insert(key.to_string(), value_to_transport(value, depth + 1)?);
+            }
+            T::Map(map)
+        }
+        other => T::Json(value_to_json(other, depth + 1)?),
+    })
+}
+
+fn transport_to_value(
+    value: &dag_core::dag::execution::ChannelTransportValue,
+    depth: usize,
+) -> Option<Value> {
+    use dag_core::dag::execution::ChannelTransportValue as T;
+    if depth > MAX_VALUE_DEPTH {
+        return None;
+    }
+    match value {
+        T::Json(value) => Some(json_to_value(value)),
+        T::File(file) => Some(Value::Path(Rc::new(file.clone()))),
+        T::Arrow(_) => None,
+        T::List(items) | T::Tuple(items) => {
+            if items.len() > MAX_ARRAY_SIZE {
+                return None;
+            }
+            let items = items
+                .iter()
+                .map(|v| transport_to_value(v, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
+            let nesting = items.iter().map(Value::depth).max().unwrap_or(0) + 1;
+            if matches!(value, T::Tuple(_)) {
+                Some(Value::Tuple(Rc::new(TupleData {
+                    items,
+                    depth: nesting,
+                })))
+            } else {
+                Some(Value::List(Rc::new(RefCell::new(ListData {
+                    items,
+                    depth: nesting,
+                }))))
+            }
+        }
+        T::Map(items) => {
+            if items.len() > MAX_MAP_SIZE {
+                return None;
+            }
+            let mut dict = DictData {
+                entries: Vec::with_capacity(items.len()),
+                index: HashMap::new(),
+                depth: 1,
+            };
+            for (key, value) in items {
+                let item = transport_to_value(value, depth + 1)?;
+                dict.depth = dict.depth.max(item.depth() + 1);
+                dict_insert(&mut dict, DictKey::Str(Rc::from(key.as_str())), item);
+            }
+            Some(Value::Dict(Rc::new(RefCell::new(dict))))
+        }
+    }
+}
+
+fn execute_pure_graph(
+    graph: &serde_json::Value,
+    args: &[Value],
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<Value, DagShellError> {
+    let invalid = |message: String| DagShellError {
+        code: "invalid_operation".into(),
+        message,
+        operation_index: None,
+        line: None,
+        column: None,
+    };
+    let nodes = graph
+        .as_array()
+        .filter(|v| !v.is_empty() && v.len() <= MAX_API_OPERATIONS)
+        .ok_or_else(|| invalid("invalid channel function graph".into()))?;
+    let mut functions = Vec::with_capacity(nodes.len());
+    let mut scopes = Vec::with_capacity(nodes.len());
+    let mut total_source = 0usize;
+    for node in nodes {
+        let source = node
+            .get("source")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| invalid("missing function source".into()))?;
+        total_source = total_source
+            .checked_add(source.len())
+            .ok_or_else(|| invalid("function graph too large".into()))?;
+        if total_source > super::MAX_SCRIPT_BYTES {
+            return Err(invalid("function graph too large".into()));
+        }
+        prescan_source(source)?;
+        let parsed = parse(source, Mode::Module, "<channel function>")
+            .map_err(|e| invalid(format!("invalid channel function: {}", e.error)))?;
+        let ast::Mod::Module(module) = parsed else {
+            return Err(invalid("invalid function module".into()));
+        };
+        if let Err((message, offset)) = validate_suite(&module.body, false) {
+            return Err(eval_error_to_dag_shell(
+                source,
+                EvalError {
+                    kind: ErrKind::Value,
+                    message,
+                    offset,
+                },
+            ));
+        }
+        let [ast::Stmt::FunctionDef(def)] = module.body.as_slice() else {
+            return Err(invalid("expected one function definition".into()));
+        };
+        let captures = node
+            .get("captures")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| invalid("missing function captures".into()))?;
+        let defaults = node
+            .get("defaults")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| invalid("missing function defaults".into()))?;
+        let ast_args: Vec<_> = def
+            .args
+            .posonlyargs
+            .iter()
+            .chain(def.args.args.iter())
+            .collect();
+        if ast_args.len() != defaults.len() {
+            return Err(invalid("invalid function defaults".into()));
+        }
+        let mut params = Vec::with_capacity(ast_args.len());
+        for (arg, default) in ast_args.into_iter().zip(defaults) {
+            let present = default
+                .get("present")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| invalid("invalid function default".into()))?;
+            let default = if present {
+                Some(json_to_value(
+                    default
+                        .get("value")
+                        .ok_or_else(|| invalid("missing default value".into()))?,
+                ))
+            } else {
+                None
+            };
+            params.push(Param {
+                name: arg.def.arg.as_str().to_owned(),
+                default,
+            });
+        }
+        let scope = Scope::new(None);
+        for (name, value) in captures {
+            scope.set(name.clone(), json_to_value(value));
+        }
+        functions.push(Rc::new(FunctionData {
+            name: def.name.as_str().to_owned(),
+            source: source.to_owned(),
+            ast_source: Rc::from(source),
+            params,
+            body: Rc::new(def.body.clone()),
+            closure: Rc::clone(&scope),
+        }));
+        scopes.push(scope);
+    }
+    for (node, scope) in nodes.iter().zip(&scopes) {
+        let bindings = node
+            .get("bindings")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| invalid("missing function bindings".into()))?;
+        for (name, index) in bindings {
+            let index = index
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| invalid("invalid function binding".into()))?;
+            let function = functions
+                .get(index)
+                .ok_or_else(|| invalid("function binding out of range".into()))?;
+            scope.set(name.clone(), Value::Function(Rc::clone(function)));
+        }
+    }
+    let root = &functions[0];
+    let mut interp = Interp {
+        state: Arc::new(Mutex::new(ScriptState::default())),
+        snapshot,
+        registry,
+        ops: 0,
+        deadline: Instant::now() + std::time::Duration::from_millis(super::DEFAULT_TIMEOUT_MS),
+        depth: 0,
+        pure: true,
+        source: Rc::clone(&root.ast_source),
+    };
+    let result = interp
+        .call_function(root, args, &[], ast::TextSize::from(0))
+        .map_err(|e| eval_error_to_dag_shell(&root.source, e));
+    // Reconstructed functions can be mutually recursive; release their scopes
+    // explicitly to avoid retaining an Rc cycle after every channel item.
+    for scope in &scopes {
+        scope.vars.borrow_mut().clear();
+    }
+    result
+}
+
+fn execute_pure_function(
+    source: &str,
+    captures: &serde_json::Map<String, serde_json::Value>,
+    args: &[Value],
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<Value, DagShellError> {
+    let invalid = |message: String| DagShellError {
+        code: "invalid_operation".into(),
+        message,
+        operation_index: None,
+        line: None,
+        column: None,
+    };
+    if source.len() > super::MAX_SCRIPT_BYTES {
+        return Err(invalid(
+            "channel function source exceeds the script size limit".into(),
+        ));
+    }
+    prescan_source(source)?;
+    let parsed = parse(source, Mode::Module, "<channel function>")
+        .map_err(|e| invalid(format!("invalid channel function: {}", e.error)))?;
+    let ast::Mod::Module(module) = parsed else {
+        return Err(invalid("channel function must be a module".into()));
+    };
+    if let Err((message, offset)) = validate_suite(&module.body, false) {
+        return Err(eval_error_to_dag_shell(
+            source,
+            EvalError {
+                kind: ErrKind::Value,
+                message,
+                offset,
+            },
+        ));
+    }
+    let [ast::Stmt::FunctionDef(def)] = module.body.as_slice() else {
+        return Err(invalid(
+            "channel function must contain exactly one function definition".into(),
+        ));
+    };
+    let mut interp = Interp {
+        state: Arc::new(Mutex::new(ScriptState::default())),
+        snapshot,
+        registry,
+        ops: 0,
+        deadline: Instant::now() + std::time::Duration::from_millis(super::DEFAULT_TIMEOUT_MS),
+        depth: 0,
+        pure: true,
+        source: Rc::from(source),
+    };
+    let scope = Scope::new(None);
+    for (name, value) in captures {
+        scope.set(name.clone(), json_to_value(value));
+    }
+    interp
+        .exec_stmt(&module.body[0], &scope)
+        .map_err(|e| eval_error_to_dag_shell(source, e))?;
+    let Some(Value::Function(function)) = scope.get(def.name.as_str()) else {
+        return Err(invalid("channel function was not defined".into()));
+    };
+    let result = interp
+        .call_function(&function, args, &[], def.start())
+        .map_err(|e| eval_error_to_dag_shell(source, e))?;
+    Ok(result)
 }
 
 pub(crate) fn run(
@@ -570,6 +1065,8 @@ pub(crate) fn run(
         ops: 0,
         deadline: started + timeout,
         depth: 0,
+        pure: false,
+        source: Rc::from(script.as_str()),
     };
     let globals = Scope::new(None);
 
@@ -799,6 +1296,9 @@ impl<'a> Interp<'a> {
                 }
                 let value = Value::Function(Rc::new(FunctionData {
                     name: def.name.as_str().to_string(),
+                    source: self.source[usize::from(def.start())..usize::from(def.end())]
+                        .to_string(),
+                    ast_source: Rc::clone(&self.source),
                     params,
                     body: Rc::new(def.body.clone()),
                     closure: Rc::clone(scope),
@@ -1031,6 +1531,50 @@ impl<'a> Interp<'a> {
             ast::Expr::Subscript(subscript) => self.subscript_read(subscript, scope),
             ast::Expr::Attribute(attribute) => {
                 let receiver = self.eval_expr(&attribute.value, scope)?;
+                if let Value::Channel(channel) = &receiver {
+                    if channel.label.as_deref() == Some(attribute.attr.as_str()) {
+                        return Ok(receiver);
+                    }
+                }
+                if let Value::ProcessOutputs(outputs) = &receiver {
+                    let name = attribute.attr.as_str();
+                    let ports = outputs
+                        .ports
+                        .iter()
+                        .filter(|(_, label)| label.as_deref() == Some(name))
+                        .collect::<Vec<_>>();
+                    if ports.len() != 1 {
+                        return Err(self.error(
+                            ErrKind::Runtime,
+                            format!(
+                                "output `{name}` is missing or ambiguous on `{}`",
+                                outputs.producer
+                            ),
+                            attribute.start(),
+                        ));
+                    }
+                    return Ok(Value::Channel(Rc::new(ChannelRef {
+                        producer: outputs.producer.clone(),
+                        port: ports[0].0,
+                        label: ports[0].1.clone(),
+                    })));
+                }
+                if let Value::Path(file) = &receiver {
+                    let path = std::path::Path::new(&file.path);
+                    let text = match attribute.attr.as_str() {
+                        "name" => path.file_name().map(|v| v.to_string_lossy().into_owned()),
+                        "stem" => path.file_stem().map(|v| v.to_string_lossy().into_owned()),
+                        "suffix" => Some(
+                            path.extension()
+                                .map(|v| format!(".{}", v.to_string_lossy()))
+                                .unwrap_or_default(),
+                        ),
+                        _ => None,
+                    };
+                    if let Some(text) = text {
+                        return self.make_string(text, attribute.start());
+                    }
+                }
                 Err(self.attribute_error(&receiver, attribute.attr.as_str(), attribute.start()))
             }
             ast::Expr::Call(call) => self.eval_call(call, scope),
@@ -1207,6 +1751,13 @@ impl<'a> Interp<'a> {
             }
             Value::Builtin(name) => {
                 if api::is_host_function(name) {
+                    if self.pure {
+                        return Err(self.error(
+                            ErrKind::Runtime,
+                            "graph operations are not available in channel functions",
+                            call.start(),
+                        ));
+                    }
                     self.call_host(name, &args, &kwargs, call.start())
                 } else {
                     self.call_builtin(name, &args, &kwargs, call.start())
@@ -1312,7 +1863,9 @@ impl<'a> Interp<'a> {
             let value = slot.expect("all slots filled above");
             scope.set(param.name.clone(), value);
         }
+        let previous_source = std::mem::replace(&mut self.source, Rc::clone(&function.ast_source));
         let outcome = self.exec_block(&function.body, &scope);
+        self.source = previous_source;
         self.depth -= 1;
         match outcome? {
             Flow::Return(value) => Ok(value),
@@ -1320,6 +1873,113 @@ impl<'a> Interp<'a> {
             Flow::Continue => Err(self.error(ErrKind::Runtime, "'continue' outside loop", offset)),
             Flow::Normal => Ok(Value::None),
         }
+    }
+
+    fn process_output(
+        &self,
+        id: &str,
+        kind: &str,
+        spec: &serde_json::Value,
+        offset: ast::TextSize,
+    ) -> EvalResult<Value> {
+        if kind == "__channel_source" || (kind == "channel" && spec.get("type").is_some()) {
+            return Ok(Value::Channel(Rc::new(ChannelRef {
+                producer: id.to_owned(),
+                port: 0,
+                label: None,
+            })));
+        }
+        let ports: Vec<(u8, Option<String>)> = if kind == "channel" {
+            if spec.get("operator").and_then(|v| v.as_str()) == Some("branch") {
+                let branches =
+                    spec.get("branches")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| {
+                            self.error(ErrKind::Runtime, "branch requires named outputs", offset)
+                        })?;
+                branches
+                    .iter()
+                    .enumerate()
+                    .map(|(i, branch)| {
+                        let port = u8::try_from(i).map_err(|_| {
+                            self.error(ErrKind::Limit, "too many branch outputs", offset)
+                        })?;
+                        let label =
+                            branch.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                                self.error(
+                                    ErrKind::Runtime,
+                                    "branch output requires a name",
+                                    offset,
+                                )
+                            })?;
+                        Ok((port, Some(label.to_string())))
+                    })
+                    .collect::<EvalResult<_>>()?
+            } else {
+                vec![(0, None)]
+            }
+        } else {
+            let layout = self
+                .registry
+                .get_node_ports_for_spec(kind, spec.clone())
+                .map_err(|e| self.error(ErrKind::Runtime, e.to_string(), offset))?;
+            layout
+                .output_ports()
+                .iter()
+                .map(|port| (port.index, port.label.clone()))
+                .collect()
+        };
+        match ports.as_slice() {
+            [] => Ok(Value::None),
+            [(port, label)] => Ok(Value::Channel(Rc::new(ChannelRef {
+                producer: id.to_owned(),
+                port: *port,
+                label: label.clone(),
+            }))),
+            _ => Ok(Value::ProcessOutputs(Rc::new(ProcessOutputs {
+                producer: id.to_owned(),
+                ports,
+            }))),
+        }
+    }
+
+    fn input_ports_for_binding(
+        &self,
+        id: &str,
+        kind: &str,
+        spec: &serde_json::Value,
+        count: usize,
+        offset: ast::TextSize,
+    ) -> EvalResult<Vec<u8>> {
+        if count > 256 {
+            return Err(self.limit_error(offset, "too many process inputs"));
+        }
+        if kind == "channel" {
+            return Ok((0..count).map(|index| index as u8).collect());
+        }
+        let ports = self
+            .registry
+            .get_node_ports_for_spec(kind, spec.clone())
+            .map_err(|e| self.error(ErrKind::Runtime, e.to_string(), offset))?;
+        let declared = ports
+            .input_ports()
+            .iter()
+            .map(|port| port.index)
+            .collect::<Vec<_>>();
+        if declared.is_empty() && count == 1 && spec.to_string().contains("{{item") {
+            return Ok(vec![0]);
+        }
+        if count > declared.len() {
+            return Err(self.error(
+                ErrKind::Runtime,
+                format!(
+                    "process `{id}` has {} declared inputs but received {count} channels",
+                    declared.len()
+                ),
+                offset,
+            ));
+        }
+        Ok(declared.into_iter().take(count).collect())
     }
 
     // ── Host graph API ─────────────────────────────────────────────────────
@@ -1347,6 +2007,245 @@ impl<'a> Interp<'a> {
             Ok(())
         };
         match name {
+            "process" => {
+                arity(1, 3)?;
+                let id = api::str_arg(&args[0], offset)?;
+                let mut kind = args.get(1);
+                let mut spec = args.get(2);
+                let mut inputs = Vec::new();
+                for (key, value) in kwargs {
+                    if key == "kind" {
+                        if kind.replace(value).is_some() {
+                            return Err(
+                                self.type_error(offset, "process() got multiple kind arguments")
+                            );
+                        }
+                        continue;
+                    }
+                    if key == "spec" {
+                        if spec.replace(value).is_some() {
+                            return Err(
+                                self.type_error(offset, "process() got multiple spec arguments")
+                            );
+                        }
+                        continue;
+                    }
+                    if key != "inputs" {
+                        return Err(self
+                            .type_error(offset, format!("process() unsupported option '{key}'")));
+                    }
+                    let values = match value {
+                        Value::List(values) => values.borrow().items.clone(),
+                        Value::Tuple(values) => values.items.clone(),
+                        _ => {
+                            return Err(self.type_error(
+                                offset,
+                                "process() inputs must be a list or tuple of channels",
+                            ));
+                        }
+                    };
+                    for value in values {
+                        let Value::Channel(channel) = value else {
+                            return Err(self.type_error(
+                                offset,
+                                "process() inputs must contain channel references",
+                            ));
+                        };
+                        inputs.push(channel);
+                    }
+                }
+                let kind = api::str_arg(
+                    kind.ok_or_else(|| self.type_error(offset, "process() requires kind"))?,
+                    offset,
+                )?;
+                let spec = api::spec_to_json(
+                    spec.ok_or_else(|| self.type_error(offset, "process() requires spec"))?,
+                    offset,
+                )?;
+                let output = self.process_output(&id, &kind, &spec, offset)?;
+                let input_ports =
+                    self.input_ports_for_binding(&id, &kind, &spec, inputs.len(), offset)?;
+                api::stage(
+                    &self.state,
+                    GraphEditOp::AddNode {
+                        id: id.clone(),
+                        kind,
+                        spec,
+                    },
+                    offset,
+                )?;
+                for (channel, to_port) in inputs.iter().zip(input_ports) {
+                    api::stage(
+                        &self.state,
+                        GraphEditOp::AddEdge {
+                            from: channel.producer.clone(),
+                            from_port: channel.port,
+                            to: id.clone(),
+                            to_port,
+                        },
+                        offset,
+                    )?;
+                }
+                Ok(output)
+            }
+            "bind_inputs" => {
+                arity(2, 2)?;
+                no_kwargs()?;
+                let id = api::str_arg(&args[0], offset)?;
+                let values = match &args[1] {
+                    Value::List(values) => values.borrow().items.clone(),
+                    Value::Tuple(values) => values.items.clone(),
+                    _ => {
+                        return Err(self.type_error(
+                            offset,
+                            "bind_inputs() requires a list or tuple of channels",
+                        ));
+                    }
+                };
+                let inputs =
+                    values
+                        .into_iter()
+                        .map(|value| match value {
+                            Value::Channel(channel) => Ok(channel),
+                            _ => Err(self
+                                .type_error(offset, "bind_inputs() requires channel references")),
+                        })
+                        .collect::<EvalResult<Vec<_>>>()?;
+                let operations = self
+                    .state
+                    .lock()
+                    .map_err(|_| self.error(ErrKind::Runtime, "script state poisoned", offset))?
+                    .operations
+                    .clone();
+                let mut definition = self
+                    .snapshot
+                    .node(&id)
+                    .map(|node| (node.kind.clone(), node.spec.clone().unwrap_or_default()));
+                let mut incoming: Vec<(String, u8, u8)> = self
+                    .snapshot
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.get("to").and_then(|v| v.as_str()) == Some(id.as_str()))
+                    .filter_map(|edge| {
+                        Some((
+                            edge.get("from")?.as_str()?.to_owned(),
+                            u8::try_from(edge.get("from_port")?.as_u64()?).ok()?,
+                            u8::try_from(edge.get("to_port")?.as_u64()?).ok()?,
+                        ))
+                    })
+                    .collect();
+                for op in &operations {
+                    match op {
+                        GraphEditOp::AddNode {
+                            id: node,
+                            kind,
+                            spec,
+                        } if node == &id => definition = Some((kind.clone(), spec.clone())),
+                        GraphEditOp::UpdateNode { id: node, spec } if node == &id => {
+                            if let Some((_, current)) = &mut definition {
+                                *current = spec.clone();
+                            }
+                        }
+                        GraphEditOp::RemoveNode { id: node, .. } if node == &id => {
+                            definition = None;
+                            incoming.clear();
+                        }
+                        GraphEditOp::AddEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        }
+                        | GraphEditOp::AddCollectEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } if to == &id => incoming.push((from.clone(), *from_port, *to_port)),
+                        GraphEditOp::RemoveEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } if to == &id => {
+                            incoming.retain(|edge| edge != &(from.clone(), *from_port, *to_port))
+                        }
+                        _ => {}
+                    }
+                }
+                let (kind, spec) = definition.ok_or_else(|| {
+                    self.error(ErrKind::Runtime, format!("unknown process `{id}`"), offset)
+                })?;
+                if kind == "__channel_source" || (kind == "channel" && spec.get("type").is_some()) {
+                    return Err(self.error(
+                        ErrKind::Runtime,
+                        "cannot bind inputs to a channel source",
+                        offset,
+                    ));
+                }
+                let ports =
+                    self.input_ports_for_binding(&id, &kind, &spec, inputs.len(), offset)?;
+                for (from, from_port, to_port) in incoming {
+                    api::stage(
+                        &self.state,
+                        GraphEditOp::RemoveEdge {
+                            from,
+                            from_port,
+                            to: id.clone(),
+                            to_port,
+                        },
+                        offset,
+                    )?;
+                }
+                for (channel, to_port) in inputs.iter().zip(ports) {
+                    api::stage(
+                        &self.state,
+                        GraphEditOp::AddEdge {
+                            from: channel.producer.clone(),
+                            from_port: channel.port,
+                            to: id.clone(),
+                            to_port,
+                        },
+                        offset,
+                    )?;
+                }
+                Ok(Value::None)
+            }
+            "output" => {
+                arity(1, 1)?;
+                no_kwargs()?;
+                api::begin_query(&self.state, offset)?;
+                let id = api::str_arg(&args[0], offset)?;
+                let staged = self
+                    .state
+                    .lock()
+                    .map_err(|_| self.error(ErrKind::Runtime, "script state poisoned", offset))?
+                    .operations
+                    .iter()
+                    .rev()
+                    .find_map(|op| match op {
+                        GraphEditOp::AddNode {
+                            id: node_id,
+                            kind,
+                            spec,
+                        } if node_id == &id => Some((kind.clone(), spec.clone())),
+                        _ => None,
+                    });
+                let (kind, spec) = match staged {
+                    Some(value) => value,
+                    None => {
+                        let node = self.snapshot.node(&id).ok_or_else(|| {
+                            self.error(
+                                ErrKind::Runtime,
+                                format!("unknown process or source `{id}`"),
+                                offset,
+                            )
+                        })?;
+                        (node.kind.clone(), node.spec.clone().unwrap_or_default())
+                    }
+                };
+                self.process_output(&id, &kind, &spec, offset)
+            }
             "node" => {
                 arity(3, 3)?;
                 no_kwargs()?;
@@ -1354,6 +2253,126 @@ impl<'a> Interp<'a> {
                 let kind = api::str_arg(&args[1], offset)?;
                 let spec = api::spec_to_json(&args[2], offset)?;
                 api::stage(&self.state, GraphEditOp::AddNode { id, kind, spec }, offset)?;
+                Ok(Value::None)
+            }
+            "from_path" | "from_file_pairs" | "from_list" | "channel_value" => {
+                arity(2, 2)?;
+                if !matches!(name, "from_path" | "from_file_pairs") {
+                    no_kwargs()?;
+                }
+                let id = api::str_arg(&args[0], offset)?;
+                let value = api::spec_to_json(&args[1], offset)?;
+                let mut spec = match name {
+                    "from_path" => serde_json::json!({"type":"glob", "pattern":value}),
+                    "from_file_pairs" => serde_json::json!({"type":"file_pairs", "pattern":value}),
+                    "from_list" => serde_json::json!({"type":"items", "values":value}),
+                    _ => serde_json::json!({"type":"value", "value":value}),
+                };
+                for (key, value) in kwargs {
+                    let allowed = if name == "from_file_pairs" {
+                        &[
+                            "hidden",
+                            "checkIfExists",
+                            "glob",
+                            "type",
+                            "maxDepth",
+                            "size",
+                            "flat",
+                            "grouping",
+                        ][..]
+                    } else {
+                        &["hidden", "checkIfExists", "glob", "maxDepth", "type"][..]
+                    };
+                    if !allowed.contains(&key.as_str()) {
+                        return Err(self.type_error(
+                            offset,
+                            format!("from_path() unsupported option '{key}'"),
+                        ));
+                    }
+                    let spec_key = if key == "type" {
+                        "pathType"
+                    } else {
+                        key.as_str()
+                    };
+                    if spec.get(spec_key).is_some() {
+                        return Err(self
+                            .type_error(offset, format!("from_path() duplicate option '{key}'")));
+                    }
+                    spec[spec_key] = match (key.as_str(), value) {
+                        ("type", Value::Str(value))
+                            if ["file", "dir", "any"].contains(&value.as_ref()) =>
+                        {
+                            serde_json::json!(value.to_string())
+                        }
+                        ("type", _) => {
+                            return Err(self.type_error(
+                                offset,
+                                "from_path() option 'type' must be 'file', 'dir', or 'any'",
+                            ));
+                        }
+                        ("maxDepth", Value::None) => serde_json::Value::Null,
+                        ("maxDepth", Value::Int(value)) if i32::try_from(*value).is_ok() => {
+                            serde_json::json!(value)
+                        }
+                        ("maxDepth", _) => {
+                            return Err(self.type_error(
+                                offset,
+                                "from_path() option 'maxDepth' must be a 32-bit integer",
+                            ));
+                        }
+                        ("size", Value::None) => serde_json::Value::Null,
+                        ("size", Value::Int(value)) => serde_json::json!(value),
+                        ("size", _) => {
+                            return Err(self.type_error(
+                                offset,
+                                "from_file_pairs() option 'size' must be an integer",
+                            ));
+                        }
+                        ("grouping", Value::Function(_)) => api::spec_to_json(value, offset)?,
+                        ("grouping", Value::None) => serde_json::Value::Null,
+                        ("grouping", _) => {
+                            return Err(self.type_error(
+                                offset,
+                                "from_file_pairs() option 'grouping' must be a function",
+                            ));
+                        }
+                        (_, Value::Bool(value)) => serde_json::json!(value),
+                        _ => {
+                            return Err(self.type_error(
+                                offset,
+                                format!("from_path() option '{key}' must be bool"),
+                            ));
+                        }
+                    };
+                }
+                api::stage(
+                    &self.state,
+                    GraphEditOp::AddNode {
+                        id: id.clone(),
+                        kind: "__channel_source".into(),
+                        spec,
+                    },
+                    offset,
+                )?;
+                Ok(Value::Channel(Rc::new(ChannelRef {
+                    producer: id,
+                    port: 0,
+                    label: None,
+                })))
+            }
+            "collect_edge" => {
+                arity(4, 4)?;
+                no_kwargs()?;
+                api::stage(
+                    &self.state,
+                    GraphEditOp::AddCollectEdge {
+                        from: api::str_arg(&args[0], offset)?,
+                        from_port: api::port_arg(&args[1], "from_port", offset)?,
+                        to: api::str_arg(&args[2], offset)?,
+                        to_port: api::port_arg(&args[3], "to_port", offset)?,
+                    },
+                    offset,
+                )?;
                 Ok(Value::None)
             }
             "update_node" => {
@@ -2063,6 +3082,9 @@ impl<'a> Interp<'a> {
             Value::Int(i) => i.to_string(),
             Value::Float(f) => format_float(*f),
             Value::Str(s) => s.to_string(),
+            Value::Path(file) => file.path.clone(),
+            Value::Channel(channel) => format!("<channel {}:{}>", channel.producer, channel.port),
+            Value::ProcessOutputs(outputs) => format!("<outputs {}>", outputs.producer),
             Value::List(_) | Value::Tuple(_) | Value::Dict(_) | Value::Range(_) => self.repr(value),
             Value::Function(function) => format!("<function {}>", function.name),
             Value::Builtin(name) => format!("<built-in function {name}>"),
@@ -2740,6 +3762,7 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::Path(x), Value::Path(y)) => x.path == y.path,
         (Value::List(x), Value::List(y)) => {
             Rc::ptr_eq(x, y)
                 || (x.borrow().items.len() == y.borrow().items.len()
@@ -2983,6 +4006,19 @@ fn builtin_function(name: &str) -> Option<&'static str> {
 // ── JSON conversion ────────────────────────────────────────────────────────
 
 pub(crate) fn value_to_json(value: &Value, depth: usize) -> Option<serde_json::Value> {
+    value_to_json_inner(value, depth, false)
+}
+
+/// Node specifications may contain persisted channel functions.
+pub(crate) fn value_to_spec_json(value: &Value) -> Option<serde_json::Value> {
+    value_to_json_inner(value, 0, true)
+}
+
+fn value_to_json_inner(
+    value: &Value,
+    depth: usize,
+    allow_functions: bool,
+) -> Option<serde_json::Value> {
     if depth > MAX_VALUE_DEPTH {
         return None;
     }
@@ -3005,7 +4041,7 @@ pub(crate) fn value_to_json(value: &Value, depth: usize) -> Option<serde_json::V
             }
             let mut out = Vec::with_capacity(list.items.len());
             for item in &list.items {
-                out.push(value_to_json(item, depth + 1)?);
+                out.push(value_to_json_inner(item, depth + 1, allow_functions)?);
             }
             Some(serde_json::Value::Array(out))
         }
@@ -3015,7 +4051,7 @@ pub(crate) fn value_to_json(value: &Value, depth: usize) -> Option<serde_json::V
             }
             let mut out = Vec::with_capacity(tuple.items.len());
             for item in &tuple.items {
-                out.push(value_to_json(item, depth + 1)?);
+                out.push(value_to_json_inner(item, depth + 1, allow_functions)?);
             }
             Some(serde_json::Value::Array(out))
         }
@@ -3039,12 +4075,84 @@ pub(crate) fn value_to_json(value: &Value, depth: usize) -> Option<serde_json::V
                     DictKey::None => "null".into(),
                     DictKey::Tuple(_) => return None,
                 };
-                out.insert(key, value_to_json(value, depth + 1)?);
+                out.insert(key, value_to_json_inner(value, depth + 1, allow_functions)?);
             }
             Some(serde_json::Value::Object(out))
         }
-        Value::Range(_) | Value::Function(_) | Value::Builtin(_) | Value::Pair(_, _) => None,
+        Value::Function(function) if allow_functions => serialize_function_graph(function, depth),
+        Value::Path(_)
+        | Value::Channel(_)
+        | Value::ProcessOutputs(_)
+        | Value::Range(_)
+        | Value::Function(_)
+        | Value::Builtin(_)
+        | Value::Pair(_, _) => None,
     }
+}
+
+fn serialize_function_graph(root: &Rc<FunctionData>, depth: usize) -> Option<serde_json::Value> {
+    let mut indices = HashMap::new();
+    indices.insert(Rc::as_ptr(root), 0usize);
+    let mut queue = vec![Rc::clone(root)];
+    let mut nodes = Vec::new();
+    let mut total_source = 0usize;
+    let mut cursor = 0;
+    while cursor < queue.len() {
+        if queue.len() > MAX_API_OPERATIONS {
+            return None;
+        }
+        let function = Rc::clone(&queue[cursor]);
+        total_source = total_source.checked_add(function.source.len())?;
+        if total_source > super::MAX_SCRIPT_BYTES {
+            return None;
+        }
+        let mut captures = serde_json::Map::new();
+        let mut bindings = serde_json::Map::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut scope = Some(function.closure.as_ref());
+        while let Some(current) = scope {
+            let vars = current.vars.borrow();
+            let mut names: Vec<_> = vars.keys().collect();
+            names.sort();
+            for name in names {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                match &vars[name] {
+                    // Channel handles belong to the authoring transaction and
+                    // cannot be captured by worker-side pure functions.
+                    Value::Channel(_) | Value::ProcessOutputs(_) => continue,
+                    Value::Function(captured) => {
+                        let ptr = Rc::as_ptr(captured);
+                        let index = match indices.get(&ptr) {
+                            Some(index) => *index,
+                            None => {
+                                let index = queue.len();
+                                indices.insert(ptr, index);
+                                queue.push(Rc::clone(captured));
+                                index
+                            }
+                        };
+                        bindings.insert(name.clone(), serde_json::json!(index));
+                    }
+                    value => {
+                        captures
+                            .insert(name.clone(), value_to_json_inner(value, depth + 1, false)?);
+                    }
+                }
+            }
+            scope = current.parent.as_deref();
+        }
+        let defaults: Option<Vec<_>> = function.params.iter().map(|param| match &param.default {
+            Some(value) => Some(serde_json::json!({"present":true, "value": value_to_json_inner(value, depth + 1, false)?})),
+            None => Some(serde_json::json!({"present":false})),
+        }).collect();
+        nodes.push(serde_json::json!({"source":function.source, "captures":captures, "bindings":bindings, "defaults":defaults?}));
+        cursor += 1;
+    }
+    Some(
+        serde_json::json!({"__dag_shell_function__": {"source": root.source, "captures": nodes[0]["captures"], "functions": nodes}}),
+    )
 }
 
 pub(crate) fn json_to_value(json: &serde_json::Value) -> Value {

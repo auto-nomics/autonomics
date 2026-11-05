@@ -177,8 +177,6 @@ impl NodeFactory for BundleSourceNodeFactory {
 mod tests {
     use super::*;
     use dag_core::BundleRegistry;
-    use dag_core::dag::DAG;
-    use dag_core::dag::runtime::SchedulerConfig;
     use datafusion::prelude::SessionContext;
     use std::sync::Arc;
     use vfs::{
@@ -247,24 +245,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dag_outputs_a_virtual_bundle_file() {
+    async fn node_outputs_a_virtual_bundle_file() {
         let harness = mounted_vfs();
         let ctx = runtime_ctx(harness.storage.clone());
-        let mut dag = DAG::default();
-        dag.add_node(
-            "source".into(),
-            Box::new(BundleSourceNode::new(
-                DataBundle::new("panels", "Reference panels", "/bundles/panels/panel.txt"),
-                Some("txt".to_string()),
-            )),
-        )
-        .unwrap();
-
-        dag.run(&SchedulerConfig::default(), &ctx, None)
+        let mut node = BundleSourceNode::new(
+            DataBundle::new("panels", "Reference panels", "/bundles/panels/panel.txt"),
+            Some("txt".to_string()),
+        );
+        let output = node
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
             .await
             .unwrap();
-
-        let output = dag.output("source").unwrap();
         let file = output.get(&0).unwrap().as_file().unwrap();
         assert_eq!(file.path, "/bundles/panels/panel.txt");
         assert_eq!(file.format.as_deref(), Some("txt"));

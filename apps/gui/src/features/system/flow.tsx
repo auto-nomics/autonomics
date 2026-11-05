@@ -14,9 +14,6 @@ import { cn } from "@/lib/utils";
 type FlowProcess = {
   id: string;
   kind: string;
-  cardinality:
-    | { type: "singleton" }
-    | { type: "fanout"; axis: string; source: { type: string; pattern?: string; values?: unknown[] } };
   error_strategy?: { mode?: string; max_retries?: number; retry_delay_ms?: number };
 };
 
@@ -41,17 +38,8 @@ type ProcessRunSummary = {
 
 export type FlowViewData = {
   flow: { processes: FlowProcess[]; wires: FlowWire[] };
-  last_run: { ok: boolean; processes: Record<string, ProcessRunSummary> } | null;
+  last_run: { ok: boolean; cancelled?: boolean; processes: Record<string, ProcessRunSummary> } | null;
 };
-
-function cardinalityLabel(process: FlowProcess) {
-  if (process.cardinality.type === "singleton") return "singleton";
-  const source =
-    process.cardinality.source.type === "glob"
-      ? process.cardinality.source.pattern ?? ""
-      : `${process.cardinality.source.values?.length ?? 0} items`;
-  return `fanout · ${process.cardinality.axis} · ${source}`;
-}
 
 export function FlowView({ activeAgent }: { activeAgent: string }) {
   const [view, setView] = useState<FlowViewData | null>(null);
@@ -99,7 +87,7 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
               view.last_run.ok ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600",
             )}
           >
-            last run {view.last_run.ok ? "ok" : "failed"}
+            last run {view.last_run.cancelled ? "cancelled" : view.last_run.ok ? "ok" : "failed"}
           </span>
         )}
         <span className="text-xs text-muted-foreground">
@@ -138,7 +126,6 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
                         </span>
                       )}
                     </div>
-                    <span className="text-xs text-muted-foreground">{cardinalityLabel(process)}</span>
                   </div>
                   {run && (
                     <div className={cn("mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs", failed ? "text-red-600" : "text-emerald-600")}>

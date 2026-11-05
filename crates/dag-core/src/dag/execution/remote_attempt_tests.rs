@@ -94,6 +94,37 @@ fn result_file(result: JobResult) -> FileRef {
 }
 
 #[tokio::test]
+async fn optional_process_output_can_be_absent_but_required_output_cannot() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input.txt");
+    std::fs::write(&input, b"input").unwrap();
+    let executor = RemoteTaskExecutor::new(
+        Arc::new(ProcessTaskTransport::new(temp.path().join("workers"))),
+        Arc::new(LocalDirectoryArtifactStore::new(
+            temp.path().join("artifacts"),
+        )),
+        temp.path().join("coordinator"),
+    );
+    let mut optional = execution(&input);
+    optional.submission.spec.spec = serde_json::json!({
+        "script": "true",
+        "outputs": [{"port": 0, "pattern": "missing.txt", "optional": true}]
+    });
+    match executor.run(optional).await {
+        JobResult::Success { outputs, .. } => assert!(outputs.is_empty()),
+        other => panic!("optional missing output should succeed: {other:?}"),
+    }
+    let mut required = execution(&input);
+    required.submission.spec.spec = serde_json::json!({
+        "script": "true", "outputs": [{"port": 0, "pattern": "missing.txt"}]
+    });
+    assert!(matches!(
+        executor.run(required).await,
+        JobResult::Failed { .. }
+    ));
+}
+
+#[tokio::test]
 async fn repeated_logical_task_ids_never_share_uploaded_inputs_or_downloaded_outputs() {
     let temp = tempfile::tempdir().unwrap();
     let first_input = temp.path().join("first.txt");

@@ -16,30 +16,12 @@ const MAX_ERROR_CHARS: usize = 300;
 
 #[tool(
     name = "run_flow",
-    description = "Execute the stage-model workflow (Nextflow-style) for batch analysis. \
-                  The flow is authored at PROCESS granularity: one process per pipeline \
-                  stage, regardless of how many items it fans out to — a folder of 100 \
-                  files into the same pipeline is ONE fanout process, not 100 nodes. \
-                  The `flow` parameter carries the authored graph as JSON: \
-                  processes: [{id, kind (a registered node kind, e.g. container_command), \
-                  spec (may reference {{item}} / {{item.field}} from the fanout source), \
-                  cardinality: {type: \"singleton\"} or {type: \"fanout\", axis, source: \
-                  {type: \"glob\", pattern: \"data/*.fastq\"} (enumerated through the VFS \
-                  at run start) or {type: \"items\", values: [...]}}], and wires: \
-                  [{from, from_port, to, to_port, op: \"direct\" (key-zip between fanouts, \
-                  broadcast from a singleton) or \"collect\" (fanout -> singleton, \
-                  Nextflow's collect)}. Rules: direct fanout->singleton is invalid — use \
-                  collect; connected fanouts must resolve to identical item key sets. \
-                  Per-process error_strategy (Nextflow's errorStrategy): default is \
-                  fail-closed; mode=ignore tolerates that process's item failures \
-                  (key-matched dependents skip, collect consumers still run on survivors, \
-                  the run stays ok); mode=retry with max_retries=N and optional \
-                  retry_delay_ms=M re-dispatches failed instances before degrading \
-                  to fail-closed. \
-                  Returns a process-grouped summary (succeeded/failed/skipped/cancelled \
-                  per process) plus failed instances with item keys for triage. Item \
-                  instances are run-scoped: the authored flow you pass in is the complete \
-                  persistent state; nothing is added to the engine's DAG."
+    description = "Execute a flow using the session graph or the supplied JSON graph. \
+                  The graph contains sources, processes, and wires. Sources emit items \
+                  incrementally and process instances start when their input tuples arrive. \
+                  Queue inputs pair in arrival order, value inputs broadcast, and collect \
+                  waits for upstream closure. \
+                  Returns process summaries and failed instance details."
 )]
 pub struct RunFlowInput {
     /// The authored flow graph (processes + wires arrays). Omit to run the
@@ -51,9 +33,8 @@ pub struct RunFlowInput {
     /// CPU-derived default.
     #[serde(default)]
     pub max_concurrency: Option<usize>,
-    /// Reuse instances whose inputs are unchanged since a previous run of
-    /// the same flow (fingerprint match + output files still valid): only
-    /// new or changed items execute. Nextflow's `-resume`.
+    /// Reuse eligible instances whose fingerprints and file outputs can be
+    /// validated. Inputs or outputs that cannot be validated are re-executed.
     #[serde(default)]
     pub resume: Option<bool>,
 }
@@ -117,6 +98,7 @@ fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
 
     serde_json::json!({
         "ok": report.ok,
+        "cancelled": report.cancelled,
         "processes": processes,
         "failed_instances": failed,
         "failed_instances_truncated":
@@ -137,11 +119,11 @@ impl ToolFunction for RunFlowTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let flow = match input.flow {
             Some(value) => Some(
-                serde_json::from_value::<dag_engine::FlowGraph>(value).map_err(
-                    |error| ToolError::ValidationFailed {
+                serde_json::from_value::<dag_engine::FlowGraph>(value).map_err(|error| {
+                    ToolError::ValidationFailed {
                         message: format!("invalid flow graph: {error}"),
-                    },
-                )?,
+                    }
+                })?,
             ),
             None => None,
         };
@@ -166,20 +148,25 @@ mod tests {
     async fn fanout_flow_runs_and_groups_by_process() {
         let engine = data_engine::data_engine::DataEngine::builder().build();
         let (client, _handle) = data_engine::runtime::spawn_with_engine(engine);
+        let directory = tempfile::tempdir().unwrap();
+        let items: Vec<serde_json::Value> = ["a", "b", "c"]
+            .iter()
+            .map(|name| {
+                let path = directory.path().join(format!("{name}.txt"));
+                std::fs::write(&path, name).unwrap();
+                serde_json::json!(path.display().to_string())
+            })
+            .collect();
         let flow = serde_json::json!({
-            "processes": [
-                {
-                    "id": "batch",
-                    "kind": "echo",
-                    "spec": {},
-                    "cardinality": {
-                        "type": "fanout",
-                        "axis": "item",
-                        "source": {"type": "items", "values": [1, 2, 3]}
-                    }
-                }
+            "sources": [
+                {"id": "reads", "spec": {"type": "items", "values": items}}
             ],
-            "wires": []
+            "processes": [
+                {"id": "batch", "kind": "file_reference", "spec": {"path": "{{item}}"}}
+            ],
+            "wires": [
+                {"from": "reads", "from_port": 0, "to": "batch", "to_port": 0, "op": "direct"}
+            ]
         });
         let tool = RunFlowTool::new(Arc::new(client));
         let result = tool
@@ -212,9 +199,6 @@ mod tests {
             })
             .await
             .unwrap_err();
-        assert!(
-            error.to_string().contains("invalid flow graph"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("invalid flow graph"), "{error}");
     }
 }

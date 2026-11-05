@@ -72,10 +72,26 @@ pub struct TaskSpec {
 /// Where a process input came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskInputSource {
-    SpecFile { pointer: String },
-    UpstreamPort { from: String, from_port: u8 },
-    ScatterItem { axis: String },
-    DynamicFanoutItem { axis: String },
+    SpecFile {
+        pointer: String,
+    },
+    UpstreamPort {
+        from: String,
+        from_port: u8,
+    },
+    /// An authored channel connection. `from` names the source or process,
+    /// not a particular upstream task instance.
+    Channel {
+        from: String,
+        from_port: u8,
+        collected: bool,
+    },
+    ScatterItem {
+        axis: String,
+    },
+    DynamicFanoutItem {
+        axis: String,
+    },
 }
 
 /// One named process input binding.

@@ -303,6 +303,9 @@ impl DAG {
                                 NodeValue::FileSet(files) => files.clone(),
                                 NodeValue::DataFrame(_) => Vec::new(),
                                 NodeValue::Channel(_) => Vec::new(),
+                                NodeValue::Structured(value) => {
+                                    value.artifacts().into_iter().cloned().collect()
+                                }
                             })
                             .collect()
                     })

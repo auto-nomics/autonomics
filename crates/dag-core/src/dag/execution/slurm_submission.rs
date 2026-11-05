@@ -285,29 +285,38 @@ impl SlurmSubmissionIntent {
         let dir = root.join(sanitize_path_component(&self.task_id));
         durable_directory(&dir)?;
         let path = dir.join(format!(".submission-response-{}.json", self.nonce));
-        let bounded = |bytes: &[u8]| serde_json::json!({
-            "bytes": bytes.len(), "sha256": hex_encode(&Sha256::digest(bytes)),
-            "prefix": String::from_utf8_lossy(&bytes[..bytes.len().min(16384)]),
-            "truncated": bytes.len() > 16384,
-        });
+        let bounded = |bytes: &[u8]| {
+            serde_json::json!({
+                "bytes": bytes.len(), "sha256": hex_encode(&Sha256::digest(bytes)),
+                "prefix": String::from_utf8_lossy(&bytes[..bytes.len().min(16384)]),
+                "truncated": bytes.len() > 16384,
+            })
+        };
         let outcome = match response {
             Ok(output) => serde_json::json!({"exit_code": output.status.code(),
                 "stdout": bounded(&output.stdout), "stderr": bounded(&output.stderr)}),
-            Err(error) => serde_json::json!({"transport_error": bounded(error.to_string().as_bytes())}),
+            Err(error) => {
+                serde_json::json!({"transport_error": bounded(error.to_string().as_bytes())})
+            }
         };
         let raw = serde_json::to_vec_pretty(&serde_json::json!({
             "schema": "SLURM_SUBMISSION_RESPONSE_V1", "nonce": self.nonce,
             "submission_identity": self.submission_identity,
             "manifest_sha256": self.manifest_sha256, "outcome": outcome,
             "resubmission_authorized": false,
-        })).map_err(|_| invalid("cannot serialize submission response"))?;
+        }))
+        .map_err(|_| invalid("cannot serialize submission response"))?;
         let mut staged = tempfile::NamedTempFile::new_in(&dir)
             .map_err(|_| invalid("cannot stage submission response"))?;
-        staged.write_all(&raw).and_then(|_| staged.as_file().sync_all())
+        staged
+            .write_all(&raw)
+            .and_then(|_| staged.as_file().sync_all())
             .map_err(|_| invalid("cannot durably write submission response"))?;
-        staged.persist_noclobber(&path)
+        staged
+            .persist_noclobber(&path)
             .map_err(|_| invalid("submission response exists or cannot be published"))?;
-        std::fs::File::open(&dir).and_then(|file| file.sync_all())
+        std::fs::File::open(&dir)
+            .and_then(|file| file.sync_all())
             .map_err(|_| invalid("cannot sync submission response directory"))?;
         Ok(path)
     }

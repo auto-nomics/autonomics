@@ -200,6 +200,7 @@ async fn real_cluster_runs_process_task_end_to_end() {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.txt".into(),
+            optional: false,
         }],
     };
     let submission = TaskSubmission {
@@ -286,6 +287,7 @@ async fn real_cluster_cancel_paths() {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.txt".into(),
+            optional: false,
         }],
     };
 

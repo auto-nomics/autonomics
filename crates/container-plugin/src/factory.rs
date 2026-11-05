@@ -369,6 +369,9 @@ mod tests {
             &self,
             request: ContainerRunRequest,
         ) -> Result<ContainerRunResult, ContainerRuntimeError> {
+            if request.env.iter().any(|(key, _)| key == "sample") {
+                std::fs::write(request.workspace.host_path.join("extra.txt"), b"extra").unwrap();
+            }
             // Write every declared output so the node's post-run check
             // (each declared output must exist) passes for multi-output
             // manifests.
@@ -677,6 +680,101 @@ ldsc --h2 "$AUTONOMICS_INPUT0" \
         assert_eq!(declared.manifest_sha256, identity.manifest_sha256);
         assert_eq!(declared.script_sha256, identity.script_sha256);
         assert!(declared.panels.iter().all(|panel| panel.digest.is_none()));
+    }
+
+    #[tokio::test]
+    async fn registered_manifest_tuple_is_prepared_and_sent_to_container() {
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = Arc::new(FakeRuntime {
+            workspace_root: workspace.path().to_path_buf(),
+            requests: Mutex::new(Vec::new()),
+        });
+        let mut manifest = test_manifest();
+        manifest.panels.clear();
+        manifest.nodes = vec![
+            toml::from_str(
+                r#"
+kind = "tuple_tool"
+desc = "Tuple input"
+doc = "Tuple input"
+[ports]
+inputs = [{type="tuple", tuple=[{val="sample"},{path="reads"}]}]
+outputs = [{path="out.txt", tuple=[{val="sample"},{path="out.txt"},{path="extra.txt"}]}]
+[command]
+interpreter = "sh"
+script = "cat \"$reads\" > /work/out.txt"
+"#,
+            )
+            .unwrap(),
+        ];
+        crate::node_definition::validate(&manifest.nodes[0]).unwrap();
+        let plugin = Plugin::new(
+            manifest,
+            b"tuple-test",
+            runtime.clone(),
+            Arc::new(PanelCache::new(workspace.path().join("panels"))),
+        );
+        let ctx = NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let mut registry = NodeRegistry::new(ctx.clone());
+        registry.register_plugin(&plugin);
+        let source = workspace.path().join("reads.fastq");
+        std::fs::write(&source, b"reads").unwrap();
+        let mut node = registry
+            .build_node("tuple_tool", serde_json::json!({}))
+            .unwrap();
+        let mut inputs = vec![NodeInput {
+            port: 0,
+            data: NodeValue::Channel(dag_core::value::ChannelValue {
+                items: vec![serde_json::json!([42, source.to_str().unwrap()])],
+            }),
+        }];
+        node.prepare_task_inputs(&mut inputs).unwrap();
+        let outputs = node
+            .execute(
+                &ctx,
+                &inputs,
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let NodeValue::Structured(dag_core::dag::execution::ChannelTransportValue::Tuple(items)) =
+            outputs.get(&0).unwrap()
+        else {
+            panic!("tuple output expected")
+        };
+        assert!(
+            matches!(&items[0], dag_core::dag::execution::ChannelTransportValue::Json(value) if value == 42)
+        );
+        assert!(
+            matches!(&items[1], dag_core::dag::execution::ChannelTransportValue::File(file) if std::fs::read(&file.path).unwrap() == b"plugin-factory-result")
+        );
+        assert!(
+            matches!(&items[2], dag_core::dag::execution::ChannelTransportValue::File(file) if std::fs::read(&file.path).unwrap() == b"extra")
+        );
+        let requests = runtime.requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        assert!(
+            request
+                .env
+                .iter()
+                .any(|(key, value)| key == "sample" && value == "42")
+        );
+        let reads = &request
+            .env
+            .iter()
+            .find(|(key, _)| key == "reads")
+            .unwrap()
+            .1;
+        let relative = Path::new(reads)
+            .strip_prefix(DEFAULT_CONTAINER_WORKDIR)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(request.workspace.host_path.join(relative)).unwrap(),
+            b"reads"
+        );
     }
 
     #[tokio::test]

@@ -107,6 +107,12 @@ impl Ports {
         self.ports.get(&index)
     }
 
+    pub(super) fn set_optional(&mut self, index: PortId) {
+        if let Some(port) = self.ports.get_mut(&index) {
+            port.required = false;
+        }
+    }
+
     /// Number of declared ports.
     pub fn len(&self) -> usize {
         self.ports.len()

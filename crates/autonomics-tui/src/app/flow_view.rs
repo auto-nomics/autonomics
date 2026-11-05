@@ -96,12 +96,14 @@ impl App {
         self.state.flow_view_scroll = self.state.flow_view_scroll.min(max_scroll);
         let scroll = self.state.flow_view_scroll;
 
-        let paragraph = Paragraph::new(lines)
-            .scroll((scroll as u16, 0))
-            .block(ratatui::widgets::Block::bordered().title(Span::styled(
+        let paragraph = Paragraph::new(lines).scroll((scroll as u16, 0)).block(
+            ratatui::widgets::Block::bordered().title(Span::styled(
                 "Flow (process view) — r refresh · j/k scroll · esc close",
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-            )));
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        );
         paragraph.render(popup, buf);
 
         if max_scroll > 0 {
@@ -115,7 +117,7 @@ impl App {
 
 /// Build the overlay's lines: run banner, per-process rows, wires.
 fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut Vec<Line>) {
-    use dag_engine::{Cardinality, ErrorMode};
+    use dag_engine::ErrorMode;
 
     if view.flow.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -126,37 +128,30 @@ fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut 
     }
 
     if let Some(run) = &view.last_run {
-        let tone = if run.ok {
-            theme.success
-        } else {
-            theme.error
-        };
+        let tone = if run.ok { theme.success } else { theme.error };
         lines.push(Line::from(vec![
             Span::styled("last run: ", Style::default().fg(theme.text_dim)),
-            Span::styled(if run.ok { "ok" } else { "failed" }, Style::default().fg(tone).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                if run.cancelled { "cancelled" } else if run.ok { "ok" } else { "failed" },
+                Style::default().fg(tone).add_modifier(Modifier::BOLD),
+            ),
         ]));
         lines.push(Line::from(""));
     }
 
     for process in view.flow.processes() {
-        let cardinality = match &process.cardinality {
-            Cardinality::Singleton => "singleton".to_string(),
-            Cardinality::Fanout { axis, .. } => format!("fanout · {axis}"),
-        };
         let mut spans = vec![
             Span::styled(
                 process.id.clone(),
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(process.kind.clone(), Style::default().fg(theme.text_dim)),
-            Span::raw(format!("  [{cardinality}]")),
         ];
         if process.error_strategy.mode != ErrorMode::Fail {
-            spans.push(Span::raw(format!(
-                "  {:?}",
-                process.error_strategy.mode
-            )));
+            spans.push(Span::raw(format!("  {:?}", process.error_strategy.mode)));
         }
         lines.push(Line::from(spans));
 
