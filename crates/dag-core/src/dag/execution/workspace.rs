@@ -43,7 +43,6 @@ mod typed_channel_staging_tests {
                 logical_node: None,
                 kind: "test".into(),
                 spec: serde_json::json!({}),
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],
@@ -75,7 +74,6 @@ mod typed_channel_staging_tests {
                 logical_node: None,
                 kind: "test".into(),
                 spec: serde_json::json!({}),
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![TaskInputBinding {
@@ -652,6 +650,7 @@ impl LocalTaskWorkspace {
         Ok((staged_files, remote_inputs))
     }
 
+    #[cfg(test)]
     pub(super) async fn stage_inputs(
         &mut self,
         submission: &mut TaskSubmission,
@@ -662,6 +661,7 @@ impl LocalTaskWorkspace {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) async fn stage_inputs_with_remote(
         &mut self,
         submission: &mut TaskSubmission,

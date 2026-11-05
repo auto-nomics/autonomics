@@ -157,6 +157,7 @@ impl CompletionSink for TargetSink {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn owner_has_pending_jobs(
     jobs: &[MonitorView],
     agent_id: Uuid,

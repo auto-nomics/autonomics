@@ -39,7 +39,6 @@ fn execution(mode: &str) -> TaskExecution {
                 logical_node: None,
                 kind: "remote-toy".into(),
                 spec: serde_json::json!({}),
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],

@@ -62,8 +62,6 @@ struct AgentEngineActor {
     /// Queued runs are rejected instead of executing on an actor the manager
     /// has already removed from its map.
     closing: Arc<AtomicBool>,
-    result_cache: Arc<ResultCache>,
-    storage: Arc<StorageCoordinator>,
     rx: mpsc::UnboundedReceiver<EngineMsg>,
 }
 
@@ -1550,8 +1548,6 @@ impl DataEngineManager {
             running: Arc::clone(&running),
             shutdown: Arc::clone(&shutdown),
             closing: Arc::clone(&closing),
-            result_cache: Arc::clone(&self.result_cache),
-            storage: Arc::clone(&self.storage),
             rx,
         };
         let task = tokio::task::spawn(server.run());

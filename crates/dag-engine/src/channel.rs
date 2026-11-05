@@ -195,6 +195,10 @@ impl<T: Clone> InputSet<T> {
 
     /// Consume a complete tuple only when every input is ready. Closed queues
     /// are drained before reporting closure; no input is consumed on Pending.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "pending and closed are distinct states, unlike Iterator::next"
+    )]
     pub fn next(&mut self) -> Firing<T> {
         let has_queue = self.inputs.iter().any(|i| i.kind == ChannelKind::Queue);
         if !has_queue && self.scalar_fired {

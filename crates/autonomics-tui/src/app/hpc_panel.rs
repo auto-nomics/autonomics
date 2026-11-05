@@ -23,7 +23,7 @@ impl App {
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("hpc_config_fetch", move || async move {
             let result = client.hpc_config().await.map_err(|error| error.to_string());
-            let _ = event_tx.send(crate::app_event::AppEvent::HpcConfigLoaded(result));
+            event_tx.send(crate::app_event::AppEvent::HpcConfigLoaded(result));
         });
     }
 
@@ -32,7 +32,7 @@ impl App {
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("hpc_jobs_fetch", move || async move {
             let reply = client.hpc_jobs().await;
-            let _ = event_tx.send(crate::app_event::AppEvent::HpcJobsLoaded(
+            event_tx.send(crate::app_event::AppEvent::HpcJobsLoaded(
                 reply.unwrap_or_else(
                     |error| serde_json::json!({ "monitors": [], "error": error.to_string() }),
                 ),
@@ -48,7 +48,7 @@ impl App {
                 .update_hpc_config(&profile)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = event_tx.send(crate::app_event::AppEvent::HpcProfileSaved(result));
+            event_tx.send(crate::app_event::AppEvent::HpcProfileSaved(result));
         });
     }
 

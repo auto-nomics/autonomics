@@ -2025,6 +2025,15 @@ done < <(compgen -G {pattern} | sort)
 
 #[async_trait::async_trait]
 impl TaskTransport for SlurmTaskTransport {
+    fn submission_failure_may_be_running(&self, error: &DagError) -> bool {
+        !matches!(
+            error,
+            DagError::SubmissionNotSent {
+                local_ssh_stopped: true,
+                ..
+            }
+        )
+    }
     fn ensure_ready(&self) -> Result<(), DagError> {
         if let Some(recorder) = &self.recorder {
             recorder.ensure_ready()?;
@@ -2994,25 +3003,6 @@ impl StagedDownload {
     }
 }
 
-async fn stream_download(
-    ssh: &SshTarget,
-    source: &str,
-    destination: &Path,
-    expected_size: u64,
-    expected_hash: &str,
-) -> Result<(), DagError> {
-    stream_download_observed(
-        ssh,
-        source,
-        destination,
-        expected_size,
-        expected_hash,
-        &crate::dag::node_event::NodeReporter::noop(),
-        "downloading",
-    )
-    .await
-}
-
 async fn stream_download_observed(
     ssh: &SshTarget,
     source: &str,
@@ -3055,25 +3045,6 @@ async fn stream_download_observed(
         }
     }
     unreachable!()
-}
-
-async fn stream_download_once(
-    ssh: &SshTarget,
-    source: &str,
-    destination: &Path,
-    expected_size: u64,
-    expected_hash: &str,
-) -> Result<(), DagError> {
-    stream_download_once_observed(
-        ssh,
-        source,
-        destination,
-        expected_size,
-        expected_hash,
-        &crate::dag::node_event::NodeReporter::noop(),
-        "downloading",
-    )
-    .await
 }
 
 async fn stream_download_once_observed(

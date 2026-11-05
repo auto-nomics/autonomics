@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
 use dag_core::resource::MemoryGuardConfig;
-use dag_core::{BundleRegistry, FileRef, NodePorts, PortType};
+use dag_core::{BundleRegistry, FileRef};
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -12,9 +12,7 @@ use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{
-    ChannelNode, DAG, DagError, DagHistory, GatherNode, LogicalEdge, LogicalExecutionStrategy,
-    LogicalGraph, LogicalNodeDefinition, PhysicalJobRef, RunRecord, RunReport, RuntimeStatus,
-    SchedulerConfig,
+    DAG, DagError, DagHistory, GatherNode, RunRecord, RunReport, RuntimeStatus, SchedulerConfig,
 };
 use crate::dag_shell::{
     DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, execute_script, graph_summary,
@@ -412,32 +410,6 @@ impl DataEngine {
         self.dag
             .add_node_with_spec(node_id.into(), node, address, spec)?;
         Ok(())
-    }
-
-    fn logical_output_type(
-        &self,
-        edge: &LogicalEdge,
-        ports: &HashMap<&str, NodePorts>,
-        gather_types: &HashMap<&str, PortType>,
-    ) -> Result<PortType> {
-        Self::logical_output_type_opt(edge, ports, gather_types).ok_or_else(|| {
-            Error::Custom(format!(
-                "edge {} -> {} uses an unresolved output type",
-                edge.from, edge.to
-            ))
-        })
-    }
-
-    fn logical_output_type_opt(
-        edge: &LogicalEdge,
-        ports: &HashMap<&str, NodePorts>,
-        gather_types: &HashMap<&str, PortType>,
-    ) -> Option<PortType> {
-        if let Some(kind) = gather_types.get(edge.from.as_str()) {
-            return Some(*kind);
-        }
-        let port = ports[edge.from.as_str()].output_port(edge.from_port)?;
-        Some(port.data_type)
     }
 
     fn remove_node_cascade(dag: &mut DAG, id: &str) -> std::result::Result<(), DagError> {
@@ -1508,6 +1480,7 @@ impl DataEngine {
     ///
     /// Returns a warning string when the record could not be persisted — the
     /// run itself is never failed by an audit write.
+    #[expect(dead_code, reason = "retained for legacy DAG run history")]
     async fn persist_run_record(
         &mut self,
         run_id: String,
@@ -1552,6 +1525,7 @@ impl DataEngine {
         None
     }
 
+    #[expect(dead_code, reason = "retained for legacy DAG run history")]
     async fn commit_history_snapshot(
         &mut self,
         manifest: &crate::dag::DagManifest,

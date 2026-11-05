@@ -390,7 +390,6 @@ fn base_spec(
         logical_node: Some(kind.into()),
         kind: kind.into(),
         spec,
-        axis: None,
         item_key: None,
         item: None,
         inputs: Vec::new(),

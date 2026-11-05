@@ -189,7 +189,6 @@ fn prepared(root: &Path) -> (TaskExecution, PrivateNativeBinding) {
         kind: "core/native_test_publisher".into(),
         spec: serde_json::json!({"output_directory":"/frozen/output","value":"toy"}),
         logical_node: None,
-        axis: None,
         item_key: None,
         item: None,
         inputs: vec![],

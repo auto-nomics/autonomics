@@ -60,8 +60,6 @@ pub struct TaskSpec {
     pub kind: String,
     pub spec: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub axis: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub item_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<serde_json::Value>,
@@ -85,12 +83,6 @@ pub enum TaskInputSource {
         from: String,
         from_port: u8,
         collected: bool,
-    },
-    ScatterItem {
-        axis: String,
-    },
-    DynamicFanoutItem {
-        axis: String,
     },
 }
 
@@ -197,4 +189,28 @@ pub struct TaskAttemptReceipt {
 /// treat an absent timeout as an infinite lease.
 pub fn task_timeout(resources: &TaskResources) -> Option<Duration> {
     resources.max_duration_ms.map(Duration::from_millis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_task_axis_is_accepted_but_not_written_back() {
+        let old = serde_json::json!({
+            "id": "qc#1", "kind": "example", "spec": {}, "axis": "sample",
+            "inputs": [], "outputs": []
+        });
+        let task: TaskSpec = serde_json::from_value(old).unwrap();
+        let written = serde_json::to_value(task).unwrap();
+        assert!(written.get("axis").is_none());
+    }
+
+    #[test]
+    fn retired_scatter_sources_are_not_silently_reinterpreted() {
+        for variant in ["ScatterItem", "DynamicFanoutItem"] {
+            let old = serde_json::json!({(variant): {"axis": "sample"}});
+            assert!(serde_json::from_value::<TaskInputSource>(old).is_err());
+        }
+    }
 }

@@ -1359,7 +1359,7 @@ impl DagNode for ContainerCommandNode {
                                     *hidden,
                                 )
                                 .map_err(|e| e.into_dag_error(self.kind))?;
-                                if matched.is_empty() && !bounds.is_some_and(|(min, _)| min == 0) {
+                                if matched.is_empty() && bounds.is_none_or(|(min, _)| min != 0) {
                                     return Err(DagError::Schedule(format!(
                                         "missing output file(s) `{path}`"
                                     )));

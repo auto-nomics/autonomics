@@ -111,10 +111,7 @@ impl TypedPodmanSettings {
                 if matches!(
                     self.resource_control,
                     TypedPodmanResourceControl::DelegatedCgroups
-                ) =>
-            {
-                ()
-            }
+                ) => {}
             (Some(path), Some(hash)) if path.is_absolute() && valid_sha256(hash) => (),
             _ => {
                 return Err(failure(
@@ -214,10 +211,7 @@ impl TypedWorkerSettings {
         match (&self.apptainer_catalog, &self.apptainer_executable) {
             (None, None) => (),
             (Some(catalog), Some(executable))
-                if catalog.is_absolute() && executable.is_absolute() =>
-            {
-                ()
-            }
+                if catalog.is_absolute() && executable.is_absolute() => {}
             _ => {
                 return Err(failure(
                     "typed Apptainer requires absolute catalog and executable paths",

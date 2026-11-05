@@ -325,7 +325,7 @@ fn validate(spec: &ScriptNodeSpec) -> Result<(), String> {
                 input.name
             ));
         }
-        if (input.kind == ScriptValueKind::Tuple) != !input.tuple.is_empty() {
+        if (input.kind == ScriptValueKind::Tuple) == input.tuple.is_empty() {
             return Err(format!(
                 "input `{}` must declare tuple qualifiers exactly when kind is tuple",
                 input.name

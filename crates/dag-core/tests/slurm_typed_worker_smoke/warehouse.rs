@@ -253,7 +253,6 @@ fn read_task(label: &str, path: &str, ctx: Arc<NodeCtx>) -> TaskExecution {
                 kind: "core/file_to_dataframe".into(),
                 spec: json!({"path":path,"format":"csv"}),
                 logical_node: None,
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],
@@ -627,7 +626,6 @@ pub(super) async fn run() -> SmokeResult<()> {
                 kind: "logical_gather".into(),
                 spec: json!({}),
                 logical_node: None,
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![TaskInputBinding {

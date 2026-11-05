@@ -1531,10 +1531,10 @@ impl<'a> Interp<'a> {
             ast::Expr::Subscript(subscript) => self.subscript_read(subscript, scope),
             ast::Expr::Attribute(attribute) => {
                 let receiver = self.eval_expr(&attribute.value, scope)?;
-                if let Value::Channel(channel) = &receiver {
-                    if channel.label.as_deref() == Some(attribute.attr.as_str()) {
-                        return Ok(receiver);
-                    }
+                if let Value::Channel(channel) = &receiver
+                    && channel.label.as_deref() == Some(attribute.attr.as_str())
+                {
+                    return Ok(receiver);
                 }
                 if let Value::ProcessOutputs(outputs) = &receiver {
                     let name = attribute.attr.as_str();

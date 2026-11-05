@@ -18,6 +18,111 @@ struct RecordingTransport {
     dispatches: Arc<Mutex<Vec<(TaskDispatch, Vec<FileRef>)>>>,
 }
 
+struct UnconfirmedTransport {
+    submitted: Arc<tokio::sync::Notify>,
+}
+
+struct UncertainSubmissionTransport;
+
+#[async_trait::async_trait]
+impl TaskTransport for UncertainSubmissionTransport {
+    fn submission_failure_may_be_running(&self, _error: &DagError) -> bool {
+        true
+    }
+    async fn submit(
+        &self,
+        _dispatch: TaskDispatch,
+        _artifacts: Vec<FileRef>,
+    ) -> Result<TaskLease, DagError> {
+        Err(DagError::Schedule("submission acknowledgement lost".into()))
+    }
+    async fn wait(&self, _lease: &TaskLease) -> Result<TaskAttemptReceipt, DagError> {
+        unreachable!()
+    }
+    async fn cancel(&self, _lease: &TaskLease) -> Result<(), DagError> {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn uncertain_submission_is_reported_as_unconfirmed() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input.txt");
+    std::fs::write(&input, b"input").unwrap();
+    let executor = RemoteTaskExecutor::new(
+        Arc::new(UncertainSubmissionTransport),
+        Arc::new(LocalDirectoryArtifactStore::new(
+            temp.path().join("artifacts"),
+        )),
+        temp.path().join("coordinator"),
+    );
+    match executor.run(execution(&input)).await {
+        JobResult::Failed { error, .. } => assert!(
+            error.to_string().contains("remote_stop_unconfirmed"),
+            "{error}"
+        ),
+        other => panic!("uncertain submission must fail: {other:?}"),
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskTransport for UnconfirmedTransport {
+    async fn submit(
+        &self,
+        dispatch: TaskDispatch,
+        _artifacts: Vec<FileRef>,
+    ) -> Result<TaskLease, DagError> {
+        self.submitted.notify_one();
+        Ok(TaskLease {
+            lease_id: "123".into(),
+            task_id: dispatch.spec.id,
+        })
+    }
+
+    async fn wait(&self, _lease: &TaskLease) -> Result<TaskAttemptReceipt, DagError> {
+        std::future::pending().await
+    }
+
+    async fn cancel(&self, _lease: &TaskLease) -> Result<(), DagError> {
+        Err(DagError::Schedule("scheduler unavailable".into()))
+    }
+}
+
+#[tokio::test]
+async fn remote_cancel_failure_is_reported_as_unconfirmed() {
+    let temp = tempfile::tempdir().unwrap();
+    let input = temp.path().join("input.txt");
+    std::fs::write(&input, b"input").unwrap();
+    let submitted = Arc::new(tokio::sync::Notify::new());
+    let executor = Arc::new(RemoteTaskExecutor::new(
+        Arc::new(UnconfirmedTransport {
+            submitted: submitted.clone(),
+        }),
+        Arc::new(LocalDirectoryArtifactStore::new(
+            temp.path().join("artifacts"),
+        )),
+        temp.path().join("coordinator"),
+    ));
+    let execution = execution(&input);
+    let token = execution.cancellation.clone();
+    let run = tokio::spawn(async move { executor.run(execution).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), submitted.notified())
+        .await
+        .unwrap();
+    token.cancel();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+        .await
+        .unwrap()
+        .unwrap();
+    match result {
+        JobResult::Failed { error, .. } => assert!(
+            error.to_string().contains("remote_stop_unconfirmed"),
+            "{error}"
+        ),
+        other => panic!("unconfirmed cancellation must fail: {other:?}"),
+    }
+}
+
 #[async_trait::async_trait]
 impl TaskTransport for RecordingTransport {
     async fn submit(
@@ -47,7 +152,6 @@ fn execution(input: &Path) -> TaskExecution {
                 logical_node: None,
                 kind: "process".into(),
                 spec: serde_json::json!({"script":"cat -- \"$AUTONOMICS_INPUT_PAYLOAD\" > result.txt", "outputs":[{"port":0,"pattern":"result.txt"}]}),
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![TaskInputBinding {

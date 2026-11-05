@@ -262,6 +262,7 @@ fn report_stopped_worker(
     Ok(())
 }
 
+#[cfg(test)]
 fn workspace_files(request: &ContainerRunRequest) -> Result<(Vec<String>, Vec<(Value, PathBuf)>)> {
     workspace_files_observed(request, &dag_core::dag::node_event::NodeReporter::noop())
 }
@@ -466,7 +467,7 @@ impl SlurmContainerRuntime {
             || budget["max_concurrency"].as_u64() != Some(1)
             || positive
                 .iter()
-                .any(|k| !budget[*k].as_u64().is_some_and(|n| n > 0))
+                .any(|k| budget[*k].as_u64().is_none_or(|n| n == 0))
             || budget["memory_bytes"]
                 .as_u64()
                 .zip(budget["memory_available_reserve_bytes"].as_u64())
@@ -897,7 +898,6 @@ impl SlurmContainerRuntime {
                 logical_node: None,
                 kind: "process".into(),
                 spec: serde_json::to_value(process).map_err(mapped)?,
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],
@@ -962,7 +962,22 @@ impl SlurmContainerRuntime {
             }
             Ok(Ok(lease)) => lease,
             Ok(Err(error)) => {
-                record_submission_failure(&journal, &mut state, &error)?;
+                let unknown = transport.submission_failure_may_be_running(&error);
+                if let Err(journal_error) = record_submission_failure(&journal, &mut state, &error)
+                {
+                    return Err(if unknown {
+                        invalid(format!(
+                            "remote_stop_unconfirmed: submission may have started remote work: {error}; failed to record submission: {journal_error}"
+                        ))
+                    } else {
+                        journal_error
+                    });
+                }
+                if unknown {
+                    return Err(invalid(format!(
+                        "remote_stop_unconfirmed: submission may have started remote work: {error}"
+                    )));
+                }
                 return Err(mapped(error));
             }
         };
@@ -984,20 +999,22 @@ impl SlurmContainerRuntime {
         {
             Ok(Ok(receipt)) => receipt,
             _ => {
-                let _ = transport.cancel(&lease).await;
+                let cancellation = transport.cancel(&lease).await;
                 reporter.phase(
                     "checking_worker_stop",
                     "verifying the remote worker subtree has stopped",
                 );
                 let proof = stop_proof(&self.settings.ssh, &lease.lease_id).await?;
                 state["stop_proof"] = proof.clone();
-                state["state"] = json!(if proof["full_subtree_terminal"] == true {
+                state["state"] = json!(if cancellation.is_ok()
+                    && proof["full_subtree_terminal"] == true
+                {
                     "STOPPED_FAILED"
                 } else {
                     "STOP_UNKNOWN"
                 });
                 record(&journal, &state)?;
-                if proof["full_subtree_terminal"] == true {
+                if cancellation.is_ok() && proof["full_subtree_terminal"] == true {
                     guard.lease = None;
                     report_stopped_worker(&reporter, &root, &proof)?;
                 }
@@ -1258,6 +1275,9 @@ impl PodmanConnection for SlurmContainerRuntime {
                     stderr: "private container failed; captured output suppressed".into(),
                 }
             }
+            ContainerRuntimeError::Invalid(message) if message.contains("remote_stop_unconfirmed") => {
+                invalid("remote_stop_unconfirmed: private container execution failed; diagnostics suppressed")
+            }
             _ => invalid("private container execution failed; diagnostics suppressed"),
         })
     }
@@ -1300,41 +1320,54 @@ async fn reconcile_cancel(
     journal: PathBuf,
     lease: TaskLease,
 ) -> std::result::Result<(), String> {
-    let _ = transport.cancel(&lease).await;
+    let cancellation = transport.cancel(&lease).await;
     let proof = stop_proof(&ssh, &lease.lease_id).await;
-    let confirmed = proof
-        .as_ref()
-        .is_ok_and(|proof| proof["full_subtree_terminal"] == true);
-    if let Ok(raw) = std::fs::read(&journal) {
-        if let Ok(mut state) = serde_json::from_slice::<Value>(&raw) {
-            if !state["job_id"].is_null() && state["job_id"] != lease.lease_id {
-                return Err(format!(
-                    "remote_stop_unconfirmed: journal does not match Slurm job {}",
-                    lease.lease_id
-                ));
-            }
-            state["job_id"] = json!(lease.lease_id);
-            state["state"] = json!("STOP_UNKNOWN");
-            if let Ok(proof) = proof {
-                if confirmed {
-                    state["state"] = json!("CANCELLED_STOPPED");
-                }
-                state["stop_proof"] = proof;
-            }
-            if let Err(error) = record(&journal, &state) {
-                return Err(format!(
-                    "remote_stop_unconfirmed: cannot record stop state for {}: {error}",
-                    lease.lease_id
-                ));
-            }
+    let confirmed = cancellation.is_ok()
+        && proof
+            .as_ref()
+            .is_ok_and(|proof| proof["full_subtree_terminal"] == true);
+    let raw = std::fs::read(&journal).map_err(|error| {
+        format!(
+            "remote_stop_unconfirmed: cannot read journal for {}: {error}",
+            lease.lease_id
+        )
+    })?;
+    let mut state = serde_json::from_slice::<Value>(&raw).map_err(|error| {
+        format!(
+            "remote_stop_unconfirmed: invalid journal for {}: {error}",
+            lease.lease_id
+        )
+    })?;
+    if !state["job_id"].is_null() && state["job_id"] != lease.lease_id {
+        return Err(format!(
+            "remote_stop_unconfirmed: journal does not match Slurm job {}",
+            lease.lease_id
+        ));
+    }
+    state["job_id"] = json!(lease.lease_id);
+    state["state"] = json!("STOP_UNKNOWN");
+    if let Ok(proof) = proof {
+        if confirmed {
+            state["state"] = json!("CANCELLED_STOPPED");
         }
+        state["stop_proof"] = proof;
+    }
+    if let Err(error) = record(&journal, &state) {
+        return Err(format!(
+            "remote_stop_unconfirmed: cannot record stop state for {}: {error}",
+            lease.lease_id
+        ));
     }
     if confirmed {
         Ok(())
     } else {
         Err(format!(
-            "remote_stop_unconfirmed: Slurm job {} has no terminal stop proof",
-            lease.lease_id
+            "remote_stop_unconfirmed: Slurm job {} has no verified cancellation and terminal stop proof{}",
+            lease.lease_id,
+            cancellation
+                .err()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default()
         ))
     }
 }

@@ -202,11 +202,11 @@ impl JobsTool {
             // caller-supplied replacements made reconstructed scripts look frozen.
             let supplied = serde_json::to_value(&input)?;
             for (field, value) in supplied.as_object().unwrap() {
-                if !value.is_null()
-                    && !matches!(field.as_str(), "action" | "cluster" | "submission_key")
-                    && !(input.action == "inspect"
-                        && matches!(field.as_str(), "offset" | "max_bytes"))
-                {
+                let permitted = value.is_null()
+                    || matches!(field.as_str(), "action" | "cluster" | "submission_key")
+                    || (input.action == "inspect"
+                        && matches!(field.as_str(), "offset" | "max_bytes"));
+                if !permitted {
                     return Err(ToolError::ValidationFailed {
                         message: format!(
                             "{} does not accept {field}; use only the original cluster and submission_key. Use inspect to read frozen evidence. No remote operation was attempted.",

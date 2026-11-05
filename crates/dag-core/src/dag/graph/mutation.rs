@@ -14,7 +14,7 @@ use super::{DAG, EdgeLabel, PortOutputs, Result};
 use crate::dag::error::DagError;
 use crate::dag::runtime::RuntimeStatus;
 use crate::dag::{DagNode, NodeId};
-use crate::value::{FileRef, NodeValue};
+use crate::value::FileRef;
 
 impl DAG {
     /// Register a node under `id`. Errors if the id is already taken.
@@ -448,90 +448,5 @@ impl DAG {
         self.statuses.insert(id.to_string(), RuntimeStatus::Success);
         self.errors.remove(id);
         Ok(())
-    }
-
-    /// Drop the recorded fingerprints of nodes whose cached file outputs no
-    /// longer match their recorded identity.
-    ///
-    /// Three-stage freshness per file: declared-immutable remotes are clean
-    /// outright; matching size + mtime is clean; a recorded `sha256:` hash is
-    /// re-computed and compared so a touched-but-unchanged file stays clean.
-    pub(super) async fn invalidate_stale_file_outputs(
-        &mut self,
-        storage: Option<&vfs::OpendalFileStorage>,
-        event_sink: Option<tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>>,
-    ) {
-        let mut stale = Vec::new();
-        for (id, outputs) in self.outputs.iter() {
-            let (tx, _rx) = tokio::sync::mpsc::channel(1);
-            let reporter = crate::dag::node_event::NodeReporter::new(id.clone(), tx)
-                .with_live_view(self.live_view.clone())
-                .with_external_sink(event_sink.clone());
-            let mut index = 0;
-            let mut changed = false;
-            for value in outputs.values() {
-                match value {
-                    NodeValue::File(file) => {
-                        index += 1;
-                        if crate::fingerprint::cached_file_changed_observed(
-                            file,
-                            storage,
-                            Some(&reporter),
-                            &format!("verifying_cache:{index}"),
-                        )
-                        .await
-                        {
-                            changed = true;
-                        }
-                    }
-                    NodeValue::FileSet(files) => {
-                        for file in files {
-                            index += 1;
-                            if crate::fingerprint::cached_file_changed_observed(
-                                file,
-                                storage,
-                                Some(&reporter),
-                                &format!("verifying_cache:{index}"),
-                            )
-                            .await
-                            {
-                                changed = true;
-                            }
-                        }
-                    }
-                    NodeValue::DataFrame(_) => {}
-                    NodeValue::Channel(_) => {}
-                    NodeValue::Structured(value) => {
-                        for file in value.artifacts() {
-                            index += 1;
-                            if crate::fingerprint::cached_file_changed_observed(
-                                file,
-                                storage,
-                                Some(&reporter),
-                                &format!("verifying_cache:{index}"),
-                            )
-                            .await
-                            {
-                                changed = true;
-                            }
-                        }
-                    }
-                }
-                if changed {
-                    break;
-                }
-            }
-            if changed {
-                stale.push(id.clone());
-            }
-        }
-
-        for id in stale {
-            // The cached outputs no longer match their recorded identity:
-            // drop the fingerprint so the node re-executes. Descendants
-            // re-evaluate through the identity chain — if this node
-            // reproduces identical outputs, they stay reused.
-            self.fingerprints.remove(&id);
-        }
     }
 }

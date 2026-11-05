@@ -35,7 +35,6 @@ async fn process_publication_outputs_have_verified_content_hashes() {
                     id: "publication-hash".into(),
                     kind: "process".into(),
                     logical_node: None,
-                    axis: None,
                     item_key: None,
                     item: None,
                     inputs: vec![],
@@ -281,7 +280,6 @@ fn submission(
             logical_node: Some("process".into()),
             kind: "noop".into(),
             spec: serde_json::json!({"mode": "remote"}),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![TaskInputBinding {

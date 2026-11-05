@@ -126,7 +126,6 @@ read_only_rootfs = true
             logical_node: None,
             kind: kind.into(),
             spec: values,
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![],

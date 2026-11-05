@@ -206,7 +206,6 @@ fn task(kind: &'static str, identity: &PluginIdentity, input: FileRef) -> TaskEx
                 kind: format!("hpc_probe/{kind}"),
                 spec: json!({}),
                 logical_node: None,
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![TaskInputBinding {

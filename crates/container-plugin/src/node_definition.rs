@@ -324,7 +324,7 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
     }
     let mut tuple_names = std::collections::BTreeSet::new();
     for input in &node.ports.inputs {
-        if (input.r#type == PortKind::Tuple) != !input.tuple.is_empty() {
+        if (input.r#type == PortKind::Tuple) == input.tuple.is_empty() {
             return Err(format!(
                 "node `{}` must declare tuple qualifiers exactly for tuple ports",
                 node.kind

@@ -445,6 +445,7 @@ impl TaskExecutor for RemoteTaskExecutor {
             Default::default()
         };
         let timeout = task_timeout(&dispatch.resources);
+        let mut submit_attempted = false;
         let submission_result = async {
             let mut uploaded_inputs = Vec::new();
             for (port, input) in dispatch.spec.inputs.iter().enumerate() {
@@ -474,6 +475,7 @@ impl TaskExecutor for RemoteTaskExecutor {
                 }
             }
 
+            submit_attempted = true;
             self.transport.submit(dispatch, uploaded_inputs).await
         }
         .await;
@@ -481,6 +483,8 @@ impl TaskExecutor for RemoteTaskExecutor {
         let lease = match submission_result {
             Ok(lease) => lease,
             Err(error) => {
+                let unknown =
+                    submit_attempted && self.transport.submission_failure_may_be_running(&error);
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -490,12 +494,22 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     127,
-                    "remote_submit_failed",
+                    if unknown {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "remote_submit_failed"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error,
+                    error: if unknown {
+                        DagError::Schedule(format!(
+                            "remote_stop_unconfirmed: submission may have started remote work: {error}"
+                        ))
+                    } else {
+                        error
+                    },
                     duration,
                     details,
                 };

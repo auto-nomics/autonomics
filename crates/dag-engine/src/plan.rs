@@ -257,16 +257,12 @@ pub fn build_plan(
                 if source_ids.contains(wire.from.as_str()) {
                     queue_like.push(wire.from.as_str());
                     items = Some(resolution.get(&wire.from).expect("resolved above").clone());
-                } else if let Some(upstream) = driving.get(wire.from.as_str()) {
-                    if let Some(upstream_items) = upstream {
-                        // Item-driven upstream: its items flow through.
-                        queue_like.push(wire.from.as_str());
-                        if items.is_none() {
-                            items = Some(upstream_items.clone());
-                        }
+                } else if let Some(Some(upstream_items)) = driving.get(wire.from.as_str()) {
+                    // Item-driven upstream: its items flow through.
+                    queue_like.push(wire.from.as_str());
+                    if items.is_none() {
+                        items = Some(upstream_items.clone());
                     }
-                    // A single-run upstream delivers one value: broadcast,
-                    // not driving.
                 }
             }
             if queue_like.len() > 1 {

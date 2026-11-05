@@ -374,13 +374,15 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
-      } else if (event.MessageInjected !== undefined) {
-        const injected = event.MessageInjected;
-        appendMessage(agent, makeItem("system", injected.text, undefined, normalizeOrigin(injected.origin)));
+        // Only user-authored prompts belong in the Ctrl+R history;
+        // MessageInjected items are non-user (delegate/background/harness).
         setPromptHistories((current) => {
           const history = current[agent] ?? [];
           return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };
         });
+      } else if (event.MessageInjected !== undefined) {
+        const injected = event.MessageInjected;
+        appendMessage(agent, makeItem("system", injected.text, undefined, normalizeOrigin(injected.origin)));
       } else if (event.PlanUpdate !== undefined) {
         setPlans((current) => ({ ...current, [agent]: event.PlanUpdate }));
       } else if (event.RetryableError !== undefined) {

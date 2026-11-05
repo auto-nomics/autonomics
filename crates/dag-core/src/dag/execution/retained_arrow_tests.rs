@@ -240,7 +240,6 @@ fn submission(frame: DataFrame) -> TaskSubmission {
             logical_node: None,
             kind: "core/sql".into(),
             spec: serde_json::json!({}),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![TaskInputBinding {
@@ -558,7 +557,6 @@ async fn remote_dataframe_completion_retains_the_artifact_instead_of_downloading
         logical_node: None,
         kind: "process".into(),
         spec: serde_json::json!({}),
-        axis: None,
         item_key: None,
         item: None,
         inputs: vec![],

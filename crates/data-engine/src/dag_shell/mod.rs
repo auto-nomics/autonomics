@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::dag::{DAG, LogicalGraph};
+use crate::dag::DAG;
 use crate::node_registry::registry::NodeRegistry;
 
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;

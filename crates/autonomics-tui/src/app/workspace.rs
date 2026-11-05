@@ -270,9 +270,7 @@ impl App {
         let outcome = self.state.agents_popup.handle_key(*key);
         // A settled search keystroke refreshes the server-side identity
         // page (dormant rows) — the local filter already applied.
-        if self.state.agents_popup.is_visible()
-            && query_before != self.state.agents_popup.query()
-        {
+        if self.state.agents_popup.is_visible() && query_before != self.state.agents_popup.query() {
             self.schedule_stored_agent_search();
         }
         match outcome {
@@ -342,7 +340,7 @@ impl App {
         self.fetch_stored_agents(&query);
         // Model column: fill the cache for live agents the popup covers.
         for live in self.state.live_agents.clone() {
-            if self.agent_model_cache.get(&live.name).is_none() {
+            if !self.agent_model_cache.contains_key(&live.name) {
                 self.refresh_agent_model_info(&live.name);
             }
         }

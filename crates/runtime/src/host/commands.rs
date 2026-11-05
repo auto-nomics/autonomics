@@ -389,7 +389,6 @@ impl RuntimeHost {
                 let live_records: Vec<_> = self
                     .ledger
                     .snapshots()
-                    .cloned()
                     .filter(|record| {
                         caller_path.as_deref().is_none_or(|value| {
                             record
@@ -403,6 +402,7 @@ impl RuntimeHost {
                                 .as_deref()
                                 .is_none_or(|value| record.status.as_str() == value)
                     })
+                    .cloned()
                     .collect();
                 let storage = self.infra.storage.clone();
                 agentik_core::supervise::spawn_safe_on(

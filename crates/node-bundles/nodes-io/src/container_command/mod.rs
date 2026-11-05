@@ -1355,7 +1355,6 @@ mod tests {
                 logical_node: None,
                 kind: "container_command".into(),
                 spec: serde_json::json!({}),
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],

@@ -409,6 +409,7 @@ impl FlowGraph {
     /// 2. wire endpoints exist (source or process); no self-wires; no
     ///    duplicate wires; ports are `None` (implicit single port) or valid;
     /// 3. the wire graph is acyclic;
+    ///
     /// Queue and value inputs may be combined; matching is performed at runtime.
     pub fn validate(&self) -> Result<(), Error> {
         let mut ids = BTreeSet::new();

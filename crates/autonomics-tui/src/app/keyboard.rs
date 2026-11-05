@@ -24,7 +24,7 @@ impl App {
 
                 if self.state.hpc_panel.visible && self.state.hpc_panel.edit_buffer.is_some() {
                     if let Some(buffer) = &mut self.state.hpc_panel.edit_buffer {
-                        buffer.push_str(&s);
+                        buffer.push_str(s);
                     }
                     return 0;
                 }

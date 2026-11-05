@@ -154,17 +154,19 @@ pub fn stream_sources_with_functions(
                         if let Err(error) = stream_file_pairs(
                             pattern.as_slice(),
                             storage.expect("checked storage"),
-                            GlobOptions {
-                                path_type,
-                                hidden,
-                                check_if_exists,
-                                glob,
-                                max_depth,
+                            FilePairOptions {
+                                glob: GlobOptions {
+                                    path_type,
+                                    hidden,
+                                    check_if_exists,
+                                    glob,
+                                    max_depth,
+                                },
+                                size,
+                                flat,
+                                grouping,
+                                evaluator: channel_function,
                             },
-                            size,
-                            flat,
-                            grouping,
-                            channel_function,
                             &tx,
                         )
                         .await
@@ -283,17 +285,28 @@ fn pair_prefix(path: &str, pattern: &str) -> Result<Option<String>, Error> {
     Ok(Some(prefix.to_string()))
 }
 
-async fn stream_file_pairs(
-    patterns: &[String],
-    storage: Arc<OpendalFileStorage>,
-    options: GlobOptions,
+struct FilePairOptions {
+    glob: GlobOptions,
     size: Option<i64>,
     flat: bool,
     grouping: Option<serde_json::Value>,
     evaluator: Option<crate::ChannelFunction>,
+}
+
+async fn stream_file_pairs(
+    patterns: &[String],
+    storage: Arc<OpendalFileStorage>,
+    options: FilePairOptions,
     output: &mpsc::Sender<Result<serde_json::Value, Error>>,
 ) -> Result<(), Error> {
     use dag_core::dag::execution::ChannelTransportValue as T;
+    let FilePairOptions {
+        glob: options,
+        size,
+        flat,
+        grouping,
+        evaluator,
+    } = options;
     let size = size.filter(|size| *size != 0).unwrap_or_else(|| {
         if patterns
             .iter()
@@ -611,8 +624,19 @@ pub async fn resolve_sources(
                 };
                 let (size, flat) = (*size, *flat);
                 let task = tokio::spawn(async move {
-                    stream_file_pairs(&patterns, storage, options, size, flat, None, None, &tx)
-                        .await
+                    stream_file_pairs(
+                        &patterns,
+                        storage,
+                        FilePairOptions {
+                            glob: options,
+                            size,
+                            flat,
+                            grouping: None,
+                            evaluator: None,
+                        },
+                        &tx,
+                    )
+                    .await
                 });
                 let mut values = Vec::new();
                 while let Some(value) = rx.recv().await {

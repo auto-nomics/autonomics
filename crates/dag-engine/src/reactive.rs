@@ -731,7 +731,7 @@ enum FunctionResult {
     },
     Dedup {
         key: NodeValue,
-        value: NodeValue,
+        value: Box<NodeValue>,
         distinct: bool,
     },
     FlatMap(serde_json::Value),
@@ -1844,7 +1844,7 @@ impl FlowScheduler {
                         let name = process.id.clone();
                         let distinct = operator == "distinct";
                         function_tasks.spawn_blocking(move || {
-                            let result = evaluator(&function, Some(&value)).map(|key| FunctionResult::Dedup { key, value, distinct });
+                            let result = evaluator(&function, Some(&value)).map(|key| FunctionResult::Dedup { key, value: Box::new(value), distinct });
                             (name, result)
                         });
                         continue;
@@ -2670,7 +2670,6 @@ impl FlowScheduler {
                         logical_node: Some(process.id.clone()),
                         kind: process.kind.clone(),
                         spec,
-                        axis: None,
                         item_key: Some(key.clone()),
                         item,
                         inputs: bindings,
@@ -2714,12 +2713,12 @@ impl FlowScheduler {
                         let result = std::panic::AssertUnwindSafe(executor.run(execution))
                             .catch_unwind().await.unwrap_or_else(|_| JobResult::Failed {
                                 id: id.as_str().into(),
-                                error: dag_core::dag::DagError::Schedule("task executor panicked".into()),
+                                error: dag_core::dag::DagError::Schedule(if executor.requires_cancel_join() { "remote_stop_unconfirmed: task executor panicked" } else { "task executor panicked" }.into()),
                                 duration: Duration::ZERO, details: None,
                             });
                         drop(local_tx);
                         let emitted = bridge.await.unwrap_or(true);
-                        if matches!(result, JobResult::Failed { .. })
+                        if matches!(&result, JobResult::Failed { error, .. } if !error.to_string().contains("remote_stop_unconfirmed"))
                             && strategy.mode == ErrorMode::Retry && attempts <= strategy.max_retries
                             && !task_cancel.is_cancelled() {
                             if emitted {
@@ -2815,7 +2814,7 @@ impl FlowScheduler {
                             } else {
                                 unique_state.entry(name.clone()).or_default().insert(key)
                             };
-                            function_pending.push_back((name, 0, emit.then_some(value), false));
+                            function_pending.push_back((name, 0, emit.then_some(*value), false));
                         },
                         FunctionResult::First(value) => {
                             let stop = value.is_some();
@@ -2876,7 +2875,7 @@ impl FlowScheduler {
                             if let (Some(fingerprint), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut()) {
                                 cache.invalidate(&process, Some(fingerprint));
                             }
-                            let ignored = mode == ErrorMode::Ignore;
+                            let ignored = mode == ErrorMode::Ignore && !error.to_string().contains("remote_stop_unconfirmed");
                             if !ignored { failed = true; token.cancel(); }
                             (RuntimeStatus::Failed, BTreeMap::new(), Some(error.to_string()), duration, ignored)
                         }

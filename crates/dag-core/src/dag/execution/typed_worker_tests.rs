@@ -271,7 +271,6 @@ fn task(payload: &str) -> TaskSpec {
         logical_node: None,
         kind: "core/worker_echo".into(),
         spec: serde_json::json!({"type":payload}),
-        axis: None,
         item_key: None,
         item: None,
         inputs: vec![TaskInputBinding {

@@ -376,13 +376,35 @@ impl FlowScheduler {
             }
         }
 
+        // The plan-based API also has to wait for remote cancellation: its
+        // dispatched tasks are detached, but each sends one terminal result.
+        let mut unconfirmed_stops = BTreeMap::new();
+        if run_cancel.is_cancelled() && run_executor.requires_cancel_join() {
+            while in_flight > 0 {
+                let Some(result) = result_rx.recv().await else {
+                    break;
+                };
+                in_flight -= 1;
+                if let JobResult::Failed { id, error, .. } = result {
+                    let error = error.to_string();
+                    if error.contains("remote_stop_unconfirmed") {
+                        unconfirmed_stops.insert(InstanceId(id), error);
+                    }
+                }
+            }
+        }
+
         // Compose the terminal report from statuses so instances that never
         // dispatched (skipped by cascade, cancelled by abort) are present.
         // After an abort, everything not yet terminal reads as cancelled.
         if run_cancel.is_cancelled() {
             for (id, status) in statuses.iter_mut() {
                 if matches!(status, RuntimeStatus::Pending | RuntimeStatus::Running) {
-                    *status = RuntimeStatus::Cancelled;
+                    *status = if unconfirmed_stops.contains_key(id) {
+                        RuntimeStatus::Failed
+                    } else {
+                        RuntimeStatus::Cancelled
+                    };
                     fatal.insert(id.clone());
                 }
             }
@@ -410,6 +432,9 @@ impl FlowScheduler {
                 elapsed_ms: 0,
             });
             record.status = *status;
+            if let Some(error) = unconfirmed_stops.remove(id) {
+                record.error = Some(error);
+            }
         }
 
         // A run is ok when nothing fatal happened: every instance either
@@ -495,7 +520,11 @@ impl FlowScheduler {
                         .unwrap_or_else(|| "instance panicked".into());
                     JobResult::Failed {
                         id: task_id,
-                        error: DagError::Schedule(message),
+                        error: DagError::Schedule(if executor.requires_cancel_join() {
+                            format!("remote_stop_unconfirmed: task executor panicked: {message}")
+                        } else {
+                            message
+                        }),
                         duration: std::time::Duration::ZERO,
                         details: None,
                     }
@@ -640,7 +669,6 @@ impl FlowScheduler {
                 logical_node: Some(process_name),
                 kind,
                 spec: instance.rendered_spec.clone(),
-                axis: None,
                 item_key: instance.item_key.clone(),
                 item: instance.item.clone(),
                 inputs: bindings,
@@ -728,10 +756,14 @@ impl FlowScheduler {
                     .map(|process_plan| process_plan.error_strategy.clone())
                     .unwrap_or_default();
                 let made_attempts = *attempts.get(&id).unwrap_or(&1);
+                let stop_unconfirmed = error.to_string().contains("remote_stop_unconfirmed");
 
                 // Retry: re-dispatch until the budget is exhausted, then
                 // degrade to terminal failure handling.
-                if strategy.mode == ErrorMode::Retry && made_attempts <= strategy.max_retries {
+                if !stop_unconfirmed
+                    && strategy.mode == ErrorMode::Retry
+                    && made_attempts <= strategy.max_retries
+                {
                     statuses.insert(id.clone(), RuntimeStatus::Pending);
                     if strategy.retry_delay_ms == 0 {
                         ready.push_back(id);
@@ -747,7 +779,7 @@ impl FlowScheduler {
                     return;
                 }
 
-                let ignored = strategy.mode == ErrorMode::Ignore;
+                let ignored = !stop_unconfirmed && strategy.mode == ErrorMode::Ignore;
                 statuses.insert(id.clone(), RuntimeStatus::Failed);
                 records.insert(
                     id.clone(),
@@ -2827,6 +2859,65 @@ mod tests {
         started: Arc<tokio::sync::Notify>,
     }
 
+    struct UnconfirmedRemoteStop(Arc<std::sync::atomic::AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl TaskExecutor for UnconfirmedRemoteStop {
+        fn name(&self) -> &'static str {
+            "unconfirmed-remote-stop"
+        }
+        async fn run(&self, execution: TaskExecution) -> JobResult {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            JobResult::Failed {
+                id: execution.submission.spec.id,
+                error: DagError::Schedule("remote_stop_unconfirmed: synthetic lease".into()),
+                duration: std::time::Duration::ZERO,
+                details: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_remote_stop_is_never_retried_or_ignored() {
+        for strategy in [
+            crate::model::ErrorStrategy::retry(2, 0),
+            crate::model::ErrorStrategy::ignore(),
+        ] {
+            for reactive in [false, true] {
+                let mut process = Process::new("worker", "echo", serde_json::json!({}));
+                process.error_strategy = strategy.clone();
+                let graph = FlowGraphBuilder::default()
+                    .source(Source::items("s", vec![serde_json::json!("a")]))
+                    .process(process)
+                    .wire(Wire::direct("s", 0, "worker", 0))
+                    .build()
+                    .unwrap();
+                let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let scheduler = FlowScheduler::new(
+                    Arc::new(UnconfirmedRemoteStop(attempts.clone())),
+                    Arc::new(EchoNode::build),
+                    engine_ctx(),
+                );
+                let report = if reactive {
+                    scheduler
+                        .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+                        .await
+                        .unwrap()
+                } else {
+                    let plan = build_plan(&graph, &resolved(&graph)).unwrap();
+                    scheduler
+                        .run(&plan, &FlowRunConfig::default(), None, None)
+                        .await
+                        .unwrap()
+                };
+                assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+                assert!(!report.ok);
+                assert_eq!(report.processes["worker"].ignored, 0);
+                assert_eq!(report.processes["worker"].failed, 1);
+            }
+        }
+    }
+
     #[async_trait::async_trait]
     impl TaskExecutor for DelayedRemoteCancellation {
         fn name(&self) -> &'static str {
@@ -2874,6 +2965,49 @@ mod tests {
                     &FlowRunConfig::default(),
                     Some(run_token),
                 )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        token.cancel();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.processes["worker"].failed, 1);
+        assert!(
+            report.instances[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("remote_stop_unconfirmed")
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_cancellation_waits_for_remote_stop_and_reports_uncertainty() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("a")]))
+            .process(Process::new("worker", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "worker", 0))
+            .build()
+            .unwrap();
+        let plan = build_plan(&graph, &resolved(&graph)).unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let scheduler = FlowScheduler::new(
+            Arc::new(DelayedRemoteCancellation {
+                started: started.clone(),
+            }),
+            Arc::new(EchoNode::build),
+            engine_ctx(),
+        );
+        let token = CancellationToken::new();
+        let run_token = token.clone();
+        let run = tokio::spawn(async move {
+            scheduler
+                .run(&plan, &FlowRunConfig::default(), None, Some(run_token))
                 .await
         });
         tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())

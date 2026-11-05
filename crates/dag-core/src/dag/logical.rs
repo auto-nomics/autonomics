@@ -1,9 +1,4 @@
-//! Logical workflow graph and its expansion into physical jobs.
-//!
-//! The logical layer describes *what* the workflow contains; the physical
-//! layer describes *which jobs* must run. Expansion currently supports static
-//! scatter cardinality, axis propagation, broadcasting singleton values, and
-//! gathering scattered jobs back into one job.
+//! Legacy logical workflow descriptions retained for historical manifests.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -12,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use super::channel::{ChannelNode, ChannelOperator, validate_branches};
 use super::error::DagError;
-use super::NodeId;
 
 pub type Result<T> = std::result::Result<T, DagError>;
 
@@ -41,14 +35,6 @@ pub enum LogicalNodeDefinition {
     },
     Gather,
     Channel(ChannelOperator),
-}
-
-/// Serializable payload retained by a dynamic fanout coordinator.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DynamicFanoutSpec {
-    pub kind: String,
-    pub spec: serde_json::Value,
-    pub axis: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -204,9 +190,7 @@ impl LogicalGraph {
             }
         }
         if visited != self.nodes.len() {
-            return Err(DagError::Schedule(
-                "logical graph contains a cycle".into(),
-            ));
+            return Err(DagError::Schedule("logical graph contains a cycle".into()));
         }
 
         for node in &self.nodes {
@@ -302,52 +286,6 @@ impl LogicalGraph {
     // (`dag-engine`) own cardinality now. The types above remain because
     // persisted manifests deserialize into them and the scheduler still
     // reports provenance from `physical_jobs`.
-}
-
-pub(crate) fn item_key(item: &serde_json::Value, index: usize) -> Result<String> {
-    let raw = match item {
-        serde_json::Value::String(value) => Some(value.clone()),
-        serde_json::Value::Object(fields) => fields
-            .get("key")
-            .and_then(|value| value.as_str())
-            .map(str::to_string),
-        _ => None,
-    };
-    let raw = raw.unwrap_or_else(|| format!("item-{index:06}"));
-    let sanitized = raw
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let mut key = if sanitized.is_empty() {
-        format!("item-{index:06}")
-    } else {
-        sanitized
-    };
-    if key.len() > 64 {
-        key.truncate(48);
-        key.push_str(&format!("-{index:06}"));
-    }
-    Ok(key)
-}
-
-pub(crate) fn physical_id(
-    logical_id: &str,
-    axis: &Option<String>,
-    item_key: &Option<String>,
-) -> NodeId {
-    match item_key {
-        Some(item_key) => match axis {
-            Some(axis) => format!("{logical_id}#{axis}={item_key}"),
-            None => format!("{logical_id}#{item_key}"),
-        },
-        None => format!("{logical_id}#0"),
-    }
 }
 
 pub(crate) fn render_spec(

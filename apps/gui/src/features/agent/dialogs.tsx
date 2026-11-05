@@ -151,7 +151,10 @@ export function AgentDialogs(props: AgentDialogsProps) {
 
   const filteredHistory = useMemo(() => {
     const needle = historyQuery.trim().toLowerCase();
-    return [...props.promptHistory].reverse().filter((item) => !needle || item.toLowerCase().includes(needle));
+    return [...props.promptHistory]
+      .filter((item): item is string => typeof item === "string")
+      .reverse()
+      .filter((item) => !needle || item.toLowerCase().includes(needle));
   }, [historyQuery, props.promptHistory]);
 
   return (
