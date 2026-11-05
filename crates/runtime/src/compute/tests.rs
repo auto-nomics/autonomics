@@ -1308,6 +1308,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     let valid = f.registry.readiness(&ReadinessRequest { images:vec![image], ..Default::default() }, &[]).unwrap();
     assert_eq!(valid["state"], "CONFIGURATION_READY");
     assert_eq!(valid["end_to_end_acceptance"], "NOT_VERIFIED");
+    assert_eq!(f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap()["state"], "NOT_VERIFIED");
     assert_eq!(valid["remote_sif_bytes_verified"], false);
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_capture(&f.registry, "readiness", calls.clone(), false);
@@ -1346,7 +1347,11 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
     let report = f.registry.readiness(&ReadinessRequest { nodes:vec!["candidate/run".into()], ..Default::default() }, &[]).unwrap();
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["blockers"][0]["code"], "NODE_NOT_REGISTERED");
-    assert_eq!(f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap()["state"], "NOT_VERIFIED");
+    let empty = f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap();
+    assert_eq!(empty["state"], "NOT_VERIFIED");
+    assert_eq!(empty["requested_images"], 0);
+    assert_eq!(empty["requested_identities"], 0);
+    assert!(!empty["verification_gaps"].as_array().unwrap().is_empty());
     assert_eq!(f.registry.catalog().revision, before);
     assert!(f.registry.status().unwrap().runs.is_empty());
 }

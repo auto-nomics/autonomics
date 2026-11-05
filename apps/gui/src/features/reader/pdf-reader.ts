@@ -2055,12 +2055,10 @@ class ZoteroStylePdfReader {
   private toolbarRevealCleanup: (() => void) | null = null;
 
   /** Auto-hide the header toolbar on fine-pointer devices. The toolbar
-   *  overlays the content top without reserving layout space and stays
-   *  revealed while the pointer is active anywhere over the reader; it
-   *  fades only after the pointer goes idle (or leaves) — moving it again
-   *  pops the toolbar back. The box never moves (opacity-only) and stays
-   *  interactive while faded, so hit targets are stable for automation.
-   *  hover:none devices keep it permanently visible. */
+   *  overlays the content top without reserving layout space and is revealed
+   *  only when the pointer enters its top activation zone. The box never
+   *  moves (opacity-only) and stays interactive while faded, so hit targets
+   *  are stable for automation. hover:none devices keep it visible. */
   private setupToolbarAutoHide() {
     if (!window.matchMedia("(hover: hover)").matches) return;
     const toolbar = this.root.querySelector(".reader-toolbar");
@@ -2079,12 +2077,22 @@ class ZoteroStylePdfReader {
         }
       }, delay);
     };
-    const onMove = () => {
+    const isNearTop = (event: PointerEvent) => {
+      const rootBounds = this.root.getBoundingClientRect();
+      const toolbarHeight = toolbar.getBoundingClientRect().height;
+      // Include a small approach band below the toolbar so it can be opened
+      // deliberately without requiring pixel-perfect pointer placement.
+      const activationHeight = Math.max(64, toolbarHeight + 20);
+      const localY = event.clientY - rootBounds.top;
+      return localY >= 0 && localY <= activationHeight;
+    };
+    const onPointerActivity = (event: PointerEvent) => {
+      if (!isNearTop(event)) return;
       reveal();
       scheduleHide(600);
     };
-    this.root.addEventListener("pointermove", onMove, { passive: true });
-    this.root.addEventListener("pointerdown", onMove, { passive: true });
+    this.root.addEventListener("pointermove", onPointerActivity, { passive: true });
+    this.root.addEventListener("pointerdown", onPointerActivity, { passive: true });
     const onLeave = () => scheduleHide(260);
     this.root.addEventListener("pointerleave", onLeave);
     reveal();
@@ -2092,8 +2100,8 @@ class ZoteroStylePdfReader {
     this.toolbarRevealCleanup = () => {
       if (idleTimer !== null) window.clearTimeout(idleTimer);
       toolbar.classList.remove("reader-toolbar-revealed");
-      this.root.removeEventListener("pointermove", onMove);
-      this.root.removeEventListener("pointerdown", onMove);
+      this.root.removeEventListener("pointermove", onPointerActivity);
+      this.root.removeEventListener("pointerdown", onPointerActivity);
       this.root.removeEventListener("pointerleave", onLeave);
     };
   }

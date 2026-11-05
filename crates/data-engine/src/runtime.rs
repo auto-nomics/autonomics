@@ -310,7 +310,7 @@ impl AgentEngineActor {
                     };
                     let started_at = chrono::Utc::now().to_rfc3339();
                     let trigger = Some(format!("agent:{agent_id}"));
-                    let result = AssertUnwindSafe(
+                    let mut result = AssertUnwindSafe(
                         runner.run(&flow, &options, Some(cancel_token.clone())),
                     )
                     .catch_unwind()
@@ -336,9 +336,14 @@ impl AgentEngineActor {
                     // Audit completed runs and top-level execution errors.
                     // The hash identifies the flow but does not reconstruct it.
                     if let Some(history) = &history {
+                        let run_id = uuid::Uuid::new_v4().to_string();
+                        if let Ok(report) = &mut result {
+                            report.run_id = Some(run_id.clone());
+                            report.audit_persisted = true;
+                        }
                         let report = result.as_ref().ok();
                         let record = dag_core::dag::history::RunRecord {
-                            id: uuid::Uuid::new_v4().to_string(),
+                            id: run_id,
                             ref_name: "flow".into(),
                             snapshot_id: None,
                             manifest_hash: flow_content_hash(&flow),
@@ -351,9 +356,14 @@ impl AgentEngineActor {
                             message: Some("stage-model flow run".into()),
                             engine_version: dag_core::engine_version().to_string(),
                             source_revision: dag_core::source_revision().to_string(),
-                            run_report_json: report.and_then(|report| serde_json::to_string(report).ok()),
+                            run_report_json: report.and_then(|report| {
+                                let mut json = serde_json::to_value(report).ok()?;
+                                json["flow"] = serde_json::to_value(&flow).ok()?;
+                                serde_json::to_string(&json).ok()
+                            }),
                         };
                         if let Err(error) = history.record_run(&record).await {
+                            if let Ok(report) = &mut result { report.audit_persisted = false; }
                             tracing::warn!(%error, "flow run record could not be persisted");
                         }
                     }
@@ -1889,6 +1899,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(initial.processes["file"].reused, 0);
+        assert!(initial.audit_persisted);
+        assert!(initial.run_id.is_some());
+        for length in [8, 12] {
+            let prefix = &initial.run_id.as_deref().unwrap()[..length];
+            let found = first.dag_runs_log(None, 20, Some(prefix.into())).await.unwrap();
+            assert_eq!(found[0].id, *initial.run_id.as_ref().unwrap());
+        }
+        let audit = dag_core::dag::history::DagHistory::open(&db).await.unwrap();
+        let record = audit.get_run(initial.run_id.as_deref().unwrap()).await.unwrap().unwrap();
+        let persisted: serde_json::Value = serde_json::from_str(record.run_report_json.as_deref().unwrap()).unwrap();
+        assert_eq!(persisted["nodes"][0]["logical_node"], "file");
+        assert_eq!(persisted["flow"], serde_json::to_value(&graph).unwrap());
+        assert_eq!(persisted["nodes"][0]["output_files"][0]["path"], file.to_string_lossy().as_ref());
+        assert!(persisted["nodes"][0]["execution"]["workspace"].is_string());
         assert_eq!(manager.evict_idle_actors().await, 1);
         let recreated = manager.client_for_agent("resume-agent-a");
         let restored_view = recreated.get_flow_view().await.unwrap();

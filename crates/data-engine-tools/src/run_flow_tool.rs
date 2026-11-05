@@ -21,7 +21,7 @@ const MAX_ERROR_CHARS: usize = 300;
                   incrementally and process instances start when their input tuples arrive. \
                   Queue inputs pair in arrival order, value inputs broadcast, and collect \
                   waits for upstream closure. \
-                  Returns process summaries and failed instance details."
+                  Returns process summaries, audit persistence status, artifact path previews and failed instance details."
 )]
 pub struct RunFlowInput {
     /// The authored flow graph (processes + wires arrays). Omit to run the
@@ -90,7 +90,7 @@ fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
                 "ignored": record.ignored,
                 "attempts": record.attempts,
                 "error": record.error.as_deref().map(|text| {
-                    &text[..text.len().min(MAX_ERROR_CHARS)]
+                    text.chars().take(MAX_ERROR_CHARS).collect::<String>()
                 }),
             })
         })
@@ -98,11 +98,21 @@ fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
 
     serde_json::json!({
         "ok": report.ok,
+        "run_id": report.run_id,
+        "audit_persisted": report.audit_persisted,
         "cancelled": report.cancelled,
+        "artifacts": report.instances.iter().filter(|record| !record.outputs.is_empty() || record.execution.is_some()).take(10).map(|record| {
+            let audit = record.audit_json();
+            let files = audit["output_files"].as_array().expect("audit file list");
+            serde_json::json!({"instance": record.id.as_str(), "output_files": files.iter().take(10).collect::<Vec<_>>(), "output_files_total": files.len(), "workspace": record.execution.as_ref().and_then(|execution| execution.workspace.as_deref())})
+        }).collect::<Vec<_>>(),
+        "artifact_details_truncated": report.instances.iter().filter(|record| !record.outputs.is_empty() || record.execution.is_some()).count() > 10,
+        "artifact_details": "dag_runs_log view=node_detail exposes persisted output_files, port_assignments and execution.workspace",
+        "reuse_policy": "Only validated file outputs are reusable; unsupported or unverifiable inputs/outputs re-execute. History persistence is required across restarts, not within a session.",
         "processes": processes,
         "failed_instances": failed,
         "failed_instances_truncated":
-            report.instances.len().saturating_sub(MAX_LISTED_FAILURES),
+            report.instances.iter().filter(|record| matches!(record.status, data_engine::dag::RuntimeStatus::Failed | data_engine::dag::RuntimeStatus::Skipped | data_engine::dag::RuntimeStatus::Cancelled)).count().saturating_sub(MAX_LISTED_FAILURES),
         "execution_binding": report.execution_binding,
     })
 }
@@ -184,6 +194,11 @@ mod tests {
         assert_eq!(json["processes"]["batch"]["succeeded"], 3, "{json}");
         assert_eq!(json["processes"]["batch"]["total"], 3, "{json}");
         assert!(json["failed_instances"].as_array().unwrap().is_empty());
+        assert_eq!(json["audit_persisted"], false);
+        assert!(json["run_id"].is_null());
+        assert_eq!(json["artifacts"].as_array().unwrap().len(), 3);
+        assert!(json["artifacts"][0]["output_files"][0]["path"].is_string());
+        assert!(json["artifacts"][0]["workspace"].is_string());
     }
 
     #[tokio::test]

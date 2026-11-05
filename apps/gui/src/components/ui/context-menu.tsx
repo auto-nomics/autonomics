@@ -15,6 +15,7 @@ function ContextMenuTrigger({ className, ...props }: ContextMenuPrimitive.Trigge
       data-slot="context-menu-trigger"
       className={cn(className)}
       {...props}
+      data-context-menu="custom"
     />
   )
 }

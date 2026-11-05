@@ -1209,6 +1209,7 @@ fn event_can_deliver(flow: &Dataflow<NodeValue>, event: &NodeEvent) -> bool {
 }
 
 // Return no cache identity when a value cannot be validated safely.
+#[cfg(test)]
 fn input_fingerprint(
     process: &crate::model::Process,
     inputs: &[NodeInput],
@@ -1216,7 +1217,31 @@ fn input_fingerprint(
     dependency_state: Option<serde_json::Value>,
     has_vfs: bool,
 ) -> Option<String> {
-    fn file(f: &FileRef) -> Option<serde_json::Value> {
+    input_fingerprint_with_files(
+        process,
+        inputs,
+        node,
+        dependency_state,
+        has_vfs,
+        &BTreeMap::new(),
+    )
+}
+
+fn input_fingerprint_with_files(
+    process: &crate::model::Process,
+    inputs: &[NodeInput],
+    node: &dyn dag_core::node::DagNode,
+    dependency_state: Option<serde_json::Value>,
+    has_vfs: bool,
+    identities: &BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    fn file(
+        f: &FileRef,
+        identities: &BTreeMap<String, serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        if let Some(identity) = identities.get(&f.path) {
+            return Some(identity.clone());
+        }
         if f.path.starts_with("vfs://")
             || f.fingerprint.as_ref().is_some_and(|fp| fp.immutable_remote)
         {
@@ -1255,7 +1280,10 @@ fn input_fingerprint(
                         format: None,
                         fingerprint: None,
                     };
-                    Some(serde_json::json!(["file", file(&reference)?]))
+                    Some(serde_json::json!([
+                        "file",
+                        file(&reference, &BTreeMap::new())?
+                    ]))
                 } else {
                     Some(serde_json::json!(["string", value]))
                 }
@@ -1280,10 +1308,10 @@ fn input_fingerprint(
     for input in inputs {
         let value = match &input.data {
             NodeValue::File(f) => {
-                if has_vfs && f.fingerprint.is_none() && !f.path.starts_with("file://") {
+                if has_vfs && !identities.contains_key(&f.path) && !f.path.starts_with("file://") {
                     return None;
                 }
-                serde_json::json!(["file", file(f)?])
+                serde_json::json!(["file", file(f, identities)?])
             }
             NodeValue::FileSet(files) => {
                 serde_json::json!([
@@ -1291,11 +1319,13 @@ fn input_fingerprint(
                     files
                         .iter()
                         .map(|f| {
-                            if has_vfs && f.fingerprint.is_none() && !f.path.starts_with("file://")
+                            if has_vfs
+                                && !identities.contains_key(&f.path)
+                                && !f.path.starts_with("file://")
                             {
                                 None
                             } else {
-                                file(f)
+                                file(f, identities)
                             }
                         })
                         .collect::<Option<Vec<_>>>()?
@@ -1317,17 +1347,24 @@ fn input_fingerprint(
     let paths = node.referenced_file_paths();
     // A bare path may resolve through the VFS before the local filesystem.
     // Its current metadata cannot safely be inferred from a host stat.
-    if has_vfs && paths.iter().any(|path| !path.starts_with("file://")) {
+    if has_vfs
+        && paths
+            .iter()
+            .any(|path| !path.starts_with("file://") && !identities.contains_key(path))
+    {
         return None;
     }
     let referenced = paths
         .into_iter()
         .map(|path| {
-            file(&FileRef {
-                path,
-                format: None,
-                fingerprint: None,
-            })
+            file(
+                &FileRef {
+                    path,
+                    format: None,
+                    fingerprint: None,
+                },
+                identities,
+            )
         })
         .collect::<Option<Vec<_>>>()?;
     let bytes = serde_json::to_vec(&serde_json::json!([
@@ -1346,23 +1383,19 @@ fn input_fingerprint(
 }
 
 fn cacheable_outputs(outputs: &dag_core::dag::graph::PortOutputs) -> bool {
+    fn reusable(file: &FileRef) -> bool {
+        file.fingerprint.as_ref().is_some_and(|fp| {
+            if file.path.starts_with("vfs://") {
+                fp.content_hash.is_some()
+            } else {
+                !fp.immutable_remote
+            }
+        })
+    }
     !outputs.is_empty()
         && outputs.iter().all(|(_, value)| match value {
-            NodeValue::File(f) => {
-                f.fingerprint
-                    .as_ref()
-                    .is_some_and(|fp| !fp.immutable_remote)
-                    && !f.path.starts_with("vfs://")
-            }
-            NodeValue::FileSet(files) => {
-                !files.is_empty()
-                    && files.iter().all(|f| {
-                        f.fingerprint
-                            .as_ref()
-                            .is_some_and(|fp| !fp.immutable_remote)
-                            && !f.path.starts_with("vfs://")
-                    })
-            }
+            NodeValue::File(file) => reusable(file),
+            NodeValue::FileSet(files) => !files.is_empty() && files.iter().all(reusable),
             _ => false,
         })
 }
@@ -2571,12 +2604,17 @@ impl FlowScheduler {
                         .map_err(|e| {
                             Error::Execution(format!("cache dependency for `{}`: {e}", process.id))
                         })?;
-                    input_fingerprint(
+                    let identities = tokio::select! {
+                        _ = token.cancelled() => BTreeMap::new(),
+                        identities = validated_vfs_inputs(&inputs, node.as_ref(), self.engine_ctx.opendal.as_deref()) => identities,
+                    };
+                    input_fingerprint_with_files(
                         process,
                         &inputs,
                         node.as_ref(),
                         dependency,
                         self.engine_ctx.opendal.is_some(),
+                        &identities,
                     )
                 } else {
                     None
@@ -2584,9 +2622,10 @@ impl FlowScheduler {
                 if cfg.resume {
                     if let (Some(key), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut()) {
                         if let Some(cached) = cache.lookup(&process.id, Some(key)) {
-                            if cached.still_valid(self.engine_ctx.opendal.as_deref()).await {
+                            if cached.still_valid(self.engine_ctx.opendal.as_deref()).await
+                                && match cached.to_port_outputs() { Some(outputs) => tokio::select! { _ = token.cancelled() => false, valid = outputs_unchanged_with_storage(&outputs, self.engine_ctx.opendal.as_deref()) => valid }, None => false } {
                                 if let Some(outputs) =
-                                    cached.to_port_outputs().filter(outputs_unchanged)
+                                    cached.to_port_outputs()
                                 {
                                     for (port, value) in outputs.iter() {
                                         flow.emit(&process.id, *port, value.clone())
@@ -2594,6 +2633,7 @@ impl FlowScheduler {
                                     }
                                     flow.finish(&process.id).map_err(Error::Execution)?;
                                     records.push(InstanceRecord {
+                                        execution: None,
                                         id,
                                         process: process.id.clone(),
                                         item_key: Some(key.clone()),
@@ -2850,10 +2890,19 @@ impl FlowScheduler {
                 joined = tasks.join_next(), if !tasks.is_empty() => {
                     let (id, process, key, fingerprint, mode, attempts, result) = joined.ok_or_else(|| Error::Execution("missing task".into()))?.map_err(|e| Error::Execution(e.to_string()))?;
                     running.remove(&id);
+                    let execution = match &result {
+                        JobResult::Success { details, .. } | JobResult::Failed { details, .. } => details.clone(),
+                    };
                     let (status, outputs, error, duration, ignored) = match result {
-                        JobResult::Success { outputs, duration, .. } => {
+                        JobResult::Success { mut outputs, duration, .. } => {
                             let has_stream = streamed.iter().any(|(task, _)| task == id.as_str());
-                            if !has_stream && cacheable_outputs(&outputs) {
+                            if !has_stream && fingerprint.is_some() {
+                                tokio::select! {
+                                    _ = token.cancelled() => {},
+                                    _ = fingerprint_cache_outputs(&mut outputs, self.engine_ctx.opendal.as_deref()) => {},
+                                }
+                            }
+                            if !has_stream && !token.is_cancelled() && cacheable_outputs(&outputs) {
                                 if let (Some(fingerprint), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut()) {
                                     cache.record(&process, Some(fingerprint), fingerprint.clone(), &outputs);
                                 }
@@ -2881,7 +2930,7 @@ impl FlowScheduler {
                         }
                     };
                     flow.finish(&process).map_err(Error::Execution)?;
-                    records.push(InstanceRecord { id, process, item_key: Some(key), status, reused: false, ignored, attempts, outputs, error, elapsed_ms: duration.as_millis() as u64 });
+                    records.push(InstanceRecord { execution, id, process, item_key: Some(key), status, reused: false, ignored, attempts, outputs, error, elapsed_ms: duration.as_millis() as u64 });
                 }
             }
         }
@@ -2934,6 +2983,7 @@ impl FlowScheduler {
                     RuntimeStatus::Cancelled
                 };
                 records.push(InstanceRecord {
+                    execution: None,
                     id,
                     process,
                     item_key: Some(key),
@@ -2959,6 +3009,7 @@ impl FlowScheduler {
         if token.is_cancelled() {
             for (id, (process, key, started, attempts)) in running {
                 records.push(InstanceRecord {
+                    execution: None,
                     id,
                     process,
                     item_key: Some(key),
@@ -2988,6 +3039,8 @@ impl FlowScheduler {
             p.summed_elapsed_ms += r.elapsed_ms;
         }
         Ok(FlowRunReport {
+            run_id: None,
+            audit_persisted: false,
             ok: !failed && !token.is_cancelled(),
             cancelled: caller_token.is_cancelled(),
             execution_binding: executor.execution_binding(),
@@ -2995,6 +3048,140 @@ impl FlowScheduler {
             instances: records,
         })
     }
+}
+
+async fn validated_vfs_inputs(
+    inputs: &[NodeInput],
+    node: &dyn dag_core::node::DagNode,
+    storage: Option<&vfs::OpendalFileStorage>,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut identities = BTreeMap::new();
+    let Some(storage) = storage else {
+        return identities;
+    };
+    let mut paths = node.referenced_file_paths();
+    for input in inputs {
+        match &input.data {
+            NodeValue::File(file) => paths.push(file.path.clone()),
+            NodeValue::FileSet(files) => paths.extend(files.iter().map(|file| file.path.clone())),
+            _ => {}
+        }
+    }
+    for path in paths.into_iter().collect::<std::collections::BTreeSet<_>>() {
+        if path.starts_with("file://") {
+            continue;
+        }
+        if let Ok((size, hash)) = storage
+            .sha256(path.strip_prefix("vfs://").unwrap_or(&path))
+            .await
+        {
+            identities.insert(path.clone(), serde_json::json!([path, size, hash]));
+        }
+    }
+    identities
+}
+
+async fn fingerprint_cache_outputs(
+    outputs: &mut dag_core::dag::graph::PortOutputs,
+    storage: Option<&vfs::OpendalFileStorage>,
+) {
+    let ports = outputs
+        .iter()
+        .map(|(port, value)| (*port, value.clone()))
+        .collect::<Vec<_>>();
+    for (port, mut value) in ports {
+        let files: Vec<&mut FileRef> = match &mut value {
+            NodeValue::File(file) => vec![file],
+            NodeValue::FileSet(files) => files.iter_mut().collect(),
+            _ => continue,
+        };
+        for file in files {
+            if let Some(path) = file.path.strip_prefix("vfs://")
+                && let Some(storage) = storage
+                && let Ok((size, hash)) = storage.sha256(path).await
+            {
+                let immutable_remote = file
+                    .fingerprint
+                    .as_ref()
+                    .is_some_and(|fp| fp.immutable_remote);
+                file.fingerprint = Some(dag_core::value::FileFingerprint {
+                    size,
+                    mtime_ns: 0,
+                    content_hash: Some(format!("sha256:{hash}")),
+                    immutable_remote,
+                });
+            }
+            if !file.path.starts_with("vfs://") {
+                let path = file.path.strip_prefix("file://").unwrap_or(&file.path);
+                if let Some(expected) = file.fingerprint.as_mut()
+                    && !expected.immutable_remote
+                    && expected.size <= 64 * 1024
+                    && let Some((size, hash)) =
+                        dag_core::fingerprint::file_sha256(&file.path, None).await
+                    && size == expected.size
+                    && let Some(after) = dag_core::value::FileFingerprint::from_path(path)
+                    && after.size == expected.size
+                    && after.mtime_ns == expected.mtime_ns
+                {
+                    expected.content_hash = Some(format!("sha256:{hash}"));
+                }
+            }
+        }
+        outputs.insert(port, value);
+    }
+}
+
+async fn outputs_unchanged_with_storage(
+    outputs: &dag_core::dag::graph::PortOutputs,
+    storage: Option<&vfs::OpendalFileStorage>,
+) -> bool {
+    for (_, value) in outputs.iter() {
+        let files = match value {
+            NodeValue::File(file) => vec![file],
+            NodeValue::FileSet(files) => files.iter().collect(),
+            _ => return false,
+        };
+        for file in files {
+            if let Some(path) = file.path.strip_prefix("vfs://") {
+                let (Some(storage), Some(expected)) = (storage, file.fingerprint.as_ref()) else {
+                    return false;
+                };
+                match storage.sha256(path).await {
+                    Ok((size, hash))
+                        if size == expected.size
+                            && expected.content_hash.as_deref()
+                                == Some(format!("sha256:{hash}").as_str()) => {}
+                    _ => return false,
+                }
+            } else {
+                // Legacy small-file cache entries lack content proof: refresh once.
+                if file
+                    .fingerprint
+                    .as_ref()
+                    .is_some_and(|fp| fp.size <= 64 * 1024 && fp.content_hash.is_none())
+                {
+                    return false;
+                }
+                let mut single = dag_core::dag::graph::PortOutputs::new();
+                single.insert(0, NodeValue::File(file.clone()));
+                if !outputs_unchanged(&single) {
+                    return false;
+                }
+                if let Some(expected) = file
+                    .fingerprint
+                    .as_ref()
+                    .and_then(|fp| fp.content_hash.as_deref())
+                {
+                    match dag_core::fingerprint::file_sha256(&file.path, None).await {
+                        Some((_, hash))
+                            if expected == format!("sha256:{hash}") || expected == hash => {}
+                        _ => return false,
+                    }
+                }
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -3544,5 +3731,73 @@ mod tests {
         }];
         assert!(input_fingerprint(&process, &inputs, &node, None, true).is_none());
         assert!(input_fingerprint(&process, &inputs, &node, None, false).is_some());
+    }
+}
+
+#[cfg(test)]
+mod vfs_cache_regression_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn small_local_outputs_hash_content_even_when_size_and_mtime_are_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("result.txt");
+        std::fs::write(&path, b"first").unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let mut outputs = dag_core::dag::graph::PortOutputs::new();
+        outputs.insert(0, NodeValue::File(FileRef::local(&path, None).unwrap()));
+        assert!(!outputs_unchanged_with_storage(&outputs, None).await);
+        fingerprint_cache_outputs(&mut outputs, None).await;
+        let NodeValue::File(file) = outputs.get(&0).unwrap() else {
+            panic!("file output");
+        };
+        assert!(
+            file.fingerprint
+                .as_ref()
+                .unwrap()
+                .content_hash
+                .as_ref()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(outputs_unchanged_with_storage(&outputs, None).await);
+        std::fs::write(&path, b"other").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        assert!(outputs_unchanged(&outputs));
+        assert!(!outputs_unchanged_with_storage(&outputs, None).await);
+    }
+
+    #[tokio::test]
+    async fn changed_or_deleted_virtual_output_never_reuses() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        storage
+            .write_bytes("data/result.txt", b"first".to_vec())
+            .await
+            .unwrap();
+        let mut outputs = dag_core::dag::graph::PortOutputs::new();
+        outputs.insert(
+            0,
+            NodeValue::File(FileRef {
+                path: "vfs://data/result.txt".into(),
+                format: None,
+                fingerprint: None,
+            }),
+        );
+        fingerprint_cache_outputs(&mut outputs, Some(&storage)).await;
+        assert!(cacheable_outputs(&outputs));
+        assert!(outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+        assert!(!outputs_unchanged_with_storage(&outputs, None).await);
+        storage
+            .write_bytes("data/result.txt", b"other".to_vec())
+            .await
+            .unwrap();
+        assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+        storage.delete_object("data/result.txt").await.unwrap();
+        assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
     }
 }

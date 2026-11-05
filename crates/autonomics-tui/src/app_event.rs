@@ -145,13 +145,6 @@ pub(crate) enum AppEvent {
     /// A live agent seen in a `/state` snapshot that the UI doesn't know
     /// yet (reconcile after lag / reconnect).
     AgentUpserted(gateway::AgentInfo),
-    /// Re-activate a passivated identity and deliver a queued message
-    /// once registration lands. The record came from storage lookup; the
-    /// config travels with it so no second fetch is needed.
-    ReactivateAgent {
-        record: agentik_core::storage::AgentRecord,
-        text: String,
-    },
     /// Surface a background-task failure as a toast (async tasks cannot
     /// touch `state.toasts` directly).
     ShowError {

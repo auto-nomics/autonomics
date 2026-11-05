@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { DisplaySettings } from "./agent";
 import { statusLabel } from "./agent";
+import { TokenUsageBadge } from "./token-usage";
 
 function planStepIcon(status: unknown) {
   const value = String(status ?? "");
@@ -67,15 +68,9 @@ export function AgentInspector(props: AgentInspectorProps) {
             {usage && (
               <div className="flex justify-between gap-2">
                 <span className="shrink-0">Tokens</span>
-                <span className="truncate">{usage.input} in / {usage.output} out</span>
+                <TokenUsageBadge usage={usage} className="shrink-0" />
               </div>
             )}
-            {usage?.cache ? (
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Cache</span>
-                <span className="truncate">{usage.cache}</span>
-              </div>
-            ) : null}
           </div>
         </Card>
       </section>

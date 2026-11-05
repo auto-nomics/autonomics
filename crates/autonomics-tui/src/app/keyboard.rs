@@ -128,12 +128,7 @@ impl App {
 
     /// Apply a batched scroll delta to the agent tab.
     pub(super) fn apply_scroll_delta(&mut self, delta: i32) {
-        let ts = self.state.active_tab_state_mut();
-        if delta > 0 {
-            ts.scroll_offset = ts.scroll_offset.saturating_add(delta as usize);
-        } else {
-            ts.scroll_offset = ts.scroll_offset.saturating_sub((-delta) as usize);
-        }
+        self.state.active_tab_state_mut().scroll_by(delta);
     }
 
     /// Feed one key to the pending leader prefix. Returns `true` when the

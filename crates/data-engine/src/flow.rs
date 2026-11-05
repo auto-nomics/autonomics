@@ -298,6 +298,51 @@ mod tests {
         assert_eq!(report.processes["read"].succeeded, 2);
     }
     #[tokio::test]
+    async fn vfs_resume_reuses_without_history_and_invalidates_same_size_changes() {
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        storage
+            .write_bytes("data/a.fastq", b"first".to_vec())
+            .await
+            .unwrap();
+        let engine = DataEngine::builder()
+            .register_opendal_fs(storage.clone())
+            .unwrap()
+            .build();
+        let graph = FlowGraph::builder()
+            .source(Source::glob("reads", "data/*.fastq"))
+            .process(Process::new(
+                "read",
+                "file_reference",
+                serde_json::json!({"path":"{{item}}"}),
+            ))
+            .wire(Wire::direct("reads", 0, "read", 0))
+            .build()
+            .unwrap();
+        let runner = engine.flow_runner();
+        let options = FlowOptions {
+            resume: Some(true),
+            ..Default::default()
+        };
+        let first = runner.run(&graph, &options, None).await.unwrap();
+        assert_eq!(first.processes["read"].reused, 0);
+        let json = serde_json::to_value(&first).unwrap();
+        assert_eq!(
+            json["nodes"][0]["output_files"][0]["path"],
+            "vfs://data/a.fastq"
+        );
+        let second = runner.run(&graph, &options, None).await.unwrap();
+        assert_eq!(second.processes["read"].reused, 1);
+        storage
+            .write_bytes("data/a.fastq", b"other".to_vec())
+            .await
+            .unwrap();
+        let changed = runner.run(&graph, &options, None).await.unwrap();
+        assert_eq!(changed.processes["read"].reused, 0);
+        let reused = runner.run(&graph, &options, None).await.unwrap();
+        assert_eq!(reused.processes["read"].reused, 1);
+    }
+
+    #[tokio::test]
     async fn reactive_resume_reuses_file_outputs_through_runner() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("input.txt");

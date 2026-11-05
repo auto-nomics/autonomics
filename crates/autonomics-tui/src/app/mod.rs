@@ -80,6 +80,7 @@ pub struct App {
     /// `Some(group keys)` while waiting, with an empty slice at the root.
     /// See [`leader`](self::leader).
     leader_pending: Option<Vec<char>>,
+    split_leaf: Option<(String, String, bool)>,
     dirty: bool,
 }
 
@@ -188,6 +189,7 @@ impl App {
             should_quit: false,
             cancel_requested_at: None,
             leader_pending: None,
+            split_leaf: None,
             dirty: true,
         };
 

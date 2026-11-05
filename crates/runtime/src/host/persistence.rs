@@ -228,6 +228,7 @@ mod agent_persistence_tests {
         let HostEvent::AgentRegistered {
             path: registered_path,
             info,
+            ..
         } = registration
         else {
             panic!("expected agent registration event");

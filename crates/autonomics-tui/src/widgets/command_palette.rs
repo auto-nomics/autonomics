@@ -25,6 +25,10 @@ use crate::xai_textarea::{TextArea, TextAreaState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandAction {
+    SplitVertical,
+    SplitHorizontal,
+    FocusOtherSplit,
+    CloseSplit,
     Quit,
     /// Toggle the command palette itself (the `<leader><leader>` slot).
     OpenCommandPalette,

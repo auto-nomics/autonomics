@@ -171,11 +171,24 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                         .sum();
                 }
             } else {
-                let rendered = super::chat_widget::render::render_line_with_settings(
+                let mut rendered = super::chat_widget::render::render_line_with_settings(
                     msg,
                     chat_inner_area,
                     self.display,
                 );
+                if matches!(msg, crate::state::ChatLine::User(_) | crate::state::ChatLine::Assistant { .. })
+                    && let Some(Some(time)) = ts.message_times.get(i)
+                    && let Some(date) = chrono::DateTime::from_timestamp_millis(*time)
+                {
+                    let stamp = date.with_timezone(&chrono::Local).format("%H:%M").to_string();
+                    let index = rendered.iter().position(|line| !line.spans.is_empty()).unwrap_or(0);
+                    if let Some(line) = rendered.get_mut(index) {
+                        line.spans.push(ratatui::text::Span::styled(
+                            format!("  {stamp}"),
+                            ratatui::style::Style::default().fg(crate::theme::current().text_faint),
+                        ));
+                    }
+                }
                 ts.cached_msg_lines[i] = rendered;
                 ts.cached_msg_row_counts[i] = ts.cached_msg_lines[i]
                     .iter()

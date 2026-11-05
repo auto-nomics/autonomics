@@ -105,6 +105,73 @@ fn try_pretty_json(text: &str) -> String {
     }
 }
 
+fn tool_input_summary(input: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(input) {
+        Ok(serde_json::Value::Object(values)) => format!(
+            "{} argument{}",
+            values.len(),
+            if values.len() == 1 { "" } else { "s" }
+        ),
+        Ok(serde_json::Value::Array(values)) => format!(
+            "{} item{}",
+            values.len(),
+            if values.len() == 1 { "" } else { "s" }
+        ),
+        Ok(_) => "value".to_string(),
+        Err(_) if input.trim().is_empty() => "no arguments".to_string(),
+        Err(_) => "raw input".to_string(),
+    }
+}
+
+fn tool_output_summary(content: &str) -> String {
+    let lines = content.lines().count().max(1);
+    format!(
+        "{lines} line{} · {} chars",
+        if lines == 1 { "" } else { "s" },
+        content.chars().count()
+    )
+}
+
+/// Render a tool's payload as a visually grouped transcript block. The
+/// border stays deliberately quiet so tool traffic is scannable between
+/// assistant turns, while JSON and command output retain their indentation.
+fn render_tool_payload(
+    text: &str,
+    area: Rect,
+    border_style: Style,
+    body_style: Style,
+) -> Vec<Line<'static>> {
+    let content_width = area.width.saturating_sub(4).max(1);
+    let display = try_pretty_json(text);
+    let mut lines = Vec::new();
+    if display.is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("│  ", border_style),
+            Span::styled("(no output)", body_style.add_modifier(Modifier::DIM)),
+        ]));
+        return lines;
+    }
+    for logical_line in display.lines() {
+        for row in wrap_spans(
+            &[Span::styled(logical_line.to_string(), body_style)],
+            content_width,
+        ) {
+            let mut spans = vec![Span::styled("│  ", border_style)];
+            spans.extend(
+                row.spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content, span.style)),
+            );
+            lines.push(Line::from(spans));
+        }
+    }
+    lines
+}
+
+fn tool_frame_footer(style: Style) -> Line<'static> {
+    Line::from(Span::styled("╰─", style.add_modifier(Modifier::DIM)))
+}
+
 /// Format a turn's token usage as a compact dim line, e.g. "↑1.2k ↓340 cache:800".
 fn format_turn_usage(u: TurnUsage) -> String {
     let mut parts = Vec::new();
@@ -156,47 +223,65 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             lines
         }
         ChatLine::ToolCall { name, input } => {
-            let mut lines = vec![Line::from(Span::styled(
-                format!("🔧 Calling: {}", name),
-                Style::default().fg(theme.warning),
-            ))];
-            if !input.is_empty() {
-                let display = try_pretty_json(input);
-                for line in display.lines() {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {}", line),
-                        Style::default().fg(theme.text_faint),
-                    )));
-                }
-            }
+            let accent = Style::default().fg(theme.warning);
+            let mut lines = vec![Line::from(vec![
+                Span::styled("╭─ ", accent),
+                Span::styled("● ", accent.add_modifier(Modifier::BOLD)),
+                Span::styled("Tool ", accent.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    name.clone(),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!(" · {}", tool_input_summary(input)),
+                    Style::default().fg(theme.text_faint),
+                ),
+            ])];
+            lines.extend(render_tool_payload(
+                input,
+                area,
+                accent,
+                Style::default().fg(theme.text_faint),
+            ));
+            lines.push(tool_frame_footer(accent));
             lines
         }
         ChatLine::ToolBackground { seq, name } => {
-            vec![Line::from(Span::styled(
-                format!("⏳ Calling: {name} (running in background, task #{seq})"),
-                Style::default()
-                    .fg(theme.warning)
-                    .add_modifier(Modifier::DIM),
-            ))]
+            let accent = Style::default().fg(theme.warning);
+            vec![
+                Line::from(vec![
+                    Span::styled("╭─ ", accent),
+                    Span::styled("◌ ", accent.add_modifier(Modifier::BOLD)),
+                    Span::styled("Tool ", accent.add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        name.clone(),
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" · running in background · task #{seq}"),
+                        Style::default().fg(theme.text_faint),
+                    ),
+                ]),
+                tool_frame_footer(accent),
+            ]
         }
         ChatLine::ToolResult { ok, content } => {
             let icon = if *ok { "✓" } else { "✗" };
             let color = if *ok { theme.success } else { theme.error };
-            let display = try_pretty_json(content);
-            let mut lines = Vec::new();
-            let mut first = true;
-            for line in display.lines() {
-                let prefix = if first {
-                    format!("{icon} ")
-                } else {
-                    "  ".to_string()
-                };
-                lines.push(Line::from(Span::styled(
-                    format!("{prefix}{line}"),
-                    Style::default().fg(color),
-                )));
-                first = false;
-            }
+            let accent = Style::default().fg(color);
+            let label = if *ok { "Result" } else { "Tool failed" };
+            let body_style = Style::default().fg(if *ok { theme.text_faint } else { theme.error });
+            let mut lines = vec![Line::from(vec![
+                Span::styled("╭─ ", accent),
+                Span::styled(format!("{icon} "), accent.add_modifier(Modifier::BOLD)),
+                Span::styled(label, accent.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" · {}", tool_output_summary(content)),
+                    Style::default().fg(theme.text_faint),
+                ),
+            ])];
+            lines.extend(render_tool_payload(content, area, accent, body_style));
+            lines.push(tool_frame_footer(accent));
             lines
         }
         ChatLine::Error(text) => {
@@ -328,18 +413,8 @@ pub(crate) fn render_line_with_settings(
             ))]
         }
         ChatLine::ToolCall { name, input } if display.collapse_tool_calls => {
-            let preview: String = if input.is_empty() {
-                String::new()
-            } else {
-                let p: String = input.chars().take(40).collect();
-                if input.len() > 40 {
-                    format!("({p}…)")
-                } else {
-                    format!("({p})")
-                }
-            };
             vec![Line::from(Span::styled(
-                format!(" 🔧 {name}{preview} [collapsed]"),
+                format!(" ● Tool {name} · {} · collapsed", tool_input_summary(input)),
                 Style::default().fg(theme.warning),
             ))]
         }
@@ -349,9 +424,11 @@ pub(crate) fn render_line_with_settings(
             } else {
                 ("✗", theme.error)
             };
-            let n = content.chars().count();
             vec![Line::from(Span::styled(
-                format!(" {icon} [result — {n} chars, collapsed]"),
+                format!(
+                    " {icon} Result · {} · collapsed",
+                    tool_output_summary(content)
+                ),
                 Style::default().fg(color),
             ))]
         }

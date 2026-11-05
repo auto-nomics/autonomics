@@ -69,7 +69,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     .await;
     let GatewayFrame::Sequenced {
         seq: registered_seq,
-        inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { info, .. }),
+        inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { info, cause, .. }),
     } = registered
     else {
         unreachable!()
@@ -78,6 +78,8 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     // field to render the agent's model without extra round-trips.
     assert_eq!(info.model.as_deref(), Some("mock-model"));
     assert_eq!(info.context_length, Some(8192));
+    // A gateway spawn is operator-initiated: focus may steal.
+    assert_eq!(cause, gateway::proto::ActivationCauseView::UserInitiated);
 
     // Deliver a user message; the scripted mock model completes the turn.
     client.deliver_message(&path, "What is 1+1?").await.unwrap();
@@ -233,6 +235,101 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rename_storage_agent_evicts_the_live_instance() {
+    let gateway_daemon = start_mock_gateway("ok").await;
+    let client = gateway_daemon.client();
+    let state = client.state().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    EventPump::spawn(client.clone(), state.last_seq, tx);
+
+    let path = client
+        .spawn_agent("worker", "/root", "researcher", None, None)
+        .await
+        .unwrap();
+    wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { .. }),
+                ..
+            }
+        )
+    })
+    .await;
+
+    let record = client
+        .list_storage_agents()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.name == path)
+        .expect("spawned identity persisted");
+
+    // Rename the identity: storage flips to the new path and the live
+    // instance running under the old path is evicted (unregistered) —
+    // otherwise it would keep emitting under a path no record claims and
+    // a later re-activation could double-activate the identity.
+    let new_path = "/root/renamed".to_string();
+    client.rename_agent_record(record.id, &new_path).await.unwrap();
+
+    // Eviction of the old-path instance carries cause `evicted`…
+    let unregistered = wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::AgentUnregistered {
+                    path: p,
+                    cause: gateway::proto::RemovalCauseView::Evicted,
+                }),
+                ..
+            } if *p == path
+        )
+    })
+    .await;
+    assert!(matches!(unregistered, GatewayFrame::Sequenced { .. }));
+    // …followed by the identity event every connected frontend uses to
+    // rebind its views (not just the client that issued the PATCH).
+    let renamed = wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::IdentityRenamed {
+                    agent_id,
+                    new_path: np,
+                    ..
+                }),
+                ..
+            } if *agent_id == record.id && *np == new_path
+        )
+    })
+    .await;
+    assert!(matches!(renamed, GatewayFrame::Sequenced { .. }));
+
+    let gone = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let snapshot = client.state().await.unwrap();
+            if !snapshot.agents.iter().any(|a| a.path == path) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "/state no longer lists the old path");
+
+    let records = client.list_storage_agents().await.unwrap();
+    assert!(
+        records
+            .iter()
+            .any(|record| record.name == new_path),
+        "storage lists the renamed path"
+    );
+
+    client.shutdown_gateway().await.unwrap();
+    gateway_daemon.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bearer_token_gates_the_api() {
     let gateway_daemon = start_mock_gateway("x").await;
 
@@ -350,7 +447,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 35);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 37);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -364,6 +461,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/agents/{name}/model",
         "/api/v1/agents/{name}/config",
         "/api/v1/agents/{name}/dag",
+        "/api/v1/agents/{name}/flow",
         "/api/v1/agents/{name}/context",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/plan",
@@ -379,6 +477,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/model-config/providers/{name}/catalog",
         "/api/v1/settings",
         "/api/v1/plugins",
+        "/api/v1/plugin-projects",
         "/api/v1/plugins/environments",
         "/api/v1/plugins/environments/dockerhub",
         "/api/v1/plugins/environments/dockerhub/tag",

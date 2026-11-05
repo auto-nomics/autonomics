@@ -1015,7 +1015,16 @@ impl DataEngine {
             .history
             .as_ref()
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
-        history.get_run(run_id).await.map_err(Error::Dag)
+        let run_id = run_id.trim();
+        if let Some(run) = history.get_run(run_id).await.map_err(Error::Dag)? { return Ok(Some(run)); }
+        if run_id.is_empty() { return Ok(None); }
+        let candidates = history.list_runs(1000, None).await.map_err(Error::Dag)?;
+        let mut matches = candidates.into_iter().filter(|run| run.id.starts_with(run_id));
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(Error::Custom(format!("ambiguous run id prefix `{run_id}`; use a longer prefix or the full id")));
+        }
+        Ok(first)
     }
 
     /// Export one recorded run as deliverable provenance evidence — a W3C
@@ -2426,4 +2435,24 @@ mod tests {
             "expected deserialization error, got {err}"
         );
     }
+    #[tokio::test]
+    async fn run_lookup_accepts_unique_prefix_and_rejects_ambiguous_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db")).await.unwrap();
+        for id in ["aaaabbbb-1111-2222-3333-444444444444", "aaaabbbb-2222-2222-3333-444444444444"] {
+            history.record_run(&crate::dag::RunRecord {
+                id: id.into(), ref_name: "flow".into(), snapshot_id: None,
+                manifest_hash: "definition".into(), trigger: None,
+                started_at: "2026-11-06T00:00:00Z".into(), finished_at: "2026-11-06T00:00:01Z".into(),
+                ok: true, cancelled: false, error: None, message: None,
+                engine_version: "test".into(), source_revision: "test".into(), run_report_json: None,
+            }).await.unwrap();
+        }
+        let engine = DataEngine::builder().build().with_history(history);
+        assert!(engine.get_run("aaaabbbb").await.unwrap_err().to_string().contains("ambiguous"));
+        assert_eq!(engine.get_run("aaaabbbb-111").await.unwrap().unwrap().id, "aaaabbbb-1111-2222-3333-444444444444");
+        assert!(engine.get_run("unknown").await.unwrap().is_none());
+        assert!(engine.get_run("aaaabbbb-2222-2222-3333-444444444444").await.unwrap().is_some());
+    }
+
 }

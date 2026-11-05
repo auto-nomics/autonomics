@@ -35,6 +35,17 @@ pub struct AgentSnapshot {
     pub session_id: Option<Uuid>,
 }
 
+/// A persisted transcript message and its storage timestamp.
+///
+/// This is storage metadata only. It deliberately does not alter `Message`
+/// serialization, so model-provider and gateway wire payloads stay unchanged.
+#[derive(Debug, Clone)]
+pub struct TimestampedMessage {
+    pub message: Message,
+    /// Unix epoch milliseconds.
+    pub created_at: i64,
+}
+
 /// One row in the `agents` registry table.
 ///
 /// `config_json` holds the serialized per-agent configuration
@@ -271,6 +282,12 @@ pub trait AgentStorage: Send + Sync {
     /// from the active model context by compaction.
     async fn get_transcript_messages(&self, session_id: Uuid)
     -> Result<Vec<Message>, StorageError>;
+    /// Read transcript rows with their durable creation times. This is an
+    /// internal storage API and is intentionally absent from the wire layer.
+    async fn get_timestamped_transcript_messages(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<TimestampedMessage>, StorageError>;
     async fn get_messages_since(
         &self,
         agent_id: Uuid,

@@ -308,11 +308,16 @@ impl ToolFunction for DagRunsLogTool {
 
         let mut out = String::new();
         for (run, short_id) in runs.iter().take(displayed_count).zip(&display_ids) {
-            let snapshot = run
+            let definition = run
                 .snapshot_id
                 .as_ref()
-                .map(|id| &id[..12.min(id.len())])
-                .unwrap_or("(none)");
+                .map(|id| format!("snapshot={}", &id[..12.min(id.len())]))
+                .unwrap_or_else(|| {
+                    format!(
+                        "manifest={}",
+                        &run.manifest_hash[..12.min(run.manifest_hash.len())]
+                    )
+                });
             let trigger = run.trigger.as_deref().unwrap_or("(unattributed)");
             let outcome = if run.cancelled {
                 "cancelled"
@@ -322,7 +327,7 @@ impl ToolFunction for DagRunsLogTool {
                 "failed"
             };
             out.push_str(&format!(
-                "run_id={short_id}  snapshot={snapshot}  {outcome}  {}  trigger={trigger}\n",
+                "run_id={short_id}  {definition}  {outcome}  {}  trigger={trigger}\n",
                 &run.started_at[..19.min(run.started_at.len())],
             ));
         }
@@ -457,6 +462,16 @@ fn run_summary_view(
         "trigger": run.trigger.clone().map(Value::String).unwrap_or(Value::Null),
     });
     if let Some(report) = report {
+        for field in [
+            "run_id",
+            "audit_persisted",
+            "processes",
+            "execution_binding",
+        ] {
+            if let Some(value) = report.get(field) {
+                obj[field] = value.clone();
+            }
+        }
         if let Some(summary) = report.get("resource") {
             obj["resource"] = summary.clone();
         }

@@ -93,6 +93,7 @@ pub struct InstanceRecord {
     /// Failure text (`DagError` display) for `Failed` instances.
     pub error: Option<String>,
     pub elapsed_ms: u64,
+    pub execution: Option<dag_core::dag::runtime::NodeRunDetails>,
 }
 
 /// Per-process rollup — the default observation granularity (Nextflow's
@@ -114,6 +115,8 @@ pub struct ProcessRunSummary {
 /// Grouped run outcome.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FlowRunReport {
+    pub run_id: Option<String>,
+    pub audit_persisted: bool,
     /// True when every materialized instance ended `Success` (vacuously true
     /// for a run whose fanouts resolved to zero items — matching the "no
     /// data, nothing to do" posture).
@@ -124,7 +127,7 @@ pub struct FlowRunReport {
     /// the executor provides one.
     pub execution_binding: Option<serde_json::Value>,
     pub processes: BTreeMap<ProcessName, ProcessRunSummary>,
-    #[serde(skip)]
+    #[serde(rename = "nodes", serialize_with = "serialize_instance_records")]
     pub instances: Vec<InstanceRecord>,
 }
 
@@ -415,6 +418,7 @@ impl FlowScheduler {
                 continue;
             }
             let record = records.entry(id.clone()).or_insert_with(|| InstanceRecord {
+                execution: None,
                 reused: false,
                 ignored: false,
                 attempts: 1,
@@ -445,6 +449,8 @@ impl FlowScheduler {
             .is_some_and(CancellationToken::is_cancelled);
         let ok = fatal.is_empty() && !cancelled;
         let mut report = FlowRunReport {
+            run_id: None,
+            audit_persisted: false,
             ok,
             cancelled,
             execution_binding: run_executor.execution_binding(),
@@ -699,6 +705,11 @@ impl FlowScheduler {
         requeue_tx: &mpsc::UnboundedSender<InstanceId>,
         delayed_retries: &mut usize,
     ) {
+        let evidence = match &result {
+            JobResult::Success { id, details, .. } | JobResult::Failed { id, details, .. } => {
+                (InstanceId::adopt(id.clone()), details.clone())
+            }
+        };
         match result {
             JobResult::Success {
                 id,
@@ -810,6 +821,9 @@ impl FlowScheduler {
                 }
             }
         }
+        if let Some(record) = records.get_mut(&evidence.0) {
+            record.execution = evidence.1;
+        }
     }
 }
 
@@ -846,6 +860,7 @@ fn record_for(
         })
         .unwrap_or_else(|| (id.parts().0.to_string(), id.parts().1.map(str::to_string)));
     InstanceRecord {
+        execution: None,
         id: id.clone(),
         process,
         item_key,
@@ -1020,6 +1035,51 @@ fn file_value(path: impl Into<String>) -> NodeValue {
         format: None,
         fingerprint: None,
     })
+}
+
+fn serialize_instance_records<S: serde::Serializer>(
+    records: &[InstanceRecord],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut sequence = serializer.serialize_seq(Some(records.len()))?;
+    for record in records {
+        sequence.serialize_element(&record.audit_json())?;
+    }
+    sequence.end()
+}
+
+impl InstanceRecord {
+    /// Durable metadata only: never collect Arrow data into an audit report.
+    pub fn audit_json(&self) -> serde_json::Value {
+        let mut files = Vec::new();
+        let mut ports = BTreeMap::new();
+        for (port, value) in &self.outputs {
+            match value {
+                NodeValue::File(file) => {
+                    files.push(file.clone());
+                    ports.insert(*port, file.clone());
+                }
+                NodeValue::FileSet(values) => files.extend(values.iter().cloned()),
+                _ => {}
+            }
+        }
+        if let Some(execution) = &self.execution {
+            for artifact in &execution.output_artifacts {
+                if !files.iter().any(|file| file.path == artifact.path) {
+                    files.push(artifact.clone());
+                }
+            }
+        }
+        serde_json::json!({
+            "id": self.id.as_str(), "logical_node": self.process, "process": self.process,
+            "item_key": self.item_key, "status": self.status,
+            "reused": self.reused, "ignored": self.ignored, "attempts": self.attempts,
+            "elapsed_ms": self.elapsed_ms, "output_files": files, "port_assignments": ports,
+            "error": self.error.as_ref().map(|message| serde_json::json!({"message":message})),
+            "execution": self.execution,
+        })
+    }
 }
 
 #[cfg(test)]

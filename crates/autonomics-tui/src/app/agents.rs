@@ -210,47 +210,6 @@ impl App {
         self.refresh_agent_model_info(name);
     }
 
-    /// Re-activate a passivated identity so a queued message can be
-    /// delivered. Looks up the stored record by exact path, then hands it
-    /// to the main loop as [`AppEvent::ReactivateAgent`], which re-spawns
-    /// the agent at its persisted path; the message rides in
-    /// `pending_outbound` until the `AgentRegistered` frame lands.
-    pub(super) fn reactivate_agent(&mut self, name: &str, text: String) {
-        if self.state.active_model_spec.is_none() {
-            self.state.toasts.error(
-                "Message not delivered",
-                Some("Configure a model before waking agents".into()),
-            );
-            return;
-        }
-        tracing::info!(agent = %name, "agent passivated — re-activating for delivery");
-        let client = self.client.clone();
-        let tx = self.app_event_tx.clone();
-        let query = name.to_string();
-        self.spawn_client_task("reactivate_agent", move || async move {
-            match client.search_storage_agents(&query, 100).await {
-                Ok(records) => {
-                    if let Some(record) = records.into_iter().find(|r| r.name == query) {
-                        tx.send(crate::app_event::AppEvent::ReactivateAgent { record, text });
-                    } else {
-                        tracing::error!(agent = %query, "no stored record — cannot re-activate");
-                        tx.send(crate::app_event::AppEvent::ShowError {
-                            title: "Message not delivered".into(),
-                            detail: Some(format!("no stored record for `{query}`")),
-                        });
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(agent = %query, error = %e, "stored record lookup failed");
-                    tx.send(crate::app_event::AppEvent::ShowError {
-                        title: "Message not delivered".into(),
-                        detail: Some(e.to_string()),
-                    });
-                }
-            }
-        });
-    }
-
     /// Switch the active leaf to the agent with this identity. Returns
     /// `false` when no open leaf matches (the agent was closed).
     pub(super) fn switch_active_agent(&mut self, agent_id: uuid::Uuid) -> bool {

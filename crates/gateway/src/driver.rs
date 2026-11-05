@@ -123,11 +123,13 @@ pub async fn run(
                             // now the daemon does it once for everyone.
                             host.control().list_contexts(path.as_str());
                         }
-                        runtime::HostEvent::AgentUnregistered { path } => {
+                        runtime::HostEvent::AgentUnregistered { path, .. } => {
                             contexts.remove_agent(path.as_str());
                         }
-                        runtime::HostEvent::AgentStatusChanged { .. } => {}
-                        runtime::HostEvent::AgentModelChanged { .. } => {}
+                        runtime::HostEvent::AgentStatusChanged { .. }
+                        | runtime::HostEvent::AgentModelChanged { .. }
+                        | runtime::HostEvent::IdentityRenamed { .. }
+                        | runtime::HostEvent::IdentityDeleted { .. } => {}
                     }
                     hub.publish(EventKind::Host(HostEventView::from(event)));
                 }

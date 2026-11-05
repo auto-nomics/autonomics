@@ -229,14 +229,16 @@ impl SharedInfra {
             open_vfs_and_storage(config, &rsi, &environments).await?;
         let base_containers = open_container_execution(config)?;
         let hpc_monitor = crate::hpc_monitor::MonitorHub::empty();
-        let compute = Some(crate::compute::ComputeRegistry::open(
-            config,
-            file_storage.clone(),
-            vfs.clone(),
-            &base_containers,
-            hpc_monitor.clone(),
-        )
-        .map_err(Error::Other)?);
+        let compute = Some(
+            crate::compute::ComputeRegistry::open(
+                config,
+                file_storage.clone(),
+                vfs.clone(),
+                &base_containers,
+                hpc_monitor.clone(),
+            )
+            .map_err(Error::Other)?,
+        );
         let container_execution = if let Some(registry) = &compute {
             let mut containers = (*base_containers).clone();
             containers.runtime = Arc::new(crate::compute::ContainerRouter {
@@ -428,7 +430,8 @@ impl SharedInfra {
         let mut agent = builder.build().await?;
         let agent_id = agent.id();
         let internal_tx = agent.internal_event_tx();
-        self.hpc_notifications.register(agent_id, internal_tx.clone());
+        self.hpc_notifications
+            .register(agent_id, internal_tx.clone());
         let model_handle = agent.model_handle().clone();
 
         // Wrap `agent.run()` in catch_unwind so a panic inside the agent
@@ -917,26 +920,9 @@ async fn build_engine_manager(
     // ── DAG history ──────────────────────────────────────────────
     if config.enable_dag_history {
         let history_db = config.dag_history_db.clone();
-        if let Some(parent) = history_db.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        engine = match DagHistory::open(&history_db).await {
-            Ok(history) => {
-                tracing::info!(
-                    path = %history_db.display(),
-                    "DAG history store opened"
-                );
-                engine.with_history(history)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %history_db.display(),
-                    error = %e,
-                    "failed to open DAG history store; history/ref tools disabled"
-                );
-                engine
-            }
-        };
+        let history = open_dag_history(&history_db).await?;
+        tracing::info!(path = %history_db.display(), "DAG history store opened");
+        engine = engine.with_history(history);
     }
 
     let engine_manager = Arc::new(DataEngineManager::new(engine));
@@ -948,6 +934,26 @@ async fn build_engine_manager(
     spawn_plugin_distiller(rsi, &config.plugin_rsi);
     tracing::info!("SharedInfra::open: DataEngineManager created");
     Ok(engine_manager)
+}
+
+async fn open_dag_history(history_db: &std::path::Path) -> Result<DagHistory> {
+    if let Some(parent) = history_db
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            Error::Other(format!(
+                "cannot create DAG history directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    DagHistory::open(history_db).await.map_err(|error| {
+        Error::Other(format!(
+            "cannot open required DAG history store {}: {error}",
+            history_db.display()
+        ))
+    })
 }
 
 /// Open the shared agent storage — the one connection later upcast to
@@ -1194,4 +1200,27 @@ pub(crate) fn slurm_settings(config: &RuntimeConfig) -> Result<dag_execution::Sl
         default_time: config.slurm.default_time.clone(),
         poll_interval: std::time::Duration::from_secs(config.slurm.poll_interval_secs),
     })
+}
+
+#[cfg(test)]
+mod history_open_tests {
+    use super::open_dag_history;
+
+    #[tokio::test]
+    async fn history_open_creates_parent_and_reports_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/history.db");
+        assert!(open_dag_history(&path).await.is_ok());
+        let blocked = directory.path().join("not-a-directory");
+        std::fs::write(&blocked, b"file").unwrap();
+        let error = open_dag_history(&blocked.join("history.db"))
+            .await
+            .err()
+            .expect("must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot create DAG history directory")
+        );
+    }
 }
