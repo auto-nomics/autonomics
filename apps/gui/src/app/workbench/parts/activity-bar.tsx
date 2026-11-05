@@ -5,7 +5,7 @@
  * behavior); clicking it again reveals it.
  */
 
-import { BookOpen, Bot, Camera, Compass, FolderCode, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
+import { BookOpen, Bot, Camera, Compass, FolderCode, FolderTree, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,7 @@ export function ActivityBar(props: {
   const bibActive = !collapsed && state.sidebar.container === "bibliography" && (activeWorkspace === "library" || activeWorkspace === null);
   const wikiActive = !collapsed && state.sidebar.container === "wiki";
   const agentsActive = !collapsed && state.sidebar.container === "agents";
+  const vfsActive = !collapsed && state.sidebar.container === "vfs";
   const pendingNotices = state.panel.unreadNotices > 0 && (!state.panel.visible || state.panel.tab !== "notices");
 
   return (
@@ -99,6 +100,13 @@ export function ActivityBar(props: {
           onClick={() => containerClick("wiki")}
         />
         <RailButton label="插件项目" title="插件项目" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-projects" })} />
+        <RailButton
+          label="VFS 文件"
+          title="VFS 文件浏览器（挂载 / 容器输出 / 数据）"
+          icon={FolderTree}
+          active={vfsActive}
+          onClick={() => containerClick("vfs")}
+        />
         <RailButton
           label="Agent"
           title="Agent 概览(对话即编辑器标签)"

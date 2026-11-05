@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -22,6 +22,7 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { ProjectEditor } from "@/features/projects/project-editor";
+import { VfsFileEditorBody } from "@/features/vfs";
 import { ConfigView, DagView, FlowView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
@@ -290,6 +291,19 @@ export function registerWorkbenchEditorKinds(): void {
     body: ProjectEditor,
     mount: "keep-alive",
     confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
+  });
+  registerEditorKind({
+    kind: "vfs-file",
+    title: (editor) => {
+      const path = String(editor.params.path ?? "");
+      return path.split("/").filter(Boolean).pop() || path || "文件";
+    },
+    name: (editor) => String(editor.params.path ?? ""),
+    icon: () => FileText,
+    body: VfsFileEditorBody,
+    // keep-alive: the loaded contents survive tab switches; editing with
+    // a dirty veto arrives with the write endpoints.
+    mount: "keep-alive",
   });
   registerEditorKind({
     kind: "config",
