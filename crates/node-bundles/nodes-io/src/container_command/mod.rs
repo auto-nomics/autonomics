@@ -142,9 +142,10 @@ pub struct ContainerCommandSpec {
     /// Files that must exist after a successful container run.
     pub outputs: Vec<ContainerCommandOutputSpec>,
     /// Optional explicit work directory under the workspace root. When
-    /// omitted, a persistent content-addressed work dir is derived from the
-    /// node identity (image, command/script, files, env, outputs, panels,
-    /// plugin identity, and input identities) and reused across re-runs.
+    /// omitted, each execution claims an unused work dir under the task
+    /// identity (image, command/script, files, env, outputs, panels, plugin
+    /// identity, and input identities). Cached results refer to their original
+    /// directory; new attempts never overwrite it.
     pub workdir: Option<String>,
     /// How inputs are materialized into the work dir. See [`StageInMode`].
     #[serde(default)]
@@ -1234,7 +1235,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hash_work_dir_persists_after_success_and_wipes_on_rerun() {
+    async fn hash_work_dir_preserves_previous_attempt_on_rerun() {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let node_spec = spec("quay.io/example/tool", vec!["tool".into()], "out.txt");
@@ -1277,8 +1278,7 @@ mod tests {
         assert_eq!(name.len(), 62, "hash remainder expected, got {name}");
         assert!(hash_dir.join("out.txt").is_file());
 
-        // A stale file from a crashed attempt must not survive a re-run
-        // into the same hash dir.
+        // A new attempt must never erase or reuse the earlier task directory.
         std::fs::write(hash_dir.join("stale.bin"), "stale").unwrap();
         let mut node = ContainerCommandNode::new(
             "container_command",
@@ -1294,8 +1294,103 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!hash_dir.join("stale.bin").exists());
+        assert!(hash_dir.join("stale.bin").exists());
         assert!(hash_dir.join("out.txt").is_file());
+        let second = shard.join(format!("{name}-2"));
+        assert!(second.join("out.txt").is_file());
+        assert!(!second.join("stale.bin").exists());
+    }
+
+    #[test]
+    fn concurrent_identical_tasks_claim_distinct_work_dirs() {
+        let env = test_env();
+        let root = env.workspace.path().canonicalize().unwrap();
+        let node = Arc::new(
+            ContainerCommandNode::new(
+                "container_command",
+                spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+                Arc::new(FakeRuntime::new(&root)),
+                Arc::new(PanelCache::new(root.join("cache"))),
+            )
+            .unwrap(),
+        );
+        let paths = std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..16)
+                .map(|_| {
+                    let node = Arc::clone(&node);
+                    let root = &root;
+                    scope.spawn(move || node.resolve_workdir(root, &"a".repeat(64)).unwrap())
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|job| job.join().unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+        });
+        assert_eq!(paths.len(), 16);
+        assert!(paths.contains(&root.join("aa").join("a".repeat(62))));
+        assert!(paths.contains(&root.join("aa").join(format!("{}-16", "a".repeat(62)))));
+    }
+
+    #[tokio::test]
+    async fn local_executor_stores_receipt_inside_container_work_dir() {
+        use dag_core::dag::execution::{
+            LocalTaskExecutor, TaskExecution, TaskExecutor, TaskResources, TaskSpec, TaskSubmission,
+        };
+        use dag_core::dag::node_event::{JobResult, NodeReporter};
+
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let node = ContainerCommandNode::new(
+            "container_command",
+            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+            runtime.clone(),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+        let receipts = tempfile::tempdir().unwrap();
+        let executor = LocalTaskExecutor::with_workspace_root(receipts.path());
+        let submission = TaskSubmission {
+            spec: TaskSpec {
+                id: "task-1".into(),
+                logical_node: None,
+                kind: "container_command".into(),
+                spec: serde_json::json!({}),
+                axis: None,
+                item_key: None,
+                item: None,
+                inputs: vec![],
+                outputs: vec![],
+            },
+            inputs: vec![],
+            resources: TaskResources::default(),
+        };
+        let result = executor
+            .run(TaskExecution {
+                submission,
+                node: Box::new(node),
+                engine_ctx: Arc::new(env.ctx.clone()),
+                reporter: NodeReporter::noop(),
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            })
+            .await;
+        let JobResult::Success {
+            details: Some(details),
+            ..
+        } = result
+        else {
+            panic!("container task failed: {result:?}")
+        };
+        let workdir = runtime.requests.lock().unwrap()[0]
+            .workspace
+            .host_path
+            .clone();
+        assert_eq!(details.workspace.as_deref(), workdir.to_str());
+        assert!(workdir.join("out.txt").is_file());
+        let manifest = PathBuf::from(&details.task_manifest.unwrap().path);
+        assert!(manifest.starts_with(workdir.join(".autonomics/receipts")));
+        assert!(manifest.is_file());
+        assert!(manifest.parent().unwrap().join("attempt.json").is_file());
+        assert_eq!(std::fs::read_dir(receipts.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

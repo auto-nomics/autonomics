@@ -894,6 +894,12 @@ impl ScriptNode {
 
 #[async_trait]
 impl DagNode for ScriptNode {
+    fn prepare_local_workdir(
+        &mut self,
+        inputs: &[NodeInput],
+    ) -> Result<Option<std::path::PathBuf>, DagError> {
+        self.inner.prepare_local_workdir(inputs)
+    }
     fn prepare_task_inputs(&self, inputs: &mut [NodeInput]) -> Result<(), DagError> {
         self.inner.prepare_task_inputs(inputs)
     }

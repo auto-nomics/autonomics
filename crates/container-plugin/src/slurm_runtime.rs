@@ -290,7 +290,7 @@ fn workspace_files_observed(
                 .ok_or_else(|| invalid("UTF-8 workspace path required"))?
                 .to_string();
             relative(&rel)?;
-            if rel == container_runtime::gc::SCRATCH_LOCK_FILE {
+            if rel == container_runtime::gc::SCRATCH_LOCK_FILE || rel == ".autonomics/receipts" {
                 continue;
             }
             let info = path.symlink_metadata()?;
@@ -1667,6 +1667,12 @@ mod tests {
         std::fs::create_dir(&inputs).unwrap();
         std::fs::write(inputs.join("selected"), b"selected").unwrap();
         std::fs::write(inputs.join("unrelated"), b"must not upload").unwrap();
+        std::fs::create_dir_all(work.join(".autonomics/receipts/attempt")).unwrap();
+        std::fs::write(
+            work.join(".autonomics/receipts/attempt/task.json"),
+            b"coordinator receipt",
+        )
+        .unwrap();
         std::os::unix::fs::symlink(inputs.join("selected"), work.join("staged")).unwrap();
         let mut request = ContainerRunRequest {
             image: "unused".into(),

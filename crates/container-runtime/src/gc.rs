@@ -578,12 +578,20 @@ fn is_shard_name(name: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The 62-character hash remainder of a content-addressed work dir.
+/// The hash remainder, optionally followed by a task attempt suffix.
 fn is_work_dir_name(name: &str) -> bool {
-    name.len() == 62
-        && name
+    let (hash, suffix) = name
+        .split_once('-')
+        .map_or((name, None), |(hash, suffix)| (hash, Some(suffix)));
+    hash.len() == 62
+        && hash
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && suffix.is_none_or(|s| {
+            !s.is_empty()
+                && s.bytes().all(|b| b.is_ascii_digit())
+                && s.parse::<u64>().is_ok_and(|n| n >= 2)
+        })
 }
 
 /// Touch a directory's mtime so panel LRU ordering reflects *use*, not
@@ -773,6 +781,10 @@ mod tests {
     async fn work_dir_sweep_removes_old_and_retains_young_and_locked() {
         let root = tempfile::tempdir().unwrap();
         let old = make_work_dir(root.path(), "aa1111", true);
+        let retry = old.with_file_name(format!("{}-2", old.file_name().unwrap().to_string_lossy()));
+        fs::create_dir_all(&retry).unwrap();
+        fs::write(retry.join("result.txt"), "retry").unwrap();
+        set_old_mtime(&retry);
         let young = make_work_dir(root.path(), "bb2222", false);
         let locked = make_work_dir(root.path(), "cc3333", true);
         let _guard = acquire_workdir_lock_exclusive(&locked).unwrap();
@@ -783,8 +795,9 @@ mod tests {
         };
         let report = sweep_work_dirs(root.path(), &policy).await;
 
-        assert_eq!(report.scanned, 3);
-        assert_eq!(report.removed, 1);
+        assert_eq!(report.scanned, 4);
+        assert_eq!(report.removed, 2);
+        assert!(!retry.exists());
         assert!(!old.exists(), "old work dir must be removed");
         assert!(young.exists(), "young work dir must be retained");
         assert!(locked.exists(), "locked work dir must be retained");
@@ -808,6 +821,16 @@ mod tests {
         .await;
         assert_eq!(report.scanned, 0);
         assert!(report.errors.is_empty());
+    }
+
+    #[test]
+    fn task_work_dir_names_include_attempt_suffixes() {
+        let hash = "a".repeat(62);
+        assert!(is_work_dir_name(&hash));
+        assert!(is_work_dir_name(&format!("{hash}-2")));
+        assert!(is_work_dir_name(&format!("{hash}-31")));
+        assert!(!is_work_dir_name(&format!("{hash}-1")));
+        assert!(!is_work_dir_name(&format!("{hash}-junk")));
     }
 
     #[test]

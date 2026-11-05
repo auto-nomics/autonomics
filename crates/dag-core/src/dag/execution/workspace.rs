@@ -20,6 +20,7 @@ use crate::value::{FileRef, NodeValue};
 pub(super) struct LocalTaskWorkspace {
     root: PathBuf,
     manifest: FileRef,
+    workdir: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -28,6 +29,32 @@ mod typed_channel_staging_tests {
     use crate::dag::DagError;
     use crate::dag::execution::ChannelTransportValue;
     use crate::value::{FileRef, NodeValue};
+
+    #[cfg(unix)]
+    #[test]
+    fn workdir_receipt_rejects_symlinked_private_directory() {
+        use crate::dag::execution::{TaskResources, TaskSpec, TaskSubmission};
+        let workdir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), workdir.path().join(".autonomics")).unwrap();
+        let submission = TaskSubmission {
+            spec: TaskSpec {
+                id: "task".into(),
+                logical_node: None,
+                kind: "test".into(),
+                spec: serde_json::json!({}),
+                axis: None,
+                item_key: None,
+                item: None,
+                inputs: vec![],
+                outputs: vec![],
+            },
+            inputs: vec![],
+            resources: TaskResources::default(),
+        };
+        assert!(LocalTaskWorkspace::create_in_workdir(workdir.path(), &submission).is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
 
     #[tokio::test]
     async fn structured_task_input_stages_and_worker_loader_restores_it() {
@@ -312,7 +339,42 @@ impl LocalTaskWorkspace {
         Ok(Self {
             root: workspace_root,
             manifest,
+            workdir: None,
         })
+    }
+
+    pub(super) fn create_in_workdir(
+        workdir: &std::path::Path,
+        submission: &TaskSubmission,
+    ) -> Result<Self, DagError> {
+        let workdir = workdir
+            .canonicalize()
+            .map_err(|e| DagError::Schedule(format!("cannot resolve task workdir: {e}")))?;
+        let mut root = workdir.clone();
+        for component in [".autonomics", "receipts"] {
+            root.push(component);
+            match std::fs::create_dir(&root) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(DagError::Schedule(format!(
+                        "cannot create task metadata directory `{}`: {e}",
+                        root.display()
+                    )));
+                }
+            }
+            let meta =
+                std::fs::symlink_metadata(&root).map_err(|e| DagError::Schedule(e.to_string()))?;
+            if !meta.is_dir() || meta.file_type().is_symlink() {
+                return Err(DagError::Schedule(format!(
+                    "task metadata path `{}` is not a real directory",
+                    root.display()
+                )));
+            }
+        }
+        let mut workspace = Self::create(&root, submission)?;
+        workspace.workdir = Some(workdir);
+        Ok(workspace)
     }
 
     fn write_manifest(
@@ -850,7 +912,13 @@ impl LocalTaskWorkspace {
         if details.stderr_log.is_none() {
             details.stderr_log = stderr_log;
         }
-        details.workspace = Some(self.root.to_string_lossy().into_owned());
+        details.workspace = Some(
+            self.workdir
+                .as_ref()
+                .unwrap_or(&self.root)
+                .to_string_lossy()
+                .into_owned(),
+        );
         details.task_manifest = Some(self.manifest.clone());
         if details.exit_code.is_none() {
             details.exit_code = Some(exit_code);
@@ -890,7 +958,12 @@ impl LocalTaskWorkspace {
             exit_code: details
                 .exit_code
                 .unwrap_or(if status == "success" { 0 } else { 1 }),
-            workspace: self.root.to_string_lossy().into_owned(),
+            workspace: self
+                .workdir
+                .as_ref()
+                .unwrap_or(&self.root)
+                .to_string_lossy()
+                .into_owned(),
             task_manifest: self.manifest.clone(),
             stdout_log: details.stdout_log.clone(),
             stderr_log: details.stderr_log.clone(),

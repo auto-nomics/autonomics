@@ -57,6 +57,8 @@ pub struct ContainerCommandNode {
     tuple_inputs: Vec<TupleInput>,
     outputs: Vec<ContainerCommandOutputSpec>,
     workdir: Option<String>,
+    local_attempt_workdir: Option<PathBuf>,
+    local_workdir_lock: Option<std::fs::File>,
     stage_in_mode: StageInMode,
     artifact_prefix: Option<String>,
     timeout_secs: u64,
@@ -141,6 +143,8 @@ impl ContainerCommandNode {
             tuple_inputs: spec.tuple_inputs,
             outputs: spec.outputs,
             workdir: spec.workdir,
+            local_attempt_workdir: None,
+            local_workdir_lock: None,
             stage_in_mode: spec.stage_in_mode,
             artifact_prefix: spec.artifact_prefix,
             timeout_secs: spec.timeout_secs,
@@ -193,8 +197,7 @@ impl ContainerCommandNode {
     /// the output bytes, hashed to the stable work-dir name.
     ///
     /// Resource knobs (`cpus`/`memory`/`timeout_secs`/`user`/...) and
-    /// `artifact_prefix` deliberately do not participate — re-tuning them
-    /// reuses the same work dir. Inputs participate through their
+    /// `artifact_prefix` deliberately do not participate in this key. Inputs participate through their
     /// `FileRef` identity (path + fingerprint), in the same port order the
     /// scheduler stages them.
     fn work_dir_identity(&self, inputs: &[NodeInput]) -> String {
@@ -293,21 +296,28 @@ impl ContainerCommandNode {
 
     /// Resolves the host work directory that will be mounted at `/work`.
     ///
-    /// When the spec omits `workdir`, a persistent content-addressed
-    /// directory `{hash[0..2]}/{hash[2..]}` under the workspace root is derived from
-    /// [`Self::work_dir_identity`] — identical re-runs of the same task
-    /// reuse it (Nextflow-style work dir). A spec-provided `workdir` is an
+    /// When the spec omits `workdir`, atomically claim an unused task work
+    /// directory under the identity's hash shard. If a directory already
+    /// exists, append `-2`, `-3`, etc., preserving previous attempts. A
+    /// cache hit is resolved before execution and retains its original path.
+    /// A spec-provided `workdir` is an
     /// explicit override (used as-is when absolute, joined onto
     /// `workspace_root` when relative). Missing directories are created on
     /// demand, the path is canonicalized, and any candidate that escapes
     /// `workspace_root` (an absolute path elsewhere, `..` traversal, or a
     /// symlink pointing out) is rejected before it can be mounted into the
     /// container.
-    fn resolve_workdir(
+    pub(super) fn resolve_workdir(
         &self,
         workspace_root: &Path,
         identity: &str,
     ) -> Result<PathBuf, ContainerCommandError> {
+        std::fs::create_dir_all(workspace_root).map_err(|e| {
+            ContainerCommandError::Invalid(format!(
+                "cannot create container workspace root `{}`: {e}",
+                workspace_root.display()
+            ))
+        })?;
         let workdir = match &self.workdir {
             Some(path) => {
                 let candidate = PathBuf::from(path);
@@ -317,14 +327,49 @@ impl ContainerCommandNode {
                     workspace_root.join(candidate)
                 }
             }
-            None => workspace_root.join(&identity[..2]).join(&identity[2..]),
+            None => {
+                let shard = workspace_root.join(&identity[..2]);
+                std::fs::create_dir_all(&shard).map_err(|e| {
+                    ContainerCommandError::Invalid(format!(
+                        "cannot create workdir shard `{}`: {e}",
+                        shard.display()
+                    ))
+                })?;
+                let shard = shard.canonicalize().map_err(|e| {
+                    ContainerCommandError::Invalid(format!("cannot resolve workdir shard: {e}"))
+                })?;
+                if !shard.starts_with(workspace_root) {
+                    return Err(ContainerCommandError::Invalid(format!(
+                        "workdir shard `{}` is outside workspace root `{}`",
+                        shard.display(),
+                        workspace_root.display()
+                    )));
+                }
+                let mut attempt = 1u64;
+                loop {
+                    let name = if attempt == 1 {
+                        identity[2..].to_string()
+                    } else {
+                        format!("{}-{attempt}", &identity[2..])
+                    };
+                    let path = shard.join(name);
+                    match std::fs::create_dir(&path) {
+                        Ok(()) => break path,
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            attempt = attempt.checked_add(1).ok_or_else(|| {
+                                ContainerCommandError::Invalid("too many workdir attempts".into())
+                            })?;
+                        }
+                        Err(e) => {
+                            return Err(ContainerCommandError::Invalid(format!(
+                                "cannot create workdir `{}`: {e}",
+                                path.display()
+                            )));
+                        }
+                    }
+                }
+            }
         };
-        std::fs::create_dir_all(workspace_root).map_err(|e| {
-            ContainerCommandError::Invalid(format!(
-                "cannot create container workspace root `{}`: {e}",
-                workspace_root.display()
-            ))
-        })?;
         std::fs::create_dir_all(&workdir).map_err(|e| {
             ContainerCommandError::Invalid(format!(
                 "cannot create workdir `{}`: {e}",
@@ -804,6 +849,31 @@ fn prepare_tuple_input(input: &NodeValue, declaration: &TupleInput) -> Result<No
 
 #[async_trait]
 impl DagNode for ContainerCommandNode {
+    fn prepare_local_workdir(&mut self, inputs: &[NodeInput]) -> Result<Option<PathBuf>, DagError> {
+        let mut prepared = inputs.to_vec();
+        self.prepare_task_inputs(&mut prepared)?;
+        let root = container_runtime::canonicalize_workspace_root(
+            self.runtime.workspace_root().to_path_buf(),
+        );
+        let identity = self.work_dir_identity(&prepared);
+        let workdir = self
+            .resolve_workdir(&root, &identity)
+            .map_err(|e| e.into_dag_error(self.kind))?;
+        let lock = if self.workdir.is_none() {
+            acquire_workdir_lock_exclusive(&workdir)
+        } else {
+            acquire_scratch_lock_shared(&workdir)
+        }
+        .map_err(|e| {
+            DagError::Schedule(format!(
+                "cannot lock task workdir `{}`: {e}",
+                workdir.display()
+            ))
+        })?;
+        self.local_attempt_workdir = Some(workdir.clone());
+        self.local_workdir_lock = Some(lock);
+        Ok(Some(workdir))
+    }
     fn prepare_task_inputs(&self, inputs: &mut [NodeInput]) -> Result<(), DagError> {
         for declaration in &self.tuple_inputs {
             let mut matching = inputs
@@ -842,6 +912,8 @@ impl DagNode for ContainerCommandNode {
             tuple_inputs: self.tuple_inputs.clone(),
             outputs: self.outputs.clone(),
             workdir: self.workdir.clone(),
+            local_attempt_workdir: None,
+            local_workdir_lock: None,
             stage_in_mode: self.stage_in_mode,
             artifact_prefix: self.artifact_prefix.clone(),
             timeout_secs: self.timeout_secs,
@@ -891,24 +963,27 @@ impl DagNode for ContainerCommandNode {
         let workspace_root = container_runtime::canonicalize_workspace_root(
             self.runtime.workspace_root().to_path_buf(),
         );
-        let identity = self.work_dir_identity(inputs);
-        let workspace_path = self
-            .resolve_workdir(&workspace_root, &identity)
-            .map_err(|error| error.into_dag_error(self.kind))?;
+        let workspace_path = match self.local_attempt_workdir.take() {
+            Some(path) => path,
+            None => self
+                .resolve_workdir(&workspace_root, &self.work_dir_identity(inputs))
+                .map_err(|error| error.into_dag_error(self.kind))?,
+        };
         let is_hash_workdir = self.workdir.is_none();
         // Hold the work-dir lock for the whole run: the GC sweep takes the
         // same lock exclusively and therefore never reclaims a live run's
-        // directory. Hash work dirs take it exclusively (concurrent identical
-        // tasks serialize) and are wiped of stale contents first; explicit
-        // user workdirs keep the shared lock and their contents.
-        let workdir_lock = if is_hash_workdir {
+        // directory. Each hash work dir is a newly claimed attempt; explicit
+        // user workdirs retain their existing shared-lock behavior.
+        let workdir_lock = if self.local_workdir_lock.is_some() {
+            None
+        } else if is_hash_workdir {
             let lock = acquire_workdir_lock_exclusive(&workspace_path).map_err(|error| {
                 ContainerCommandError::Invalid(format!(
                     "cannot lock container work dir `{}`: {error}",
                     workspace_path.display()
                 ))
             });
-            lock.map_err(|error| error.into_dag_error(self.kind))?
+            Some(lock.map_err(|error| error.into_dag_error(self.kind))?)
         } else {
             let lock = acquire_scratch_lock_shared(&workspace_path).map_err(|error| {
                 ContainerCommandError::Invalid(format!(
@@ -916,14 +991,8 @@ impl DagNode for ContainerCommandNode {
                     workspace_path.display()
                 ))
             });
-            lock.map_err(|error| error.into_dag_error(self.kind))?
+            Some(lock.map_err(|error| error.into_dag_error(self.kind))?)
         };
-        if is_hash_workdir {
-            wipe_workdir_contents(&workspace_path)
-                .await
-                .map_err(ContainerCommandError::Invalid)
-                .map_err(|error| error.into_dag_error(self.kind))?;
-        }
         let mut panel_refs = self.panels.clone();
         panel_refs.extend(self.panel_bundles.iter().map(|panel| {
             PanelRef {
@@ -1607,31 +1676,4 @@ fn run_details(
         output_artifacts_by_port: Default::default(),
         ..Default::default()
     }
-}
-
-/// Remove every entry in a hash work dir except the lock file, so a re-run
-/// into the same directory can never observe stale outputs from a previous
-/// (possibly crashed) attempt.
-async fn wipe_workdir_contents(workdir: &Path) -> Result<(), String> {
-    let dir = workdir.to_path_buf();
-    tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            if entry.file_name() == ".autonomics-lock" {
-                continue;
-            }
-            let path = entry.path();
-            if path.is_dir() {
-                std::fs::remove_dir_all(&path)?;
-            } else {
-                std::fs::remove_file(&path)?;
-            }
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|error| format!("workdir wipe task failed: {error}"))
-    .and_then(|result| {
-        result.map_err(|error| format!("cannot wipe work dir `{}`: {error}", workdir.display()))
-    })
 }

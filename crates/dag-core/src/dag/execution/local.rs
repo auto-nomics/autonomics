@@ -131,18 +131,34 @@ impl TaskExecutor for LocalTaskExecutor {
 
         let timeout = task_timeout(&execution.submission.resources);
         let cancellation = execution.cancellation.clone();
-        let mut workspace =
-            match LocalTaskWorkspace::create(&self.workspace_root, &execution.submission) {
-                Ok(workspace) => Some(workspace),
-                Err(error) => {
-                    return JobResult::Failed {
-                        id: task_id,
-                        error,
-                        duration: start.elapsed(),
-                        details: execution.reporter.take_run_details(),
-                    };
-                }
-            };
+        let prepared_workdir = match execution
+            .node
+            .prepare_local_workdir(&execution.submission.inputs)
+        {
+            Ok(workdir) => workdir,
+            Err(error) => {
+                return JobResult::Failed {
+                    id: task_id,
+                    error,
+                    duration: start.elapsed(),
+                    details: execution.reporter.take_run_details(),
+                };
+            }
+        };
+        let mut workspace = match match prepared_workdir.as_deref() {
+            Some(workdir) => LocalTaskWorkspace::create_in_workdir(workdir, &execution.submission),
+            None => LocalTaskWorkspace::create(&self.workspace_root, &execution.submission),
+        } {
+            Ok(workspace) => Some(workspace),
+            Err(error) => {
+                return JobResult::Failed {
+                    id: task_id,
+                    error,
+                    duration: start.elapsed(),
+                    details: execution.reporter.take_run_details(),
+                };
+            }
+        };
 
         execution.reporter.phase(
             "waiting_for_capacity",
