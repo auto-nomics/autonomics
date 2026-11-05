@@ -145,11 +145,25 @@ pub fn api_router(state: GatewayState) -> Router {
             get(skills::get_skill_library_detail),
         )
         // ── VFS browser ──
-        .route("/vfs/list", get(vfs::list))
-        .route("/vfs/stat", get(vfs::stat))
-        .route("/vfs/mounts", get(vfs::mounts))
-        .route("/vfs/file", get(vfs::file))
-        .route("/vfs/text", get(vfs::text))
+        // The group carries a raised body limit: uploads stream through
+        // PUT /vfs/file (bounded by VFS_MAX_UPLOAD_BYTES), while the rest
+        // of the API keeps the default 2 MiB limit.
+        .merge(
+            Router::new()
+                .route("/vfs/list", get(vfs::list))
+                .route("/vfs/stat", get(vfs::stat))
+                .route("/vfs/mounts", get(vfs::mounts))
+                .route("/vfs/file", get(vfs::file).put(vfs::upload))
+                .route("/vfs/text", get(vfs::text).put(vfs::save_text))
+                .route("/vfs/mkdir", post(vfs::mkdir))
+                .route("/vfs/entry", delete(vfs::remove))
+                .route("/vfs/move", post(vfs::move_path))
+                .route("/vfs/copy", post(vfs::copy))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    vfs::VFS_MAX_UPLOAD_BYTES,
+                ))
+                .with_state(state.clone()),
+        )
         .with_state(state)
 }
 

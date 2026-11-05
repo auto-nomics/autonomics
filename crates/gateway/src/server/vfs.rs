@@ -26,6 +26,8 @@ const DEFAULT_TEXT_MAX_BYTES: usize = 1024 * 1024;
 /// Hard cap for the text endpoint (10 MiB), matching the vbash `cat`
 /// bound.
 const MAX_TEXT_MAX_BYTES: usize = 10 * 1024 * 1024;
+/// Upload body cap for the VFS route group.
+pub(crate) const VFS_MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 /// Map a typed browse error onto the gateway error convention
 /// (`{"error": message}` with the suggested status code).
@@ -324,4 +326,177 @@ fn content_type_for(path: &str) -> header::HeaderValue {
         _ => "application/octet-stream",
     };
     header::HeaderValue::from_str(mime).expect("static mime strings are valid header values")
+}
+
+// ── Write endpoints ──────────────────────────────────────────────────
+//
+// Every mutation dispatches through the browse facade, so read-only
+// mounts and MountPermissions are enforced inside OpendalFileStorage —
+// exactly like the agent-facing vbash ops.
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct MkdirRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RemoveQuery {
+    path: String,
+    recursive: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct TransferRequest {
+    src: String,
+    dst: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct SaveTextRequest {
+    path: String,
+    contents: String,
+    /// Last-known contents; a mismatch answers 409 so the editor
+    /// reloads instead of clobbering a concurrent change. `None`
+    /// overwrites unconditionally (upload semantics).
+    original: Option<String>,
+}
+
+/// `POST /vfs/mkdir` — create a directory.
+#[utoipa::path(post, path = "/api/v1/vfs/mkdir", tag = "vfs",
+    request_body = MkdirRequest,
+    responses(
+        (status = 200, description = "Directory created"),
+        (status = 403, description = "Read-only mount"),
+    ))]
+pub(crate) async fn mkdir(
+    State(state): State<GatewayState>,
+    Json(request): Json<MkdirRequest>,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let path = browse::mkdir(&state.infra.file_storage, &request.path)
+        .await
+        .map_err(vfs_error)?;
+    Ok(Json(serde_json::json!({ "path": path, "created": true })))
+}
+
+/// `DELETE /vfs/entry` — delete a file or directory.
+#[utoipa::path(delete, path = "/api/v1/vfs/entry", tag = "vfs",
+    params(
+        ("path" = String, Query, description = "Virtual path"),
+        ("recursive" = Option<bool>, Query, description = "Remove non-empty directories"),
+    ),
+    responses(
+        (status = 200, description = "Entry deleted"),
+        (status = 400, description = "Refused (virtual root)"),
+        (status = 404, description = "Not found"),
+        (status = 409, description = "Directory not empty without recursive"),
+    ))]
+pub(crate) async fn remove(
+    State(state): State<GatewayState>,
+    Query(query): Query<RemoveQuery>,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let recursive = query.recursive.unwrap_or(false);
+    let path = browse::remove(&state.infra.file_storage, &query.path, recursive)
+        .await
+        .map_err(vfs_error)?;
+    Ok(Json(
+        serde_json::json!({ "path": path, "deleted": true, "recursive": recursive }),
+    ))
+}
+
+/// `POST /vfs/move` — rename/move. Requires write access on both ends so
+/// nothing can be smuggled out of a read-only mount.
+#[utoipa::path(post, path = "/api/v1/vfs/move", tag = "vfs",
+    request_body = TransferRequest,
+    responses(
+        (status = 200, description = "Entry moved"),
+        (status = 403, description = "Read-only mount on either end"),
+    ))]
+pub(crate) async fn move_path(
+    State(state): State<GatewayState>,
+    Json(request): Json<TransferRequest>,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let (src, dst) = browse::move_entry(&state.infra.file_storage, &request.src, &request.dst)
+        .await
+        .map_err(vfs_error)?;
+    Ok(Json(serde_json::json!({ "src": src, "dst": dst, "moved": true })))
+}
+
+/// `POST /vfs/copy` — copy a file (or same-backend subtree).
+#[utoipa::path(post, path = "/api/v1/vfs/copy", tag = "vfs",
+    request_body = TransferRequest,
+    responses(
+        (status = 200, description = "Entry copied"),
+        (status = 403, description = "Destination is a read-only mount"),
+    ))]
+pub(crate) async fn copy(
+    State(state): State<GatewayState>,
+    Json(request): Json<TransferRequest>,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let (src, dst) = browse::copy(&state.infra.file_storage, &request.src, &request.dst)
+        .await
+        .map_err(vfs_error)?;
+    Ok(Json(serde_json::json!({ "src": src, "dst": dst, "copied": true })))
+}
+
+/// `PUT /vfs/file?path=` — raw byte upload (binary or large files).
+/// `write_bytes` stages then renames under the per-object lock, so
+/// readers never observe a partial file.
+#[utoipa::path(put, path = "/api/v1/vfs/file", tag = "vfs",
+    params(("path" = String, Query, description = "Virtual destination path")),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    responses(
+        (status = 200, description = "Bytes stored"),
+        (status = 403, description = "Read-only mount"),
+    ))]
+pub(crate) async fn upload(
+    State(state): State<GatewayState>,
+    Query(query): Query<PathQuery>,
+    body: axum::body::Bytes,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let size = body.len() as u64;
+    state
+        .infra
+        .file_storage
+        .write_bytes(&query.path, body.to_vec())
+        .await
+        .map_err(BrowseError::from)
+        .map_err(vfs_error)?;
+    Ok(Json(serde_json::json!({ "path": query.path, "size": size, "written": true })))
+}
+
+/// `PUT /vfs/text` — conflict-checked text save from the editor.
+#[utoipa::path(put, path = "/api/v1/vfs/text", tag = "vfs",
+    request_body = SaveTextRequest,
+    responses(
+        (status = 200, description = "Text stored"),
+        (status = 409, description = "File changed on the server; reload before saving"),
+        (status = 403, description = "Read-only mount"),
+    ))]
+pub(crate) async fn save_text(
+    State(state): State<GatewayState>,
+    Json(request): Json<SaveTextRequest>,
+) -> GatewayResult<Json<serde_json::Value>> {
+    let storage = &state.infra.file_storage;
+    if let Some(original) = &request.original {
+        match browse::read_text(storage, &request.path, MAX_TEXT_MAX_BYTES).await {
+            Ok(current) => {
+                if current.contents != *original {
+                    return Err(GatewayError::Status(
+                        StatusCode::CONFLICT,
+                        "File changed on the server; reload it before saving".into(),
+                    ));
+                }
+            }
+            // Missing file: the save creates it (editor "new file" flow).
+            Err(BrowseError::NotFound(_)) => {}
+            Err(error) => return Err(vfs_error(error)),
+        }
+    }
+    let size = request.contents.len() as u64;
+    storage
+        .write_bytes(&request.path, request.contents.into_bytes())
+        .await
+        .map_err(BrowseError::from)
+        .map_err(vfs_error)?;
+    Ok(Json(serde_json::json!({ "path": request.path, "size": size, "written": true })))
 }

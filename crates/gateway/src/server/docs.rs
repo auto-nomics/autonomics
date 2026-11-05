@@ -66,6 +66,12 @@ use crate::proto::*;
         vfs::mounts,
         vfs::file,
         vfs::text,
+        vfs::mkdir,
+        vfs::remove,
+        vfs::move_path,
+        vfs::copy,
+        vfs::upload,
+        vfs::save_text,
     ),
     components(schemas(
         GatewayStatus,
@@ -105,6 +111,9 @@ use crate::proto::*;
         DockerHubRepositoryView,
         DockerHubTagView,
         ApprovePluginEnvironmentRequest,
+        vfs::MkdirRequest,
+        vfs::TransferRequest,
+        vfs::SaveTextRequest,
     )),
     tags(
         (name = "gateway", description = "Daemon lifecycle and health"),
@@ -115,6 +124,7 @@ use crate::proto::*;
         (name = "model-config", description = "Model providers, active model, and embedding"),
         (name = "settings", description = "Display settings"),
         (name = "plugins", description = "Manifest plugin family management"),
+        (name = "vfs", description = "Virtual filesystem browse and file management"),
     ),
     modifiers(&BearerSecurityAddon)
 )]

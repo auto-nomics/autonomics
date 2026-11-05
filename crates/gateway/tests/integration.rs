@@ -350,7 +350,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 42);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 46);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -392,6 +392,10 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/vfs/mounts",
         "/api/v1/vfs/file",
         "/api/v1/vfs/text",
+        "/api/v1/vfs/mkdir",
+        "/api/v1/vfs/entry",
+        "/api/v1/vfs/move",
+        "/api/v1/vfs/copy",
     ];
     for path in expected_paths {
         assert!(
@@ -834,6 +838,167 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
             .await
             .unwrap();
         assert_eq!(missing.status(), 404, "endpoint {endpoint}");
+    }
+
+    gateway_daemon.stop().await;
+}
+
+/// Write-side VFS endpoints over the wire: mkdir → upload → conflict
+/// save → download byte-parity → move → delete, plus the read-only
+/// 403 (via the /plugins/active identity mount when present).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vfs_write_endpoints_manage_files_and_refuse_read_only_mounts() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+    let auth = |request: reqwest::RequestBuilder| request.bearer_auth(token);
+
+    // mkdir creates the working directory.
+    let made = auth(http.post(format!("{base}/api/v1/vfs/mkdir")))
+        .json(&serde_json::json!({ "path": "/vfs-w2e/docs" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 200);
+
+    // Binary upload streams raw bytes.
+    let uploaded = auth(http.put(format!("{base}/api/v1/vfs/file")))
+        .query(&[("path", "/vfs-w2e/docs/blob.bin")])
+        .body([0u8, 1, 2, 255, 254, 128, 7].to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(uploaded.status(), 200);
+    assert_eq!(uploaded.json::<serde_json::Value>().await.unwrap()["size"], 7);
+
+    // Text save creates a file; a second save with a stale original 409s.
+    let saved = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v1",
+            "original": null,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200);
+
+    let conflicted = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v2-stale",
+            "original": "not-what-is-stored",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(conflicted.status(), 409);
+
+    let rewritten = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v2",
+            "original": "v1",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rewritten.status(), 200);
+
+    // Download parity for both the uploaded binary and the saved text.
+    let blob = auth(http.get(format!("{base}/api/v1/vfs/file")))
+        .query(&[("path", "/vfs-w2e/docs/blob.bin")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blob.status(), 200);
+    assert_eq!(blob.bytes().await.unwrap().to_vec(), vec![0u8, 1, 2, 255, 254, 128, 7]);
+    let text = auth(http.get(format!("{base}/api/v1/vfs/text")))
+        .query(&[("path", "/vfs-w2e/docs/notes.md")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(text.json::<serde_json::Value>().await.unwrap()["contents"], "v2");
+
+    // move then delete round out the lifecycle.
+    let moved = auth(http.post(format!("{base}/api/v1/vfs/move")))
+        .json(&serde_json::json!({ "src": "/vfs-w2e/docs/blob.bin", "dst": "/vfs-w2e/docs/blob-moved.bin" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), 200);
+
+    // Non-empty directory refuses without recursive.
+    let refused = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/vfs-w2e/docs")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+
+    let removed = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/vfs-w2e/docs"), ("recursive", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), 200);
+    let gone = auth(http.get(format!("{base}/api/v1/vfs/stat")))
+        .query(&[("path", "/vfs-w2e/docs")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+
+    // The virtual root is untouchable.
+    let root = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/"), ("recursive", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(root.status(), 400);
+
+    // Read-only mounts reject every mutation. The harness manifest
+    // always carries a read-only mount (e.g. /plugins/active); if the
+    // layout ever changes, fall back to any read_only entry from
+    // /vfs/mounts.
+    let mounts: serde_json::Value = auth(http.get(format!("{base}/api/v1/vfs/mounts")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let read_only_path = mounts["mounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["read_only"] == true)
+        .map(|m| m["path"].as_str().unwrap().to_string());
+    if let Some(mount_path) = read_only_path {
+        let denied = auth(http.post(format!("{base}/api/v1/vfs/mkdir")))
+            .json(&serde_json::json!({ "path": format!("{mount_path}/nope") }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), 403, "write into read-only mount {mount_path}");
+        let denied_text = auth(http.put(format!("{base}/api/v1/vfs/text")))
+            .json(&serde_json::json!({ "path": format!("{mount_path}/nope.txt"), "contents": "x" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied_text.status(), 403);
+        // Smuggling out of a read-only mount via move is refused too.
+        let smuggle = auth(http.post(format!("{base}/api/v1/vfs/move")))
+            .json(&serde_json::json!({ "src": mount_path, "dst": "/vfs-w2e/smuggled" }))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            smuggle.status() == 403 || smuggle.status() == 404 || smuggle.status() == 400,
+            "move out of read-only mount answered {}",
+            smuggle.status()
+        );
     }
 
     gateway_daemon.stop().await;
