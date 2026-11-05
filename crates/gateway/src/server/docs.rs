@@ -5,7 +5,7 @@ use utoipa::{Modify, OpenApi};
 
 use super::{
     agents, context, events, hydration, lifecycle, model_config, plugin_environments, plugins,
-    settings, skills, storage,
+    settings, skills, storage, vfs,
 };
 use crate::proto::*;
 
@@ -61,6 +61,11 @@ use crate::proto::*;
         plugin_environments::delete_environment,
         skills::list_skill_library,
         skills::get_skill_library_detail,
+        vfs::list,
+        vfs::stat,
+        vfs::mounts,
+        vfs::file,
+        vfs::text,
     ),
     components(schemas(
         GatewayStatus,

@@ -14,7 +14,7 @@ use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
     agents, compute, context, events, gui, hpc_config, hpc_jobs, hydration, lifecycle,
-    model_config, plugin_environments, plugins, settings, skills, storage,
+    model_config, plugin_environments, plugins, settings, skills, storage, vfs,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -144,6 +144,12 @@ pub fn api_router(state: GatewayState) -> Router {
             "/skills/library/{name}",
             get(skills::get_skill_library_detail),
         )
+        // ── VFS browser ──
+        .route("/vfs/list", get(vfs::list))
+        .route("/vfs/stat", get(vfs::stat))
+        .route("/vfs/mounts", get(vfs::mounts))
+        .route("/vfs/file", get(vfs::file))
+        .route("/vfs/text", get(vfs::text))
         .with_state(state)
 }
 

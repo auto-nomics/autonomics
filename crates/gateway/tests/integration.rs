@@ -350,7 +350,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 35);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 42);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -387,6 +387,11 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/events",
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
+        "/api/v1/vfs/list",
+        "/api/v1/vfs/stat",
+        "/api/v1/vfs/mounts",
+        "/api/v1/vfs/file",
+        "/api/v1/vfs/text",
     ];
     for path in expected_paths {
         assert!(
@@ -601,6 +606,235 @@ async fn hpc_config_rejects_unknown_fields() {
         .update_hpc_config(&serde_json::json!({"nonsense_field": 1}))
         .await;
     assert!(err.is_err(), "unknown profile fields must be rejected");
+
+    gateway_daemon.stop().await;
+}
+
+// ── VFS browser endpoints ─────────────────────────────────────────────
+
+/// Read-side VFS endpoints over the wire: list, stat, mounts, text and
+/// the streaming file endpoint (full + Range + 416 + UTF-8 refusal).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+
+    // Seed fixtures straight through the daemon's file storage.
+    gateway_daemon
+        .infra
+        .file_storage
+        .write_bytes("/vfs-e2e/hello.txt", b"hello vfs browser".to_vec())
+        .await
+        .unwrap();
+    gateway_daemon
+        .infra
+        .file_storage
+        .write_bytes("/vfs-e2e/blob.bin", vec![0xff, 0xfe, 0x00, 0x80])
+        .await
+        .unwrap();
+
+    // list / contains the fixture directory.
+    let list: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/list"))
+        .query(&[("path", "/")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = list["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"/vfs-e2e"),
+        "expected /vfs-e2e in root listing, got {names:?}"
+    );
+
+    // Nested listing works and reports leaf names.
+    let nested: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/list"))
+        .query(&[("path", "/vfs-e2e")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let paths: Vec<&str> = nested["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"/vfs-e2e/hello.txt"), "{paths:?}");
+    let hello = nested["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "/vfs-e2e/hello.txt")
+        .unwrap();
+    assert_eq!(hello["name"], "hello.txt");
+    assert_eq!(hello["is_dir"], false);
+
+    // stat reports size and the covering mount's read-only flag.
+    let stat: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/stat"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stat["size"], 17);
+    assert_eq!(stat["read_only"], false);
+    assert!(stat["mount"].is_object(), "root mount should cover it");
+
+    // mounts is non-empty and carries the declarative fields.
+    let mounts: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/mounts"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(mounts["count"].as_u64().unwrap() >= 1);
+    assert!(mounts["mounts"][0]["path"].is_string());
+
+    // text returns UTF-8 contents.
+    let text: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(text["contents"], "hello vfs browser");
+    assert_eq!(text["truncated"], false);
+
+    // text truncates at max_bytes.
+    let truncated: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/hello.txt"), ("max_bytes", "5")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(truncated["contents"], "hello");
+    assert_eq!(truncated["truncated"], true);
+    assert_eq!(truncated["size"], 17);
+
+    // text refuses binary content with 400.
+    let binary = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/blob.bin")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(binary.status(), 400);
+
+    // file streams the full body with a length header.
+    let full = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(full.status(), 200);
+    assert_eq!(
+        full.headers().get(reqwest::header::CONTENT_LENGTH).unwrap(),
+        "17"
+    );
+    assert_eq!(full.bytes().await.unwrap(), b"hello vfs browser".as_slice());
+
+    // Range slice → 206 with the right bytes and Content-Range.
+    let ranged = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=6-8")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ranged.status(), 206);
+    assert_eq!(
+        ranged.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
+        "bytes 6-8/17"
+    );
+    assert_eq!(ranged.bytes().await.unwrap(), b"vfs".as_slice());
+
+    // Suffix range form.
+    let suffix = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=-7")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(suffix.status(), 206);
+    assert_eq!(suffix.bytes().await.unwrap(), b"browser".as_slice());
+
+    // Unsatisfiable range → 416.
+    let unsatisfiable = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=100-200")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsatisfiable.status(), 416);
+
+    // Download disposition carries the file name.
+    let download = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt"), ("download", "true")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        download
+            .headers()
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .unwrap(),
+        "attachment; filename=\"hello.txt\""
+    );
+
+    // Missing paths are 404 on the per-file endpoints. (`list` keeps
+    // the vbash `ls` semantics: an empty page, not an error, because
+    // some backends cannot distinguish a missing prefix from an empty
+    // directory.)
+    for endpoint in ["stat", "text", "file"] {
+        let missing = http
+            .get(format!("{base}/api/v1/vfs/{endpoint}"))
+            .query(&[("path", "/vfs-e2e/missing.txt")])
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), 404, "endpoint {endpoint}");
+    }
 
     gateway_daemon.stop().await;
 }

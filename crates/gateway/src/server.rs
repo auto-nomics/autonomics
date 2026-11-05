@@ -21,6 +21,7 @@ mod settings;
 mod skills;
 mod state;
 mod storage;
+mod vfs;
 
 pub use error::GatewayError;
 pub(crate) use plugin_environments::DockerHubClient;
