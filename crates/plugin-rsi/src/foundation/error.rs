@@ -66,6 +66,9 @@ pub enum Error {
     #[error("image registry operation failed: {0}")]
     ImageRegistry(String),
 
+    #[error("container operation failed: {0}")]
+    Container(String),
+
     #[error("plugin source `{name}` already has a conflicting declaration")]
     ConflictingPluginSource { name: String },
 

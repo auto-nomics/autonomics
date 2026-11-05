@@ -364,7 +364,7 @@ pub(crate) fn request_user_ids(request: &ContainerRunRequest) -> (i64, i64) {
         .unwrap_or(default)
 }
 
-pub(crate) fn truncate_captured_bytes(bytes: &[u8]) -> String {
+pub fn truncate_captured_bytes(bytes: &[u8]) -> String {
     if bytes.len() <= MAX_CAPTURED_OUTPUT_BYTES {
         return String::from_utf8_lossy(bytes).into_owned();
     }

@@ -40,6 +40,7 @@ pub struct PluginInfra {
     publisher: SharedPluginPublisher,
     pull_request_publisher: SharedPullRequestPublisher,
     registry: Arc<RwLock<Option<Arc<dyn PluginRegistryControl>>>>,
+    dev_execution: Arc<RwLock<Option<Arc<container_runtime::ContainerExecutionInfra>>>>,
 }
 
 impl PluginInfra {
@@ -66,6 +67,7 @@ impl PluginInfra {
             publisher,
             pull_request_publisher,
             registry: Arc::new(RwLock::new(None)),
+            dev_execution: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -74,6 +76,34 @@ impl PluginInfra {
             .registry
             .write()
             .expect("registry control lock poisoned") = Some(control);
+    }
+
+    /// Attach the container execution infra used by development
+    /// sessions (same install-later pattern as [`Self::configure_registry`]).
+    pub fn configure_dev_execution(
+        &self,
+        execution: Arc<container_runtime::ContainerExecutionInfra>,
+    ) {
+        *self
+            .dev_execution
+            .write()
+            .expect("dev execution lock poisoned") = Some(execution);
+    }
+
+    /// Development-session manager for plugin workspaces.
+    pub fn dev_sessions(&self) -> Result<crate::runtime::dev_session::DevSessionManager> {
+        let execution = self
+            .dev_execution
+            .read()
+            .expect("dev execution lock poisoned")
+            .clone()
+            .ok_or_else(|| {
+                Error::Validation("plugin development containers are not configured".into())
+            })?;
+        Ok(crate::runtime::dev_session::DevSessionManager::new(
+            execution,
+            Arc::clone(&self.store),
+        ))
     }
 
     pub fn store(&self) -> Arc<PluginStore> {
