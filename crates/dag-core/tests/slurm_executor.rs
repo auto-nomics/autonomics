@@ -234,6 +234,12 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
+        // The pinned SSH profile requires an owner-only parent directory;
+        // tempfile uses the process umask for directory permissions.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         // Child-only HOME: never mutate the Rust process environment, and
         // never let a fake `cd && pwd` resolve to a real account home.
         let home = dir.path().join("home");

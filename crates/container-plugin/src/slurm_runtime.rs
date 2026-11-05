@@ -1385,6 +1385,7 @@ mod tests {
     #[test]
     fn submission_journal_uses_protocol_evidence_not_error_text() {
         let fixture = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let journal = fixture.path().join("STATE.json");
         for stopped in [true, false] {
             let mut state = json!({"state":"SUBMITTING", "dispatch":{"id":"original"}});

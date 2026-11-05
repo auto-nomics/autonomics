@@ -12110,6 +12110,7 @@ dependencies = [
  "container-plugin",
  "container-runtime",
  "dag-core",
+ "dag-engine",
  "data-catalog",
  "data-engine",
  "data-engine-tools",

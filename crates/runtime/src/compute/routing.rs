@@ -67,9 +67,12 @@ impl TaskExecutor for BoundExecutor {
             }
         }
         if blockers.is_empty() { return Ok(()); }
+        // A streaming workflow may already have dispatched other tasks before
+        // this preflight is reached.  Only the blocked nodes are guaranteed
+        // not to have been submitted by this call.
         Err(DagError::Schedule(serde_json::json!({"state":"WORKFLOW_BLOCKED",
             "target_id":self.binding.target_id,"target_revision":self.binding.target_revision,
-            "blockers":blockers,"new_job_submitted":false}).to_string()))
+            "blockers":blockers,"blocked_nodes_submitted":false}).to_string()))
     }
     async fn run(&self, execution: TaskExecution) -> JobResult {
         // Covers dynamic fanout and direct executor callers on the same target
