@@ -668,3 +668,18 @@ pub struct CreatePluginProjectRequest {
     pub environment_id: String,
     pub purpose: String,
 }
+
+/// `/vfs/mounts` reply: the declarative mount table.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VfsMountsReply {
+    pub mounts: Vec<VfsMountEntry>,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VfsMountEntry {
+    pub path: String,
+    pub backend: String,
+    pub source: String,
+    pub read_only: bool,
+}

@@ -169,4 +169,12 @@ pub(crate) enum AppEvent {
     HpcJobsLoaded(serde_json::Value),
     /// Site profile persisted via `PUT /hpc/config`.
     HpcProfileSaved(std::result::Result<serde_json::Value, String>),
+    /// Directory listing from `GET /vfs/list` (cwd + entries).
+    VfsListingLoaded(std::result::Result<(String, Vec<vfs::browse::VfsEntry>), String>),
+    /// Text preview from `GET /vfs/text`.
+    VfsTextLoaded(std::result::Result<vfs::browse::TextRead, String>),
+    /// Mount table from `GET /vfs/mounts` (path, read_only).
+    VfsMountsLoaded(std::result::Result<Vec<(String, bool)>, String>),
+    /// A VFS mutation finished (status message or error).
+    VfsMutationDone(std::result::Result<String, String>),
 }

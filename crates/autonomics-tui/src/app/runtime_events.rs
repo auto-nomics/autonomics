@@ -391,6 +391,18 @@ impl App {
                 Ok(reply) => self.apply_hpc_save_reply(reply),
                 Err(error) => self.apply_hpc_save_failed(error),
             },
+            crate::app_event::AppEvent::VfsListingLoaded(result) => {
+                self.apply_vfs_listing(result);
+            }
+            crate::app_event::AppEvent::VfsTextLoaded(result) => {
+                self.apply_vfs_text(result);
+            }
+            crate::app_event::AppEvent::VfsMountsLoaded(result) => {
+                self.apply_vfs_mounts(result);
+            }
+            crate::app_event::AppEvent::VfsMutationDone(result) => {
+                self.apply_vfs_mutation(result);
+            }
             crate::app_event::AppEvent::BibliographySnapshotLoaded { token, result } => {
                 self.apply_bibliography_snapshot(token, result);
             }
