@@ -28,7 +28,10 @@ pub const TEST_RUN_DEFAULT_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TestRunRequest {
-    /// The node's `kind` inside the plugin manifest.
+    /// The node's `kind` inside the plugin manifest. The gateway route
+    /// takes it from the path and overwrites this field; direct callers
+    /// set it explicitly.
+    #[serde(default)]
     pub kind: String,
     /// Port label → file contents (v1: File ports only).
     #[serde(default)]

@@ -350,7 +350,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 46);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 54);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -396,6 +396,14 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/vfs/entry",
         "/api/v1/vfs/move",
         "/api/v1/vfs/copy",
+        "/api/v1/plugin-projects/{name}/dev-session",
+        "/api/v1/plugin-projects/{name}/validate",
+        "/api/v1/plugin-projects/{name}/activate",
+        "/api/v1/plugin-projects/{name}/report",
+        "/api/v1/plugin-projects/{name}/nodes/{kind}/test-run",
+        "/api/v1/plugins/{name}/uninstall",
+        "/api/v1/plugins/{name}/rollback",
+        "/api/v1/plugins/{name}/fork",
     ];
     for path in expected_paths {
         assert!(
@@ -999,6 +1007,166 @@ async fn vfs_write_endpoints_manage_files_and_refuse_read_only_mounts() {
             "move out of read-only mount answered {}",
             smuggle.status()
         );
+    }
+
+    gateway_daemon.stop().await;
+}
+
+/// Plugin dev endpoints over the wire against a real RuntimeHost rsi:
+/// scaffolded creation, validation NeedsFix, report 404→200, dev-session
+/// status degrading to `unknown` without podman, unknown project 404.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugin_dev_endpoints_scaffold_validate_and_report() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+    let auth = |request: reqwest::RequestBuilder| request.bearer_auth(token);
+
+    // Approve an environment directly through the daemon's registry (the
+    // HTTP approval path resolves tags against Docker Hub, which the
+    // integration suite must not depend on).
+    gateway_daemon
+        .infra
+        .rsi
+        .environment_registry()
+        .approve(
+            "sh-dev",
+            plugin_rsi::Environment {
+                reference: "docker.io/library/debian@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                interpreters: vec!["sh".into()],
+            },
+        )
+        .unwrap();
+
+    // Create → scaffolded project with one demo node.
+    let created = auth(http.post(format!("{base}/api/v1/plugin-projects")))
+        .json(&serde_json::json!({
+            "name": "wire-plugin",
+            "environment_id": "sh-dev",
+            "purpose": "wire scaffold test",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200);
+    let view: serde_json::Value = created.json().await.unwrap();
+    assert!(view["image"].as_str().unwrap().contains("@sha256:"));
+
+    let files = auth(
+        http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/files")),
+    )
+    .send()
+    .await
+    .unwrap()
+    .json::<serde_json::Value>()
+    .await
+    .unwrap();
+    let names = serde_json::to_string(&files).unwrap();
+    assert!(names.contains("demo.sh"), "scaffold script: {names}");
+    assert!(names.contains("README.md"), "scaffold readme: {names}");
+
+    // No report yet → 404; after a validation run → 200 with gates.
+    let missing = auth(
+        http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/report")),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Validation of the untouched scaffold passes the six gates.
+    let validated = auth(http.post(format!(
+        "{base}/api/v1/plugin-projects/wire-plugin/validate"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(validated.status(), 200);
+    let outcome: serde_json::Value = validated.json().await.unwrap();
+    assert_eq!(outcome["outcome"], "passed", "scaffold must validate: {outcome}");
+
+    let report = auth(
+        http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/report")),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(report.status(), 200);
+    let report: serde_json::Value = report.json().await.unwrap();
+    assert!(report["gates"].as_array().unwrap().len() >= 6);
+
+    // Activation needs a clean git tree; the scaffold is committed, so it
+    // succeeds end to end and the node is registered.
+    let activated = auth(http.post(format!(
+        "{base}/api/v1/plugin-projects/wire-plugin/activate"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(activated.status(), 200);
+    let activation: serde_json::Value = activated.json().await.unwrap();
+    assert_eq!(activation["activated"], true, "scaffold must activate: {activation}");
+
+    let plugins = auth(http.get(format!("{base}/api/v1/plugins")))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let wire = plugins["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["name"] == "wire-plugin")
+        .expect("activated plugin in /plugins");
+    assert!(wire["registered"].as_bool().unwrap(), "hot reload: {wire}");
+    assert!(wire["kinds"].to_string().contains("wire_plugin"));
+
+    // Dev-session status without a usable podman degrades to `unknown`
+    // (still 200, detail explains why) instead of erroring.
+    let session = auth(
+        http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/dev-session")),
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(session.status(), 200);
+    let session: serde_json::Value = session.json().await.unwrap();
+    assert!(
+        session["state"] == "absent" || session["state"] == "unknown" || session["state"] == "running",
+        "dev-session probe must degrade, got: {session}"
+    );
+
+    // Unknown projects are 404 across the new surface.
+    for path in [
+        "dev-session",
+        "validate",
+        "activate",
+        "report",
+        "nodes/x/test-run",
+    ] {
+        // Valid bodies per endpoint so the 404 comes from the project
+        // lookup, not from body validation.
+        let body = match path {
+            "dev-session" => r#"{"action":"start"}"#,
+            "nodes/x/test-run" => r#"{"inputs":{},"params":{}}"#,
+            _ => "{}",
+        };
+        let request = if path == "report" {
+            auth(http.get(format!(
+                "{base}/api/v1/plugin-projects/missing-plugin/{path}"
+            )))
+        } else {
+            auth(http.post(format!(
+                "{base}/api/v1/plugin-projects/missing-plugin/{path}"
+            )))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+        };
+        let missing = request.send().await.unwrap();
+        assert_eq!(missing.status(), 404, "path {path}");
     }
 
     gateway_daemon.stop().await;

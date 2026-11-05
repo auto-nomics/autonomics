@@ -116,8 +116,16 @@ pub fn api_router(state: GatewayState) -> Router {
         )
         .route("/plugin-projects/{name}/files", get(plugins::project_files))
         .route("/plugin-projects/{name}/file", get(plugins::read_project_file).put(plugins::save_project_file))
+        .route("/plugin-projects/{name}/dev-session", get(plugins::dev_session_status).post(plugins::dev_session_action))
+        .route("/plugin-projects/{name}/validate", post(plugins::validate_project))
+        .route("/plugin-projects/{name}/activate", post(plugins::activate_project))
+        .route("/plugin-projects/{name}/report", get(plugins::latest_report))
+        .route("/plugin-projects/{name}/nodes/{kind}/test-run", post(plugins::test_run_node))
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
+        .route("/plugins/{name}/uninstall", post(plugins::uninstall_plugin))
+        .route("/plugins/{name}/rollback", post(plugins::rollback_plugin))
+        .route("/plugins/{name}/fork", post(plugins::fork_plugin))
         .route(
             "/plugins/environments",
             get(plugin_environments::list_environments),

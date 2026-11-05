@@ -19,6 +19,7 @@ api-server = { path = "../api-server" }
 wiki = { path = "../wiki", features = ["vfs"] }
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
+container-runtime = { path = "../container-runtime" }
 vfs = { path = "../vfs" }
 dag-core = { path = "../dag-core" }
 container-plugin = { path = "../container-plugin" }
