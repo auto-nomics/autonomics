@@ -1224,7 +1224,10 @@ impl DagNode for ContainerCommandNode {
             request.image,
             self.runtime.name()
         ));
-        let result = match self.runtime.run(request).await {
+        let cleanup_reporter = reporter.clone();
+        let observer = container_runtime::observation::RunObserver::default()
+            .with_cleanup_handler(move |task| cleanup_reporter.register_cleanup(task));
+        let result = match self.runtime.run_observed(request, None, observer).await {
             Ok(result) => result,
             Err(error) => {
                 // Also surface the capped capture on the live event stream; the

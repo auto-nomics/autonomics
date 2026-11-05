@@ -2888,23 +2888,75 @@ impl FlowScheduler {
         }
         Ok(())
         }.await;
+        let mut cleanup_errors = Vec::new();
         if loop_result.is_err() || token.is_cancelled() {
-            // Wake node/executor cancellation handlers before forcefully aborting.
-            // Closing the event receiver also releases tasks waiting on event acknowledgements.
+            // Closing the receiver releases task event acknowledgements. Remote
+            // executors must finish their cancellation/reconciliation before
+            // their futures are dropped; local executors retain the bounded wait.
             token.cancel();
             drop(pending_events);
             drop(event_rx);
-            if tokio::time::timeout(Duration::from_secs(1), async {
-                while tasks.join_next().await.is_some() {}
-            })
-            .await
-            .is_err()
-            {
+            let mut completed = Vec::new();
+            let drain = async {
+                while let Some(result) = tasks.join_next().await {
+                    completed.push(result);
+                }
+            };
+            let expired = if executor.requires_cancel_join() {
+                drain.await;
+                false
+            } else {
+                tokio::time::timeout(Duration::from_secs(1), drain)
+                    .await
+                    .is_err()
+            };
+            if expired {
                 tasks.abort_all();
                 while tasks.join_next().await.is_some() {}
             }
+            for (id, process, key, _, _, attempts, result) in completed.into_iter().flatten() {
+                running.remove(&id);
+                let error = match &result {
+                    JobResult::Failed { error, .. } => Some(error.to_string()),
+                    JobResult::Success { .. } => None,
+                };
+                if let Some(error) = error
+                    .as_ref()
+                    .filter(|error| error.contains("remote_stop_unconfirmed"))
+                {
+                    cleanup_errors.push(error.clone());
+                }
+                let status = if error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("remote_stop_unconfirmed"))
+                {
+                    RuntimeStatus::Failed
+                } else {
+                    RuntimeStatus::Cancelled
+                };
+                records.push(InstanceRecord {
+                    id,
+                    process,
+                    item_key: Some(key),
+                    status,
+                    reused: false,
+                    ignored: false,
+                    attempts,
+                    outputs: BTreeMap::new(),
+                    error,
+                    elapsed_ms: result.duration().as_millis().min(u64::MAX as u128) as u64,
+                });
+            }
         }
-        loop_result?;
+        if let Err(error) = loop_result {
+            if !cleanup_errors.is_empty() {
+                return Err(Error::Execution(format!(
+                    "{error}; {}",
+                    cleanup_errors.join("; ")
+                )));
+            }
+            return Err(error);
+        }
         if token.is_cancelled() {
             for (id, (process, key, started, attempts)) in running {
                 records.push(InstanceRecord {

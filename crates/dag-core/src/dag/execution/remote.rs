@@ -346,6 +346,10 @@ impl TaskExecutor for RemoteTaskExecutor {
         "remote"
     }
 
+    fn requires_cancel_join(&self) -> bool {
+        true
+    }
+
     async fn run(&self, execution: TaskExecution) -> JobResult {
         let start = std::time::Instant::now();
         let task_id = execution.submission.spec.id.clone();
@@ -513,7 +517,8 @@ impl TaskExecutor for RemoteTaskExecutor {
         let receipt = match outcome {
             WaitOutcome::Receipt(Ok(receipt)) => receipt,
             WaitOutcome::Receipt(Err(error)) => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     // An unconfirmed cancel must surface in logs: the remote
                     // job may still be running, so nothing may clean its
                     // workspace.
@@ -533,18 +538,29 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     125,
-                    "remote_failed",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "remote_failed"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error,
+                    error: match cancel_error {
+                        Some(cancel_error) => DagError::Schedule(format!(
+                            "remote_stop_unconfirmed: remote lease `{}` after failure {error}: {cancel_error}",
+                            lease.lease_id
+                        )),
+                        None => error,
+                    },
                     duration,
                     details,
                 };
             }
             WaitOutcome::Cancelled => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     tracing::warn!(
                         task = %task_id,
                         lease = %lease.lease_id,
@@ -561,18 +577,29 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     130,
-                    "cancelled",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "cancelled"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error: DagError::Schedule("remote task cancelled".into()),
+                    error: DagError::Schedule(match cancel_error {
+                        Some(error) => format!(
+                            "remote_stop_unconfirmed: cancellation of remote lease `{}` could not be confirmed: {error}",
+                            lease.lease_id
+                        ),
+                        None => "remote task cancelled".into(),
+                    }),
                     duration,
                     details,
                 };
             }
             WaitOutcome::TimedOut => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     tracing::warn!(
                         task = %task_id,
                         lease = %lease.lease_id,
@@ -589,12 +616,22 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     124,
-                    "timeout",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "timeout"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error: DagError::Schedule("remote task timed out".into()),
+                    error: DagError::Schedule(match cancel_error {
+                        Some(error) => format!(
+                            "remote_stop_unconfirmed: timed out remote lease `{}`: {error}",
+                            lease.lease_id
+                        ),
+                        None => "remote task timed out".into(),
+                    }),
                     duration,
                     details,
                 };

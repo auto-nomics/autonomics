@@ -702,8 +702,9 @@ impl SlurmContainerRuntime {
         if let Some(recorder) = &self.submission_recorder {
             recorder.ensure_ready().map_err(mapped)?;
         }
+        let event_observer = observer.clone();
         let reporter = dag_core::dag::node_event::NodeReporter::noop().with_observer(move |o| {
-            observer.emit(container_runtime::observation::RuntimeObservation {
+            event_observer.emit(container_runtime::observation::RuntimeObservation {
                 phase: o.phase,
                 current: o.current,
                 total: o.total,
@@ -939,22 +940,42 @@ impl SlurmContainerRuntime {
         }
         let transport = Arc::new(transport);
         reporter.phase("submitting", "submitting the admitted Slurm job");
-        let lease = match transport.submit(dispatch, vec![]).await {
-            Ok(lease) => lease,
+        // Submission must survive cancellation: sbatch may have accepted a job
+        // even while the coordinator is still waiting for its response.
+        let submit_transport = Arc::clone(&transport);
+        let mut submission = PendingSubmission {
+            task: Some(tokio::spawn(async move {
+                submit_transport.submit(dispatch, vec![]).await
+            })),
+            transport: Arc::clone(&transport),
+            ssh: self.settings.ssh.clone(),
+            journal: journal.clone(),
+            observer: observer.clone(),
+        };
+        let submitted = submission.task.as_mut().expect("submission task").await;
+        submission.task.take();
+        let lease = match submitted {
             Err(error) => {
+                return Err(invalid(format!(
+                    "remote_stop_unconfirmed: Slurm submission task failed: {error}"
+                )));
+            }
+            Ok(Ok(lease)) => lease,
+            Ok(Err(error)) => {
                 record_submission_failure(&journal, &mut state, &error)?;
                 return Err(mapped(error));
             }
         };
-        state["job_id"] = json!(lease.lease_id);
-        state["state"] = json!("SUBMITTED");
-        record(&journal, &state)?;
         let mut guard = RemoteCancelGuard {
             transport: Arc::clone(&transport),
             ssh: self.settings.ssh.clone(),
             lease: Some(lease.clone()),
             journal: journal.clone(),
+            observer: observer.clone(),
         };
+        state["job_id"] = json!(lease.lease_id);
+        state["state"] = json!("SUBMITTED");
+        record(&journal, &state)?;
         let receipt = match tokio::time::timeout(
             Duration::from_secs(request.timeout_secs.saturating_add(60)),
             transport.wait_observed(&lease, &reporter),
@@ -1242,11 +1263,88 @@ impl PodmanConnection for SlurmContainerRuntime {
     }
 }
 
+struct PendingSubmission {
+    task: Option<tokio::task::JoinHandle<std::result::Result<TaskLease, dag_core::dag::DagError>>>,
+    transport: Arc<SlurmTaskTransport>,
+    ssh: SshTarget,
+    journal: PathBuf,
+    observer: container_runtime::observation::RunObserver,
+}
+
+impl Drop for PendingSubmission {
+    fn drop(&mut self) {
+        let Some(task) = self.task.take() else { return };
+        let transport = Arc::clone(&self.transport);
+        let ssh = self.ssh.clone();
+        let journal = self.journal.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let cleanup = handle.spawn(async move {
+                match task.await {
+                    Ok(Ok(lease)) => reconcile_cancel(transport, ssh, journal, lease).await,
+                    Ok(Err(error)) => Err(format!(
+                        "remote_stop_unconfirmed: submission was interrupted: {error}"
+                    )),
+                    Err(error) => Err(format!(
+                        "remote_stop_unconfirmed: submission task failed: {error}"
+                    )),
+                }
+            });
+            self.observer.register_cleanup(cleanup);
+        }
+    }
+}
+
+async fn reconcile_cancel(
+    transport: Arc<SlurmTaskTransport>,
+    ssh: SshTarget,
+    journal: PathBuf,
+    lease: TaskLease,
+) -> std::result::Result<(), String> {
+    let _ = transport.cancel(&lease).await;
+    let proof = stop_proof(&ssh, &lease.lease_id).await;
+    let confirmed = proof
+        .as_ref()
+        .is_ok_and(|proof| proof["full_subtree_terminal"] == true);
+    if let Ok(raw) = std::fs::read(&journal) {
+        if let Ok(mut state) = serde_json::from_slice::<Value>(&raw) {
+            if !state["job_id"].is_null() && state["job_id"] != lease.lease_id {
+                return Err(format!(
+                    "remote_stop_unconfirmed: journal does not match Slurm job {}",
+                    lease.lease_id
+                ));
+            }
+            state["job_id"] = json!(lease.lease_id);
+            state["state"] = json!("STOP_UNKNOWN");
+            if let Ok(proof) = proof {
+                if confirmed {
+                    state["state"] = json!("CANCELLED_STOPPED");
+                }
+                state["stop_proof"] = proof;
+            }
+            if let Err(error) = record(&journal, &state) {
+                return Err(format!(
+                    "remote_stop_unconfirmed: cannot record stop state for {}: {error}",
+                    lease.lease_id
+                ));
+            }
+        }
+    }
+    if confirmed {
+        Ok(())
+    } else {
+        Err(format!(
+            "remote_stop_unconfirmed: Slurm job {} has no terminal stop proof",
+            lease.lease_id
+        ))
+    }
+}
+
 struct RemoteCancelGuard {
     transport: Arc<SlurmTaskTransport>,
     ssh: SshTarget,
     lease: Option<TaskLease>,
     journal: PathBuf,
+    observer: container_runtime::observation::RunObserver,
 }
 impl Drop for RemoteCancelGuard {
     fn drop(&mut self) {
@@ -1257,25 +1355,8 @@ impl Drop for RemoteCancelGuard {
         let ssh = self.ssh.clone();
         let journal = self.journal.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = transport.cancel(&lease).await;
-                let proof = stop_proof(&ssh, &lease.lease_id).await;
-                if let Ok(raw) = std::fs::read(&journal) {
-                    if let Ok(mut state) = serde_json::from_slice::<Value>(&raw) {
-                        if state["job_id"] != lease.lease_id {
-                            return;
-                        }
-                        state["state"] = json!("STOP_UNKNOWN");
-                        if let Ok(proof) = proof {
-                            if proof["full_subtree_terminal"] == true {
-                                state["state"] = json!("CANCELLED_STOPPED");
-                            }
-                            state["stop_proof"] = proof;
-                        }
-                        let _ = record(&journal, &state);
-                    }
-                }
-            });
+            let task = handle.spawn(reconcile_cancel(transport, ssh, journal, lease));
+            self.observer.register_cleanup(task);
         }
         // The durable RUNNING record remains pending if the runtime is gone.
         // Neither branch removes remote scratch or infers a successful exit.

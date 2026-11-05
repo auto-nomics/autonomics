@@ -3201,6 +3201,13 @@ impl ProcessRoutingTaskExecutor {
 
 #[async_trait::async_trait]
 impl TaskExecutor for ProcessRoutingTaskExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.local.requires_cancel_join()
+            || self
+                .remote
+                .as_ref()
+                .is_some_and(|executor| executor.requires_cancel_join())
+    }
     fn name(&self) -> &'static str {
         "process-routing"
     }

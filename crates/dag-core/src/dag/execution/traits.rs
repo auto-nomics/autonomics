@@ -24,6 +24,12 @@ pub trait TaskExecutor: Send + Sync {
         None
     }
 
+    /// The scheduler must join this executor after cancellation so it can
+    /// finish remote cancellation and retain any unconfirmed lease evidence.
+    fn requires_cancel_join(&self) -> bool {
+        false
+    }
+
     /// Inspect compiled requirements on the already-bound executor before any
     /// node starts. Dynamic nodes must also be checked at dispatch.
     fn preflight(&self, _nodes: &[(&str, &dyn crate::DagNode)]) -> Result<(), DagError> {

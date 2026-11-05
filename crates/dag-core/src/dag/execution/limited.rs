@@ -37,6 +37,9 @@ impl LimitedTaskExecutor {
 
 #[async_trait::async_trait]
 impl TaskExecutor for LimitedTaskExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.inner.requires_cancel_join()
+    }
     fn name(&self) -> &'static str {
         self.inner.name()
     }

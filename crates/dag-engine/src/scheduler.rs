@@ -2822,6 +2822,78 @@ mod tests {
         started: Arc<tokio::sync::Notify>,
         cancelled: Arc<std::sync::atomic::AtomicBool>,
     }
+
+    struct DelayedRemoteCancellation {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskExecutor for DelayedRemoteCancellation {
+        fn name(&self) -> &'static str {
+            "delayed-remote-cancellation"
+        }
+        fn requires_cancel_join(&self) -> bool {
+            true
+        }
+        async fn run(&self, execution: TaskExecution) -> JobResult {
+            self.started.notify_one();
+            execution.cancellation.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+            JobResult::Failed {
+                id: execution.submission.spec.id,
+                error: DagError::Schedule("remote_stop_unconfirmed: fake remote job".into()),
+                duration: std::time::Duration::from_millis(1200),
+                details: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_waits_for_remote_stop_and_reports_uncertainty() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::items("s", vec![serde_json::json!("a")]))
+            .process(Process::new("worker", "echo", serde_json::json!({})))
+            .wire(Wire::direct("s", 0, "worker", 0))
+            .build()
+            .unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let scheduler = FlowScheduler::new(
+            Arc::new(DelayedRemoteCancellation {
+                started: started.clone(),
+            }),
+            Arc::new(EchoNode::build),
+            engine_ctx(),
+        );
+        let token = CancellationToken::new();
+        let run_token = token.clone();
+        let run = tokio::spawn(async move {
+            scheduler
+                .run_dataflow(
+                    &graph,
+                    &resolved(&graph),
+                    &FlowRunConfig::default(),
+                    Some(run_token),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .unwrap();
+        token.cancel();
+        let report = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.processes["worker"].failed, 1);
+        assert!(
+            report.instances[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("remote_stop_unconfirmed")
+        );
+    }
     #[async_trait::async_trait]
     impl TaskExecutor for CancellationObservingExecutor {
         fn name(&self) -> &'static str {

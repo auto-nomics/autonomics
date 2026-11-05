@@ -635,6 +635,9 @@ fn rejected(execution: TaskExecution, error: DagError) -> JobResult {
 
 #[async_trait::async_trait]
 impl TaskExecutor for TypedRemoteTaskExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.remote.requires_cancel_join()
+    }
     fn name(&self) -> &'static str {
         "typed-remote"
     }
@@ -711,6 +714,13 @@ impl PlacementTaskExecutor {
 
 #[async_trait::async_trait]
 impl TaskExecutor for PlacementTaskExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.local.requires_cancel_join()
+            || self
+                .remote
+                .as_ref()
+                .is_some_and(|executor| executor.requires_cancel_join())
+    }
     fn name(&self) -> &'static str {
         "placement"
     }
@@ -1094,7 +1104,10 @@ pub(super) async fn execute_typed_worker_core(
     }
     let reporter = NodeReporter::noop();
     let outputs = node.execute(ctx, &inputs, &reporter).await?;
-    if outputs.iter().any(|(port, _)| !requested.contains_key(port)) {
+    if outputs
+        .iter()
+        .any(|(port, _)| !requested.contains_key(port))
+    {
         return Err(failure("typed worker returned an undeclared output port"));
     }
     let output_root = workspace.join("typed-outputs");
