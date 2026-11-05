@@ -100,6 +100,68 @@ export function vfsFileUrl(path: string, download = false): string {
   return `/api/v1/vfs/file${query({ path, download })}`;
 }
 
+export async function mkdir(path: string): Promise<void> {
+  await gatewayRequest("POST", "/vfs/mkdir", { path });
+}
+
+export async function removeEntry(path: string, recursive = false): Promise<void> {
+  await gatewayRequest("DELETE", `/vfs/entry${query({ path, recursive })}`);
+}
+
+export async function moveEntry(src: string, dst: string): Promise<void> {
+  await gatewayRequest("POST", "/vfs/move", { src, dst });
+}
+
+/** Conflict-checked editor save; `original: null` overwrites. */
+export async function saveTextFile(path: string, contents: string, original: string | null): Promise<void> {
+  await gatewayRequest("PUT", "/vfs/text", { path, contents, original });
+}
+
+/** Upload a browser `File` as raw bytes (web build). */
+export async function uploadBrowserFile(path: string, file: File): Promise<void> {
+  const response = await fetch(vfsFileUrl(path), {
+    method: "PUT",
+    credentials: "same-origin",
+    body: file,
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error ?? `上传失败 (${response.status})`);
+  }
+}
+
+/** Pick a local file for upload: browser file input or Tauri dialog. */
+export async function pickUploadSource(): Promise<File | string | null> {
+  if (isTauri) {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    return dialog.open({ multiple: false, directory: false, title: "上传到 VFS" });
+  }
+  return new Promise<File | null>((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
+}
+
+/** Upload the picked source into `dir`, returning the written path. */
+export async function uploadToDir(dir: string, source: File | string): Promise<string> {
+  const name = source instanceof File
+    ? source.name
+    : source.split("/").filter(Boolean).pop() ?? "upload";
+  const path = dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`;
+  if (isTauri) {
+    if (typeof source !== "string") throw new Error("桌面端上传需要一个本地文件路径");
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("vfs_upload", { request: { path, localPath: source } });
+    return path;
+  }
+  if (!(source instanceof File)) throw new Error("浏览器上传需要一个文件");
+  await uploadBrowserFile(path, source);
+  return path;
+}
+
 /** Download a VFS file to the local machine. */
 export async function downloadVfsFile(path: string): Promise<void> {
   const name = path.split("/").filter(Boolean).pop() ?? "file";

@@ -301,9 +301,10 @@ export function registerWorkbenchEditorKinds(): void {
     name: (editor) => String(editor.params.path ?? ""),
     icon: () => FileText,
     body: VfsFileEditorBody,
-    // keep-alive: the loaded contents survive tab switches; editing with
-    // a dirty veto arrives with the write endpoints.
+    // keep-alive: loaded contents and unsaved drafts survive tab
+    // switches; the dirty veto guards closing with unsaved edits.
     mount: "keep-alive",
+    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("该文件有未保存的修改，关闭将丢弃修改。继续？"),
   });
   registerEditorKind({
     kind: "config",

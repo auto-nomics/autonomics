@@ -29,6 +29,7 @@ try {
     ], returned: 1, truncated: false },
   };
   const listed = [];
+  const writes = { mkdirs: [], saves: [], deletes: [], moves: [], uploads: [] };
 
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
   await page.route('**/api/v1/**', async route => {
@@ -38,7 +39,7 @@ try {
     if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [], contexts: {}, display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false } } });
     if (path === '/vfs/mounts') return route.fulfill({ json: { mounts: [
       { path: '/', backend: 'default', source: '/', read_only: false },
-      { path: '/data', backend: 'default', source: 'data', read_only: true },
+      { path: '/data/ldsc', backend: 'default', source: 'ldsc', read_only: true },
     ], count: 2 } });
     if (path === '/vfs/list') {
       const dir = url.searchParams.get('path') ?? '/';
@@ -47,13 +48,40 @@ try {
       if (!listing) return route.fulfill({ status: 404, json: { error: `no fixture for ${dir}` } });
       return route.fulfill({ json: listing });
     }
-    if (path === '/vfs/text') {
+    if (path === '/vfs/text' && route.request().method() === 'GET') {
       const file = url.searchParams.get('path');
       if (file === '/notes.md') return route.fulfill({ json: { path: file, contents: '# Notes\nhello vfs', size: 14, truncated: false } });
       if (file === '/data/ldsc/readme.txt') return route.fulfill({ json: { path: file, contents: 'panel', size: 5, truncated: false } });
       return route.fulfill({ status: 404, json: { error: 'not found' } });
     }
     if (path === '/vfs/stat') return route.fulfill({ json: { path: '/notes.md', name: 'notes.md', is_dir: false, size: 12, read_only: false } });
+    if (path === '/vfs/mkdir' && route.request().method() === 'POST') {
+      writes.mkdirs.push(route.request().postDataJSON().path);
+      return route.fulfill({ json: { path: route.request().postDataJSON().path, created: true } });
+    }
+    if (path === '/vfs/text' && route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      writes.saves.push(body);
+      if (body.original !== null && body.original !== '# Notes\nhello vfs') {
+        return route.fulfill({ status: 409, json: { error: 'File changed on the server; reload it before saving' } });
+      }
+      if (body.path === '/draft.md') return route.fulfill({ json: { path: body.path, size: body.contents.length, written: true } });
+      listings['/'].entries = listings['/'].entries.map(entry =>
+        entry.path === body.path ? { ...entry, size: body.contents.length } : entry);
+      return route.fulfill({ json: { path: body.path, size: body.contents.length, written: true } });
+    }
+    if (path === '/vfs/entry') {
+      writes.deletes.push(url.searchParams.get('path'));
+      return route.fulfill({ json: { path: url.searchParams.get('path'), deleted: true } });
+    }
+    if (path === '/vfs/move') {
+      writes.moves.push(route.request().postDataJSON());
+      return route.fulfill({ json: route.request().postDataJSON() });
+    }
+    if (path === '/vfs/file' && route.request().method() === 'PUT') {
+      writes.uploads.push(url.searchParams.get('path'));
+      return route.fulfill({ json: { path: url.searchParams.get('path'), size: 0, written: true } });
+    }
     // Loose shell fixtures.
     if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], snapshots: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
     if (path.startsWith('/wiki/')) return route.fulfill({ json: { entries: [] } });
@@ -91,19 +119,53 @@ try {
   await page.locator('[data-vfs-path="/notes.md"]').click();
   const tab = page.locator('[data-editor-group] [role="tab"]', { hasText: 'notes.md' });
   await tab.waitFor();
-  const viewer = page.locator('textarea[aria-label="查看 /notes.md"]');
+  const viewer = page.locator('[data-vfs-editor="/notes.md"]');
   await viewer.waitFor();
   assert.match(await viewer.inputValue(), /hello vfs/);
   await page.locator('[data-vfs-file-path="/notes.md"]').waitFor();
+
+  // ── File management: new folder via prompt ─────────────────────────
+  const dialogs = [];
+  page.on('dialog', dialog => {
+    dialogs.push({ type: dialog.type(), message: dialog.message() });
+    if (dialog.type() === 'prompt') {
+      void dialog.accept(dialog.message().includes('重命名') ? 'renamed-draft' : 'scratch');
+    } else void dialog.accept();
+  });
+  await page.waitForFunction(() => document.querySelector('[data-vfs-active-dir]').dataset.vfsActiveDir === '/data');
+  await sidebar.getByRole('button', { name: '新建文件夹' }).click();
+  assert.deepEqual(writes.mkdirs, ['/data/scratch'], `mkdir payload: ${JSON.stringify(writes.mkdirs)}`);
+
+  // ── Editor save + conflict ─────────────────────────────────────────
+  const editor = page.locator('[data-vfs-editor="/notes.md"]');
+  await editor.fill('# Notes\nhello vfs EDITED');
+  const saveButton = page.getByRole('button', { name: '保存' });
+  await saveButton.click();
+  await page.waitForFunction(() => document.querySelector('[data-vfs-file-path="/notes.md"]').textContent.includes('•') === false);
+  const lastSave = writes.saves.at(-1);
+  assert.equal(lastSave.path, '/notes.md');
+  assert.equal(lastSave.contents, '# Notes\nhello vfs EDITED');
+  assert.equal(lastSave.original, '# Notes\nhello vfs');
+  // A stale original (server-side change) answers 409 → conflict banner.
+  await editor.fill('second edit');
+  await saveButton.click();
+  await page.getByText('文件在服务器上已变更').waitFor();
+
+  // ── Row actions: rename and delete ─────────────────────────────────
+  await page.locator('[data-vfs-path="/notes.md"]').hover();
+  await page.locator('[data-vfs-actions="/notes.md"]').getByRole('button', { name: '重命名 notes.md' }).click();
+  for (let i = 0; i < 100 && writes.moves.length === 0; i++) await new Promise(r => setTimeout(r, 50));
+  assert.equal(writes.moves.at(-1)?.src, '/notes.md', `rename move: ${JSON.stringify(writes.moves)}`);
+  assert.equal(writes.moves.at(-1)?.dst, '/renamed-draft');
 
   // ── Read-only mount file shows the badge ──────────────────────────
   await page.locator('[data-vfs-path="/data/ldsc"]').click();
   await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
   await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').click();
   await page.locator('[data-vfs-file-path="/data/ldsc/readme.txt"]').waitFor();
-  await page.getByText('只读挂载').waitFor();
+  await page.locator('header', { has: page.locator('[data-vfs-file-path="/data/ldsc/readme.txt"]') })
+    .getByText('只读挂载', { exact: true }).waitFor();
 
-  // ── Fresh reload keeps the container selectable ────────────────────
   assert.equal(errors.length, 0, `page errors: ${errors.join('; ')}`);
   console.log('vfs-browser: all assertions passed');
 } catch (error) {

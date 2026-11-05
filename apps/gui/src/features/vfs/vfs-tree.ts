@@ -105,6 +105,22 @@ export function invalidateDir(path: string): void {
   commit({ children });
 }
 
+/** Invalidate `path` and its descendants, then reload every directory
+ *  that is (or was) cached or expanded below it — mutations must not
+ *  leave expanded folders stuck on a cleared cache. */
+export async function reloadSubtree(path: string): Promise<void> {
+  const prefix = path.endsWith("/") ? path : `${path}/`;
+  const covers = (key: string) => key === path || key.startsWith(prefix);
+  const affected = [...state.children.keys()].filter(covers);
+  invalidateDir(path);
+  const targets = new Set<string>([
+    ...affected,
+    ...[...state.expanded].filter(covers),
+  ]);
+  if (covers("/")) targets.add("/");
+  await Promise.all([...targets].map((dir) => loadDir(dir)));
+}
+
 export function toggleDir(path: string): void {
   const expanded = new Set(state.expanded);
   if (expanded.has(path)) {
