@@ -51,8 +51,8 @@ pub struct DevSessionView {
 /// Manages the dev container of every plugin workspace.
 #[derive(Clone)]
 pub struct DevSessionManager {
-    execution: Arc<ContainerExecutionInfra>,
-    store: Arc<PluginStore>,
+    pub(crate) execution: Arc<ContainerExecutionInfra>,
+    pub(crate) store: Arc<PluginStore>,
 }
 
 impl DevSessionManager {

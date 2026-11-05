@@ -140,6 +140,18 @@ impl PluginInfra {
             .create(plugin_name, environment_id, purpose, &self.catalog())
     }
 
+    /// Create a Draft plugin workspace with the runnable scaffold — the
+    /// human entry point (GUI plugin manager).
+    pub fn create_plugin_scaffolded(
+        &self,
+        plugin_name: &str,
+        environment_id: &str,
+        purpose: &str,
+    ) -> Result<crate::PluginOperator<'_>> {
+        self.store
+            .create_scaffolded(plugin_name, environment_id, purpose, &self.catalog())
+    }
+
     /// Fork an installed reference plugin into a new development workspace.
     ///
     /// This is the fast path for agents: the fork is already runnable in the
