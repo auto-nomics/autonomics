@@ -144,18 +144,24 @@ async fn install_model(config: &gateway::RuntimeConfig) -> Result<()> {
     Ok(())
 }
 
-/// Default concurrent image pre-pull width. Overlapping `podman pull`
-/// processes is safe — podman serialises store mutations through its own
-/// file locks; container creation keeps its separate `CREATE_GATE`.
+/// Default concurrent image pre-pull width, chosen by storage driver:
+/// overlay commits layers with cheap hardlink/mount work, so the store
+/// lock rotates quickly and parallel pulls pay off; vfs commits are
+/// full-copy extractions that hold the store lock for the whole layer,
+/// so wide concurrency only queues pull processes behind one writer.
 /// `AUTONOMICS_IMAGE_PULL_CONCURRENCY` overrides (clamped to 1..=16;
 /// 1 restores a fully sequential pull).
-fn pull_concurrency() -> usize {
-    const DEFAULT: usize = 4;
+fn pull_concurrency(storage_driver: Option<&str>) -> usize {
+    let default = match storage_driver {
+        Some("overlay") => 4,
+        // vfs and any unrecognised/legacy setting stay conservative.
+        _ => 2,
+    };
     std::env::var("AUTONOMICS_IMAGE_PULL_CONCURRENCY")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .map(|value| value.clamp(1, 16))
-        .unwrap_or(DEFAULT)
+        .unwrap_or(default)
 }
 
 /// Short human label for a digest-pinned reference — the final path
@@ -190,7 +196,7 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
         println!("images: {} declared, all present", declared.len());
         return Ok(());
     }
-    let concurrency = pull_concurrency();
+    let concurrency = pull_concurrency(infra.config.storage_driver.as_deref());
     println!(
         "images: {} declared, {} missing — pulling ({} concurrent)",
         declared.len(),
