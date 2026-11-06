@@ -44,6 +44,136 @@ struct Session {
     child: Child,
     terminal: Option<super::devterminal::Terminal>,
     language_servers: HashMap<String, super::devlsp::LanguageServer>,
+    vscode: Option<VscodeSession>,
+}
+
+struct VscodeSession {
+    source: PathBuf,
+    _socket_dir: tempfile::TempDir,
+    child: Child,
+    #[cfg(unix)]
+    listener: super::devvscode::Listener,
+}
+
+fn vscode_source() -> GatewayResult<Option<PathBuf>> {
+    let Some(path) = std::env::var_os("AUTONOMICS_VSCODE_SERVER_DIR") else {
+        return Ok(None);
+    };
+    let path = std::fs::canonicalize(path)
+        .map_err(|error| unavailable(format!("无法访问 VS Code 服务目录：{error}")))?;
+    if !path.join("bin/code-server-oss").is_file() || !path.join("node").is_file() {
+        return Err(unavailable("VS Code 服务目录缺少服务端程序"));
+    }
+    Ok(Some(path))
+}
+
+/// Persistent server data is separate from project files and scratch-GC names.
+#[cfg(unix)]
+fn vscode_data_dir(config: &PodmanConfig, project: &str) -> GatewayResult<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    plugin_rsi::validate_plugin_name(project)
+        .map_err(|error| GatewayError::Message(error.to_string()))?;
+    std::fs::create_dir_all(&config.workspace_root)
+        .map_err(|error| unavailable(format!("无法创建容器工作目录：{error}")))?;
+    let root = config.workspace_root.join(".devcontainer-vscode");
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(unavailable(format!("无法创建 VS Code 数据目录：{error}"))),
+    }
+    let metadata = std::fs::symlink_metadata(&root).map_err(|e| unavailable(e.to_string()))?;
+    // SAFETY: geteuid has no preconditions and only reads the process identity.
+    let uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+        return Err(unavailable(
+            "VS Code 数据目录必须由当前用户持有且仅当前用户可访问",
+        ));
+    }
+    let data = root.join(project);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o777);
+    match builder.create(&data) {
+        Ok(()) => std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o777))
+            .map_err(|e| unavailable(e.to_string()))?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(unavailable(format!(
+                "无法创建项目 VS Code 数据目录：{error}"
+            )));
+        }
+    }
+    let metadata = std::fs::symlink_metadata(&data).map_err(|e| unavailable(e.to_string()))?;
+    if !metadata.file_type().is_dir() || metadata.uid() != uid {
+        return Err(unavailable("项目 VS Code 数据目录必须是当前用户持有的目录"));
+    }
+    let data = std::fs::canonicalize(data).map_err(|e| unavailable(e.to_string()))?;
+    if data
+        .to_str()
+        .is_none_or(|path| path.contains([',', '\n', '\r']))
+    {
+        return Err(unavailable("VS Code 数据目录路径无效"));
+    }
+    Ok(data)
+}
+
+#[cfg(unix)]
+async fn start_vscode(
+    config: &PodmanConfig,
+    container: &str,
+    project: &str,
+    source: PathBuf,
+    socket_dir: tempfile::TempDir,
+    port_file: PathBuf,
+    remote_user: Option<&str>,
+    remote_env: &BTreeMap<String, String>,
+) -> GatewayResult<VscodeSession> {
+    let mut command = config.async_command();
+    command.args(["exec", "--workdir=/work"]);
+    if let Some(user) = remote_user {
+        command.arg(format!("--user={user}"));
+    }
+    command.args(
+        remote_env
+            .iter()
+            .map(|(key, value)| format!("--env={key}={value}")),
+    );
+    command.arg("--env=AUTONOMICS_VSCODE_BRIDGE_DIR=/run/autonomics-vscode");
+    let base = format!("/api/v1/plugin-projects/{project}/vscode");
+    let mut child = command
+        .args([container, "/bin/sh", "-c", "umask 000; exec /opt/autonomics-vscode/bin/code-server-oss --socket-path /run/autonomics-vscode/server.sock --server-data-dir /var/autonomics-vscode-data --without-connection-token --server-base-path \"$1\"", "vscode-server", &base])
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+        .kill_on_drop(true).spawn()
+        .map_err(|error| unavailable(format!("无法启动 VS Code 服务：{error}")))?;
+    let socket = socket_dir.path().join("socket/server.sock");
+    let ready = timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(status) = child.try_wait().map_err(|e| unavailable(e.to_string()))? {
+                return Err(unavailable(format!(
+                    "VS Code 服务启动失败（{status}），请检查镜像兼容性"
+                )));
+            }
+            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(150)).await;
+        }
+    })
+    .await;
+    match ready {
+        Ok(Ok(())) => {
+            let listener = super::devvscode::listen(socket, base, &port_file).await?;
+            Ok(VscodeSession {
+                source,
+                _socket_dir: socket_dir,
+                child,
+                listener,
+            })
+        }
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(unavailable("VS Code 服务启动超时")),
+    }
 }
 
 fn unavailable(message: impl Into<String>) -> GatewayError {
@@ -62,7 +192,134 @@ async fn running(config: &PodmanConfig, name: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// Keep the session reserved until Podman confirms the container has exited.
+async fn stop_session(slot: &mut Option<Session>) -> bool {
+    let Some(mut session) = slot.take() else {
+        return true;
+    };
+    drop(session.child.stdin.take());
+    if matches!(
+        timeout(Duration::from_secs(10), session.child.wait()).await,
+        Ok(Ok(_))
+    ) {
+        true
+    } else {
+        *slot = Some(session);
+        false
+    }
+}
+
 impl DevContainers {
+    #[cfg(unix)]
+    async fn vscode_control(
+        &self,
+        config: &PodmanConfig,
+        project: &str,
+        input: &[u8],
+    ) -> GatewayResult<Value> {
+        let mut slot = self.active(project).await?;
+        let session = slot.as_mut().ok_or_else(|| unavailable("开发容器未连接"))?;
+        if session
+            .child
+            .try_wait()
+            .map_err(|error| unavailable(error.to_string()))?
+            .is_some()
+        {
+            return Err(unavailable("开发容器已退出"));
+        }
+        if session.vscode.is_none() {
+            return Err(unavailable("VS Code 服务未启用"));
+        }
+        let name = session.name.clone();
+        let user = session.settings.remote_user.clone();
+        let env = session.remote_env.clone();
+        drop(slot);
+        let mut command = config.async_command();
+        command.args(["exec", "--interactive", "--workdir=/work"]);
+        if let Some(user) = user {
+            command.arg(format!("--user={user}"));
+        }
+        command.args(
+            env.iter()
+                .map(|(key, value)| format!("--env={key}={value}")),
+        );
+        let mut child = command
+            .args([
+                &name,
+                "/opt/autonomics-vscode/node",
+                "/opt/autonomics-vscode/extensions/autonomics-workspace-bridge/client.js",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| unavailable(format!("无法连接 VS Code 扩展宿主：{error}")))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| unavailable("无法连接 VS Code 扩展宿主输入"))?;
+        stdin
+            .write_all(input)
+            .await
+            .map_err(|_| unavailable("无法发送 VS Code 操作"))?;
+        drop(stdin);
+        let output = timeout(Duration::from_secs(5), child.wait_with_output())
+            .await
+            .map_err(|_| unavailable("VS Code 扩展宿主响应超时"))?
+            .map_err(|_| unavailable("无法读取 VS Code 扩展宿主响应"))?;
+        if !output.status.success() || output.stdout.len() > 16384 {
+            return Err(unavailable("VS Code 工作台尚未就绪或操作失败"));
+        }
+        let result: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|_| unavailable("VS Code 扩展宿主响应无效"))?;
+        let slot = self.active(project).await?;
+        if slot.as_ref().is_none_or(|session| session.name != name) {
+            return Err(unavailable("开发容器已更换，请重试"));
+        }
+        Ok(result)
+    }
+
+    /// Connect while the session lock keeps the selected container alive.
+    #[cfg(unix)]
+    #[allow(dead_code)] // Used by the isolated VS Code listener when it is added.
+    pub(crate) async fn vscode_connection(
+        &self,
+        project: &str,
+    ) -> GatewayResult<tokio::net::UnixStream> {
+        plugin_rsi::validate_plugin_name(project)
+            .map_err(|error| GatewayError::Message(error.to_string()))?;
+        let mut slot = self.active(project).await?;
+        let session = slot.as_mut().ok_or_else(|| unavailable("开发容器未连接"))?;
+        if session
+            .child
+            .try_wait()
+            .map_err(|error| unavailable(error.to_string()))?
+            .is_some()
+        {
+            return Err(unavailable("开发容器已退出"));
+        }
+        let server = session
+            .vscode
+            .as_mut()
+            .ok_or_else(|| unavailable("VS Code 服务未启用"))?;
+        if server
+            .child
+            .try_wait()
+            .map_err(|error| unavailable(error.to_string()))?
+            .is_some()
+        {
+            return Err(unavailable("VS Code 服务已退出"));
+        }
+        timeout(
+            Duration::from_secs(2),
+            tokio::net::UnixStream::connect(server._socket_dir.path().join("socket/server.sock")),
+        )
+        .await
+        .map_err(|_| unavailable("连接 VS Code 服务超时"))?
+        .map_err(|_| unavailable("无法连接 VS Code 服务"))
+    }
+
     async fn slot(&self, project: &str, create: bool) -> Option<Arc<Mutex<Option<Session>>>> {
         let mut sessions = self.sessions.lock().await;
         if create {
@@ -83,7 +340,10 @@ impl DevContainers {
             .await
             .ok_or_else(|| unavailable("开发容器未连接，请重新打开项目"))?;
         let guard = slot.lock_owned().await;
-        if guard.is_none() {
+        if guard
+            .as_ref()
+            .is_none_or(|session| session.child.stdin.is_none())
+        {
             return Err(unavailable("开发容器未连接，请重新打开项目"));
         }
         Ok(guard)
@@ -194,21 +454,42 @@ impl DevContainers {
         rebuild: bool,
     ) -> GatewayResult<String> {
         let settings = super::devcontainer_config::DevConfig::load(workspace, image)?;
+        let vscode_source = vscode_source()?;
         let slot = self
             .slot(project, true)
             .await
             .expect("created session slot");
         let mut session_slot = slot.lock().await;
         if let Some(session) = session_slot.as_mut() {
+            if session.child.stdin.is_none() {
+                match session.child.try_wait() {
+                    Ok(Some(_)) => *session_slot = None,
+                    Ok(None) => return Err(unavailable("开发容器正在关闭，请稍后重试")),
+                    Err(error) => return Err(unavailable(format!("无法检查开发容器：{error}"))),
+                }
+            }
+        }
+        if let Some(session) = session_slot.as_mut() {
             let mut container_settings = settings.clone();
             // remoteEnv belongs to newly spawned remote processes and can change
             // without replacing the container itself.
             container_settings.remote_env = session.settings.remote_env.clone();
-            if !rebuild && session.settings == container_settings && session.workspace == workspace
+            if !rebuild
+                && session.settings == container_settings
+                && session.workspace == workspace
+                && session.vscode.as_ref().map(|server| &server.source) == vscode_source.as_ref()
             {
                 match session.child.try_wait() {
                     Ok(None) => {
-                        if running(config, &session.name).await {
+                        let server_alive = match session.vscode.as_mut() {
+                            Some(server) => server
+                                .child
+                                .try_wait()
+                                .map_err(|e| unavailable(e.to_string()))?
+                                .is_none(),
+                            None => true,
+                        };
+                        if running(config, &session.name).await && server_alive {
                             let remote_env = settings
                                 .resolve_remote_env(config, &session.name, workspace)
                                 .await?;
@@ -225,9 +506,11 @@ impl DevContainers {
                             session.settings = settings;
                             return Ok(session.name.clone());
                         }
-                        return Err(unavailable(
-                            "开发容器暂时不可访问，现有会话已保留，请稍后重试",
-                        ));
+                        if server_alive {
+                            return Err(unavailable(
+                                "开发容器暂时不可访问，现有会话已保留，请稍后重试",
+                            ));
+                        }
                     }
                     Ok(Some(_)) => {}
                     Err(error) => return Err(unavailable(format!("无法检查开发容器：{error}"))),
@@ -237,8 +520,14 @@ impl DevContainers {
         // Keep an existing session alive if the replacement image fails to build.
         let image = settings.build_image(config).await?;
         let (namespace, container_user) = settings.user_settings(config, &image).await?;
-        // Dropping the old stdin closes the session before replacing it.
-        *session_slot = None;
+        #[cfg(unix)]
+        let vscode_data = vscode_source
+            .as_ref()
+            .map(|_| vscode_data_dir(config, project))
+            .transpose()?;
+        if !stop_session(&mut session_slot).await {
+            return Err(unavailable("旧开发容器仍在关闭，请稍后重试"));
+        }
         let mount = workspace
             .to_str()
             .ok_or_else(|| unavailable("项目工作区路径不是有效的 UTF-8"))?;
@@ -246,6 +535,38 @@ impl DevContainers {
             return Err(unavailable("项目工作区路径不能包含逗号或换行"));
         }
         let name = format!("autonomics-dev-{}", uuid::Uuid::new_v4().simple());
+        #[cfg(unix)]
+        let vscode_socket_dir = if let Some(source) = &vscode_source {
+            use std::os::unix::fs::PermissionsExt;
+            if source.to_string_lossy().contains([',', '\n', '\r']) {
+                return Err(unavailable("VS Code 服务路径不能包含逗号或换行"));
+            }
+            let dir = tempfile::Builder::new()
+                .prefix("autonomics-vscode-")
+                .tempdir()
+                .map_err(|e| unavailable(format!("无法创建 VS Code 通信目录：{e}")))?;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| unavailable(e.to_string()))?;
+            let socket = dir.path().join("socket");
+            std::fs::create_dir(&socket).map_err(|e| unavailable(e.to_string()))?;
+            if socket
+                .to_str()
+                .is_none_or(|path| path.contains([',', '\n', '\r']))
+            {
+                return Err(unavailable("VS Code 通信目录路径无效"));
+            }
+            // The private parent remains 0700 on the host; the mounted child
+            // must be writable by an arbitrary configured remoteUser.
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o777))
+                .map_err(|e| unavailable(e.to_string()))?;
+            Some(dir)
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        if vscode_source.is_some() {
+            return Err(unavailable("VS Code 容器服务需要 Unix socket"));
+        }
         let mut command = config.async_command();
         command.args([
             "run",
@@ -261,6 +582,24 @@ impl DevContainers {
             "--mount",
             &format!("type=bind,src={mount},dst=/work,rw"),
         ]);
+        #[cfg(unix)]
+        if let (Some(source), Some(socket_dir)) = (&vscode_source, &vscode_socket_dir) {
+            command.arg("--mount").arg(format!(
+                "type=bind,src={},dst=/opt/autonomics-vscode,ro",
+                source.display()
+            ));
+            command.arg("--mount").arg(format!(
+                "type=bind,src={},dst=/run/autonomics-vscode,rw",
+                socket_dir.path().join("socket").display()
+            ));
+            let data = vscode_data
+                .as_ref()
+                .ok_or_else(|| unavailable("VS Code 数据目录不可用"))?;
+            command.arg("--mount").arg(format!(
+                "type=bind,src={},dst=/var/autonomics-vscode-data,rw",
+                data.display()
+            ));
+        }
         command.arg(namespace.as_deref().unwrap_or("--userns=keep-id"));
         command.arg(if container_user.is_some() {
             "--workdir=/"
@@ -314,6 +653,29 @@ impl DevContainers {
                         settings.remote_user.as_deref(),
                     )
                     .await?;
+                #[cfg(unix)]
+                let vscode = match (vscode_source, vscode_socket_dir) {
+                    (Some(source), Some(socket_dir)) => Some(
+                        start_vscode(
+                            config,
+                            &name,
+                            project,
+                            source,
+                            socket_dir,
+                            vscode_data
+                                .as_ref()
+                                .and_then(|path| path.parent())
+                                .ok_or_else(|| unavailable("VS Code 数据目录不可用"))?
+                                .join(format!(".port-{project}")),
+                            settings.remote_user.as_deref(),
+                            &remote_env,
+                        )
+                        .await?,
+                    ),
+                    _ => None,
+                };
+                #[cfg(not(unix))]
+                let vscode = None;
                 *session_slot = Some(Session {
                     name: name.clone(),
                     settings,
@@ -322,6 +684,7 @@ impl DevContainers {
                     child,
                     terminal: None,
                     language_servers: HashMap::new(),
+                    vscode,
                 });
                 Ok(name)
             }
@@ -330,15 +693,12 @@ impl DevContainers {
         }
     }
 
-    async fn close(&self, project: &str) {
+    async fn close(&self, project: &str) -> bool {
         let Some(slot) = self.slot(project, false).await else {
-            return;
+            return true;
         };
-        let session = slot.lock().await.take();
-        if let Some(mut session) = session {
-            drop(session.child.stdin.take());
-            let _ = timeout(Duration::from_secs(10), session.child.wait()).await;
-        }
+        let mut guard = slot.lock().await;
+        stop_session(&mut guard).await
     }
 
     async fn is_connected(&self, config: &PodmanConfig, project: &str) -> bool {
@@ -354,7 +714,14 @@ impl DevContainers {
                 *session_slot = None;
                 false
             }
-            Ok(None) => running(config, &session.name).await,
+            Ok(None) if session.child.stdin.is_none() => false,
+            Ok(None) => {
+                let server_alive = session
+                    .vscode
+                    .as_mut()
+                    .is_none_or(|server| matches!(server.child.try_wait(), Ok(None)));
+                server_alive && running(config, &session.name).await
+            }
             Err(_) => false,
         }
     }
@@ -727,7 +1094,9 @@ pub(crate) async fn close(
 ) -> GatewayResult<Json<Value>> {
     plugin_rsi::validate_plugin_name(&project)
         .map_err(|error| GatewayError::Message(error.to_string()))?;
-    state.devcontainers.close(&project).await;
+    if !state.devcontainers.close(&project).await {
+        return Err(unavailable("开发容器仍在关闭，请稍后重试"));
+    }
     Ok(Json(json!({"project": project, "status": "disconnected"})))
 }
 
@@ -742,6 +1111,114 @@ pub(crate) async fn status(
         .is_connected(&state.infra.container_execution.config, &project)
         .await;
     Ok(Json(json!({"project": project, "connected": connected})))
+}
+
+/// Issue the local workbench URL only to an authenticated local gateway client.
+#[cfg(unix)]
+pub(crate) async fn vscode_url(
+    State(state): State<GatewayState>,
+    AxumPath(project): AxumPath<String>,
+    headers: axum::http::HeaderMap,
+) -> GatewayResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(':').next());
+    if !matches!(host, Some("127.0.0.1" | "localhost")) {
+        return Err(unavailable(
+            "VS Code 本地工作台仅支持通过 localhost 或 127.0.0.1 访问网关",
+        ));
+    }
+    plugin_rsi::validate_plugin_name(&project)
+        .map_err(|error| GatewayError::Message(error.to_string()))?;
+    let mut slot = state.devcontainers.active(&project).await?;
+    let session = slot.as_mut().ok_or_else(|| unavailable("开发容器未连接"))?;
+    if session
+        .child
+        .try_wait()
+        .map_err(|error| unavailable(error.to_string()))?
+        .is_some()
+    {
+        return Err(unavailable("开发容器已退出"));
+    }
+    let server = session
+        .vscode
+        .as_mut()
+        .ok_or_else(|| unavailable("VS Code 服务未启用"))?;
+    if server
+        .child
+        .try_wait()
+        .map_err(|error| unavailable(error.to_string()))?
+        .is_some()
+        || server.listener.task.is_finished()
+    {
+        return Err(unavailable("VS Code 服务已退出"));
+    }
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({"url": server.listener.url})),
+    )
+        .into_response())
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn vscode_url() -> GatewayResult<axum::response::Response> {
+    Err(unavailable("VS Code 容器服务需要 Unix socket"))
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct VscodeControl {
+    action: String,
+    path: Option<String>,
+    line: Option<u32>,
+    column: Option<u32>,
+}
+
+#[cfg(unix)]
+pub(crate) async fn vscode_control(
+    State(state): State<GatewayState>,
+    AxumPath(project): AxumPath<String>,
+    Json(request): Json<VscodeControl>,
+) -> GatewayResult<Json<Value>> {
+    plugin_rsi::validate_plugin_name(&project)
+        .map_err(|error| GatewayError::Message(error.to_string()))?;
+    match request.action.as_str() {
+        "state" if request.path.is_none() && request.line.is_none() && request.column.is_none() => {
+        }
+        "open" => {
+            let path = request
+                .path
+                .as_deref()
+                .ok_or_else(|| GatewayError::Message("缺少文件路径".into()))?;
+            validate_file_path(path)?;
+            if request
+                .line
+                .is_some_and(|value| value == 0 || value > 10_000_000)
+                || request
+                    .column
+                    .is_some_and(|value| value == 0 || value > 10_000_000)
+            {
+                return Err(GatewayError::Message("文件位置无效".into()));
+            }
+        }
+        _ => return Err(GatewayError::Message("不支持的 VS Code 操作".into())),
+    }
+    let input = serde_json::to_vec(&json!({"action":request.action, "path":request.path, "line":request.line, "column":request.column}))
+        .map_err(|_| GatewayError::Message("VS Code 操作无效".into()))?;
+    if input.len() > 16384 {
+        return Err(GatewayError::Message("VS Code 操作过大".into()));
+    }
+    let result = state
+        .devcontainers
+        .vscode_control(&state.infra.container_execution.config, &project, &input)
+        .await?;
+    Ok(Json(result))
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn vscode_control() -> GatewayResult<Json<Value>> {
+    Err(unavailable("VS Code 容器服务需要 Unix socket"))
 }
 
 #[derive(serde::Deserialize)]
@@ -1049,6 +1526,470 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn closing_session_stays_reserved_until_container_exits() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("closing");
+        let child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "cat >/dev/null; : > \"$1\"; sleep 1", "test"])
+            .arg(&marker)
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let manager = Arc::new(DevContainers::default());
+        let slot = manager.slot("project", true).await.unwrap();
+        *slot.lock().await = Some(Session {
+            name: "container".into(),
+            settings: super::super::devcontainer_config::DevConfig::load(dir.path(), "image")
+                .unwrap_or_else(|_| panic!("default config")),
+            workspace: dir.path().to_path_buf(),
+            remote_env: BTreeMap::new(),
+            child,
+            terminal: None,
+            language_servers: HashMap::new(),
+            vscode: None,
+        });
+        let closing = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.close("project").await })
+        };
+        timeout(Duration::from_secs(5), async {
+            while !marker.exists() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            timeout(Duration::from_millis(150), manager.active("project"))
+                .await
+                .is_err()
+        );
+        assert!(closing.await.unwrap());
+        assert!(manager.active("project").await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vscode_data_is_private_separate_and_rejects_symlinks() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = PodmanConfig::default();
+        config.workspace_root = dir.path().join("workspace");
+        let alpha = vscode_data_dir(&config, "alpha").unwrap_or_else(|_| panic!("alpha data"));
+        let beta = vscode_data_dir(&config, "beta").unwrap_or_else(|_| panic!("beta data"));
+        assert_ne!(alpha, beta);
+        assert_eq!(
+            vscode_data_dir(&config, "alpha").unwrap_or_else(|_| panic!("reuse data")),
+            alpha
+        );
+        assert_eq!(
+            std::fs::metadata(alpha.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert!(vscode_data_dir(&config, "../escape").is_err());
+        symlink(dir.path(), alpha.parent().unwrap().join("linked")).unwrap();
+        assert!(vscode_data_dir(&config, "linked").is_err());
+        std::fs::set_permissions(
+            alpha.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(vscode_data_dir(&config, "alpha").is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "requires a local test image, Podman state and AUTONOMICS_VSCODE_SERVER_DIR"]
+    async fn real_container_starts_vscode_in_project_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = std::env::var("AUTONOMICS_DEVCONTAINER_TEST_STATE").expect("test state");
+        let image = std::env::var("AUTONOMICS_DEVCONTAINER_TEST_IMAGE").expect("test image");
+        assert!(std::env::var_os("AUTONOMICS_VSCODE_SERVER_DIR").is_some());
+        let mut config =
+            container_runtime::ContainerExecutionInfra::for_operator_state_dir(Path::new(&state))
+                .expect("container configuration")
+                .config;
+        let runtime_dir = tempfile::tempdir().unwrap();
+        config.workspace_root = runtime_dir.path().join("runtime");
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("hello.py"),
+            "print('container workbench')\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.path().join("second.py"),
+            "print('bridge opened file')\n",
+        )
+        .unwrap();
+        let manager = DevContainers::default();
+        manager
+            .connect(&config, "vscode-test", &image, workspace.path())
+            .await
+            .unwrap_or_else(|_| panic!("connect VS Code container"));
+        let (socket_dir, workbench_url) = {
+            let slot = manager
+                .active("vscode-test")
+                .await
+                .unwrap_or_else(|_| panic!("active VS Code container"));
+            let vscode = slot.as_ref().unwrap().vscode.as_ref().unwrap();
+            (
+                vscode._socket_dir.path().to_owned(),
+                vscode.listener.url.clone(),
+            )
+        };
+        assert_eq!(
+            std::fs::metadata(&socket_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let stream = manager
+            .vscode_connection("vscode-test")
+            .await
+            .unwrap_or_else(|_| panic!("connect to VS Code socket"));
+        let request = axum::http::Request::builder()
+            .uri("/api/v1/plugin-projects/vscode-test/vscode/?folder=/work")
+            .header("host", "localhost")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = timeout(
+            Duration::from_secs(30),
+            super::super::devvscode::forward(stream, request),
+        )
+        .await
+        .unwrap()
+        .unwrap_or_else(|_| panic!("proxy VS Code response"));
+        assert!(
+            response.status() == StatusCode::OK || response.status() == StatusCode::FOUND,
+            "{}",
+            response.status()
+        );
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client.get(&workbench_url).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
+        );
+        let html = response.text().await.unwrap();
+        assert!(html.contains("workbench"));
+        let origin = workbench_url
+            .split('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("/");
+        assert_eq!(
+            client
+                .get(format!(
+                    "{origin}/wrong/api/v1/plugin-projects/vscode-test/vscode/"
+                ))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            client
+                .get(&workbench_url)
+                .header("host", "attacker.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            client
+                .get(&workbench_url)
+                .header("connection", "Upgrade")
+                .header("upgrade", "websocket")
+                .header("origin", "http://attacker.example")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        if std::env::var_os("AUTONOMICS_DEVCONTAINER_TEST_BROWSER").is_some() {
+            let parent_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let parent_url = format!("http://{}/", parent_listener.local_addr().unwrap());
+            let parent_html = format!(
+                r#"<iframe src="{workbench_url}" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" style="width:1400px;height:900px"></iframe>"#
+            );
+            let parent_app = axum::Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let html = parent_html.clone();
+                    async move { axum::response::Html(html) }
+                }),
+            );
+            let parent_task =
+                tokio::spawn(
+                    async move { axum::serve(parent_listener, parent_app).await.unwrap() },
+                );
+            let script = r#"const {chromium}=require('playwright'); const fs=require('node:fs'); const path=require('node:path');
+(async()=>{const browser=await chromium.launchPersistentContext(process.argv[2],{executablePath:'/usr/bin/chromium',args:['--no-sandbox','--no-proxy-server']});
+try {const page=browser.pages()[0]||await browser.newPage(); let sockets=0; page.on('websocket',()=>sockets++);
+page.on('pageerror',e=>console.log('PAGE ERROR',e.message));
+page.on('console',m=>{if(m.type()==='error') console.log('CONSOLE ERROR',m.text())});
+page.on('requestfailed',r=>console.log('REQUEST FAILED',r.url(),r.failure()?.errorText));
+page.on('response',r=>{if(r.status()>=400) console.log('HTTP ERROR',r.status(),r.url())});
+await page.goto(process.argv[1]); const frame=page.frameLocator('iframe');
+try {await frame.locator('.monaco-workbench').waitFor({timeout:25000});}
+catch(e){console.log('PAGE TEXT',(await frame.locator('body').innerText()).slice(0,1500));throw e;}
+await frame.getByText('hello.py',{exact:true}).first().dblclick({timeout:30000});
+await frame.getByText("print('container workbench')",{exact:false}).first().waitFor({timeout:30000});
+await frame.locator('body').evaluate(()=>localStorage.setItem('autonomics-origin-test','persisted'));
+await page.waitForTimeout(3000); if (!sockets) throw new Error('no remote websocket opened');
+const dir=process.argv[3]; const wait=async name=>{for(let i=0;i<500;i++){if(fs.existsSync(path.join(dir,name)))return;await new Promise(r=>setTimeout(r,100));}throw Error('timeout '+name)};
+fs.writeFileSync(path.join(dir,'browser-ready'),'1'); await wait('open-issued');
+const line=frame.getByText("print('bridge opened file')",{exact:false}).first(); await line.waitFor({timeout:30000});
+await line.click(); await page.keyboard.press('End'); await page.keyboard.type('#dirty');
+await frame.getByText('#dirty',{exact:false}).first().waitFor({timeout:10000});
+fs.writeFileSync(path.join(dir,'browser-dirty'),'1'); await wait('save-issued');
+await page.keyboard.press('Control+s'); fs.writeFileSync(path.join(dir,'browser-saved'),'1'); await wait('browser-done');
+console.log('workbench, file and remote websocket ready');
+} finally {await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});"#;
+            let gui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/gui");
+            let browser_profile = runtime_dir.path().join("browser-profile");
+            let mut browser = tokio::process::Command::new("node")
+                .current_dir(gui)
+                .args(["-e", script, &parent_url])
+                .arg(&browser_profile)
+                .arg(runtime_dir.path())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let wait_file = |name: &'static str| {
+                let path = runtime_dir.path().join(name);
+                async move {
+                    timeout(Duration::from_secs(45), async {
+                        while !path.exists() {
+                            sleep(Duration::from_millis(100)).await;
+                        }
+                    })
+                    .await
+                }
+            };
+            if wait_file("browser-ready").await.is_err() {
+                let _ = browser.kill().await;
+                let output = browser.wait_with_output().await.unwrap();
+                panic!(
+                    "browser failed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let state_request = br#"{"action":"state","debug":true}"#;
+            timeout(Duration::from_secs(20), async {
+                loop {
+                    if manager
+                        .vscode_control(&config, "vscode-test", state_request)
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await
+            .expect("bridge activation");
+            let opened = manager
+                .vscode_control(
+                    &config,
+                    "vscode-test",
+                    br#"{"action":"open","path":"second.py","line":1,"column":1}"#,
+                )
+                .await
+                .unwrap_or_else(|_| panic!("open file in VS Code"));
+            assert_eq!(opened["opened"], true);
+            std::fs::write(runtime_dir.path().join("open-issued"), "1").unwrap();
+            if wait_file("browser-dirty").await.is_err() {
+                let _ = browser.kill().await;
+                let output = browser.wait_with_output().await.unwrap();
+                panic!(
+                    "open/edit failed: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            let dirty_state = timeout(Duration::from_secs(10), async {
+                loop {
+                    if manager
+                        .vscode_control(&config, "vscode-test", state_request)
+                        .await
+                        .is_ok_and(|value| value["dirty"] == true)
+                    {
+                        break;
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await;
+            if dirty_state.is_err() {
+                let last = manager
+                    .vscode_control(&config, "vscode-test", state_request)
+                    .await
+                    .ok();
+                let disk =
+                    std::fs::read_to_string(workspace.path().join("second.py")).unwrap_or_default();
+                panic!("dirty state not reported: {last:?}; disk={disk:?}");
+            }
+            std::fs::write(runtime_dir.path().join("save-issued"), "1").unwrap();
+            wait_file("browser-saved").await.expect("save in VS Code");
+            timeout(Duration::from_secs(10), async {
+                loop {
+                    if manager
+                        .vscode_control(&config, "vscode-test", state_request)
+                        .await
+                        .is_ok_and(|value| value["dirty"] == false)
+                    {
+                        break;
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await
+            .expect("clean state");
+            std::fs::write(runtime_dir.path().join("browser-done"), "1").unwrap();
+            let output = timeout(Duration::from_secs(15), browser.wait_with_output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            parent_task.abort();
+        }
+        assert!(manager.is_connected(&config, "vscode-test").await);
+        let marker = manager.exec(&config, "vscode-test", "mkdir -p /var/autonomics-vscode-data/extensions/test-extension && printf persisted > /var/autonomics-vscode-data/extensions/test-extension/marker", &[], &[]).await.unwrap_or_else(|_| panic!("write VS Code extension data"));
+        assert!(marker.status.success());
+        manager.close("vscode-test").await;
+        assert!(!socket_dir.exists());
+        let previous = manager
+            .connect(&config, "vscode-test", &image, workspace.path())
+            .await
+            .unwrap_or_else(|_| panic!("reopen VS Code container"));
+        let reopened_url = {
+            let slot = manager
+                .active("vscode-test")
+                .await
+                .unwrap_or_else(|_| panic!("active reopened project"));
+            slot.as_ref()
+                .unwrap()
+                .vscode
+                .as_ref()
+                .unwrap()
+                .listener
+                .url
+                .clone()
+        };
+        assert_eq!(
+            workbench_url.split('/').take(3).collect::<Vec<_>>(),
+            reopened_url.split('/').take(3).collect::<Vec<_>>()
+        );
+        assert_ne!(workbench_url, reopened_url);
+        if std::env::var_os("AUTONOMICS_DEVCONTAINER_TEST_BROWSER").is_some() {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let parent_url = format!("http://{}/", listener.local_addr().unwrap());
+            let html = format!(
+                r#"<iframe src="{reopened_url}" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" style="width:1400px;height:900px"></iframe>"#
+            );
+            let app = axum::Router::new().route(
+                "/",
+                axum::routing::get(move || {
+                    let html = html.clone();
+                    async move { axum::response::Html(html) }
+                }),
+            );
+            let parent_task =
+                tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let script = r#"const {chromium}=require('playwright');
+(async()=>{const ctx=await chromium.launchPersistentContext(process.argv[2],{executablePath:'/usr/bin/chromium',args:['--no-sandbox','--no-proxy-server']});
+try {const page=ctx.pages()[0]||await ctx.newPage(); await page.goto(process.argv[1],{waitUntil:'domcontentloaded'});
+const frame=page.frameLocator('iframe'); await frame.locator('.monaco-workbench').waitFor({timeout:25000});
+if(await frame.locator('body').evaluate(()=>localStorage.getItem('autonomics-origin-test'))!=='persisted') throw new Error('browser storage not restored');
+}finally{await ctx.close();}})().catch(e=>{console.error(e);process.exit(1)});"#;
+            let output = timeout(
+                Duration::from_secs(45),
+                tokio::process::Command::new("node")
+                    .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/gui"))
+                    .args(["-e", script, &parent_url])
+                    .arg(runtime_dir.path().join("browser-profile"))
+                    .output(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            parent_task.abort();
+        }
+        let marker = manager
+            .exec(
+                &config,
+                "vscode-test",
+                "cat /var/autonomics-vscode-data/extensions/test-extension/marker",
+                &[],
+                &[],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("read persisted data"));
+        assert!(marker.status.success());
+        assert_eq!(marker.stdout, b"persisted");
+        let rebuilt = manager
+            .connect_mode(&config, "vscode-test", &image, workspace.path(), true)
+            .await
+            .unwrap_or_else(|_| panic!("rebuild VS Code container"));
+        assert_ne!(previous, rebuilt);
+        let marker = manager
+            .exec(
+                &config,
+                "vscode-test",
+                "cat /var/autonomics-vscode-data/extensions/test-extension/marker",
+                &[],
+                &[],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("read data after rebuild"));
+        assert!(marker.status.success());
+        assert_eq!(marker.stdout, b"persisted");
+        manager
+            .connect(&config, "vscode-other", &image, workspace.path())
+            .await
+            .unwrap_or_else(|_| panic!("open second project"));
+        let isolated = manager
+            .exec(
+                &config,
+                "vscode-other",
+                "test ! -e /var/autonomics-vscode-data/extensions/test-extension/marker",
+                &[],
+                &[],
+            )
+            .await
+            .unwrap_or_else(|_| panic!("check project isolation"));
+        assert!(isolated.status.success());
+        manager.close("vscode-other").await;
+        manager.close("vscode-test").await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn temporary_health_probe_failure_does_not_destroy_session() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
@@ -1083,6 +2024,7 @@ mod tests {
             child,
             terminal: None,
             language_servers: HashMap::new(),
+            vscode: None,
         });
         assert!(!manager.is_connected(&config, "project").await);
         assert!(manager.active("project").await.is_ok());
@@ -1132,6 +2074,7 @@ mod tests {
             child,
             terminal: None,
             language_servers: HashMap::new(),
+            vscode: None,
         });
         let task = {
             let manager = manager.clone();
@@ -1191,6 +2134,7 @@ mod tests {
             child,
             terminal: None,
             language_servers: HashMap::new(),
+            vscode: None,
         });
         let task = {
             let manager = manager.clone();
@@ -1244,6 +2188,7 @@ mod tests {
             child,
             terminal: None,
             language_servers: HashMap::new(),
+            vscode: None,
         });
         assert!(manager.snapshot(&config, "project").await.is_err());
         manager.close("project").await;
@@ -1292,10 +2237,12 @@ mod tests {
         let state =
             std::env::var("AUTONOMICS_DEVCONTAINER_TEST_STATE").expect("test state directory");
         let image = std::env::var("AUTONOMICS_DEVCONTAINER_TEST_IMAGE").expect("local test image");
-        let config =
+        let mut config =
             container_runtime::ContainerExecutionInfra::for_operator_state_dir(Path::new(&state))
                 .expect("container configuration")
                 .config;
+        let runtime_dir = tempfile::tempdir().unwrap();
+        config.workspace_root = runtime_dir.path().join("runtime");
         let workspace = tempfile::tempdir().unwrap();
         std::fs::write(workspace.path().join(".devcontainer.json"), r#"{"containerUser":"root","remoteUser":"nobody","onCreateCommand":"id -u > /work/lifecycle-uid"}"#).unwrap();
         let manager = DevContainers::default();

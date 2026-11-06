@@ -9,6 +9,8 @@ pub(crate) mod devcontainer;
 mod devcontainer_config;
 mod devlsp;
 mod devterminal;
+#[cfg(unix)]
+mod devvscode;
 mod docs;
 mod error;
 mod events;

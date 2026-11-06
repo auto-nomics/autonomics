@@ -255,7 +255,7 @@ export class LanguageClient {
     this.stopped = true;
     window.clearTimeout(this.timer);
     for (const disposable of this.disposables) disposable.dispose();
-    for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); pending.reject(new Error("语言服务已关闭")); }
+    for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); const cancelled = new Error("Canceled"); cancelled.name = "Canceled"; pending.reject(cancelled); }
     this.pending.clear();
     if (!this.model.isDisposed()) monaco.editor.setModelMarkers(this.model, "container-lsp", []);
     if (this.client) void gatewayRequest("DELETE", `${this.base}/${this.client}`).catch(() => {});

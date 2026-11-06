@@ -30,6 +30,10 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [project, setProject] = useState("");
   const [connected, setConnected] = useState(false);
+  const [vscodeFrames, setVscodeFrames] = useState<Record<string, string>>({});
+  const [vscodeDirty, setVscodeDirty] = useState<Record<string, boolean>>({});
+  const vscodeUrl = vscodeFrames[project] ?? "";
+  const [showVscode, setShowVscode] = useState(false);
   const [containerVersion, setContainerVersion] = useState(0);
   const [connecting, setConnecting] = useState("");
   const [files, setFiles] = useState<string[]>([]);
@@ -55,12 +59,14 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
   const [debugThread, setDebugThread] = useState<number>();
   const [debugStop, setDebugStop] = useState(0);
   const debugRef = useRef<DebugClient | null>(null);
+  const autoShowVscode = useRef(true);
   const workspaceEditLock = useRef(false);
   const editRevision = useRef(0);
   const workspaceState = useRef({ project, path, connected, busy, buffers });
   workspaceState.current = { project, path, connected, busy, buffers };
   const dirty = contents !== original;
-  const anyDirty = dirty || Object.values(buffers).some(buffer => buffer.contents !== buffer.original);
+  const localDirty = dirty || Object.values(buffers).some(buffer => buffer.contents !== buffer.original);
+  const anyDirty = localDirty || Object.values(vscodeDirty).some(Boolean);
   useEffect(() => { if (active) setContainer("projects"); }, [active]);
   useEffect(() => { patchEditorState(editor.id, { dirty: anyDirty, project, containerVersion }); }, [editor.id, anyDirty, project, containerVersion]);
   useEffect(() => () => { debugRef.current?.dispose(); debugRef.current = null; }, [project]);
@@ -101,6 +107,39 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     } catch (cause) { setError(String(cause)); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { autoShowVscode.current = true; setShowVscode(false); }, [project]);
+  useEffect(() => {
+    if (!project || !connected) return;
+    let cancelled = false;
+    void gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(project)}/vscode-session`).then(result => {
+      if (cancelled || typeof result?.url !== "string") return;
+      try {
+        const url = new URL(result.url);
+        if (url.protocol !== "http:" || url.hostname !== "127.0.0.2" || !url.port) return;
+        setVscodeFrames(current => ({ ...current, [project]: url.href }));
+        if (autoShowVscode.current && !workspaceState.current.path) setShowVscode(true);
+      } catch { /* An invalid workbench URL is never embedded. */ }
+    }).catch(() => { /* The optional VS Code service may not be configured. */ });
+    return () => { cancelled = true; };
+  }, [project, connected, containerVersion]);
+  useEffect(() => {
+    const projects = Object.keys(vscodeFrames);
+    if (!projects.length) return;
+    let cancelled = false, timer = 0;
+    const poll = async () => {
+      await Promise.all(projects.map(async item => {
+        try {
+          const result = await gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(item)}/vscode-control`, { action: "state" });
+          if (!cancelled && result?.ready === true && typeof result.dirty === "boolean") {
+            setVscodeDirty(current => current[item] === result.dirty ? current : { ...current, [item]: result.dirty });
+          }
+        } catch { /* Preserve the last known state while the extension host reconnects. */ }
+      }));
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 2000);
+    };
+    void poll();
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [vscodeFrames]);
   useEffect(() => {
     if (!project) return;
     let cancelled = false;
@@ -191,9 +230,10 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     return () => window.removeEventListener("beforeunload", warn);
   }, [anyDirty]);
 
-  const mayLeave = () => !anyDirty || window.confirm("项目中有未保存的修改，是否放弃？");
+  const mayLeave = () => !localDirty || window.confirm("项目中有未保存的修改，是否放弃？");
   const selectProject = async (next: string, rebuild = false) => {
     if (next !== project && !mayLeave()) return;
+    if (rebuild && (localDirty || vscodeDirty[project]) && !window.confirm("重建容器会关闭工作台，请先保存未保存的修改。是否继续？")) return;
     setBusy(true); setConnecting(next); setError("");
     if (rebuild) setConnected(false);
     try {
@@ -212,8 +252,19 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     }
     finally { setBusy(false); setConnecting(""); }
   };
-  const openFile = async (next: string, target?: { line: number; column: number }): Promise<boolean> => {
+  const openFile = async (next: string, target?: { line: number; column: number }, preferVscode = false): Promise<boolean> => {
     if (!connected) return false;
+    const cachedDirty = buffers[next] && buffers[next].contents !== buffers[next].original;
+    if (preferVscode && vscodeUrl && !cachedDirty) {
+      setBusy(true); setError("");
+      try {
+        const result = await gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(project)}/vscode-control`, { action: "open", path: next, ...target });
+        if (result?.opened === true) { setTreeSelection({ path: next, kind: "file" }); setShowVscode(true); return true; }
+      } catch (cause) { setError(`无法在 VS Code 中打开文件：${String(cause)}`); return false; }
+      finally { setBusy(false); }
+    }
+    autoShowVscode.current = false;
+    setShowVscode(false);
     if (next === path) { setTreeSelection({ path: next, kind: "file" }); if (target) setNavigation(current => ({ path: next, ...target, id: (current?.id ?? 0) + 1 })); return true; }
     const cached = buffers[next];
     if (cached) { setPath(next); setContents(cached.contents); setOriginal(cached.original); setTreeSelection({ path: next, kind: "file" }); setNavigation(current => target ? { path: next, ...target, id: (current?.id ?? 0) + 1 } : undefined); return true; }
@@ -417,15 +468,19 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
               <Button size="icon-xs" variant="ghost" aria-label={treeSelection?.kind === "directory" ? "删除文件夹" : "删除文件"} title="删除所选项目" disabled={busy || !connected || !treeSelection || !!debugRef.current} onClick={() => void deleteFile()}><Trash2 /></Button>
             </div>
             {!connected ? <p className="px-3 py-2 text-xs text-muted-foreground">开发容器未连接</p> : loadingFiles && files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">文件加载中…</p> : files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">暂无文件</p> : null}
-            <ProjectFileTree key={project} files={files} directories={directories} selected={treeSelection?.path ?? ""} disabled={busy || !connected} directoryMove={directoryMove} onOpen={(file) => void openFile(file)} onSelectDirectory={(folder) => setTreeSelection({ path: folder, kind: "directory" })} />
+            <ProjectFileTree key={project} files={files} directories={directories} selected={treeSelection?.path ?? ""} disabled={busy || !connected} directoryMove={directoryMove} onOpen={(file) => void openFile(file, undefined, true)} onSelectDirectory={(folder) => setTreeSelection({ path: folder, kind: "directory" })} />
           </>}
         </div>
       </aside>, slot)}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {selected?.error && <div role="status" className="border-b bg-amber-500/10 p-3 text-xs">项目 manifest 需要修复：{selected.error}</div>}
+        {vscodeUrl && <div className="flex shrink-0 gap-1 border-b px-2 py-1"><Button size="xs" variant={showVscode ? "secondary" : "ghost"} onClick={() => setShowVscode(true)}>VS Code 工作台</Button>{path && <Button size="xs" variant={!showVscode ? "secondary" : "ghost"} onClick={() => setShowVscode(false)}>项目编辑器</Button>}</div>}
+        {Object.entries(vscodeFrames).map(([frameProject, url]) => <iframe key={frameProject} title={`${frameProject} VS Code 工作台`} src={url} className={`min-h-0 w-full flex-1 border-0 ${showVscode && project === frameProject ? "" : "hidden"}`} inert={project === frameProject && !connected} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" allow="clipboard-read; clipboard-write" referrerPolicy="no-referrer" />)}
+        <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${showVscode && vscodeUrl ? "hidden" : ""}`}>
         {path && conflicts[path] && <div role="status" className="flex items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs"><span>{conflicts[path] === "deleted" ? "该文件已在容器中删除，当前缓冲区仍被保留。" : "该文件已在容器中更改，当前未保存内容仍被保留。"}</span>{conflicts[path] === "changed" && <Button size="xs" variant="outline" disabled={busy || !connected} onClick={() => void reloadFile()}>重新读取</Button>}</div>}
         {Object.keys(buffers).length > 0 && <div className="flex shrink-0 overflow-x-auto border-b" role="tablist" aria-label="打开的项目文件">{Object.entries(buffers).map(([file, buffer]) => <div key={file} className={`flex shrink-0 items-center border-r ${file === path ? "bg-accent" : "text-muted-foreground"}`}><button type="button" role="tab" aria-selected={file === path} title={file} disabled={busy} className="max-w-48 truncate px-3 py-2 text-xs" onClick={() => void openFile(file)}>{file.split("/").at(-1)}{buffer.contents !== buffer.original ? " •" : ""}</button><button type="button" aria-label={`关闭 ${file}`} title={`关闭 ${file}`} disabled={busy} className="mr-1 rounded p-1 hover:bg-muted" onClick={() => closeBuffer(file)}><X className="size-3" /></button></div>)}</div>}
         {path ? <><div className="flex items-center gap-2 border-b px-4 py-2 text-sm"><span className="min-w-0 flex-1 truncate" title={path}>{path}{dirty ? " •" : ""}</span>{path.endsWith(".py") && <Button size="sm" variant="outline" disabled={dirty || busy || !connected || !!debugRef.current} title={dirty ? "请先保存文件" : "在开发容器中调试"} onClick={() => void startDebug()}>开始调试</Button>}<Button size="sm" variant="outline" disabled={!dirty || busy || !connected} onClick={() => void save()}><Save /> 保存</Button></div><CodeEditor project={project} path={path} value={contents} readOnly={!connected || busy} lspEnabled={connected} saveVersion={saveVersion} navigation={navigation} breakpoints={breakpoints[path]} onToggleBreakpoint={toggleBreakpoint} onNavigate={(file, line, column) => openFile(file, { line, column })} onChange={changeContents} onSave={() => void save()} onApplyEdits={applyWorkspaceEdits} /></> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">{project ? "从左侧选择文件开始编辑" : "选择或创建一个插件项目"}</div>}
+        </div>
         {debugStatus && <div className="shrink-0 border-t px-3 py-2 text-xs"><div className="flex flex-wrap items-center gap-2"><span role="status">{debugStatus}</span>{debugRef.current && <><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("continue")}>继续</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("next")}>单步跳过</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("stepIn")}>单步进入</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("stepOut")}>单步跳出</Button><Button size="xs" variant="outline" onClick={stopDebug}>停止</Button></>}</div>{debugThread !== undefined && debugRef.current && <DebugInspector key={debugStop} client={debugRef.current} thread={debugThread} onNavigate={(file, line, column) => void openFile(file, { line, column })} />}{debugOutput && <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap">{debugOutput}</pre>}</div>}
         <Button className="m-2 self-start" size="sm" variant="ghost" onClick={() => { setPanelTab("terminal"); setPanelVisible(true); }}><TerminalSquare />终端</Button>
       </div>

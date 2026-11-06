@@ -1,0 +1,11 @@
+{
+  "name": "autonomics-workspace-bridge",
+  "displayName": "Autonomics Workspace Bridge",
+  "publisher": "autonomics",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.80.0" },
+  "extensionKind": ["workspace"],
+  "activationEvents": ["*"],
+  "capabilities": { "untrustedWorkspaces": { "supported": true } },
+  "main": "./extension.js"
+}

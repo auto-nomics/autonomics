@@ -116,6 +116,8 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/plugin-projects/{name}/files", get(plugins::project_files))
         .route("/plugin-projects/{name}/snapshot", get(plugins::project_snapshot))
         .route("/plugin-projects/{name}/container", get(super::devcontainer::status).post(super::devcontainer::open).delete(super::devcontainer::close))
+        .route("/plugin-projects/{name}/vscode-session", post(super::devcontainer::vscode_url))
+        .route("/plugin-projects/{name}/vscode-control", post(super::devcontainer::vscode_control))
         .route("/plugin-projects/{name}/terminal", get(super::devcontainer::terminal_output).post(super::devcontainer::terminal_open).delete(super::devcontainer::terminal_close))
         .route("/plugin-projects/{name}/terminal/input", post(super::devcontainer::terminal_input))
         .route("/plugin-projects/{name}/terminal/size", put(super::devcontainer::terminal_resize))

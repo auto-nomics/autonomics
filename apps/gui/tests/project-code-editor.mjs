@@ -13,15 +13,22 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   page.setDefaultTimeout(20000);
   const errors = [], saves = [], requests = [], terminalInputs = [], languageMessages = [], scriptMessages = [], languageRequests = [], debugMessages = [], debugRequests = [];
+  await page.route('http://127.0.0.2:34999/**', route => route.fulfill({ contentType: 'text/html', body: '<p>isolated workbench</p>' }));
   const files = new Map([['src/main.py', 'print(1)\n'], ['src/other.py', 'def target():\n    pass\n'], ['src/watch.py', 'original\n'], ['src/example.tsx', 'const greeting: string = "hello";\ngree'], ['src/example.jsx', 'const view = <div />;\nview'], ['src/example.c', 'int greeting = 1;\ngree'], ['src/example.cpp', 'int greeting = 1;\ngree'], ['src/example.go', 'package main\nvar greeting = 1\n']]);
   const directories = new Set(['src']);
   let languageExited = false, languageMissing = false, scriptMissing = false, debugFail = false, rebuilds = 0, badEditNext = false;
+  let bridgeOpen = false, bridgeDirty = false;
+  const bridgeCalls = [];
   // Monaco cancels outstanding editor requests when a model is disposed.
   page.on('pageerror', error => { if (error.name === 'Canceled' && error.message === 'Canceled') return; errors.push(error.message); console.error(error.stack); });
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
   await page.route('**/api/v1/**', route => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     requests.push(`${route.request().method()} ${path}`);
+    if (path === '/plugin-projects/alpha/vscode-control') {
+      const body = route.request().postDataJSON(); bridgeCalls.push(body);
+      return route.fulfill({ json: body.action === 'state' ? { ready: true, dirty: bridgeDirty } : { opened: bridgeOpen } });
+    }
     if (path === '/events') return;
     if (path === '/plugin-projects/alpha/container' && route.request().method() === 'POST' && new URL(route.request().url()).searchParams.get('rebuild') === 'true') { rebuilds++; return route.fulfill({ json: { connected: true } }); }
     if (path === '/plugin-projects/alpha/snapshot') return route.fulfill({ json: { entries: [...directories].map(item => ({ path: item, kind: 'directory', stamp: item })).concat([...files].map(([item, contents]) => ({ path: item, kind: 'file', stamp: contents }))) } });
@@ -88,6 +95,7 @@ try {
       '/state': { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }], contexts: { '/root/alpha': { id: 's1', title: 'Alpha', created_at: 2, last_active: 3 } }, display_settings: {} },
       '/plugin-projects': { projects: [{ name: 'alpha', status: 'draft', error: null }, { name: 'beta', status: 'draft', error: null }] },
       '/plugin-projects/alpha/container': { connected: true },
+      '/plugin-projects/alpha/vscode-session': { url: 'http://127.0.0.2:34999/test/' },
       '/plugins/environments': { environments: [] },
       '/plugin-projects/alpha/files': { files: [...files.keys()], directories: [...directories] },
     };
@@ -97,8 +105,11 @@ try {
   await page.getByRole('button', { name: '插件项目', exact: true }).click();
   const side = page.getByRole('complementary', { name: '插件项目导航' });
   await side.getByRole('button', { name: /alpha/ }).click();
+  await page.getByTitle('alpha VS Code 工作台').waitFor();
+  await page.frameLocator('iframe[title="alpha VS Code 工作台"]').getByText('isolated workbench').waitFor();
   await side.getByRole('button', { name: 'src' }).click();
   await side.getByRole('button', { name: 'main.py' }).click();
+  assert.equal(await page.getByTitle('alpha VS Code 工作台').isVisible(), false);
   const editor = page.locator('.monaco-editor textarea.inputarea');
   await editor.waitFor(); await editor.focus();
   await page.locator('.monaco-editor .view-line [class*="mtk"]').first().waitFor();
@@ -121,6 +132,7 @@ try {
   await page.getByRole('tablist', { name: '打开的项目文件' }).getByRole('tab', { name: /main.py/ }).click();
   await page.waitForFunction(() => document.querySelector('.monaco-editor .view-lines')?.textContent?.includes('print(2)'));
   const rebuilt = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).searchParams.get('rebuild') === 'true');
+  page.once('dialog', dialog => { assert.match(dialog.message(), /未保存/); return dialog.accept(); });
   await side.getByRole('button', { name: '重建开发容器' }).click();
   await rebuilt;
   await page.waitForFunction(() => document.querySelector('[aria-label="重建开发容器"]') && !document.querySelector('[aria-label="重建开发容器"]').disabled);
@@ -317,6 +329,15 @@ try {
   files.set('src/after-unregister.py', 'created');
   await side.getByRole('button', { name: 'after-unregister.py' }).waitFor();
   assert.equal(languageRequests.some(message => message.method === 'workspace/didChangeWatchedFiles' && message.params.changes.some(change => change.uri === 'file:///work/src/after-unregister.py')), false);
+  bridgeOpen = true;
+  await side.getByRole('button', { name: 'after-unregister.py' }).click();
+  await page.getByTitle('alpha VS Code 工作台').waitFor({ state: 'visible' });
+  assert.ok(bridgeCalls.some(call => call.action === 'open' && call.path === 'src/after-unregister.py'));
+  bridgeDirty = true;
+  await page.waitForTimeout(2500);
+  page.once('dialog', dialog => { assert.match(dialog.message(), /未保存/); return dialog.dismiss(); });
+  await page.getByRole('button', { name: '关闭 插件项目' }).click();
+  assert.equal(await page.getByTitle('alpha VS Code 工作台').count(), 1);
   assert.deepEqual(errors, []);
   console.log('project-code-editor: all assertions passed');
 } finally { if (browser) await browser.close(); server.kill(); }
