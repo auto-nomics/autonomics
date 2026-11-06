@@ -297,6 +297,63 @@ pub(crate) fn make_client() -> Result<opengwas::OpengwasClient, DagError> {
     })
 }
 
+/// Collect the string values of one column across input batches.
+///
+/// Intended for ID-list inputs feeding batch API queries: nulls, blank and
+/// whitespace-only entries are dropped, duplicates removed, first-seen row
+/// order preserved. Accepts `Utf8` / `LargeUtf8` columns.
+pub(crate) fn string_column_values(
+    node_type: &str,
+    batches: &[RecordBatch],
+    column: &str,
+) -> Result<Vec<String>, DagError> {
+    let err = |msg: String| DagError::NodeError {
+        node_type: node_type.into(),
+        msg,
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for batch in batches {
+        let arr = batch.column_by_name(column).ok_or_else(|| {
+            err(format!(
+                "input has no column '{column}' (available: {})",
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|f| f.name().clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+        let values: Vec<Option<&str>> = if let Some(a) = arr.as_any().downcast_ref::<StringArray>()
+        {
+            (0..a.len())
+                .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
+                .collect()
+        } else if let Some(a) = arr
+            .as_any()
+            .downcast_ref::<arrow_array::LargeStringArray>()
+        {
+            (0..a.len())
+                .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
+                .collect()
+        } else {
+            return Err(err(format!(
+                "column '{column}' must be a string column (Utf8/LargeUtf8), found {}",
+                arr.data_type()
+            )));
+        };
+        for v in values.into_iter().flatten() {
+            let v = v.trim();
+            if !v.is_empty() && seen.insert(v.to_string()) {
+                out.push(v.to_string());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// A [`NodePorts`] with a single output port.
 pub(crate) fn single_output_port() -> NodePorts {
     NodePorts::new().add_output_port(None)

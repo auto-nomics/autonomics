@@ -8,11 +8,6 @@
   --reader-annotation-opacity: 1;
   position: fixed;
   inset: 0;
-  /* Below the floating agent workspace (z-40) so the chat panel stays
-     usable over the reader; still above view content and the bib
-     drawers (z-35). Reader-internal popups are capped by this stacking
-     context, so they cannot rise above the workspace either. */
-  z-index: 38;
   display: grid;
   grid-template-columns:
     calc(var(--reader-sidebar-width) + var(--reader-resizer-width))
@@ -21,6 +16,8 @@
   background: var(--background);
   color: var(--foreground);
 }
+/* Standalone readers are dialogs above the workspace content. */
+.zotero-pdf-reader:not([data-hosted]) { z-index: 38; }
 .zotero-pdf-reader[data-pdf-theme="dark"] {
   --reader-page-filter: invert(100%) hue-rotate(180deg);
   --reader-page-background: #17191d;
@@ -325,12 +322,11 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 16px;
-  min-height: 60px;
-  padding: 10px 16px;
+  gap: 4px 8px;
+  min-height: 40px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--card);
-  box-shadow: 0 2px 12px #0002;
+  background: var(--background);
   font-family: inherit;
   font-size: 12px;
   color: var(--foreground);
@@ -342,11 +338,11 @@
   justify-content: center;
   gap: 6px;
   width: auto;
-  min-width: 32px;
-  height: 32px;
-  padding: 0 8px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 4px;
   background: transparent;
   color: var(--muted-foreground);
   font: inherit;
@@ -354,7 +350,7 @@
   cursor: pointer;
   transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.reader-toolbar button svg { width: 17px; height: 17px; flex: none; }
+.reader-toolbar button svg { width: 16px; height: 16px; flex: none; }
 .reader-toolbar button:hover { background: var(--accent); color: var(--accent-foreground); }
 .reader-toolbar button:active { background: color-mix(in oklch, var(--primary) 10%, var(--accent)); }
 .reader-toolbar button:disabled { opacity: .4; cursor: default; background: transparent; }
@@ -364,8 +360,7 @@
   outline-offset: 2px;
 }
 .reader-toolbar button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
-  background: color-mix(in oklch, var(--primary) 16%, var(--accent));
+  background: var(--accent);
   color: var(--primary);
 }
 .reader-toolbar-start,
@@ -376,19 +371,16 @@
   align-items: center;
   gap: 2px;
 }
-.reader-toolbar-start { gap: 12px; }
+.reader-toolbar-start { gap: 4px; }
 .reader-tool-group {
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--background) 44%, transparent);
+  padding: 0;
 }
 .reader-page-field {
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 28px;
-  padding: 0 7px;
+  height: 26px;
+  padding: 0 6px;
   border: 1px solid var(--input);
   border-radius: 5px;
   background: var(--background);
@@ -430,7 +422,7 @@
 }
 .reader-main { container-type: inline-size; }
 @container (max-width: 1050px) {
-  .reader-toolbar { gap: 8px; padding: 8px 10px; }
+  .reader-toolbar { gap: 4px; padding: 4px 8px; }
   .reader-tool-label { display: none; }
   .reader-toolbar-start { gap: 5px; }
 }
@@ -1011,6 +1003,8 @@
    auxiliary pane usable. Standalone readers retain their full-window layout. */
 .zotero-pdf-reader[data-hosted] {
   position: absolute;
+  /* Keep reader overlays inside the editor pane's stacking order. */
+  isolation: isolate;
   --reader-sidebar-width: clamp(230px, 25%, 320px);
 }
 .zotero-pdf-reader[data-hosted] .reader-toolbar { overflow-x: auto; }
@@ -1031,7 +1025,6 @@
   z-index: 60;
   opacity: 0;
   transition: opacity 0.18s ease;
-  box-shadow: 0 6px 18px #0004;
 }
 .reader-toolbar.reader-toolbar-revealed,
 .reader-toolbar:focus-within {

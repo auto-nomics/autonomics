@@ -2054,47 +2054,34 @@ class ZoteroStylePdfReader {
 
   private toolbarRevealCleanup: (() => void) | null = null;
 
-  /** Auto-hide the header toolbar on fine-pointer devices. The toolbar
-   *  overlays the content top without reserving layout space and stays
-   *  revealed while the pointer is active anywhere over the reader; it
-   *  fades only after the pointer goes idle (or leaves) — moving it again
-   *  pops the toolbar back. The box never moves (opacity-only) and stays
-   *  interactive while faded, so hit targets are stable for automation.
-   *  hover:none devices keep it permanently visible. */
+  /** Reveal only over the toolbar's own bounds; keyboard focus also reveals it. */
   private setupToolbarAutoHide() {
     if (!window.matchMedia("(hover: hover)").matches) return;
     const toolbar = this.root.querySelector(".reader-toolbar");
     if (!toolbar) return;
-    let idleTimer: number | null = null;
+    let hideTimer: number | null = null;
     const reveal = () => {
-      if (idleTimer !== null) { window.clearTimeout(idleTimer); idleTimer = null; }
+      if (hideTimer !== null) { window.clearTimeout(hideTimer); hideTimer = null; }
       toolbar.classList.add("reader-toolbar-revealed");
     };
-    const scheduleHide = (delay: number) => {
-      if (idleTimer !== null) window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(() => {
-        idleTimer = null;
+    const scheduleHide = () => {
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => {
+        hideTimer = null;
         if (!toolbar.matches(":hover") && !toolbar.contains(document.activeElement)) {
           toolbar.classList.remove("reader-toolbar-revealed");
         }
-      }, delay);
+      }, 260);
     };
-    const onMove = () => {
-      reveal();
-      scheduleHide(600);
-    };
-    this.root.addEventListener("pointermove", onMove, { passive: true });
-    this.root.addEventListener("pointerdown", onMove, { passive: true });
-    const onLeave = () => scheduleHide(260);
-    this.root.addEventListener("pointerleave", onLeave);
-    reveal();
-    scheduleHide(600);
+    toolbar.addEventListener("pointerenter", reveal);
+    toolbar.addEventListener("pointerleave", scheduleHide);
+    toolbar.addEventListener("focusout", scheduleHide);
     this.toolbarRevealCleanup = () => {
-      if (idleTimer !== null) window.clearTimeout(idleTimer);
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
       toolbar.classList.remove("reader-toolbar-revealed");
-      this.root.removeEventListener("pointermove", onMove);
-      this.root.removeEventListener("pointerdown", onMove);
-      this.root.removeEventListener("pointerleave", onLeave);
+      toolbar.removeEventListener("pointerenter", reveal);
+      toolbar.removeEventListener("pointerleave", scheduleHide);
+      toolbar.removeEventListener("focusout", scheduleHide);
     };
   }
 

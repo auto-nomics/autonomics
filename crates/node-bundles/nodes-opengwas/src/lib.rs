@@ -6,16 +6,17 @@
 //! metadata, etc. can flow through a DAG (join, filter via `sql_node`,
 //! sink to CSV/VFS, …).
 //!
-//! All are zero-input / single-output source nodes. They reuse the
-//! `opengwas` SDK client and require the `OPENGWAS_TOKEN` environment
-//! variable.
+//! All are single-output source nodes that reuse the `opengwas` SDK client
+//! and require the `OPENGWAS_TOKEN` environment variable. Most are
+//! zero-input (IDs embedded in the spec); the exception is `opengwas_phewas`,
+//! which reads its variant list from an upstream DataFrame column.
 //!
 //! # Nodes
 //!
 //! | Kind | Endpoint | Output |
 //! |------|----------|--------|
 //! | `source_opengwas_associations` | `/associations` | variant × study associations |
-//! | `source_opengwas_phewas` | `/phewas` | variant × trait PheWAS hits |
+//! | `opengwas_phewas` | `/phewas` (DataFrame input) | variant × trait PheWAS hits |
 //! | `source_opengwas_gwasinfo` | `/gwasinfo` | study metadata by ID |
 //! | `source_opengwas_gwasinfo_search` | `/gwasinfo` (SQL search) | matching study metadata |
 //! | `source_opengwas_variants_rsid` | `/variants/rsid` | variant annotations by rsID |
@@ -60,11 +61,16 @@ impl NodePlugin for Plugin {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow_array::{Array, Float64Array, Int64Array, StringArray};
+    use arrow_schema::DataType;
     use opengwas::types::GwasInfo;
     use serde_json::Value;
 
-    use crate::shared::{build_gwasinfo_batch, build_json_batch, extract_rows, infer_columns};
+    use crate::shared::{
+        build_gwasinfo_batch, build_json_batch, extract_rows, infer_columns, string_column_values,
+    };
     use crate::{associations, gwasinfo_search, ld_clump, phewas};
 
     // -- extract_rows --
@@ -234,9 +240,72 @@ mod tests {
 
     #[test]
     fn phewas_spec_defaults() {
-        let json = serde_json::json!({"variant": ["rs1205"]});
-        let spec: phewas::OpengwasPhewasSpec = serde_json::from_value(json).unwrap();
+        let spec: phewas::OpengwasPhewasSpec =
+            serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(spec.variant_column, "rsid");
         assert!((spec.pval - 0.01).abs() < f64::EPSILON);
+        assert_eq!(spec.batch_size, 100);
+        assert!(spec.index_list.is_none());
+    }
+
+    #[test]
+    fn phewas_spec_explicit() {
+        let json = serde_json::json!({
+            "variant_column": "snp",
+            "pval": 1e-4,
+            "index_list": ["ieu-a-2"],
+            "batch_size": 20
+        });
+        let spec: phewas::OpengwasPhewasSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(spec.variant_column, "snp");
+        assert!((spec.pval - 1e-4).abs() < f64::EPSILON);
+        assert_eq!(spec.index_list, Some(vec!["ieu-a-2".to_string()]));
+        assert_eq!(spec.batch_size, 20);
+    }
+
+    // -- string_column_values (phewas DataFrame input) --
+
+    fn batch_with_rsid() -> arrow_array::RecordBatch {
+        use arrow_schema::{Field, Schema};
+        let schema = Arc::new(Schema::new(vec![Field::new("rsid", DataType::Utf8, true)]));
+        arrow_array::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(StringArray::from(vec![
+                Some("rs1"),
+                None,
+                Some("  "),
+                Some("rs2"),
+                Some("rs1"),
+            ]))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn string_column_dedups_and_drops_blanks() {
+        let batches = vec![batch_with_rsid()];
+        let vals = string_column_values("test", &batches, "rsid").unwrap();
+        assert_eq!(vals, vec!["rs1", "rs2"]);
+    }
+
+    #[test]
+    fn string_column_missing_column_errors() {
+        let batches = vec![batch_with_rsid()];
+        let err = string_column_values("test", &batches, "nope").unwrap_err();
+        assert!(err.to_string().contains("no column 'nope'"));
+    }
+
+    #[test]
+    fn string_column_non_string_errors() {
+        use arrow_schema::{Field, Schema};
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)]));
+        let batch = arrow_array::RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![Some(1), None]))],
+        )
+        .unwrap();
+        let err = string_column_values("test", &[batch], "n").unwrap_err();
+        assert!(err.to_string().contains("must be a string column"));
     }
 
     #[test]
