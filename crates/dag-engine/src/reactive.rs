@@ -2704,6 +2704,8 @@ impl FlowScheduler {
                         artifact_paths: vec![],
                     })
                     .collect();
+                let resources =
+                    crate::scheduler::declared_resources(node.as_ref(), &spec);
                 let submission = TaskSubmission {
                     spec: TaskSpec {
                         id: id.as_str().into(),
@@ -2716,7 +2718,7 @@ impl FlowScheduler {
                         outputs: output_bindings,
                     },
                     inputs,
-                    resources: node.task_resources().unwrap_or_default(),
+                    resources,
                 };
                 let ctx = Arc::clone(&self.engine_ctx);
                 let executor = Arc::clone(&executor);

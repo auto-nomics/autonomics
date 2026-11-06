@@ -52,6 +52,26 @@ pub type ChannelBinaryFunction = Arc<
     dyn Fn(&serde_json::Value, &NodeValue, &NodeValue) -> Result<NodeValue, String> + Send + Sync,
 >;
 
+/// Spec key carrying a per-instance execution timeout in milliseconds
+/// (`node('x', 'kind', {'timeout_ms': 5000})`). Without it the node
+/// declaration's own budget — by default none — applies.
+pub(crate) const SPEC_TIMEOUT_MS_KEY: &str = "timeout_ms";
+
+/// Executor resources for one instance: the node declaration's baseline
+/// overlaid with the author's spec-declared `timeout_ms` budget. The spec key
+/// is the explicit per-node override and wins over the declaration; the
+/// executor stack rejects a zero budget via `TaskResources::validate`.
+pub(crate) fn declared_resources(
+    node: &dyn DagNode,
+    spec: &serde_json::Value,
+) -> dag_core::TaskResources {
+    let mut resources = node.task_resources().unwrap_or_default();
+    if let Some(millis) = spec.get(SPEC_TIMEOUT_MS_KEY).and_then(|value| value.as_u64()) {
+        resources.max_duration_ms = Some(millis);
+    }
+    resources
+}
+
 /// Tuning knobs for one flow run.
 #[derive(Debug, Clone)]
 pub struct FlowRunConfig {
@@ -590,7 +610,8 @@ impl FlowScheduler {
 
     /// Assemble the executor submission for one instance: inputs from the
     /// upstream instances' outputs on their route ports, the outputs contract
-    /// from the node's declared ports, resources from the node's declaration.
+    /// from the node's declared ports, resources from the node's declaration
+    /// overlaid with the spec-declared execution timeout.
     fn build_submission(
         &self,
         plan: &ExecutionPlan,
@@ -681,7 +702,7 @@ impl FlowScheduler {
                 outputs: outputs_contract,
             },
             inputs,
-            resources: node.task_resources().unwrap_or_default(),
+            resources: declared_resources(node, &instance.rendered_spec),
         }
     }
 
@@ -1235,6 +1256,7 @@ mod tests {
     #[derive(Clone)]
     struct ContractExecutor {
         specs: Arc<std::sync::Mutex<Vec<dag_core::TaskSpec>>>,
+        resources: Arc<std::sync::Mutex<Vec<dag_core::TaskResources>>>,
         bind_count: Arc<std::sync::atomic::AtomicUsize>,
         preflights: Arc<std::sync::atomic::AtomicUsize>,
         bound: bool,
@@ -1266,6 +1288,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(execution.submission.spec.clone());
+            self.resources
+                .lock()
+                .unwrap()
+                .push(execution.submission.resources.clone());
             InlineExecutor.run(execution).await
         }
     }
@@ -1316,6 +1342,7 @@ mod tests {
         let preflights = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let executor = ContractExecutor {
             specs: Arc::clone(&specs),
+            resources: Arc::new(std::sync::Mutex::new(Vec::new())),
             bind_count: Arc::clone(&binds),
             preflights: Arc::clone(&preflights),
             bound: false,
@@ -1374,6 +1401,194 @@ mod tests {
             serde_json::from_value(serde_json::to_value(task).unwrap()).unwrap();
         assert_eq!(restored.inputs[0].source, task.inputs[0].source);
         assert_eq!(restored.inputs[1].source, task.inputs[1].source);
+    }
+
+    #[tokio::test]
+    async fn spec_declared_timeout_reaches_executor_resources() {
+        let graph = FlowGraphBuilder::default()
+            .source(Source::value("cfg", serde_json::json!(42)))
+            .process(Process::new(
+                "timed",
+                "named_port",
+                serde_json::json!({"timeout_ms": 1500}),
+            ))
+            .process(Process::new(
+                "untimed",
+                "named_port",
+                serde_json::json!({"tag": "plain"}),
+            ))
+            .wire(Wire::direct("cfg", 0, "timed", 0))
+            .wire(Wire::direct("cfg", 0, "untimed", 0))
+            .build()
+            .unwrap();
+        let specs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let resources: Arc<std::sync::Mutex<Vec<dag_core::TaskResources>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let executor = ContractExecutor {
+            specs: Arc::clone(&specs),
+            resources: Arc::clone(&resources),
+            bind_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            preflights: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            bound: false,
+        };
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(NamedPortNode {
+                ports: dag_core::NodePorts::new()
+                    .add_input_port_of_type(None, dag_core::value::PortType::Channel)
+                    .add_output_port_of_type(None, dag_core::value::PortType::File),
+            }))
+        });
+        let scheduler = FlowScheduler::new(Arc::new(executor), builder, engine_ctx());
+        let report = scheduler
+            .run_dataflow(&graph, &resolved(&graph), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(report.ok);
+        let specs = specs.lock().unwrap();
+        let resources = resources.lock().unwrap();
+        assert_eq!(specs.len(), 2);
+        for (spec, resources) in specs.iter().zip(resources.iter()) {
+            match spec.logical_node.as_deref() {
+                Some("timed") => assert_eq!(resources.max_duration_ms, Some(1500)),
+                Some("untimed") => assert_eq!(resources.max_duration_ms, None),
+                other => panic!("unexpected process {other:?}"),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct BudgetedNode {
+        meta: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for BudgetedNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.meta
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "budgeted"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn task_resources(&self) -> Result<dag_core::TaskResources, DagError> {
+            Ok(dag_core::TaskResources {
+                cpus: Some(2),
+                memory_bytes: None,
+                max_duration_ms: Some(60_000),
+            })
+        }
+    }
+
+    #[test]
+    fn declared_resources_spec_overrides_node_budget() {
+        let node = BudgetedNode {
+            meta: dag_core::NodePorts::new(),
+        };
+        // Spec absent: the node declaration passes through untouched.
+        let inherited = declared_resources(&node, &serde_json::json!({}));
+        assert_eq!(inherited.cpus, Some(2));
+        assert_eq!(inherited.max_duration_ms, Some(60_000));
+        // An explicit spec budget wins over the declaration.
+        let overridden = declared_resources(&node, &serde_json::json!({"timeout_ms": 1500}));
+        assert_eq!(overridden.cpus, Some(2));
+        assert_eq!(overridden.max_duration_ms, Some(1500));
+        // Non-numeric values (including string "null" from lax callers)
+        // are ignored, never coerced.
+        let nullish = declared_resources(&node, &serde_json::json!({"timeout_ms": null}));
+        assert_eq!(nullish.max_duration_ms, Some(60_000));
+        let textual = declared_resources(&node, &serde_json::json!({"timeout_ms": "1500"}));
+        assert_eq!(textual.max_duration_ms, Some(60_000));
+    }
+
+    #[derive(Clone)]
+    struct HangingNode {
+        ports: dag_core::NodePorts,
+    }
+    #[async_trait::async_trait]
+    impl DagNode for HangingNode {
+        fn ports(&self) -> &dag_core::NodePorts {
+            &self.ports
+        }
+        async fn execute(
+            &mut self,
+            _ctx: &NodeCtx,
+            _inputs: &[NodeInput],
+            _reporter: &NodeReporter,
+        ) -> Result<PortOutputs, DagError> {
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            Ok(PortOutputs::new())
+        }
+        fn clone_box(&self) -> Box<dyn DagNode> {
+            Box::new(self.clone())
+        }
+        fn kind(&self) -> &'static str {
+            "hanging"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    /// End to end through the real local executor: a spec-declared
+    /// `timeout_ms` must kill a hung node instead of leasing it forever.
+    #[tokio::test]
+    async fn spec_timeout_kills_a_hanging_node_through_the_local_executor() {
+        let flow = FlowGraphBuilder::default()
+            .process(Process::new(
+                "hang",
+                "hanging",
+                serde_json::json!({"timeout_ms": 150}),
+            ))
+            .build()
+            .unwrap();
+        let builder: NodeBuilder = Arc::new(|_, _| {
+            Ok(Box::new(HangingNode {
+                ports: dag_core::NodePorts::new(),
+            }))
+        });
+        let workspace = tempfile::tempdir().unwrap();
+        let scheduler = FlowScheduler::new(
+            Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                workspace.path(),
+            )),
+            builder,
+            engine_ctx(),
+        );
+        let started = std::time::Instant::now();
+        let report = scheduler
+            .run_dataflow(&flow, &resolved(&flow), &FlowRunConfig::default(), None)
+            .await
+            .unwrap();
+        assert!(!report.ok, "{:?}", report.instances);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "the run must return at the timeout, not after the node body"
+        );
+        let record = report
+            .instances
+            .iter()
+            .find(|record| record.process == "hang")
+            .expect("the hanging process materialized one instance");
+        assert!(
+            record
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("exceeded max_duration_ms")),
+            "{:?}",
+            record.error
+        );
     }
 
     #[async_trait::async_trait]
