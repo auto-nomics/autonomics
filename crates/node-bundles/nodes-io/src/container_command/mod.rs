@@ -1403,6 +1403,7 @@ mod tests {
             program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
             workspace_root: workspace_root.clone(),
             panel_cache_root: state.path().join("panels"),
+            ..PodmanConfig::default()
         });
         let mut node = ContainerCommandNode::new(
             "container_command",

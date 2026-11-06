@@ -5,12 +5,23 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { RefreshCw, ZoomIn, ZoomOut, GitBranch } from "lucide-react";
 
-function dagStatus(status: unknown) {
+export function dagStatus(status: unknown) {
   if (typeof status === "string") return status.toLowerCase();
   if (status && typeof status === "object") return Object.keys(status)[0]?.toLowerCase() ?? "pending";
   return "pending";
 }
+
+const statusColors: Record<string, { node: string; badge: string }> = {
+  pending: { node: "border-l-slate-400 bg-slate-500/5", badge: "bg-slate-500/10 text-slate-600 dark:text-slate-300" },
+  ready: { node: "border-l-sky-500 bg-sky-500/5", badge: "bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  running: { node: "border-l-amber-500 bg-amber-500/5", badge: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  success: { node: "border-l-emerald-500 bg-emerald-500/5", badge: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  failed: { node: "border-l-red-500 bg-red-500/5", badge: "bg-red-500/10 text-red-700 dark:text-red-300" },
+  skipped: { node: "border-l-violet-500 bg-violet-500/5", badge: "bg-violet-500/10 text-violet-700 dark:text-violet-300" },
+  cancelled: { node: "border-l-orange-500 bg-orange-500/5", badge: "bg-orange-500/10 text-orange-700 dark:text-orange-300" },
+};
 
 export function calculateLevels(snapshot: DagSnapshot) {
   const incoming = new Map(snapshot.nodes.map((node) => [node.id, 0]));
@@ -22,8 +33,8 @@ export function calculateLevels(snapshot: DagSnapshot) {
   const levels = new Map(snapshot.nodes.map((node) => [node.id, 0]));
   const remaining = new Map(incoming);
   const queue = snapshot.nodes.filter((node) => (incoming.get(node.id) ?? 0) === 0).map((node) => node.id);
-  while (queue.length) {
-    const id = queue.shift()!;
+  for (let cursor = 0; cursor < queue.length; cursor++) {
+    const id = queue[cursor];
     for (const next of outgoing.get(id) ?? []) {
       levels.set(next, Math.max(levels.get(next) ?? 0, (levels.get(id) ?? 0) + 1));
       const count = (remaining.get(next) ?? 1) - 1;
@@ -107,41 +118,51 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
     const columns = new Map<number, string[]>();
     for (const node of snapshot.nodes) {
       const level = levels.get(node.id) ?? 0;
-      columns.set(level, [...(columns.get(level) ?? []), node.id]);
+      const column = columns.get(level) ?? [];
+      column.push(node.id);
+      columns.set(level, column);
     }
     const positions = new Map<string, { x: number; y: number }>();
-    let height = 280;
+    const rows = Math.max(1, ...Array.from(columns.values(), ids => ids.length));
+    const height = Math.max(280, rows * 100 + 56);
     for (const [level, ids] of columns) {
-      ids.forEach((id, row) => positions.set(id, { x: 28 + level * 250, y: 28 + row * 100 }));
-      height = Math.max(height, ids.length * 100 + 56);
+      ids.forEach((id, row) => positions.set(id, { x: 28 + level * 270, y: 28 + row * 100 + (rows - ids.length) * 50 }));
     }
     return {
       levels,
       positions,
-      width: Math.max(900, (maxLevel + 1) * 250 + 48),
+      width: Math.max(500, (maxLevel + 1) * 270 + 48),
       height,
     };
   }, [snapshot]);
 
   const selectedNode = snapshot?.nodes.find((node) => node.id === selected) ?? null;
+  const changeZoom = (value: number) => {
+    const next = Math.max(0.25, Math.min(3, value));
+    if (viewport && next !== zoomRef.current) {
+      const x = viewport.clientWidth / 2, y = viewport.clientHeight / 2;
+      zoomAnchor.current = { x, y, graphX: (viewport.scrollLeft + x) / zoomRef.current, graphY: (viewport.scrollTop + y) / zoomRef.current };
+    }
+    zoomRef.current = next;
+    setZoom(next);
+  };
 
   return (
-    <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span>
+    <div className="flex min-h-0 flex-1 flex-col bg-background">
+      <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">
+        <span className="flex items-center gap-2"><GitBranch className="size-4" />
           {snapshot
             ? `${snapshot.nodes.length} nodes · ${snapshot.edges.length} edges · ${snapshot.nodes.filter((node) => dagStatus(node.status) === "running").length} running · ${snapshot.nodes.filter((node) => dagStatus(node.status) === "failed").length} failed`
             : `agent ${activeAgent || "—"}`}
         </span>
-        <div className="flex items-center gap-2"><span className="text-xs tabular-nums" title="Ctrl + scroll to zoom">{Math.round(zoom * 100)}%</span><Button size="sm" variant="secondary" onClick={() => void load(activeAgent)}>Refresh</Button></div>
+        <div className="flex items-center gap-1"><Button size="icon" variant="ghost" className="size-7" aria-label="Zoom out" onClick={() => changeZoom(zoom / 1.2)}><ZoomOut className="size-4" /></Button><button type="button" className="min-w-12 rounded px-1 py-1 tabular-nums hover:bg-accent" title="Reset zoom" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button><Button size="icon" variant="ghost" className="size-7" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.2)}><ZoomIn className="size-4" /></Button><span className="mx-1 h-4 w-px bg-border" /><Button size="icon" variant="ghost" className="size-7" aria-label="Refresh DAG" disabled={loading || !activeAgent} onClick={() => void load(activeAgent)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button></div>
       </div>
-      {loading && <Card className="p-3 text-sm text-muted-foreground">Loading DAG snapshot…</Card>}
-      {error && <Card className="border-destructive/40 p-3 text-sm text-destructive">{error}</Card>}
-      {snapshot && layout && (
-        <Card className="min-h-0 p-0!">
-          <ScrollArea className="h-full" scrollOrientation="both" viewportRef={setViewport}>
+      {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
+      <div className="relative min-h-0 flex-1">
+      {snapshot && layout && snapshot.nodes.length > 0 ? (
+          <ScrollArea className="h-full" scrollOrientation="both" viewportRef={setViewport} viewportLabel="DAG graph" viewportTabIndex={0}>
           <div style={{ width: layout.width * zoom, height: layout.height * zoom }}>
-          <div className="relative origin-top-left" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})` }}>
+          <div className="relative origin-top-left" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})`, backgroundImage: "radial-gradient(var(--border) 1px, transparent 1px)", backgroundSize: "20px 20px" }}>
             <svg width={layout.width} height={layout.height} className="absolute inset-0 pointer-events-none">
               {snapshot.edges.map((edge) => {
                 const from = layout.positions.get(edge.from);
@@ -163,35 +184,33 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
               const position = layout.positions.get(node.id);
               if (!position) return null;
               const status = dagStatus(node.status);
+              const colors = statusColors[status] ?? statusColors.pending;
               return (
                 <button
                   key={node.id}
                   type="button"
                   onClick={() => setSelected(node.id)}
+                  aria-pressed={selected === node.id}
                   style={{ left: position.x, top: position.y }}
                   className={cn(
-                    "absolute grid h-[72px] w-[210px] place-content-start gap-1 rounded-md border border-l-4 bg-card p-2 text-left hover:bg-accent",
-                    selected === node.id && "border-primary shadow-[0_0_0_1px_var(--primary)]",
-                    status === "pending" && "border-l-muted-foreground",
-                    status === "ready" && "border-l-sky-400",
-                    status === "running" && "border-l-amber-400",
-                    status === "success" && "border-l-emerald-400",
-                    status === "failed" && "border-l-destructive",
-                    status === "cancelled" && "border-l-rose-300",
+                    "absolute flex h-[72px] w-[210px] flex-col items-start gap-1 overflow-hidden rounded-md border border-l-4 bg-card bg-clip-padding p-2 text-left shadow-sm transition-colors hover:brightness-95 dark:hover:brightness-125 focus-visible:outline-2 focus-visible:outline-ring",
+                    colors.node,
+                    selected === node.id && "ring-1 ring-primary",
                   )}
                 >
-                  <strong className="truncate text-sm">{node.id}</strong>
-                  <span className="truncate text-xs text-muted-foreground">{node.kind}</span>
-                  <small className="truncate text-xs text-muted-foreground">{status}{node.dirty ? " · dirty" : ""}</small>
+                  <strong className="w-full truncate text-sm">{node.id}</strong>
+                  <span className="w-full truncate text-xs text-muted-foreground">{node.kind}</span>
+                  <span className="flex items-center gap-1.5 text-[10px]"><span className={cn("rounded px-1.5 font-medium leading-4", colors.badge)}>{status}</span>{node.dirty && <span className="text-muted-foreground">dirty</span>}</span>
                 </button>
               );
             })}
           </div>
           </div>
           </ScrollArea>
-        </Card>
-      )}
-      <Card className="p-4">
+      ) : <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">{loading ? "Loading DAG snapshot…" : error ? "Could not load DAG." : "No DAG nodes"}</div>}
+      {snapshot && snapshot.nodes.length > 0 && <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-background/90 px-2 py-1 text-[11px] text-muted-foreground">Ctrl + scroll to zoom</div>}
+      </div>
+      <Card className="max-h-40 overflow-auto rounded-none border-x-0 border-b-0 bg-muted/20 p-3 shadow-none">
         {selectedNode ? (
           <pre className="text-xs whitespace-pre-wrap">
             {[

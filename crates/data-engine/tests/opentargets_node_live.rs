@@ -6,6 +6,7 @@
 //! cargo test -p data-engine --test opentargets_node_live -- --ignored
 //! ```
 
+use std::sync::Arc;
 use data_engine::node_registry::{NodeCtx, NodeFactory};
 use datafusion::prelude::SessionContext;
 use nodes_io::source_opentargets::{
@@ -154,4 +155,86 @@ async fn search_node_runs() {
     .unwrap();
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert!(total > 0);
+}
+
+/// Variant-ID table → `opentargets_genetic` → credible sets + L2G genes.
+/// `17_66232877_G_C` is a real GCST90018961 (LDL cholesterol) lead variant
+/// with APOH among its L2G predictions.
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn genetic_node_variant_mode() {
+    let ctx = datafusion::prelude::SessionContext::new();
+    let ids = arrow_array::RecordBatch::try_from_iter(vec![(
+        "variant_id",
+        Arc::new(arrow_array::StringArray::from(vec!["17_66232877_G_C"])) as Arc<dyn arrow_array::Array>,
+    )])
+    .unwrap();
+    let input_df = ctx.read_batch(ids).unwrap();
+
+    let mut node = build_node(
+        "opentargets_genetic",
+        serde_json::json!({"min_l2g": 0.5, "batch_size": 10}),
+    );
+    let outputs = node
+        .execute(
+            &node_ctx(),
+            &[data_engine::dag::NodeInput::new_dataframe(0, input_df)],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .expect("genetic node execute failed");
+    let df = outputs.dataframe(0).expect("missing output port 0").clone();
+    let batches = df.collect().await.unwrap();
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert!(total > 0, "expected credible-set rows for the lead variant");
+    let schema = batches[0].schema();
+    let cols: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+        cols,
+        vec![
+            "input_id",
+            "study_locus_id",
+            "study_id",
+            "trait",
+            "study_type",
+            "lead_variant_id",
+            "lead_variant_rsid",
+            "pval",
+            "beta",
+            "purity_r2",
+            "gene_id",
+            "gene_symbol",
+            "l2g_score"
+        ]
+    );
+}
+
+/// Study-ID mode: one GCST study → its fine-mapped loci with L2G genes.
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn genetic_node_study_mode() {
+    let ctx = datafusion::prelude::SessionContext::new();
+    let ids = arrow_array::RecordBatch::try_from_iter(vec![(
+        "study_id",
+        Arc::new(arrow_array::StringArray::from(vec!["GCST90018961"])) as Arc<dyn arrow_array::Array>,
+    )])
+    .unwrap();
+    let input_df = ctx.read_batch(ids).unwrap();
+
+    let mut node = build_node(
+        "opentargets_genetic",
+        serde_json::json!({"id_kind": "study", "id_column": "study_id", "min_l2g": 0.9}),
+    );
+    let outputs = node
+        .execute(
+            &node_ctx(),
+            &[data_engine::dag::NodeInput::new_dataframe(0, input_df)],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .expect("genetic node execute failed");
+    let df = outputs.dataframe(0).expect("missing output port 0").clone();
+    let batches = df.collect().await.unwrap();
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert!(total > 0, "expected high-confidence L2G rows for GCST90018961");
 }

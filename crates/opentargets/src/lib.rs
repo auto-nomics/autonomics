@@ -40,6 +40,7 @@ pub mod associations;
 pub mod client;
 pub mod error;
 pub mod format;
+pub mod genetics;
 pub mod search;
 pub mod tools;
 pub mod types;
@@ -47,6 +48,10 @@ pub mod types;
 pub use associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
 pub use client::{DEFAULT_ENDPOINT, OpenTargetsClient, endpoint};
 pub use error::{OpenTargetsError, Result};
+pub use genetics::{
+    CredibleSetLocus, CredibleSetPage, CredibleSetStudy, CredibleSetVariant, L2GPrediction,
+    L2GPredictionPage, L2GTarget,
+};
 pub use search::{SearchResult, SearchResults};
 pub use tools::opentargets_registrations;
 pub use types::{

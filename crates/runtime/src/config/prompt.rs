@@ -66,7 +66,10 @@ const PROMPT_OPENTARGETS: &str = "\n\
 - For association data in pipelines, use the DAG nodes `source_opentargets_associated_diseases` /
   `source_opentargets_associated_targets` (ranked tables with per-datasource score columns)
   and `source_opentargets_associations`; the `opentargets_*` tools are for interactive
-  lookup of entity annotation cards, studies, and variants.";
+  lookup of entity annotation cards, studies, and variants.
+- For genetics evidence (fine-mapped credible sets, Locus-to-Gene predictions) feed a \
+  variant-ID or study-ID table into the `opentargets_genetic` node; it returns one row \
+  per (locus, predicted gene) with the L2G score.";
 
 const PROMPT_GWASCATALOG: &str = "\n\
 ### GWAS Catalog (EBI)\n\

@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use crate::associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
 use crate::error::{OpenTargetsError, Result};
+use crate::genetics::{CredibleSetPage, CREDIBLE_SET_FRAGMENT};
 use crate::search::SearchResults;
 use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
 
@@ -108,6 +109,10 @@ datatypeScores { id score }
 const SEARCH_FRAGMENT: &str = r#"
 id name entity score description category highlights
 "#;
+
+// Lives with its types so the nested L2G selection stays close to
+// `L2GPrediction` / `CredibleSetLocus`.
+// (see genetics.rs for `CREDIBLE_SET_FRAGMENT`)
 
 // ---------------------------------------------------------------------------
 // Client
@@ -423,6 +428,47 @@ impl OpenTargetsClient {
             index += 1;
         }
         Ok(out)
+    }
+
+    // ----- genetics (credible sets / Locus-to-Gene) ----------------------
+
+    /// One page of fine-mapped credible-set loci for a batch of lead
+    /// variants (`chr_pos_ref_alt`, GRCh38). Loci whose LD set contains a
+    /// queried variant are also returned; check the `variant` field on each
+    /// row for the actual lead variant.
+    pub async fn credible_sets_by_variant(
+        &self,
+        variant_ids: &[&str],
+        page: Pagination,
+    ) -> Result<CredibleSetPage> {
+        self.credible_sets("variantIds", variant_ids, page).await
+    }
+
+    /// One page of fine-mapped credible-set loci for a batch of study IDs
+    /// (e.g. GCST…).
+    pub async fn credible_sets_by_study(
+        &self,
+        study_ids: &[&str],
+        page: Pagination,
+    ) -> Result<CredibleSetPage> {
+        self.credible_sets("studyIds", study_ids, page).await
+    }
+
+    /// Shared `credibleSets(filter, page)` runner.
+    async fn credible_sets(
+        &self,
+        id_argument: &str,
+        ids: &[&str],
+        page: Pagination,
+    ) -> Result<CredibleSetPage> {
+        let q = format!(
+            "query($ids: [String!]!, $page: Pagination!) {{
+                credibleSets({id_argument}: $ids, page: $page) {{
+                    count rows {{ {CREDIBLE_SET_FRAGMENT} }}
+                }} }}"
+        );
+        self.field(&q, json!({ "ids": ids, "page": page }), "credibleSets")
+            .await
     }
 }
 

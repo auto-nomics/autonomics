@@ -1,6 +1,6 @@
 //! Open Targets Platform source nodes.
 //!
-//! Four source nodes that pull tabular data from the [Open Targets Platform](
+//! Five nodes that pull tabular data from the [Open Targets Platform](
 //! https://platform.opentargets.org/api) GraphQL API and emit it as a
 //! DataFusion `DataFrame`, so association score tables and search hits can
 //! flow through a DAG (join, filter via `sql_node`, sink to CSV/VFS, …).
@@ -15,10 +15,14 @@
 //! - [`OpentargetsAssociatedTargetsNode`]
 //!   (`source_opentargets_associated_targets`) — the disease→target
 //!   counterpart with the same score breakdown.
+//! - [`OpentargetsGeneticNode`] (`opentargets_genetic`) — fine-mapped
+//!   credible sets with Locus-to-Gene predictions, IDs read from an
+//!   upstream DataFrame (list input stays out of the spec).
 //!
-//! All are zero-input / single-output source nodes. They reuse the
-//! `opentargets` SDK client; `DagNode::execute` is async on the engine's
-//! tokio runtime, so the client is simply `.await`ed.
+//! The first four are zero-input / single-output source nodes; the genetics
+//! node has one DataFrame input and one output. All reuse the `opentargets`
+//! SDK client; `DagNode::execute` is async on the engine's tokio runtime, so
+//! the client is simply `.await`ed.
 
 use std::sync::Arc;
 
@@ -29,14 +33,15 @@ use datafusion::common::HashMap;
 use datafusion::dataframe::DataFrame;
 use datafusion::prelude::SessionContext;
 use opentargets::{
-    AssociatedDisease, AssociatedTarget, OpenTargetsClient, Pagination, ScoredComponent,
-    SearchResult,
+    AssociatedDisease, AssociatedTarget, CredibleSetLocus, OpenTargetsClient, Pagination,
+    ScoredComponent, SearchResult,
 };
 use schemars::{JsonSchema, schema_for};
 use serde::Deserialize;
 
-use dag_core::dag::{DagError, DagNode, NodePorts, graph::PortOutputs};
+use dag_core::dag::{DagError, DagNode, NodeInput, NodePorts, graph::PortOutputs};
 use dag_core::registry::{NodeCtx, NodeFactory};
+use dag_core::value::PortType;
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -864,6 +869,363 @@ impl DagNode for OpentargetsAssociatedTargetsNode {
     }
 }
 
+// ===========================================================================
+// 5. Genetics node (credible sets + Locus-to-Gene, IDs from an input frame)
+// ===========================================================================
+
+/// Default name of the input column holding variant/study IDs.
+fn default_genetic_id_column() -> String {
+    "variant_id".into()
+}
+
+/// Default number of IDs per `credibleSets` request.
+fn default_genetic_batch_size() -> u32 {
+    25
+}
+
+/// Page size for the internal `credibleSets` pagination loop.
+const GENETIC_PAGE_SIZE: u32 = 100;
+
+/// Spec for [`OpentargetsGeneticNode`]. No list fields: the ID list always
+/// arrives on the input DataFrame port.
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct OpentargetsGeneticSpec {
+    /// What the input column holds: `"variant"` (default) — `chr_pos_ref_alt`
+    /// GRCh38 lead variants — or `"study"` — GWAS/QTL study IDs (GCST…).
+    #[serde(default)]
+    pub id_kind: Option<String>,
+    /// Name of the input DataFrame column holding the IDs. Default
+    /// `variant_id`.
+    #[serde(default = "default_genetic_id_column")]
+    pub id_column: String,
+    /// Minimum Locus-to-Gene score in `[0,1]`; gene rows below are dropped.
+    /// Default keeps every predicted gene.
+    #[serde(default)]
+    pub min_l2g: Option<f64>,
+    /// IDs per `credibleSets` request; large inputs are queried in chunks of
+    /// this size and the loci merged. Default `25`.
+    #[serde(default = "default_genetic_batch_size")]
+    pub batch_size: u32,
+    /// Override the GraphQL endpoint URL (tests / staging).
+    #[serde(default)]
+    pub endpoint: Option<String>,
+}
+
+/// Genetics node: fine-mapped credible sets with Locus-to-Gene predictions,
+/// the IDs read from an upstream DataFrame column (phewas-style).
+#[derive(Clone)]
+pub struct OpentargetsGeneticNode {
+    meta: NodePorts,
+    spec: OpentargetsGeneticSpec,
+}
+
+pub struct OpentargetsGeneticNodeFactory;
+
+impl NodeFactory for OpentargetsGeneticNodeFactory {
+    fn kind(&self) -> &'static str {
+        "opentargets_genetic"
+    }
+
+    fn desc(&self) -> &'static str {
+        "Fine-mapped credible sets with Locus-to-Gene predictions for variants \
+        or studies read from an upstream DataFrame."
+    }
+
+    fn doc(&self) -> &'static str {
+        "Takes a DataFrame with an ID column (`id_column`, default `variant_id`) \
+         and queries the Open Targets Platform `credibleSets` endpoint — the \
+         genetics_portal content (fine-mapping + Locus-to-Gene) now lives in \
+         the Platform API. `id_kind` selects the column semantics: `\"variant\"` \
+         (default, `chr_pos_ref_alt` GRCh38 lead variants) or `\"study\"` \
+         (GCST-style study IDs).\n\n\
+         Output is long-format, one row per (locus, predicted gene): \
+         `input_id, study_locus_id, study_id, trait, study_type, \
+         lead_variant_id, lead_variant_rsid, pval, beta, purity_r2, gene_id, \
+         gene_symbol, l2g_score`. Loci without any predicted gene (above \
+         `min_l2g`) are dropped.\n\n\
+         Note: in variant mode loci whose LD set contains the queried variant \
+         are also returned; `lead_variant_id` carries the actual lead variant, \
+         and `input_id` preserves the queried ID for joins back to the input."
+    }
+
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(OpentargetsGeneticSpec)
+    }
+
+    fn ports(&self) -> NodePorts {
+        NodePorts::new()
+            .add_input_port_of_type_with_label(None, PortType::DataFrame, "ids")
+            .add_output_port(None)
+    }
+
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        let node_spec: OpentargetsGeneticSpec = serde_json::from_value(spec)?;
+        Ok(Box::new(OpentargetsGeneticNode {
+            meta: self.ports(),
+            spec: node_spec,
+        }))
+    }
+}
+
+#[async_trait]
+impl DagNode for OpentargetsGeneticNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new((*self).clone())
+    }
+
+    fn kind(&self) -> &'static str {
+        "opentargets_genetic"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let err = |msg: String| DagError::NodeError {
+            node_type: "opentargets_genetic".into(),
+            msg,
+        };
+        let kind = self.spec.id_kind.as_deref().unwrap_or("variant");
+        let fetch = match kind {
+            "variant" | "study" => kind,
+            other => {
+                return Err(err(format!(
+                    "unknown id_kind '{other}' (expected 'variant' or 'study')"
+                )))
+            }
+        };
+
+        let input = inputs.first().ok_or_else(|| {
+            err(format!(
+                "no input: connect a DataFrame with {} IDs to the 'ids' port",
+                if fetch == "variant" { "variant" } else { "study" }
+            ))
+        })?;
+        let df = input
+            .dataframe()
+            .map_err(|e| err(format!("input is not a DataFrame: {e}")))?;
+        let ids = genetic_string_values(&df, &self.spec.id_column).await?;
+        if ids.is_empty() {
+            return Err(err(format!(
+                "column '{}' contains no usable IDs",
+                self.spec.id_column
+            )));
+        }
+        tracing::info!(
+            "Open Targets credibleSets: querying {} unique {fetch} IDs (min_l2g = {})",
+            ids.len(),
+            self.spec.min_l2g.unwrap_or(0.0),
+        );
+
+        let client = client_from_endpoint(&self.spec.endpoint);
+        let min_l2g = self.spec.min_l2g.unwrap_or(0.0);
+        let batch = self.spec.batch_size.max(1) as usize;
+        let mut loci: Vec<(String, CredibleSetLocus)> = Vec::new();
+        for chunk in ids.chunks(batch) {
+            let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
+            let mut index = 0u32;
+            let mut fetched = 0i64;
+            loop {
+                let page = if fetch == "variant" {
+                    client
+                        .credible_sets_by_variant(&refs, Pagination::new(index, GENETIC_PAGE_SIZE))
+                        .await
+                } else {
+                    client
+                        .credible_sets_by_study(&refs, Pagination::new(index, GENETIC_PAGE_SIZE))
+                        .await
+                }
+                .map_err(|e| DagError::Schedule(format!("Open Targets request failed: {e}")))?;
+                let count = page.count;
+                let got = page.rows.len() as i64;
+                fetched += got;
+                loci.extend(
+                    chunk
+                        .iter()
+                        .zip(page.rows.into_iter())
+                        .map(|(id, locus)| (id.clone(), locus)),
+                );
+                if fetched >= count || got == 0 {
+                    break;
+                }
+                index += 1;
+            }
+        }
+
+        let batch = build_genetic_batch(loci, min_l2g)?;
+        let df = ctx
+            .session()
+            .read_batch(batch)
+            .map_err(|e| DagError::Schedule(format!("failed to read genetics batch: {e}")))?;
+        let mut res: PortOutputs = PortOutputs::new();
+        res.insert(0, df);
+        Ok(res)
+    }
+}
+
+/// Extract non-null string values from one column of a DataFrame, deduped in
+/// first-seen order (duplicate IDs only multiply network requests).
+async fn genetic_string_values(df: &DataFrame, column: &str) -> Result<Vec<String>, DagError> {
+    let index = df
+        .schema()
+        .index_of_column_by_name(None, column)
+        .ok_or_else(|| {
+            DagError::NodeError {
+                node_type: "opentargets_genetic".into(),
+                msg: format!("input table has no column {column:?}"),
+            }
+        })?;
+    let batches = df
+        .clone()
+        .collect()
+        .await
+        .map_err(|e| DagError::Schedule(format!("failed to collect input table: {e}")))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut values = Vec::new();
+    for batch in batches {
+        let array = batch.column(index);
+        let strings = array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DagError::NodeError {
+                node_type: "opentargets_genetic".into(),
+                msg: format!(
+                    "column {column:?} must be UTF-8 (found {})",
+                    array.data_type()
+                ),
+            })?;
+        for i in 0..strings.len() {
+            if !strings.is_null(i) && seen.insert(strings.value(i).to_string()) {
+                values.push(strings.value(i).to_string());
+            }
+        }
+    }
+    Ok(values)
+}
+
+/// One long-format output row: a credible-set locus crossed with one
+/// predicted gene.
+struct GeneticRow {
+    input_id: String,
+    study_locus_id: String,
+    study_id: String,
+    trait_name: Option<String>,
+    study_type: Option<String>,
+    lead_variant_id: Option<String>,
+    lead_variant_rsid: Option<String>,
+    pval: Option<f64>,
+    beta: Option<f64>,
+    purity_r2: Option<f64>,
+    gene_id: String,
+    gene_symbol: Option<String>,
+    l2g_score: f64,
+}
+
+/// Flatten `(input_id, locus)` pairs into gene rows, dropping loci whose
+/// predictions all fall below `min_l2g`.
+fn genetic_rows(
+    loci: Vec<(String, CredibleSetLocus)>,
+    min_l2g: f64,
+) -> impl Iterator<Item = GeneticRow> {
+    loci.into_iter().flat_map(move |(input_id, locus)| {
+        let study = locus.study.clone();
+        let variant = locus.variant.clone();
+        let pval = match (locus.p_value_mantissa, locus.p_value_exponent) {
+            (Some(m), Some(e)) => Some(m * 10f64.powi(e)),
+            _ => None,
+        };
+        locus
+            .l2g_predictions
+            .rows
+            .into_iter()
+            .filter(move |p| p.score >= min_l2g)
+            .map(move |p| GeneticRow {
+                input_id: input_id.clone(),
+                study_locus_id: locus.study_locus_id.clone(),
+                study_id: locus.study_id.clone(),
+                trait_name: study
+                    .as_ref()
+                    .and_then(|s| s.trait_from_source.clone()),
+                study_type: locus.study_type.clone(),
+                lead_variant_id: variant.as_ref().and_then(|v| v.id.clone()),
+                lead_variant_rsid: variant
+                    .as_ref()
+                    .and_then(|v| v.rs_ids.as_ref().and_then(|r| r.first().cloned())),
+                pval,
+                beta: locus.beta,
+                purity_r2: locus.purity_mean_r2,
+                gene_id: p.target.id.clone(),
+                gene_symbol: p.target.approved_symbol.clone(),
+                l2g_score: p.score,
+            })
+    })
+}
+
+/// Assemble the genetics output batch:
+/// `input_id, study_locus_id, study_id, trait, study_type, lead_variant_id,
+/// lead_variant_rsid, pval, beta, purity_r2, gene_id, gene_symbol, l2g_score`.
+fn build_genetic_batch(loci: Vec<(String, CredibleSetLocus)>, min_l2g: f64) -> Result<RecordBatch, DagError> {
+    let rows: Vec<GeneticRow> = genetic_rows(loci, min_l2g).collect();
+    let schema = Arc::new(Schema::new(vec![
+        field("input_id", true),
+        field("study_locus_id", true),
+        field("study_id", true),
+        field("trait", true),
+        field("study_type", true),
+        field("lead_variant_id", true),
+        field("lead_variant_rsid", true),
+        Field::new("pval", DataType::Float64, true),
+        Field::new("beta", DataType::Float64, true),
+        Field::new("purity_r2", DataType::Float64, true),
+        field("gene_id", true),
+        field("gene_symbol", true),
+        Field::new("l2g_score", DataType::Float64, true),
+    ]));
+    let columns = vec![
+        str_array(rows.iter().map(|r| Some(r.input_id.clone())).collect()),
+        str_array(
+            rows.iter()
+                .map(|r| Some(r.study_locus_id.clone()))
+                .collect(),
+        ),
+        str_array(rows.iter().map(|r| Some(r.study_id.clone())).collect()),
+        str_array(rows.iter().map(|r| r.trait_name.clone()).collect()),
+        str_array(rows.iter().map(|r| r.study_type.clone()).collect()),
+        str_array(
+            rows.iter()
+                .map(|r| r.lead_variant_id.clone())
+                .collect(),
+        ),
+        str_array(
+            rows.iter()
+                .map(|r| r.lead_variant_rsid.clone())
+                .collect(),
+        ),
+        f64_array(rows.iter().map(|r| r.pval).collect()),
+        f64_array(rows.iter().map(|r| r.beta).collect()),
+        f64_array(rows.iter().map(|r| r.purity_r2).collect()),
+        str_array(rows.iter().map(|r| Some(r.gene_id.clone())).collect()),
+        str_array(rows.iter().map(|r| r.gene_symbol.clone()).collect()),
+        f64_array(rows.iter().map(|r| Some(r.l2g_score)).collect()),
+    ];
+    RecordBatch::try_new(schema, columns)
+        .map_err(|e| DagError::Schedule(format!("failed to build genetics batch: {e}")))
+}
+
 // ---------------------------------------------------------------------------
 // Shared breakdown batch builder
 // ---------------------------------------------------------------------------
@@ -1073,5 +1435,120 @@ mod breakdown_tests {
         let batch =
             build_breakdown_batch(rows.into_iter(), 0, 0, "disease_id", "disease_name").unwrap();
         assert_eq!(batch.num_columns(), 4);
+    }
+}
+
+#[cfg(test)]
+mod genetic_tests {
+    use super::*;
+
+    use opentargets::{CredibleSetStudy, CredibleSetVariant, L2GPrediction, L2GTarget};
+
+    fn locus(id: &str, l2g: Vec<L2GPrediction>) -> CredibleSetLocus {
+        CredibleSetLocus {
+            study_locus_id: id.into(),
+            study_id: "GCST90018961".into(),
+            study_type: Some("gwas".into()),
+            purity_mean_r2: None,
+            p_value_mantissa: Some(5.204),
+            p_value_exponent: Some(-21),
+            beta: Some(0.0654),
+            study: Some(CredibleSetStudy {
+                trait_from_source: Some("LDL cholesterol".into()),
+                ..Default::default()
+            }),
+            variant: Some(CredibleSetVariant {
+                id: Some("17_66232877_G_C".into()),
+                rs_ids: Some(vec!["rs149394327".into()]),
+            }),
+            l2g_predictions: opentargets::L2GPredictionPage {
+                count: l2g.len() as i64,
+                rows: l2g,
+            },
+        }
+    }
+
+    fn prediction(gene: &str, symbol: &str, score: f64) -> L2GPrediction {
+        L2GPrediction {
+            score,
+            target: L2GTarget {
+                id: gene.into(),
+                approved_symbol: Some(symbol.into()),
+            },
+        }
+    }
+
+    #[test]
+    fn genetics_long_format_crosses_loci_with_genes() {
+        let loci = vec![
+            (
+                "1_1_A_T".into(),
+                locus(
+                    "locus1",
+                    vec![
+                        prediction("ENSG1", "APOH", 0.99),
+                        prediction("ENSG2", "PRKCA", 0.05),
+                    ],
+                ),
+            ),
+            ("2_2_C_G".into(), locus("locus2", vec![])),
+        ];
+        let batch = build_genetic_batch(loci, 0.0).unwrap();
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 13);
+        let symbol = batch
+            .column(11)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(symbol.value(0), "APOH");
+        assert_eq!(symbol.value(1), "PRKCA");
+        // pval reassembled from mantissa × 10^exponent.
+        let pval = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert!((pval.value(0) - 5.204e-21).abs() < 1e-30);
+        // Locus without predicted genes is dropped entirely.
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(ids.value(1), "1_1_A_T"); // only locus1 rows survive
+    }
+
+    #[test]
+    fn genetics_min_l2g_filters_gene_rows() {
+        let loci = vec![(
+            "v".into(),
+            locus(
+                "locus1",
+                vec![
+                    prediction("ENSG1", "APOH", 0.9),
+                    prediction("ENSG2", "PRKCA", 0.2),
+                ],
+            ),
+        )];
+        let batch = build_genetic_batch(loci, 0.5).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        let genes = batch
+            .column(10)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(genes.value(0), "ENSG1");
+    }
+
+    #[test]
+    fn genetics_empty_input_yields_typed_empty_batch() {
+        let batch = build_genetic_batch(Vec::new(), 0.0).unwrap();
+        assert_eq!(batch.num_rows(), 0);
+        assert_eq!(batch.num_columns(), 13);
+        // No NullArray: every column keeps its declared type.
+        for column in batch.columns() {
+            assert_ne!(column.data_type(), &arrow_schema::DataType::Null);
+        }
     }
 }

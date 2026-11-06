@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { gatewayRequest } from "@/gateway";
 import type { DagSnapshot } from "@/types";
-import { calculateLevels } from "./dag";
+import { calculateLevels, dagStatus } from "./dag";
+
+const statusDotColors: Record<string, string> = {
+  pending: "text-slate-400",
+  ready: "text-sky-500",
+  running: "text-amber-500",
+  success: "text-emerald-500",
+  failed: "text-red-500",
+  skipped: "text-violet-500",
+  cancelled: "text-orange-500",
+};
 
 type Point = { x: number; y: number };
 type View = { zoom: number; x: number; y: number };
@@ -87,7 +97,8 @@ export function DagMinimap({ activeAgent }: { activeAgent: string }) {
         })}
         {snapshot.nodes.map(node => {
           const point = layout.positions.get(node.id);
-          return point && <circle key={node.id} cx={point.x} cy={point.y} r="4" fill="currentColor" className="text-primary"><title>{node.id}</title></circle>;
+          const status = dagStatus(node.status);
+          return point && <circle key={node.id} cx={point.x} cy={point.y} r="4" fill="currentColor" className={statusDotColors[status] ?? statusDotColors.pending}><title>{node.id} · {status}</title></circle>;
         })}
       </svg>
       {error && <span className="absolute right-1 bottom-1 text-xs text-destructive">Refresh failed</span>}

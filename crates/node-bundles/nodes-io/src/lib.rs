@@ -249,6 +249,9 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(
             source_opentargets::OpentargetsAssociatedTargetsNodeFactory,
         ));
+        // Genetics (credible sets + L2G) takes IDs from an input DataFrame
+        // port — phewas-style — so no ID list lives in the spec.
+        registry.register(Box::new(source_opentargets::OpentargetsGeneticNodeFactory));
         registry.register(Box::new(source_chembl::ChemblActivitiesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMoleculesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMechanismsNodeFactory));

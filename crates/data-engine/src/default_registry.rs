@@ -140,6 +140,7 @@ mod tests {
                     program: "podman".into(),
                     workspace_root: "/tmp/autonomics-registry-workspace".into(),
                     panel_cache_root: "/tmp/autonomics-registry-panels".into(),
+                    ..container_runtime::PodmanConfig::default()
                 },
             ));
         let registry = build_default_registry_with_container_execution(
@@ -169,6 +170,7 @@ mod tests {
                     program: "podman".into(),
                     workspace_root: "/tmp/autonomics-visualization-workspace".into(),
                     panel_cache_root: "/tmp/autonomics-visualization-panels".into(),
+                    ..container_runtime::PodmanConfig::default()
                 },
             ));
         // Pin the plugins root to a path that does not exist: the assertion
@@ -280,6 +282,14 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{kind} must be registered: {error}"));
             assert_eq!(ports.output_ports().len(), 1);
         }
+
+        // The genetics node follows the phewas pattern: one DataFrame input
+        // carrying the ID list, one output, no ID list in the spec.
+        let ports = registry
+            .get_node_ports("opentargets_genetic")
+            .unwrap_or_else(|error| panic!("opentargets_genetic must be registered: {error}"));
+        assert_eq!(ports.input_ports().len(), 1);
+        assert_eq!(ports.output_ports().len(), 1);
     }
 
     /// B5 (M3-② spike): the scalar and matrix OpenGWAS operations fold into
@@ -361,6 +371,7 @@ mod tests {
                     program: "podman".into(),
                     workspace_root: "/tmp/autonomics-kegg-registry-workspace".into(),
                     panel_cache_root: "/tmp/autonomics-kegg-registry-panels".into(),
+                    ..container_runtime::PodmanConfig::default()
                 },
             ));
         let registry = build_default_registry_with_container_execution(
@@ -435,6 +446,7 @@ script_file = "scripts/h2.sh"
                     program: "podman".into(),
                     workspace_root: plugins_root.path().join("workspace"),
                     panel_cache_root: plugins_root.path().join("panels"),
+                    ..container_runtime::PodmanConfig::default()
                 },
             ));
         let registry = build_default_registry_with_container_execution(
