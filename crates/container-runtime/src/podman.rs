@@ -133,12 +133,16 @@ impl PodmanConfig {
     }
 
     /// RuntimeHost passes its resolved state directory, including builder
-    /// overrides. No workspace, panel or overlay escapes through ambient HOME.
+    /// overrides. No workspace or overlay escapes through ambient HOME. The
+    /// panel cache is the one deliberate exception: it stays on the shared
+    /// catalog root (`default_panel_cache_root`, env-overridable) so panel
+    /// bundles exist exactly once locally and containers bind-mount the
+    /// catalog's verified content directly instead of a private copy.
     pub fn for_state_dir(state_dir: &Path) -> Self {
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
             workspace_root: state_dir.join("containers/workspace"),
-            panel_cache_root: state_dir.join("containers/panels"),
+            panel_cache_root: crate::config::default_panel_cache_root(),
             storage_root: Some(state_dir.join("containers/storage")),
             run_root: Some(state_dir.join("containers/run")),
             // Deterministic private storage also works inside the trusted
@@ -162,9 +166,10 @@ impl PodmanConfig {
         let mut config = Self::for_state_dir(state_dir);
         if driver == PrivateStorageDriver::Overlay {
             // Never reinterpret an existing VFS store or use host storage.
+            // The panel cache keeps pointing at the shared catalog root in
+            // both layouts — one local copy of every bundle.
             let root = state_dir.join("containers-overlay");
             config.workspace_root = root.join("workspace");
-            config.panel_cache_root = root.join("panels");
             config.storage_root = Some(root.join("storage"));
             config.run_root = Some(root.join("run"));
             config.storage_driver = Some("overlay".into());
@@ -1206,7 +1211,9 @@ mod tests {
         let a = PodmanConfig::for_state_dir(Path::new("/tmp/test-instance-a"));
         let b = PodmanConfig::for_state_dir(Path::new("/tmp/test-instance-b"));
         assert!(a.workspace_root.starts_with("/tmp/test-instance-a"));
-        assert!(a.panel_cache_root.starts_with("/tmp/test-instance-a"));
+        // The panel cache is the one shared root: every instance mounts
+        // the catalog's single verified copy instead of a private duplicate.
+        assert_eq!(a.panel_cache_root, b.panel_cache_root);
         assert_ne!(a.storage_root, b.storage_root);
         assert_ne!(a.run_root, b.run_root);
         let asynchronous = a.async_command();
@@ -1249,9 +1256,11 @@ mod tests {
         let overlay =
             PodmanConfig::for_state_dir_with_storage_driver(state, PrivateStorageDriver::Overlay);
         assert_ne!(overlay.storage_root, legacy.storage_root);
+        // Storage/run/workspace move to the separate overlay store; the
+        // panel cache stays on the shared catalog root in every layout.
+        assert_eq!(overlay.panel_cache_root, legacy.panel_cache_root);
         for root in [
             &overlay.workspace_root,
-            &overlay.panel_cache_root,
             overlay.storage_root.as_ref().unwrap(),
             overlay.run_root.as_ref().unwrap(),
         ] {

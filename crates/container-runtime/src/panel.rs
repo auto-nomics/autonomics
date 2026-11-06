@@ -224,6 +224,35 @@ impl PanelCache {
         panel.validate().map_err(ContainerRuntimeError::Invalid)?;
         let prefix =
             normalize_virtual_prefix(&panel.source).map_err(ContainerRuntimeError::Invalid)?;
+
+        let cache_key = format!("{}@{}", panel.id, panel.digest);
+        let destination = self.root.join(&cache_key);
+        let marker = destination.join(PANEL_CACHE_COMPLETE_MARKER);
+        // Local-first: the catalog cache already stores every bundle under
+        // `<root>/<owner>/<name>@<digest>` with the same completion marker
+        // and manifest schema. A present, digest-matching entry is the one
+        // authoritative copy — mount it directly instead of fetching a
+        // second copy from object storage.
+        if marker_is_valid(&marker, &panel.digest).await {
+            if let Some((manifest, manifest_bytes)) =
+                self.load_local_manifest(&destination).await?
+            {
+                // Strict mode admits a panel only through its signed byte
+                // identity; the local copy must carry the same signature
+                // the object-storage manifest would have been checked
+                // against.
+                if manifest.digest == panel.digest && self.admits_local_manifest(&prefix, &manifest_bytes)
+                {
+                    self.verify_cache_files(&destination, &manifest).await?;
+                    // Record the hit so the LRU sweeper removes
+                    // least-recently-used entries rather than
+                    // least-recently-downloaded ones.
+                    crate::gc::touch_dir_mtime(&destination);
+                    return Ok(self.cached_panel(panel, destination, manifest_bytes));
+                }
+            }
+        }
+
         let (manifest, manifest_bytes) = self.load_manifest(storage, &prefix).await?;
         // A frozen runtime binding may use a logical alias for the catalog
         // repository. Strict mode has already verified the admitted original
@@ -244,9 +273,6 @@ impl PanelCache {
             });
         }
 
-        let cache_key = format!("{}@{}", panel.id, panel.digest);
-        let destination = self.root.join(&cache_key);
-        let marker = destination.join(PANEL_CACHE_COMPLETE_MARKER);
         if marker_is_valid(&marker, &panel.digest).await {
             self.verify_cache_files(&destination, &manifest).await?;
             // Record the hit so the LRU sweeper removes least-recently-used
@@ -315,6 +341,43 @@ impl PanelCache {
             mount_path: panel.mount_path.clone(),
             manifest_bytes: Some(manifest_bytes),
         }
+    }
+
+    /// Whether a locally stored manifest carries the signed byte identity
+    /// strict mode requires. Non-strict caches admit any digest-matching
+    /// manifest; strict ones only admit the exact signed bytes.
+    fn admits_local_manifest(&self, prefix: &str, manifest_bytes: &[u8]) -> bool {
+        if !self.content_required {
+            return true;
+        }
+        let Some(expected) = self.expected_manifest_hash(prefix) else {
+            return false;
+        };
+        let actual = sha256_digest(&Sha256::digest(manifest_bytes));
+        actual.strip_prefix("sha256:") == Some(expected)
+    }
+
+    /// Read the manifest already stored beside a cached entry. The catalog
+    /// cache and the panel cache share the same on-disk convention, so an
+    /// installed bundle carries its own manifest — no object-storage round
+    /// trip is needed to admit it.
+    async fn load_local_manifest(
+        &self,
+        destination: &Path,
+    ) -> Result<Option<(PanelManifest, Vec<u8>)>, ContainerRuntimeError> {
+        let path = destination.join(PANEL_MANIFEST_OBJECT);
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let manifest: PanelManifest = match serde_json::from_slice(&bytes) {
+            Ok(manifest) => manifest,
+            // A manifest this cache cannot interpret is not an admission
+            // failure: the object-storage copy remains authoritative.
+            Err(_) => return Ok(None),
+        };
+        Ok(Some((manifest, bytes)))
     }
 
     async fn load_manifest(
@@ -529,6 +592,70 @@ mod tests {
             format!("1000g_eur@{}", manifest.digest)
         );
         assert!(cached.host_path.join(PANEL_CACHE_COMPLETE_MARKER).is_file());
+    }
+
+    /// The catalog cache already stores every bundle under
+    /// `<root>/<owner>/<name>@<digest>` with the panel cache's completion
+    /// marker and manifest schema. `ensure` must admit that entry as the
+    /// one authoritative copy — the object storage in this test is empty, so
+    /// a hit proves nothing was downloaded.
+    #[tokio::test]
+    async fn an_installed_catalog_entry_is_mounted_in_place_without_downloading() {
+        let object_root = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::new(object_root.path());
+        let content = b"catalog-panel";
+        let digest = format!("sha256:{}", "4".repeat(64));
+        let manifest = PanelManifest {
+            schema_version: 2,
+            id: "wjixiang/catalog-ldsc".into(),
+            version: "v1".into(),
+            digest: digest.clone(),
+            files: vec![PanelFile {
+                path: "LDREF/chr22.bed".into(),
+                size: content.len() as u64,
+                sha256: content_digest(content),
+            }],
+        };
+        // The catalog layout: <root>/<owner>/<name>@<digest>.
+        let entry = cache_root
+            .path()
+            .join("wjixiang")
+            .join(format!("catalog-ldsc@{digest}"));
+        tokio::fs::create_dir_all(entry.join("LDREF")).await.unwrap();
+        tokio::fs::write(entry.join("LDREF/chr22.bed"), content)
+            .await
+            .unwrap();
+        tokio::fs::write(
+            entry.join(PANEL_MANIFEST_OBJECT),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            entry.join(PANEL_CACHE_COMPLETE_MARKER),
+            format!("digest={digest}\n"),
+        )
+        .await
+        .unwrap();
+
+        let panel = PanelRef {
+            id: "wjixiang/catalog-ldsc".into(),
+            digest: digest.clone(),
+            source: "/catalog/wjixiang/catalog-ldsc".into(),
+            mount_path: "/bundles/wjixiang/catalog-ldsc".into(),
+        };
+        let cache = PanelCache::new(cache_root.path());
+        let cached = cache.ensure(&storage, &panel).await.unwrap();
+
+        // Mounted in place — the catalog's own directory, no copy.
+        assert_eq!(cached.host_path, entry);
+        assert_eq!(
+            tokio::fs::read(cached.host_path.join("LDREF/chr22.bed"))
+                .await
+                .unwrap(),
+            content
+        );
     }
 
     #[tokio::test]

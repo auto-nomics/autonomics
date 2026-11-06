@@ -72,14 +72,23 @@ impl ContainerExecutionInfra {
 
     /// One operator-only backend selection shared by daemon, readiness and
     /// software preparation. Agent input cannot choose a host/default store.
+    /// Resolution order: `AUTONOMICS_CONTAINER_STORAGE_DRIVER` env, then the
+    /// operator's persisted marker `<state_dir>/container-storage-driver`
+    /// (write it once when adopting overlay — launching without either
+    /// falls back to vfs and would silently build a second store), then
+    /// the legacy vfs default.
     pub fn for_operator_state_dir(state_dir: &std::path::Path) -> Result<Self, String> {
-        let setting = std::env::var_os("AUTONOMICS_CONTAINER_STORAGE_DRIVER")
-            .map(|value| {
-                value.into_string().map_err(|_| {
-                    "AUTONOMICS_CONTAINER_STORAGE_DRIVER must be valid UTF-8".to_string()
-                })
-            })
-            .transpose()?;
+        let setting = match std::env::var_os("AUTONOMICS_CONTAINER_STORAGE_DRIVER") {
+            Some(value) => Some(
+                value
+                    .into_string()
+                    .map_err(|_| "AUTONOMICS_CONTAINER_STORAGE_DRIVER must be valid UTF-8")?,
+            ),
+            None => std::fs::read_to_string(state_dir.join("container-storage-driver"))
+                .ok()
+                .map(|text| text.trim().to_owned())
+                .filter(|text| !text.is_empty()),
+        };
         let driver = PrivateStorageDriver::parse_operator_setting(setting.as_deref())?;
         Self::for_state_dir_with_storage_driver(state_dir, driver)
     }
@@ -209,9 +218,11 @@ mod tests {
             overlay.workspace_root,
             state.join("containers-overlay/workspace")
         );
+        // Panels stay on the shared catalog root — one local copy mounted
+        // directly by containers, never duplicated per store layout.
         assert_eq!(
             overlay.panel_cache_root,
-            state.join("containers-overlay/panels")
+            crate::config::default_panel_cache_root()
         );
     }
 }
