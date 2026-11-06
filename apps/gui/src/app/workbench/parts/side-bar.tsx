@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { setProjectSidebarSlot } from "@/features/projects/sidebar-slot";
 import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
 import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -17,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
-import { openEditor, useWorkbenchState, type ContainerId } from "../workbench-store";
+import { openEditor, setContainer, useWorkbenchState, type ContainerId } from "../workbench-store";
 import { openBibliographyEditor } from "../static-commands";
 import { openPalette } from "../command-registry";
 import { togglePanel } from "../workbench-store";
@@ -37,6 +38,7 @@ const CONTAINER_TITLES: Record<ContainerId, string> = {
   bibliography: "文献与证据",
   wiki: "知识库",
   agents: "Agent",
+  projects: "插件项目",
 };
 
 function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
@@ -63,6 +65,11 @@ function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId;
         ))}
       </div>
     );
+  }
+  if (container === "projects") {
+    const group = state.groups.active === "main" ? state.groups.main : state.groups.active === "secondary" ? state.groups.secondary : state.groups.extra[state.groups.active];
+    const active = group?.editors.find(editor => editor.id === group.activeId);
+    return <><div ref={setProjectSidebarSlot} className="flex min-h-0 flex-1 flex-col" />{active?.kind !== "plugin-projects" && <Button variant="ghost" onClick={() => openEditor({ kind: "plugin-projects" })}>打开插件项目</Button>}</>;
   }
   if (container === "wiki") {
     return (
@@ -185,6 +192,7 @@ export function SideBar(props: {
             </div>
           </div>
           <SideBarContent container={container} mobile={props.mobile} onSpawn={props.onSpawn} />
+          <Button variant="ghost" className="justify-start" onClick={() => { setContainer("projects"); openEditor({ kind: "plugin-projects" }); }}>插件项目</Button>
           <MobileDrawerFooter onLogout={props.onLogout} />
         </aside>
       </>
@@ -206,7 +214,7 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
   const state = useWorkbenchState();
   return (
     <>
-      {container !== "wiki" && container !== "agents" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {container !== "wiki" && container !== "agents" && container !== "projects" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CONTAINER_TITLES[container]}
         </span>

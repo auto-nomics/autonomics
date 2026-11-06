@@ -63,6 +63,11 @@ fn build_node_smoke() {
         serde_json::json!({"query": "BRCA1"}),
     );
     assert_eq!(node.kind(), "source_opentargets_search");
+    let node = build_node(
+        "opentargets_genetic",
+        serde_json::json!({"id_kind": "study", "id_column": "study_id"}),
+    );
+    assert_eq!(node.kind(), "opentargets_genetic");
 }
 
 async fn run_node(
@@ -207,6 +212,76 @@ async fn genetic_node_variant_mode() {
             "l2g_score"
         ]
     );
+}
+
+/// Regression for run 305a975f: an upstream `core/sql` node built the
+/// variant ID with `concat(...)`, which DataFusion types as `Utf8View` —
+/// the node used to reject it with "must be UTF-8 (found Utf8View)".
+/// Same pipeline as `genetic_node_variant_mode`, but the ID column comes
+/// from a real SQL projection instead of a hand-built `StringArray`.
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn genetic_node_accepts_sql_concat_utf8_view_ids() {
+    let ctx = SessionContext::new();
+    let parts = arrow_array::RecordBatch::try_from_iter(vec![
+        (
+            "chrom",
+            Arc::new(arrow_array::StringArray::from(vec!["17"])) as Arc<dyn arrow_array::Array>,
+        ),
+        (
+            "pos",
+            Arc::new(arrow_array::Int64Array::from(vec![66232877i64])) as Arc<dyn arrow_array::Array>,
+        ),
+        (
+            "ref",
+            Arc::new(arrow_array::StringArray::from(vec!["G"])) as Arc<dyn arrow_array::Array>,
+        ),
+        (
+            "alt",
+            Arc::new(arrow_array::StringArray::from(vec!["C"])) as Arc<dyn arrow_array::Array>,
+        ),
+    ])
+    .unwrap();
+    ctx.register_batch("parts", parts).unwrap();
+    // SQL-composed variant ID, pinned to the view layout the failing run
+    // handed the node (concat's own coercion depends on the DataFusion
+    // version and input layouts, so pin it explicitly).
+    let input_df = ctx
+        .sql(
+            "select arrow_cast(concat(chrom, '_', pos, '_', ref, '_', alt), 'Utf8View') \
+             as variant_id from parts",
+        )
+        .await
+        .unwrap();
+    let physical = input_df.clone().collect().await.unwrap().remove(0);
+    assert_eq!(
+        physical.column(0).data_type(),
+        &arrow_schema::DataType::Utf8View
+    );
+
+    let mut node = build_node(
+        "opentargets_genetic",
+        serde_json::json!({"min_l2g": 0.5, "batch_size": 10}),
+    );
+    let outputs = node
+        .execute(
+            &node_ctx(),
+            &[data_engine::dag::NodeInput::new_dataframe(0, input_df)],
+            &data_engine::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .expect("genetic node must accept Utf8View variant_id");
+    let df = outputs.dataframe(0).expect("missing output port 0").clone();
+    let batches = df.collect().await.unwrap();
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert!(total > 0, "expected credible-set rows for the lead variant");
+    // The queried ID round-trips into input_id unchanged.
+    let ids = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    assert_eq!(ids.value(0), "17_66232877_G_C");
 }
 
 /// Study-ID mode: one GCST study → its fine-mapped loci with L2G genes.

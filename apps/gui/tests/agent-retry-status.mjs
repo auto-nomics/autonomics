@@ -106,6 +106,45 @@ try {
   assert.equal(await page.getByText('retrying', { exact: true }).count(), 0, 'retrying must not survive the fatal error');
   assert.equal(await page.locator('pre', { hasText: 'fatal boom' }).count(), 1, 'exactly one fatal error item');
 
+  const compactFrame = (id, compact) => sendFrame({ id, event: 'agent', data: { agent: '/root/alpha', event: { Compact: { event: compact } } } });
+  compactFrame(8, { CompactStart: { plan: { head_messages: 12, head_tokens: 3000, tail_messages: 4 } } });
+  compactFrame(9, { CompactPhase: { phase: 'Summarizing' } });
+  compactFrame(10, { CompactSummaryDelta: { text: '第一部分' } });
+  compactFrame(11, { CompactSummaryDelta: { text: '第二部分' } });
+  flush();
+  const compact = page.getByRole('region', { name: '上下文压缩' });
+  await compact.getByText('第一部分第二部分').waitFor();
+  await compact.getByText('正在压缩上下文').waitFor();
+  compactFrame(12, { CompactPhase: { phase: 'Rebuilding' } });
+  flush();
+  await compact.getByText('正在重建上下文').waitFor();
+  compactFrame(13, { CompactFinish: { stats: { messages_before: 16, messages_after: 5, freed_tokens: 2500, summary_tokens: 300, duration_ms: 1200 }, error: null } });
+  flush();
+  await compact.getByText('压缩完成').waitFor();
+  await compact.getByText(/16 → 5 条消息/).waitFor();
+  assert.equal(await compact.locator('details').getAttribute('open'), null, 'finished compaction collapses');
+  assert.equal(await compact.getByText('第一部分第二部分').isVisible(), false, 'summary is hidden after completion');
+  await compact.getByText('压缩完成').click();
+  await compact.getByText('第一部分第二部分').waitFor({ state: 'visible' });
+  compactFrame(14, { CompactStart: { plan: null } });
+  compactFrame(15, { CompactFinish: { stats: null, error: 'summary failed' } });
+  flush();
+  await compact.getByText('压缩失败').waitFor();
+  await compact.getByText('summary failed').waitFor();
+  assert.equal(await compact.getByText('第一部分第二部分').count(), 0, 'new compaction clears previous summary');
+
+  sendFrame({ id: 16, event: 'agent', data: { agent: '/root/alpha', event: { UserMessageAcknowledged: 'my previous prompt' } } });
+  sendFrame({ id: 17, event: 'agent', data: { agent: '/root/alpha', event: { MessageInjected: { text: 'background notice', origin: 'Harness' } } } });
+  flush();
+  await page.getByText('background notice').waitFor();
+  await page.keyboard.press('Control+r');
+  const history = page.getByRole('dialog', { name: 'Prompt history' });
+  await history.getByText('my previous prompt').waitFor();
+  assert.equal(await history.getByText('background notice').count(), 0, 'injected messages do not enter prompt history');
+  await history.getByPlaceholder('Filter prompts').fill('previous');
+  await history.getByText('my previous prompt').click();
+  assert.equal(await page.getByPlaceholder('输入消息…').inputValue(), 'my previous prompt');
+
   assert.deepEqual(errors, []);
   console.log('agent-retry-status: all assertions passed');
 } finally {

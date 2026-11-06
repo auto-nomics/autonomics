@@ -20,6 +20,7 @@ bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 dag-core = { path = "../dag-core" }
 container-plugin = { path = "../container-plugin" }
+container-runtime = { path = "../container-runtime" }
 axum = { version = "0.8", features = ["macros"] }
 tokio.workspace = true
 tokio-stream = "0.1"
@@ -28,6 +29,7 @@ futures.workspace = true
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
+json5 = "0.4"
 thiserror = { workspace = true }
 tracing.workspace = true
 uuid = { version = "1.23", features = ["v4", "serde"] }
@@ -40,6 +42,7 @@ eventsource-stream = "0.2"
 percent-encoding = "2"
 tempfile = { version = "3", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+portable-pty = "0.9.0"
 
 [features]
 # Test harness (`gateway::testing`) + mock-model support. Pulls

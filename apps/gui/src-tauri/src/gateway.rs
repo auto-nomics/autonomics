@@ -190,6 +190,15 @@ async fn api_request(
         {
             request = request.timeout(Duration::from_secs(210));
         }
+        // Opening a project may pull its development image. Match the
+        // gateway's 120-second startup budget instead of timing out at 30s.
+        if method.eq_ignore_ascii_case("POST")
+            && normalized_path.starts_with("plugin-projects/")
+            && normalized_path.split('?').next().unwrap_or("").ends_with("/container")
+        {
+            // Image build, startup, and up to five container lifecycle stages.
+            request = request.timeout(Duration::from_secs(1500));
+        }
         if matches!(&body, Some(value) if !value.is_null()) {
             request = request.json(&body);
         }

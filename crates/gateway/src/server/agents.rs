@@ -158,9 +158,53 @@ pub(crate) async fn get_agent_model(
     State(state): State<GatewayState>,
     Path(name): Path<String>,
 ) -> GatewayResult<Json<AgentModelInfoView>> {
-    let info = state.control.agent_model_info(&name).await.ok_or_else(|| {
-        GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
-    })?;
+    let info = if let Some(info) = state.control.agent_model_info(&name).await {
+        info
+    } else {
+        let record = state
+            .infra
+            .storage
+            .get_agent_by_name(&name)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
+            })?;
+        let config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
+        let model = if let Some(spec) = config.preferred_model.as_deref() {
+            state
+                .models
+                .resolve(spec)
+                .await
+                .map_err(GatewayError::Message)?
+        } else {
+            state
+                .model_slot
+                .load_full()
+                .ok_or_else(|| GatewayError::Message("No model configured on host.".into()))?
+                .as_ref()
+                .clone()
+        };
+        let info = &model.model_info;
+        let effort = if info.supports_thinking {
+            Some(
+                config
+                    .runtime
+                    .reasoning_effort
+                    .or(state.infra.memory.runtime_config().reasoning_effort)
+                    .unwrap_or_else(|| {
+                        if info.thinking_required && !info.thinking_enabled {
+                            agentik_types::ReasoningEffort::Low
+                        } else {
+                            agentik_types::ReasoningEffort::default()
+                        }
+                    }),
+            )
+        } else {
+            None
+        };
+        (model.model_spec(), info.context_length, effort)
+    };
     let (model, context_length, reasoning_effort) = info;
     Ok(Json(AgentModelInfoView {
         model,
@@ -184,26 +228,23 @@ pub(crate) async fn set_agent_model(
         .resolve(&req.spec)
         .await
         .map_err(GatewayError::Message)?;
+    let storage = &state.infra.storage;
+    let mut record = storage
+        .get_agent_by_name(&name)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            GatewayError::Status(StatusCode::NOT_FOUND, format!("agent `{name}` not found"))
+        })?;
+    let mut config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
+    config.preferred_model = Some(req.spec);
+    record.config_json = config.to_json();
+    record.last_active = chrono::Utc::now().timestamp_millis();
+    storage
+        .upsert_agent(record)
+        .await
+        .map_err(|e| e.to_string())?;
     state.control.set_agent_model(&name, model);
-
-    // Persist preferred_model in the agent record (best-effort).
-    let storage = state.infra.storage.clone();
-    let name_for_task = name.clone();
-    let spec = req.spec.clone();
-    tokio::spawn(async move {
-        if let Ok(Some(mut record)) = storage.get_agent_by_name(&name_for_task).await {
-            if let Some(obj) = record.config_json.as_object_mut() {
-                obj.insert(
-                    "preferred_model".to_string(),
-                    serde_json::Value::String(spec.clone()),
-                );
-            }
-            record.last_active = chrono::Utc::now().timestamp_millis();
-            if let Err(e) = storage.upsert_agent(record).await {
-                tracing::warn!(agent = %name_for_task, error = %e, "failed to persist model spec");
-            }
-        }
-    });
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -242,6 +283,9 @@ pub(crate) async fn get_agent_config(
     }
     if let Some(enabled) = config.runtime.generate_memory {
         effective.generate_memory = enabled;
+    }
+    if let Some(effort) = config.runtime.reasoning_effort {
+        effective.reasoning_effort = Some(effort);
     }
     Ok(Json(AgentRuntimeConfigView {
         runtime: config.runtime,
@@ -282,7 +326,34 @@ pub(crate) async fn set_agent_config(
     let effective = state
         .control
         .set_agent_runtime_config(&name, runtime.clone())
-        .await
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
+        .await;
+    let effective = match effective {
+        Ok(effective) => effective,
+        Err(error) => {
+            let status = state
+                .control
+                .get_status()
+                .await
+                .ok_or_else(|| GatewayError::Message("Host unavailable".to_string()))?;
+            if status
+                .agents
+                .iter()
+                .any(|agent| agent.path.as_str() == name)
+            {
+                return Err(GatewayError::Message(error.to_string()));
+            }
+            let mut effective = state.infra.memory.runtime_config();
+            if let Some(value) = runtime.use_memory {
+                effective.use_memory = value;
+            }
+            if let Some(value) = runtime.generate_memory {
+                effective.generate_memory = value;
+            }
+            if let Some(value) = runtime.reasoning_effort {
+                effective.reasoning_effort = Some(value);
+            }
+            effective
+        }
+    };
     Ok(Json(AgentRuntimeConfigView { runtime, effective }))
 }

@@ -17,7 +17,7 @@ import {
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
 import { renderMarkdown } from "@/lib/markdown";
-import type { AgentInfo, ChatItem, ModelRow, StoredAgent } from "@/types";
+import type { AgentInfo, ChatItem, CompactionView, ModelRow, StoredAgent } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -62,6 +62,28 @@ export type AgentWorkspaceMode = "docked";
 const DEFAULT_WINDOW = 60;
 const LOAD_CHUNK = 80;
 const MAX_WINDOW = 500;
+
+function CompactionPanel({ compaction }: { compaction: CompactionView }) {
+  const [open, setOpen] = useState(compaction.running || !!compaction.error);
+
+  useLayoutEffect(() => {
+    setOpen(compaction.running || !!compaction.error);
+  }, [compaction.running, compaction.error]);
+
+  return (
+    <section aria-label="上下文压缩" className="rounded-md border bg-muted/30 p-3 text-sm" aria-live="polite">
+      <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+        <summary className="cursor-pointer font-medium">
+          {compaction.running ? (compaction.phase === "Rebuilding" ? "正在重建上下文" : "正在压缩上下文") : compaction.error ? "压缩失败" : compaction.stats ? "压缩完成" : "无需压缩"}
+        </summary>
+        {compaction.plan && <p className="mt-1 text-xs text-muted-foreground">总结 {compaction.plan.head_messages} 条消息（约 {compaction.plan.head_tokens} tokens），保留最近 {compaction.plan.tail_messages} 条</p>}
+        {compaction.summary && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-sans text-xs">{compaction.summary}</pre>}
+        {compaction.error && <p className="mt-2 text-destructive">{compaction.error}</p>}
+      </details>
+      {compaction.stats && <p className="mt-2 text-xs text-muted-foreground">{compaction.stats.messages_before} → {compaction.stats.messages_after} 条消息 · 释放约 {compaction.stats.freed_tokens} tokens · { (compaction.stats.duration_ms / 1000).toFixed(1) } 秒</p>}
+    </section>
+  );
+}
 
 function formatTime(time: number) {
   return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -307,6 +329,7 @@ export type AgentWorkspaceProps = {
   activeAgent: string;
   statuses: Record<string, string>;
   messages: ChatItem[];
+  compaction?: CompactionView;
   /** True while the active agent's session history is being fetched;
    *  renders chat-shaped skeleton placeholders instead of the transcript. */
   historyLoading: boolean;
@@ -593,7 +616,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               </CommandGroup>
               <CommandGroup heading="打开的 agent">
                 {props.openTabs.map((path) => {
-                  const live = agents.find((agent) => agent.path === path);
                   return (
                     <CommandItem
                       key={path}
@@ -604,7 +626,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                         setAgentPickerOpen(false);
                       }}
                     >
-                      <AgentStatusIcon status={live ? statuses[path] : "dormant"} />
+                      <AgentStatusIcon status={statuses[path] ?? "idle"} />
                       <span className="truncate">{leafName(path)}</span>
                       <span title={path} className="min-w-0 truncate pl-2 text-xs text-muted-foreground">
                         {path}
@@ -692,7 +714,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                       renderItem(block.message)
                     );
                   })}
-                  {!messages.length && !streaming && (
+                  {props.compaction && (
+                    <CompactionPanel key={activeAgent} compaction={props.compaction} />
+                  )}
+                  {!messages.length && !streaming && !props.compaction && (
                     <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
                   )}
                 </>

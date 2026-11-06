@@ -91,19 +91,14 @@ async fn string_values(df: &DataFrame, name: &str, node: &str) -> Result<Vec<Str
     let mut values = Vec::new();
     for batch in batches {
         let column = batch.column(index);
-        let values_array = column
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                DagError::Schedule(format!(
-                    "{node}: column {name:?} must be UTF-8 (found {})",
-                    column.data_type()
-                ))
-            })?;
-        for index in 0..values_array.len() {
-            if !values_array.is_null(index) {
-                values.push(values_array.value(index).to_string());
-            }
+        let strings = crate::arrow_strings::utf8_strings(column).ok_or_else(|| {
+            DagError::Schedule(format!(
+                "{node}: column {name:?} must be UTF-8 (found {})",
+                column.data_type()
+            ))
+        })?;
+        for value in strings.into_iter().flatten() {
+            values.push(value.to_string());
         }
     }
     Ok(values)

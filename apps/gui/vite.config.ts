@@ -35,6 +35,14 @@ export default defineConfig({
         if (output.type === "chunk" && Object.keys(output.modules).some(id => id.endsWith("zotero-sdt.generated.js"))) {
           output.code = "/*! Zotero Reader semantic components: AGPL-3.0. Copyright Corporation for Digital Scholarship. Corresponding sources, revisions and notices: tools/zotero-extractor/ (included in release runtimes). */\n" + output.code;
         }
+        if (output.type === "chunk" && Object.keys(output.modules).some(id => id.includes("/monaco-editor/"))) {
+          const license = fs.readFileSync(path.resolve(__dirname, "node_modules/monaco-editor/LICENSE"), "utf8");
+          output.code = `/*!\n${license}\n*/\n` + output.code;
+        }
+        if (output.type === "chunk" && Object.keys(output.modules).some(id => id.includes("/node_modules/@xterm/"))) {
+          const licenses = ["xterm", "addon-fit"].map(name => fs.readFileSync(path.resolve(__dirname, `node_modules/@xterm/${name}/LICENSE`), "utf8"));
+          output.code = `/*!\n${licenses.join("\n\n")}\n*/\n` + output.code;
+        }
       }
     },
   }],
@@ -65,6 +73,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
+    assetsInlineLimit: (filePath) => filePath.includes("codicon.ttf") ? true : undefined,
     rollupOptions: {
       output: {
         inlineDynamicImports: true,

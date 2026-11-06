@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, History, List, Plus, Search, SlidersHorizontal } from "lucide-react";
+import { History, List, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { AgentInspector, AgentStatusIcon, leafName, openAgentDialog, statusLabel } from "@/features/agent";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,18 +43,17 @@ export function AgentSidebar({ onSpawn }: { onSpawn: () => void }) {
       <ScrollArea className="min-h-0 flex-1" contentClassName="px-2 py-2">
         {shown.length === 0 ? <p className="px-2 py-3 text-xs text-muted-foreground">{query ? "没有匹配的 Agent。" : "暂无 Agent，可创建或恢复。"}</p> : <div role="list" aria-label="Agent 列表">
           {shown.map(path => {
-            const live = runtime.agents.find(agent => agent.path === path);
-            const status = live ? runtime.statuses[path] : "dormant";
+            const status = runtime.statuses[path] ?? "idle";
             return <div role="listitem" key={path}><button type="button" title={path} aria-label={`打开 Agent ${path}`} aria-current={path === runtime.activeAgent ? "true" : undefined} className={cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground", path === runtime.activeAgent && "bg-accent text-foreground")} onClick={() => { runtime.selectAgent(path); openAgentEditor(path); }}>
-              {live ? <AgentStatusIcon status={status} /> : <Bot className="size-3.5 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate">{leafName(path)}</span><span className="shrink-0 text-[10px] text-muted-foreground">{live ? statusLabel(status) : "未运行"}</span>
+              <AgentStatusIcon status={status} />
+              <span className="min-w-0 flex-1 truncate">{leafName(path)}</span><span className="shrink-0 text-[10px] text-muted-foreground">{statusLabel(status)}</span>
             </button></div>;
           })}
         </div>}
       </ScrollArea>
     </div>
     <div id="agent-sidebar-overview" role="tabpanel" aria-label="Agent 详情" hidden={view !== "overview"} className={cn("min-h-0 flex-1 flex-col overflow-hidden", view === "overview" ? "flex" : "hidden")}>
-      <AgentInspector activeAgent={runtime.activeAgent} activeInfo={runtime.agents.find(agent => agent.path === runtime.activeAgent)} status={runtime.statuses[runtime.activeAgent]} plan={runtime.plans[runtime.activeAgent] ?? null} usage={runtime.usage[runtime.activeAgent] ?? null} display={runtime.display} inspectorOpen={view === "overview"} onToggleDisplay={key => void runtime.toggleDisplay(key)} onOpenDag={() => { if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } }); }} onOpenCopy={() => openAgentDialog("copy")} onOpenHistory={() => openAgentDialog("history")} onRefreshHistory={runtime.refreshHistory} />
+      <AgentInspector activeAgent={runtime.activeAgent} activeInfo={runtime.agents.find(agent => agent.path === runtime.activeAgent) ?? (runtime.agentModels[runtime.activeAgent] ? { path: runtime.activeAgent, agent_id: null, status: "Idle", ...runtime.agentModels[runtime.activeAgent] } : undefined)} status={runtime.statuses[runtime.activeAgent]} plan={runtime.plans[runtime.activeAgent] ?? null} usage={runtime.usage[runtime.activeAgent] ?? null} display={runtime.display} inspectorOpen={view === "overview"} onToggleDisplay={key => void runtime.toggleDisplay(key)} onOpenDag={() => { if (runtime.activeAgent) openEditor({ kind: "dag", params: { agentPath: runtime.activeAgent } }); }} onOpenCopy={() => openAgentDialog("copy")} onOpenHistory={() => openAgentDialog("history")} onRefreshHistory={runtime.refreshHistory} />
     </div>
   </div>;
 }

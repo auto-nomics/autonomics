@@ -49,7 +49,14 @@ fn root(config: &PodmanConfig) -> Result<Option<PathBuf>, String> {
     match (&config.storage_root, &config.run_root) {
         (None, None) => Ok(None),
         (Some(storage), Some(run)) if storage.is_absolute() && run.is_absolute() => {
-            let path = run.join("autonomics-container-intents");
+            // The operator's state directory may legitimately be reached via
+            // a symlink. Resolve that parent before checking the intent
+            // directory itself, which must not redirect to another location.
+            fs::create_dir_all(run).map_err(error)?;
+            let path = run
+                .canonicalize()
+                .map_err(error)?
+                .join("autonomics-container-intents");
             fs::create_dir_all(&path).map_err(error)?;
             if path.canonicalize().map_err(error)? != path {
                 return Err("container intent directory must be canonical".into());
@@ -343,6 +350,33 @@ else:sys.exit(125)
         let mut config = PodmanConfig::for_state_dir(dir);
         config.program = dir.join("TEST-podman.py").to_string_lossy().into();
         config
+    }
+    #[test]
+    fn state_directory_alias_is_supported_but_intent_directory_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir(&real).unwrap();
+        let alias = dir.path().join("alias");
+        symlink(&real, &alias).unwrap();
+        let alias_config = config(&alias);
+        let intent = OwnedIntent::create(&alias_config, "TEST-owned")
+            .unwrap()
+            .unwrap();
+        assert!(intent.path.starts_with(&real));
+        drop(intent);
+
+        let other = dir.path().join("other");
+        fs::create_dir(&other).unwrap();
+        let bad = config(&dir.path().join("bad"));
+        let run = bad.run_root.as_ref().unwrap();
+        fs::create_dir_all(run).unwrap();
+        symlink(&other, run.join("autonomics-container-intents")).unwrap();
+        assert_eq!(
+            root(&bad).unwrap_err(),
+            "container intent directory must be canonical"
+        );
     }
     async fn eventually_recover_fake(config: &PodmanConfig, path: &Path) -> Vec<String> {
         let original = fs::read(path).unwrap();

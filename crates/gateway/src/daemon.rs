@@ -155,6 +155,7 @@ pub async fn run_daemon(
         contexts: contexts.clone(),
         control: host.control(),
         infra: host.infra(),
+        devcontainers: Arc::new(crate::server::devcontainer::DevContainers::default()),
         dockerhub: Arc::new(DockerHubClient::default()),
         models: models.clone(),
         model_slot: model_slot.clone(),

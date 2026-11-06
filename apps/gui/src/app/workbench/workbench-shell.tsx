@@ -78,17 +78,17 @@ function WikiSearchDialog() {
 /** One workspace per visible agent group, with agent-scoped input and context. */
 function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string; visible: boolean; runtime: AgentRuntime; onSpawn: () => void }) {
   const slot = useAgentSlot(path);
-  const agentId = runtime.agents.find(agent => agent.path === path)?.agent_id;
   const contextId = runtime.activeContexts[path] ?? runtime.contexts[path]?.id ?? null;
   useEffect(() => {
-    if (visible && agentId && contextId) void runtime.ensureAgentHistory(path, contextId);
-  }, [agentId, contextId, path, visible, runtime.ensureAgentHistory]);
+    if (visible && contextId) void runtime.ensureAgentHistory(path, contextId);
+  }, [contextId, path, visible, runtime.ensureAgentHistory]);
   const refreshEffort = useCallback(() => { if (visible) void runtime.refreshAgentEffort(path); }, [runtime.refreshAgentEffort, path, visible]);
   const select = (target: string) => { runtime.selectAgent(target); openAgentEditor(target); };
   const scope = path && contextId ? JSON.stringify([path, contextId]) : null;
   return <ContextBasketScope scope={scope} label={leafName(path)}>
-    <AgentWorkspace dockedSlot={slot} agents={runtime.agents} activeAgent={path} statuses={runtime.statuses}
+    <AgentWorkspace dockedSlot={slot} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
       messages={runtime.messages[path] ?? []} historyLoading={runtime.historyLoading[path] ?? false}
+      compaction={runtime.compactions[path]}
       streaming={runtime.streaming[path] ?? null} usage={runtime.usage[path] ?? null} display={runtime.display}
       draft={runtime.drafts[path] ?? ""} busy={runtime.sendingPaths[path] ? "send" : runtime.busy === "send" ? null : runtime.busy}
       onDraftChange={value => runtime.setDraftFor(path, value)} onSendMessage={context => void runtime.sendMessageTo(path, context)}

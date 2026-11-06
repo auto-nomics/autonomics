@@ -274,6 +274,7 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         contexts: contexts.clone(),
         control: host.control(),
         infra: host.infra(),
+        devcontainers: Arc::new(crate::server::devcontainer::DevContainers::default()),
         dockerhub: Arc::new(DockerHubClient::default()),
         models,
         model_slot,

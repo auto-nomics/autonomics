@@ -1,6 +1,7 @@
 //! DAG node bundle for file, DataFrame, and container I/O boundaries.
 
 pub mod archive_nodes;
+mod arrow_strings;
 pub mod bundle_source;
 pub mod container_command;
 pub mod dataframe_to_file;
@@ -252,6 +253,7 @@ impl NodePlugin for Plugin {
         // Genetics (credible sets + L2G) takes IDs from an input DataFrame
         // port — phewas-style — so no ID list lives in the spec.
         registry.register(Box::new(source_opentargets::OpentargetsGeneticNodeFactory));
+        registry.register(Box::new(source_opentargets::OpentargetsPhewasNodeFactory));
         registry.register(Box::new(source_chembl::ChemblActivitiesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMoleculesNodeFactory));
         registry.register(Box::new(source_chembl::ChemblMechanismsNodeFactory));

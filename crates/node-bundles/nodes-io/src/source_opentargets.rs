@@ -902,8 +902,8 @@ pub struct OpentargetsGeneticSpec {
     /// Default keeps every predicted gene.
     #[serde(default)]
     pub min_l2g: Option<f64>,
-    /// IDs per `credibleSets` request; large inputs are queried in chunks of
-    /// this size and the loci merged. Default `25`.
+    /// Legacy chunk size; requests are issued per ID to preserve attribution.
+    /// Default `25`.
     #[serde(default = "default_genetic_batch_size")]
     pub batch_size: u32,
     /// Override the GraphQL endpoint URL (tests / staging).
@@ -1005,14 +1005,18 @@ impl DagNode for OpentargetsGeneticNode {
             other => {
                 return Err(err(format!(
                     "unknown id_kind '{other}' (expected 'variant' or 'study')"
-                )))
+                )));
             }
         };
 
         let input = inputs.first().ok_or_else(|| {
             err(format!(
                 "no input: connect a DataFrame with {} IDs to the 'ids' port",
-                if fetch == "variant" { "variant" } else { "study" }
+                if fetch == "variant" {
+                    "variant"
+                } else {
+                    "study"
+                }
             ))
         })?;
         let df = input
@@ -1035,7 +1039,7 @@ impl DagNode for OpentargetsGeneticNode {
         let min_l2g = self.spec.min_l2g.unwrap_or(0.0);
         let batch = self.spec.batch_size.max(1) as usize;
         let mut loci: Vec<(String, CredibleSetLocus)> = Vec::new();
-        for chunk in ids.chunks(batch) {
+        for chunk in ids.chunks(batch).flat_map(|chunk| chunk.chunks(1)) {
             let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
             let mut index = 0u32;
             let mut fetched = 0i64;
@@ -1053,12 +1057,7 @@ impl DagNode for OpentargetsGeneticNode {
                 let count = page.count;
                 let got = page.rows.len() as i64;
                 fetched += got;
-                loci.extend(
-                    chunk
-                        .iter()
-                        .zip(page.rows.into_iter())
-                        .map(|(id, locus)| (id.clone(), locus)),
-                );
+                loci.extend(page.rows.into_iter().map(|locus| (chunk[0].clone(), locus)));
                 if fetched >= count || got == 0 {
                     break;
                 }
@@ -1083,11 +1082,9 @@ async fn genetic_string_values(df: &DataFrame, column: &str) -> Result<Vec<Strin
     let index = df
         .schema()
         .index_of_column_by_name(None, column)
-        .ok_or_else(|| {
-            DagError::NodeError {
-                node_type: "opentargets_genetic".into(),
-                msg: format!("input table has no column {column:?}"),
-            }
+        .ok_or_else(|| DagError::NodeError {
+            node_type: "opentargets_genetic".into(),
+            msg: format!("input table has no column {column:?}"),
         })?;
     let batches = df
         .clone()
@@ -1098,19 +1095,16 @@ async fn genetic_string_values(df: &DataFrame, column: &str) -> Result<Vec<Strin
     let mut values = Vec::new();
     for batch in batches {
         let array = batch.column(index);
-        let strings = array
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| DagError::NodeError {
-                node_type: "opentargets_genetic".into(),
-                msg: format!(
-                    "column {column:?} must be UTF-8 (found {})",
-                    array.data_type()
-                ),
-            })?;
-        for i in 0..strings.len() {
-            if !strings.is_null(i) && seen.insert(strings.value(i).to_string()) {
-                values.push(strings.value(i).to_string());
+        let strings = crate::arrow_strings::utf8_strings(array).ok_or_else(|| DagError::NodeError {
+            node_type: "opentargets_genetic".into(),
+            msg: format!(
+                "column {column:?} must be UTF-8 (found {})",
+                array.data_type()
+            ),
+        })?;
+        for value in strings.into_iter().flatten() {
+            if seen.insert(value.to_string()) {
+                values.push(value.to_string());
             }
         }
     }
@@ -1157,9 +1151,7 @@ fn genetic_rows(
                 input_id: input_id.clone(),
                 study_locus_id: locus.study_locus_id.clone(),
                 study_id: locus.study_id.clone(),
-                trait_name: study
-                    .as_ref()
-                    .and_then(|s| s.trait_from_source.clone()),
+                trait_name: study.as_ref().and_then(|s| s.trait_from_source.clone()),
                 study_type: locus.study_type.clone(),
                 lead_variant_id: variant.as_ref().and_then(|v| v.id.clone()),
                 lead_variant_rsid: variant
@@ -1178,7 +1170,10 @@ fn genetic_rows(
 /// Assemble the genetics output batch:
 /// `input_id, study_locus_id, study_id, trait, study_type, lead_variant_id,
 /// lead_variant_rsid, pval, beta, purity_r2, gene_id, gene_symbol, l2g_score`.
-fn build_genetic_batch(loci: Vec<(String, CredibleSetLocus)>, min_l2g: f64) -> Result<RecordBatch, DagError> {
+fn build_genetic_batch(
+    loci: Vec<(String, CredibleSetLocus)>,
+    min_l2g: f64,
+) -> Result<RecordBatch, DagError> {
     let rows: Vec<GeneticRow> = genetic_rows(loci, min_l2g).collect();
     let schema = Arc::new(Schema::new(vec![
         field("input_id", true),
@@ -1205,16 +1200,8 @@ fn build_genetic_batch(loci: Vec<(String, CredibleSetLocus)>, min_l2g: f64) -> R
         str_array(rows.iter().map(|r| Some(r.study_id.clone())).collect()),
         str_array(rows.iter().map(|r| r.trait_name.clone()).collect()),
         str_array(rows.iter().map(|r| r.study_type.clone()).collect()),
-        str_array(
-            rows.iter()
-                .map(|r| r.lead_variant_id.clone())
-                .collect(),
-        ),
-        str_array(
-            rows.iter()
-                .map(|r| r.lead_variant_rsid.clone())
-                .collect(),
-        ),
+        str_array(rows.iter().map(|r| r.lead_variant_id.clone()).collect()),
+        str_array(rows.iter().map(|r| r.lead_variant_rsid.clone()).collect()),
         f64_array(rows.iter().map(|r| r.pval).collect()),
         f64_array(rows.iter().map(|r| r.beta).collect()),
         f64_array(rows.iter().map(|r| r.purity_r2).collect()),
@@ -1550,5 +1537,348 @@ mod genetic_tests {
         for column in batch.columns() {
             assert_ne!(column.data_type(), &arrow_schema::DataType::Null);
         }
+    }
+
+    /// Upstream `core/sql` with `concat(...)` emits `variant_id` as
+    /// `Utf8View`; the node must accept it exactly like the `Utf8` column a
+    /// TSV round-trip through `file_to_dataframe` produces.
+    #[tokio::test]
+    async fn genetics_id_column_accepts_utf8_view() {
+        use arrow_array::StringViewArray;
+        use arrow_schema::{DataType, Field, Schema};
+        use datafusion::prelude::SessionContext;
+        use std::sync::Arc;
+
+        let ids = vec![
+            Some("1_555168_A_G".to_string()),
+            None,
+            Some("17_66232877_G_C_longer_than_12_bytes".to_string()),
+            Some("1_555168_A_G".to_string()), // duplicate collapses
+        ];
+        let frame = |layout: DataType| {
+            let ctx = SessionContext::new();
+            let schema = Arc::new(Schema::new(vec![Field::new("variant_id", layout.clone(), true)]));
+            let values: Vec<Option<&str>> =
+                ids.iter().map(|id| id.as_deref()).collect();
+            let column: arrow_array::ArrayRef = match layout {
+                DataType::Utf8 => Arc::new(StringArray::from(values.clone())),
+                _ => Arc::new(StringViewArray::from(values)),
+            };
+            let batch = RecordBatch::try_new(schema, vec![column]).unwrap();
+            ctx.read_batch(batch).unwrap()
+        };
+
+        let from_view = genetic_string_values(&frame(DataType::Utf8View), "variant_id")
+            .await
+            .unwrap();
+        let from_utf8 = genetic_string_values(&frame(DataType::Utf8), "variant_id")
+            .await
+            .unwrap();
+        // Null dropped, duplicate deduped in first-seen order — identical
+        // request IDs regardless of the string layout.
+        assert_eq!(from_view, vec!["1_555168_A_G", "17_66232877_G_C_longer_than_12_bytes"]);
+        assert_eq!(from_view, from_utf8);
+    }
+}
+
+/// Query credible-set study associations without requiring L2G predictions.
+#[derive(Debug, Clone, JsonSchema, Deserialize)]
+pub struct OpentargetsPhewasSpec {
+    /// Column containing mapped GRCh38 `chr_pos_ref_alt` IDs.
+    #[serde(default = "default_genetic_id_column")]
+    pub id_column: String,
+    /// GraphQL endpoint override.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Maximum pages per variant (default 1000); truncation is reported.
+    #[serde(default)]
+    pub max_pages: Option<u32>,
+}
+
+#[derive(Clone)]
+pub struct OpentargetsPhewasNode {
+    meta: NodePorts,
+    spec: OpentargetsPhewasSpec,
+}
+pub struct OpentargetsPhewasNodeFactory;
+
+impl NodeFactory for OpentargetsPhewasNodeFactory {
+    fn kind(&self) -> &'static str {
+        "opentargets_phewas"
+    }
+    fn desc(&self) -> &'static str {
+        "Auditable variant–study credible-set associations without L2G filtering."
+    }
+    fn doc(&self) -> &'static str {
+        "Input: a DataFrame (e.g. from a file source) with GRCh38 chr_pos_ref_alt IDs. rsIDs must first be mapped and allele-checked externally. Output 0 contains one row per returned study locus, including query ID, lead ID, relationship, study trait, p-value components and discovery/replication sample ancestry and LD population structure as JSON. Output 1 audits each unique input ID, including invalid IDs, errors, page counts, reported counts and truncation. Credible-set membership is not necessarily a direct association; this API does not establish complete PheWAS coverage or equivalence to a historical BigQuery dataset. Study ancestry metadata must be interpreted before filtering."
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schema_for!(OpentargetsPhewasSpec)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new()
+            .add_input_port_of_type_with_label(None, PortType::DataFrame, "ids")
+            .add_output_port(None)
+            .add_output_port(None)
+    }
+    fn build(
+        &self,
+        spec: serde_json::Value,
+        _node_ctx: NodeCtx,
+    ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
+        Ok(Box::new(OpentargetsPhewasNode {
+            meta: self.ports(),
+            spec: serde_json::from_value(spec)?,
+        }))
+    }
+}
+
+const PHEWAS_QUERY: &str = r#"query($ids: [String!]!, $page: Pagination!) {
+  credibleSets(variantIds: $ids, page: $page) { count rows {
+    studyLocusId studyId studyType pValueMantissa pValueExponent beta
+    variant { id rsIds }
+    study { traitFromSource initialSampleSize discoverySamples { ancestry sampleSize }
+      replicationSamples { ancestry sampleSize } ldPopulationStructure { ldPopulation relativeSampleSize } }
+  } }
+}"#;
+
+fn valid_ot_variant(id: &str) -> bool {
+    let parts: Vec<_> = id.split('_').collect();
+    parts.len() == 4
+        && !parts[0].is_empty()
+        && parts[1].parse::<u64>().is_ok_and(|n| n > 0)
+        && parts[2..]
+            .iter()
+            .all(|s| !s.is_empty() && s.bytes().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')))
+}
+
+// JSON string columns preserve nulls and the exact nested ancestry metadata.
+fn phewas_batch(rows: &[Vec<Option<String>>], names: &[&str]) -> Result<RecordBatch, DagError> {
+    let schema = Arc::new(Schema::new(
+        names.iter().map(|n| field(n, true)).collect::<Vec<_>>(),
+    ));
+    let columns = (0..names.len())
+        .map(|i| str_array(rows.iter().map(|r| r[i].clone()).collect()))
+        .collect();
+    RecordBatch::try_new(schema, columns)
+        .map_err(|e| DagError::Schedule(format!("Open Targets output: {e}")))
+}
+fn json_value(v: &serde_json::Value) -> Option<String> {
+    if v.is_null() {
+        None
+    } else if let Some(s) = v.as_str() {
+        Some(s.to_owned())
+    } else {
+        Some(v.to_string())
+    }
+}
+
+#[async_trait]
+impl DagNode for OpentargetsPhewasNode {
+    fn ports(&self) -> &NodePorts {
+        &self.meta
+    }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "opentargets_phewas"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    async fn execute(
+        &mut self,
+        ctx: &NodeCtx,
+        inputs: &[NodeInput],
+        _reporter: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let df = inputs
+            .first()
+            .ok_or_else(|| {
+                DagError::Schedule("opentargets_phewas requires an input DataFrame".into())
+            })?
+            .dataframe()
+            .map_err(|e| DagError::Schedule(format!("input is not a DataFrame: {e}")))?;
+        let ids = genetic_string_values(&df, &self.spec.id_column).await?;
+        let column_index = df
+            .schema()
+            .index_of_column_by_name(None, &self.spec.id_column)
+            .ok_or_else(|| DagError::Schedule("missing ID column".into()))?;
+        let input_batches = df
+            .clone()
+            .collect()
+            .await
+            .map_err(|e| DagError::Schedule(format!("failed to collect input: {e}")))?;
+        let null_count: usize = input_batches
+            .iter()
+            .map(|batch| batch.column(column_index).null_count())
+            .sum();
+        let client = client_from_endpoint(&self.spec.endpoint);
+        let mut associations = Vec::new();
+        let mut audit = Vec::new();
+        if null_count > 0 {
+            audit.push(vec![
+                None,
+                Some("unresolved_id".into()),
+                None,
+                Some("0".into()),
+                Some("0".into()),
+                Some(format!("{null_count} null input rows")),
+            ]);
+        }
+        let limit = self.spec.max_pages.unwrap_or(1000).max(1);
+        for id in ids {
+            let mut status = "complete".to_string();
+            let mut error = None;
+            let mut total: Option<i64> = None;
+            let mut fetched = 0usize;
+            let mut pages = 0u32;
+            if !valid_ot_variant(&id) {
+                status = "unresolved_id".into();
+            } else {
+                for index in 0..limit {
+                    let response: Result<serde_json::Value, _> = client
+                        .query(
+                            PHEWAS_QUERY,
+                            serde_json::json!({"ids":[id], "page":{"index":index,"size":100}}),
+                        )
+                        .await;
+                    let data = match response {
+                        Ok(d) => d,
+                        Err(e) => {
+                            status = "failed".into();
+                            error = Some(e.to_string());
+                            break;
+                        }
+                    };
+                    let page = &data["credibleSets"];
+                    let (Some(count), Some(rows)) =
+                        (page["count"].as_i64(), page["rows"].as_array())
+                    else {
+                        status = "failed".into();
+                        error = Some("invalid credibleSets response".into());
+                        break;
+                    };
+                    pages += 1;
+                    if total.is_some_and(|n| n != count) {
+                        status = "inconsistent_count".into();
+                        error = Some("reported count changed during pagination".into());
+                        break;
+                    }
+                    total = Some(count);
+                    fetched += rows.len();
+                    for row in rows {
+                        let lead = row["variant"]["id"].as_str();
+                        let relation = match lead {
+                            Some(v) if v == id => "lead",
+                            Some(_) => "non_lead",
+                            None => "unknown",
+                        };
+                        associations.push(vec![
+                            Some(id.clone()),
+                            json_value(&row["studyLocusId"]),
+                            json_value(&row["studyId"]),
+                            json_value(&row["studyType"]),
+                            json_value(&row["study"]["traitFromSource"]),
+                            json_value(&row["variant"]["id"]),
+                            json_value(&row["variant"]["rsIds"]),
+                            Some(relation.into()),
+                            json_value(&row["pValueMantissa"]),
+                            json_value(&row["pValueExponent"]),
+                            json_value(&row["beta"]),
+                            json_value(&row["study"]["initialSampleSize"]),
+                            json_value(&row["study"]["discoverySamples"]),
+                            json_value(&row["study"]["replicationSamples"]),
+                            json_value(&row["study"]["ldPopulationStructure"]),
+                        ]);
+                    }
+                    if fetched as i64 >= count {
+                        if count == 0 {
+                            status = "no_results".into();
+                        }
+                        break;
+                    }
+                    if rows.is_empty() {
+                        status = "incomplete".into();
+                        error = Some("empty page before reported count".into());
+                        break;
+                    }
+                    if index + 1 == limit {
+                        status = "truncated".into();
+                    }
+                }
+            }
+            audit.push(vec![
+                Some(id),
+                Some(status),
+                total.map(|n| n.to_string()),
+                Some(fetched.to_string()),
+                Some(pages.to_string()),
+                error,
+            ]);
+        }
+        let result = phewas_batch(
+            &associations,
+            &[
+                "input_id",
+                "study_locus_id",
+                "study_id",
+                "study_type",
+                "trait",
+                "lead_variant_id",
+                "lead_variant_rsids",
+                "relationship",
+                "pvalue_mantissa",
+                "pvalue_exponent",
+                "beta",
+                "initial_sample_size",
+                "discovery_samples_json",
+                "replication_samples_json",
+                "ld_population_structure_json",
+            ],
+        )?;
+        let audit = phewas_batch(
+            &audit,
+            &[
+                "input_id",
+                "status",
+                "reported_count",
+                "returned_count",
+                "pages_fetched",
+                "error",
+            ],
+        )?;
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, batch_to_df(&ctx.session(), result)?);
+        outputs.insert(1, batch_to_df(&ctx.session(), audit)?);
+        Ok(outputs)
+    }
+}
+
+#[cfg(test)]
+mod phewas_tests {
+    use super::*;
+
+    #[test]
+    fn validates_variant_format_without_claiming_mapping() {
+        assert!(valid_ot_variant("17_66232877_G_C"));
+        assert!(valid_ot_variant("1_123_AT_A"));
+        assert!(!valid_ot_variant("rs123"));
+        assert!(!valid_ot_variant("1_0_A_C"));
+        assert!(!valid_ot_variant("1_123_A_N"));
+    }
+
+    #[test]
+    fn empty_outputs_keep_schema_and_nested_json_is_preserved() {
+        let batch = phewas_batch(&[], &["input_id", "status"]).unwrap();
+        assert_eq!(batch.num_rows(), 0);
+        assert_eq!(batch.num_columns(), 2);
+        let ancestry = serde_json::json!([{ "ancestry": "European", "sampleSize": 42 }]);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json_value(&ancestry).unwrap()).unwrap(),
+            ancestry
+        );
+        assert_eq!(json_value(&serde_json::Value::Null), None);
     }
 }

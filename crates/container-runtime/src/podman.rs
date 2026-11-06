@@ -177,7 +177,8 @@ impl PodmanConfig {
         config
     }
 
-    pub(crate) fn async_command(&self) -> Command {
+    /// Construct a Podman command using this runtime's configured private store.
+    pub fn async_command(&self) -> Command {
         let mut command = async_podman_command(&self.program);
         if let Some(root) = &self.worker_runtime_dir {
             command.arg("--remote=false");
@@ -224,7 +225,8 @@ impl PodmanConfig {
         command
     }
 
-    pub(crate) fn blocking_command(&self) -> std::process::Command {
+    /// Construct a blocking Podman command using this runtime's private store.
+    pub fn blocking_command(&self) -> std::process::Command {
         let mut command = blocking_podman_command(&self.program);
         if let Some(root) = &self.worker_runtime_dir {
             command.arg("--remote=false");

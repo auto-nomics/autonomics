@@ -65,6 +65,7 @@ export function ActivityBar(props: {
     setContainer(container);
     setSidebarCollapsed(false);
     if (container === "bibliography") openBibliographyEditor();
+    if (container === "projects") openEditor({ kind: "plugin-projects" });
   };
 
   const group = getGroup(state.groups, state.groups.active);
@@ -98,7 +99,7 @@ export function ActivityBar(props: {
           active={wikiActive}
           onClick={() => containerClick("wiki")}
         />
-        <RailButton label="插件项目" title="插件项目" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-projects" })} />
+        <RailButton label="插件项目" title="插件项目" icon={FolderCode} active={!collapsed && state.sidebar.container === "projects"} onClick={() => containerClick("projects")} />
         <RailButton
           label="Agent"
           title="Agent 概览(对话即编辑器标签)"

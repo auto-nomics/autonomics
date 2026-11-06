@@ -6,12 +6,13 @@
  */
 
 import { X } from "lucide-react";
+import { ProjectTerminal } from "@/features/projects/project-terminal";
 import type { FrameLogEntry, NoticeEntry } from "@/app/use-agent-runtime";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { setPanelTab, setPanelVisible, useWorkbenchState } from "../workbench-store";
+import { getGroup, setPanelTab, setPanelVisible, useWorkbenchState } from "../workbench-store";
 
 function formatTime(time: number) {
   return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -30,6 +31,10 @@ function noticeSummary(entry: NoticeEntry): string {
 export function BottomPanel(props: { frameLog: FrameLogEntry[]; notices: NoticeEntry[] }) {
   const state = useWorkbenchState();
   const tab = state.panel.tab;
+  const group = getGroup(state.groups, state.groups.active);
+  const editor = group?.editors.find(item => item.id === group.activeId);
+  const projectState = editor?.kind === "plugin-projects" ? editor.state as { project?: string; containerVersion?: number } | null : null;
+  const project = projectState?.project;
 
   return (
     <section aria-label="底部面板" className="flex h-full min-h-0 flex-col bg-background">
@@ -37,6 +42,7 @@ export function BottomPanel(props: { frameLog: FrameLogEntry[]; notices: NoticeE
         {([
           ["events", "事件流"],
           ["notices", "通知"],
+          ["terminal", "终端"],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -82,6 +88,8 @@ export function BottomPanel(props: { frameLog: FrameLogEntry[]; notices: NoticeE
             <div className="p-4 text-center font-sans text-xs text-muted-foreground">暂无事件 — 与 agent 交互后这里显示网关帧流</div>
           )}
         </ScrollArea>
+      ) : tab === "terminal" ? (
+        project ? <ProjectTerminal key={`${project}:${projectState?.containerVersion ?? 0}`} project={project} /> : <div className="p-4 text-xs text-muted-foreground">请选择插件项目。</div>
       ) : (
         <ScrollArea className="min-h-0 flex-1" contentClassName="p-2 font-sans text-xs">
           {props.notices.map((entry, index) => (

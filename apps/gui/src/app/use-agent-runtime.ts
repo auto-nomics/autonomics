@@ -45,7 +45,7 @@ function isDeltaOnlyFrame(frame: GatewayFrame): boolean {
   if (frame.kind !== "agent") return false;
   const event = frame.data?.event;
   return event !== null && typeof event === "object"
-    && (event.TextDelta !== undefined || event.ThinkingDelta !== undefined);
+    && (event.TextDelta !== undefined || event.ThinkingDelta !== undefined || event.Compact?.event?.CompactSummaryDelta !== undefined);
 }
 
 function frameSummary(frame: GatewayFrame): string {
@@ -183,11 +183,13 @@ export function useAgentRuntime() {
   // Persisted identities (GET /storage/agents) for the merged agent
   // picker: resume targets whether or not the instance is live.
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
+  const [storedIds, setStoredIds] = useState<Record<string, string>>({});
   const [contexts, setContexts] = useState<Record<string, ContextInfo>>({});
   const [activeContexts, setActiveContexts] = useState<Record<string, string | null>>({});
   const [activeAgent, setActiveAgent] = useState("");
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
+  const [compactions, setCompactions] = useState<Record<string, import("@/types").CompactionView>>({});
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [streaming, setStreaming] = useState<Record<string, ChatItem | null>>({});
   const [rawMessages, setRawMessages] = useState<RawMessageMap>({});
@@ -217,8 +219,8 @@ export function useAgentRuntime() {
   const [frameLog, setFrameLog] = useState<FrameLogEntry[]>([]);
   const [notices, setNotices] = useState<NoticeEntry[]>([]);
 
-  const stateRef = useRef({ agents, contexts, activeAgent, activeContexts });
-  stateRef.current = { agents, contexts, activeAgent, activeContexts };
+  const stateRef = useRef({ agents, contexts, activeAgent, activeContexts, storedIds });
+  stateRef.current = { agents, contexts, activeAgent, activeContexts, storedIds };
   const openTabsRef = useRef(openTabs);
   openTabsRef.current = openTabs;
   const streamingRef = useRef<Record<string, ChatItem | null>>({});
@@ -237,7 +239,8 @@ export function useAgentRuntime() {
     const info = stateRef.current.agents.find((agent) => agent.path === agentPath);
     const contextId = explicitContextId ?? stateRef.current.activeContexts[agentPath]
       ?? stateRef.current.contexts[agentPath]?.id ?? null;
-    if (!info?.agent_id || !contextId) return;
+    const agentId = info?.agent_id ?? stateRef.current.storedIds[agentPath];
+    if (!agentId || !contextId) return;
     // Only the latest in-flight load per agent may clear the flag, so a
     // superseded fetch (fast context double-switch) cannot hide the
     // skeleton while its successor is still running.
@@ -250,12 +253,12 @@ export function useAgentRuntime() {
     try {
       const response = await gatewayRequest(
         "GET",
-        `/agents/${info.agent_id}/sessions/${contextId}/history`,
+        `/agents/${agentId}/sessions/${contextId}/history`,
       );
       const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
         .flatMap(convertMessage);
       if (historyLoadSeq.current[agentPath] !== seq) return;
-      loadedHistory.current[agentPath] = `${info.agent_id}:${contextId}`;
+      loadedHistory.current[agentPath] = `${agentId}:${contextId}`;
       setMessages((current) => ({ ...current, [agentPath]: history }));
       setRawMessages((current) => ({
         ...current,
@@ -278,7 +281,7 @@ export function useAgentRuntime() {
   /** Reuse the current transcript when a tab is revisited. Explicit refresh
    *  still calls loadHistory directly and bypasses this cache. */
   const ensureAgentHistory = useCallback((agentPath: string, contextId: string) => {
-    const agentId = stateRef.current.agents.find(agent => agent.path === agentPath)?.agent_id;
+    const agentId = stateRef.current.agents.find(agent => agent.path === agentPath)?.agent_id ?? stateRef.current.storedIds[agentPath];
     if (!agentId || !contextId) return;
     const version = `${agentId}:${contextId}`;
     if (loadedHistory.current[agentPath] === version) return;
@@ -292,13 +295,36 @@ export function useAgentRuntime() {
   // A resumed agent and its context are announced asynchronously. Selecting
   // the tab can happen before either ID is available, so load once both are
   // present, and again when the user selects a different agent or context.
-  const selectedAgentId = agents.find((agent) => agent.path === activeAgent)?.agent_id;
+  const selectedAgentId = agents.find((agent) => agent.path === activeAgent)?.agent_id ?? storedIds[activeAgent];
   const selectedContextId = activeContexts[activeAgent] ?? contexts[activeAgent]?.id;
   useEffect(() => {
     if (activeAgent && selectedAgentId && selectedContextId) {
       void ensureAgentHistory(activeAgent, selectedContextId);
     }
   }, [activeAgent, selectedAgentId, selectedContextId, ensureAgentHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    for (const path of openTabs) {
+      if (agents.some(agent => agent.path === path && agent.agent_id) && contexts[path]) continue;
+      void (async () => {
+        try {
+          const page: StoredAgent[] = await gatewayRequest("GET", `/storage/agents?q=${encodeURIComponent(path)}&limit=100`);
+          const record = page.find(agent => agent.name === path);
+          if (!record || cancelled) return;
+          setStoredIds(current => current[path] === record.id ? current : { ...current, [path]: record.id });
+          if (contexts[path]) return;
+          const sessions: ContextInfo[] = await gatewayRequest("GET", `/storage/agents/${record.id}/sessions`);
+          const latest = sessions.reduce<ContextInfo | undefined>((a, b) => !a || b.last_active > a.last_active ? b : a, undefined);
+          if (latest && !cancelled) {
+            setContexts(current => current[path] ? current : { ...current, [path]: latest });
+            setActiveContexts(current => current[path] ? current : { ...current, [path]: latest.id });
+          }
+        } catch (error) { console.warn("Failed to load agent history metadata", error); }
+      })();
+    }
+    return () => { cancelled = true; };
+  }, [openTabs, agents, contexts]);
 
   /** Records a live frame into the bottom-panel feeds. Called only on
    *  arrival — buffered events replay straight into handleFrame so the
@@ -360,7 +386,18 @@ export function useAgentRuntime() {
           };
         });
       };
-      if (event.TextDelta !== undefined) {
+      if (event.Compact !== undefined) {
+        const compact = event.Compact.event;
+        setCompactions(current => {
+          const previous = current[agent];
+          if (compact?.CompactStart) return { ...current, [agent]: { running: true, phase: null, summary: "", plan: compact.CompactStart.plan ?? null, stats: null, error: null } };
+          if (!previous) return current;
+          if (compact?.CompactPhase) return { ...current, [agent]: { ...previous, phase: compact.CompactPhase.phase } };
+          if (compact?.CompactSummaryDelta) return { ...current, [agent]: { ...previous, summary: previous.summary + compact.CompactSummaryDelta.text } };
+          if (compact?.CompactFinish) return { ...current, [agent]: { ...previous, running: false, phase: null, stats: compact.CompactFinish.stats ?? null, error: compact.CompactFinish.error ?? null } };
+          return current;
+        });
+      } else if (event.TextDelta !== undefined) {
         appendStreamDelta("assistant", event.TextDelta);
       } else if (event.ThinkingDelta !== undefined) {
         appendStreamDelta("thinking", event.ThinkingDelta);
@@ -374,13 +411,13 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
-      } else if (event.MessageInjected !== undefined) {
-        const injected = event.MessageInjected;
-        appendMessage(agent, makeItem("system", injected.text, undefined, normalizeOrigin(injected.origin)));
         setPromptHistories((current) => {
           const history = current[agent] ?? [];
           return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };
         });
+      } else if (event.MessageInjected !== undefined) {
+        const injected = event.MessageInjected;
+        appendMessage(agent, makeItem("system", injected.text, undefined, normalizeOrigin(injected.origin)));
       } else if (event.PlanUpdate !== undefined) {
         setPlans((current) => ({ ...current, [agent]: event.PlanUpdate }));
       } else if (event.RetryableError !== undefined) {
@@ -454,7 +491,7 @@ export function useAgentRuntime() {
         // registry only: open tabs survive as dormant views and the
         // identity re-activates from storage on the next message.
         setAgents((current) => current.filter((agent) => agent.path !== event.path));
-        setStatuses((current) => ({ ...current, [event.path]: "dormant" }));
+        setStatuses((current) => ({ ...current, [event.path]: "idle" }));
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
         // The host projection collapses Retrying into Running; the retry
@@ -529,6 +566,7 @@ export function useAgentRuntime() {
         contexts: snapshotContexts,
         activeAgent: nextAgent,
         activeContexts: nextActiveContexts,
+        storedIds: stateRef.current.storedIds,
       };
       setAgents(nextAgents);
       setOpenTabs(nextTabs);
@@ -543,7 +581,7 @@ export function useAgentRuntime() {
       setStatuses(() => ({
         ...Object.fromEntries(nextAgents.map((agent) => [agent.path, statusLabel(agent.status)])),
         // Dormant tabs keep their dormant marker across reconnects.
-        ...Object.fromEntries(nextTabs.filter((path) => !livePaths.has(path)).map((path) => [path, "dormant"])),
+        ...Object.fromEntries(nextTabs.filter((path) => !livePaths.has(path)).map((path) => [path, "idle"])),
       }));
       setConnected(true);
       setConnectionError(null);
@@ -611,46 +649,6 @@ export function useAgentRuntime() {
     try { localStorage.setItem(OPEN_TABS_KEY, JSON.stringify(openTabs)); } catch { /* storage unavailable */ }
   }, [openTabs]);
 
-  /** Look up the stored record behind a path — the cached picker page
-   *  first, then a bounded server search (the page may not cover it). */
-  const findStoredByPath = async (path: string): Promise<StoredAgent | null> => {
-    const cached = storedAgents.find((stored) => stored.name === path);
-    if (cached) return cached;
-    try {
-      const page: StoredAgent[] = await gatewayRequest(
-        "GET",
-        `/storage/agents?q=${encodeURIComponent(path)}&limit=100`,
-      );
-      return page.find((stored) => stored.name === path) ?? null;
-    } catch {
-      return null;
-    }
-  };
-
-  /** Re-activate a dormant identity (no-op when the instance is live).
-   *  Re-spawns from the stored config; the `agent_registered` frame
-   *  refreshes the registry. */
-  const activateAgent = async (path: string) => {
-    if (agents.some((agent) => agent.path === path)) return;
-    const stored = await findStoredByPath(path);
-    if (!stored) throw new Error(`agent \`${path}\` is not live and has no stored identity`);
-    const name = stored.name.split("/").filter(Boolean).pop() ?? "";
-    if (!name) throw new Error("Cannot resume the root placeholder");
-    const segments = stored.name.split("/").filter(Boolean);
-    const result = await gatewayRequest("POST", "/agents", {
-      name,
-      parent_path: segments.length <= 1 ? "/root" : `/${segments.slice(0, -1).join("/")}`,
-      profile: stored.config_json.kind ?? "researcher",
-      runtime: stored.config_json.runtime ?? {},
-      model_spec: stored.config_json.preferred_model ?? null,
-    });
-    setAgents((current) => current.some((agent) => agent.path === result.path) ? current : [
-      ...current,
-      { path: result.path, agent_id: stored.id, status: "Idle" },
-    ]);
-    setStatuses((current) => ({ ...current, [result.path]: "idle" }));
-  };
-
   const sendMessageTo = async (path: string, context = "") => {
     const text = (draftsRef.current[path] ?? "").trim();
     if (!text || !path || sendingRef.current.has(path)) return;
@@ -658,7 +656,6 @@ export function useAgentRuntime() {
     setSendingPaths(current => ({ ...current, [path]: true }));
     setDraftFor(path, "");
     try {
-      await activateAgent(path);
       await gatewayRequest("POST", `/agents/${path}/messages`, { text: text + context });
     } catch (cause) {
       setDrafts(current => ({ ...current, [path]: current[path] || text }));
@@ -739,7 +736,6 @@ export function useAgentRuntime() {
       selectAgent(running.path);
       return;
     }
-    await activateAgent(stored.name);
     selectAgent(stored.name);
   };
 
@@ -777,11 +773,13 @@ export function useAgentRuntime() {
    *  `null` = the model has no thinking support). Read from the model
    *  info endpoint, which resolves override + model default. */
   const [agentEfforts, setAgentEfforts] = useState<Record<string, string | null>>({});
+  const [agentModels, setAgentModels] = useState<Record<string, { model: string; context_length: number }>>({});
   const refreshAgentEffort = useCallback(async (path: string) => {
     if (!path) return;
     try {
       const info = await gatewayRequest("GET", `/agents/${path}/model`);
       setAgentEfforts((current) => ({ ...current, [path]: info?.reasoning_effort ?? null }));
+      setAgentModels((current) => ({ ...current, [path]: { model: info.model, context_length: info.context_length } }));
     } catch { /* the composer pill falls back to the generic label */ }
   }, []);
 
@@ -842,6 +840,7 @@ export function useAgentRuntime() {
     activeContextId,
     // transcript
     messages,
+    compactions,
     historyLoading,
     streaming,
     rawMessages,
@@ -867,6 +866,7 @@ export function useAgentRuntime() {
     setAgentModel,
     // reasoning effort
     agentEfforts,
+    agentModels,
     refreshAgentEffort,
     setAgentEffort,
     // workbench panel feeds

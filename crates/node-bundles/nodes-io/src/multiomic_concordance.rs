@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arrow_array::{Array, Float64Array, RecordBatch, StringArray};
+use arrow_array::{Array, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -301,22 +301,19 @@ fn parse_id_mapping(batches: &[RecordBatch]) -> Result<BTreeMap<String, String>,
         let gene_idx = schema.index_of("gene_symbol").map_err(|_| {
             ConcordanceError::Runtime("ID mapping is missing column `gene_symbol`".into())
         })?;
-        let inputs = batch
-            .column(input_idx)
-            .as_any()
-            .downcast_ref::<StringArray>()
+        let inputs = crate::arrow_strings::utf8_strings(batch.column(input_idx))
             .ok_or_else(|| ConcordanceError::Runtime("mapping `input_id` is not Utf8".into()))?;
-        let genes = batch
-            .column(gene_idx)
-            .as_any()
-            .downcast_ref::<StringArray>()
+        let genes = crate::arrow_strings::utf8_strings(batch.column(gene_idx))
             .ok_or_else(|| ConcordanceError::Runtime("mapping `gene_symbol` is not Utf8".into()))?;
         for row in 0..batch.num_rows() {
-            if inputs.is_null(row) || genes.is_null(row) {
+            let (Some(input_id), Some(gene_symbol)) = (
+                inputs.get(row).and_then(|value| *value),
+                genes.get(row).and_then(|value| *value),
+            ) else {
                 continue;
-            }
-            let input_id = inputs.value(row).trim();
-            let gene_symbol = genes.value(row).trim();
+            };
+            let input_id = input_id.trim();
+            let gene_symbol = gene_symbol.trim();
             if !input_id.is_empty() && !gene_symbol.is_empty() {
                 mapping
                     .entry(input_id.to_string())
@@ -362,16 +359,9 @@ fn build_table(
                 columns.pvalue_col
             ))
         })?;
-        let genes = batch
-            .column(gene_idx)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or_else(|| {
-                ConcordanceError::Runtime(format!(
-                    "{label} column `{}` is not Utf8",
-                    columns.gene_col
-                ))
-            })?;
+        let genes = crate::arrow_strings::utf8_strings(batch.column(gene_idx)).ok_or_else(
+            || ConcordanceError::Runtime(format!("{label} column `{}` is not Utf8", columns.gene_col)),
+        )?;
         let effects = batch
             .column(effect_idx)
             .as_any()
@@ -393,10 +383,9 @@ fn build_table(
                 ))
             })?;
         for row in 0..batch.num_rows() {
-            if genes.is_null(row) {
+            let Some(raw_symbol) = genes.get(row).and_then(|value| *value).map(str::trim) else {
                 continue;
-            }
-            let raw_symbol = genes.value(row).trim();
+            };
             if raw_symbol.is_empty() {
                 continue;
             }

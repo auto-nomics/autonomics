@@ -21,6 +21,7 @@ pub struct GatewayState {
     pub contexts: ContextCache,
     pub control: HostControl,
     pub infra: SharedInfra,
+    pub(crate) devcontainers: Arc<super::devcontainer::DevContainers>,
     /// Read-only Docker Hub lookup client used by the user approval flow.
     pub dockerhub: Arc<DockerHubClient>,
     /// Handle to the model actor (owns the app DB, the default model

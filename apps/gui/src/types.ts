@@ -19,6 +19,15 @@ export type GatewayFrame = {
   data: any;
 };
 
+export type CompactionView = {
+  running: boolean;
+  phase: string | null;
+  summary: string;
+  plan: { head_messages: number; head_tokens: number; tail_messages: number } | null;
+  stats: { messages_before: number; messages_after: number; freed_tokens: number; summary_tokens: number; duration_ms: number } | null;
+  error: string | null;
+};
+
 /** Backend message provenance: bare tags for user/system, or the
  *  authoring agent's path wrapped in the externally-tagged map form. */
 export type MessageOrigin = "user" | "system" | { agent: { path: string } };

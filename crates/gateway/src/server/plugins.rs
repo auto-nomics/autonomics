@@ -160,34 +160,150 @@ pub(crate) struct SaveProjectFile {
     original: String,
 }
 
-fn project_workspace(
-    state: &GatewayState,
-    name: &str,
-) -> super::error::GatewayResult<plugin_rsi::PluginWorkspace> {
+#[derive(serde::Deserialize)]
+pub(crate) struct CreateProjectFile {
+    path: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct RenameProjectFile {
+    path: String,
+    new_path: String,
+}
+
+fn container_output(output: std::process::Output) -> super::error::GatewayResult<Vec<u8>> {
     use super::error::GatewayError;
-    plugin_rsi::validate_plugin_name(name).map_err(|e| GatewayError::Message(e.to_string()))?;
-    let root = state.infra.rsi.store().root().join(name);
-    let metadata = std::fs::symlink_metadata(&root).map_err(|_| {
-        GatewayError::Status(
-            axum::http::StatusCode::NOT_FOUND,
-            "Project not found".into(),
-        )
-    })?;
-    if !metadata.file_type().is_dir() {
-        return Err(GatewayError::Message("Project must be a directory".into()));
+    if output.status.success() { return Ok(output.stdout); }
+    if output.status.code() == Some(42) {
+        return Err(GatewayError::Status(axum::http::StatusCode::CONFLICT, "目标文件已存在或文件已在磁盘上更改".into()));
     }
-    Ok(plugin_rsi::PluginWorkspace::new(root))
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(GatewayError::Message(format!("开发容器文件操作失败：{}", detail.trim())))
+}
+
+pub(crate) async fn create_project_file(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<CreateProjectFile>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_file_path(&request.path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::create_script(), &[&request.path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": request.path})))
+}
+
+pub(crate) async fn create_project_directory(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<CreateProjectFile>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_file_path(&request.path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::create_directory_script(), &[&request.path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": request.path})))
+}
+
+pub(crate) async fn delete_project_directory(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<FileQuery>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_file_path(&query.path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::delete_directory_script(), &[&query.path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": query.path})))
+}
+
+pub(crate) async fn rename_project_directory(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<RenameProjectFile>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_directory_move(&request.path, &request.new_path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::rename_directory_script(), &[&request.path, &request.new_path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": request.new_path})))
+}
+
+pub(crate) async fn delete_project_file(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(query): axum::extract::Query<FileQuery>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_file_path(&query.path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::delete_script(), &[&query.path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": query.path})))
+}
+
+pub(crate) async fn rename_project_file(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<RenameProjectFile>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    super::devcontainer::validate_file_path(&request.path)?;
+    super::devcontainer::validate_file_path(&request.new_path)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &super::devcontainer::rename_script(), &[&request.path, &request.new_path], &[]).await?;
+    container_output(output)?;
+    Ok(Json(serde_json::json!({"path": request.new_path})))
 }
 
 pub(crate) async fn project_files(
     State(state): State<GatewayState>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> super::error::GatewayResult<Json<serde_json::Value>> {
-    let workspace = project_workspace(&state, &name)?;
-    let files = workspace
-        .list_files()
-        .map_err(|e| super::error::GatewayError::Message(e.to_string()))?;
-    Ok(Json(serde_json::json!({"files": files})))
+    let script = super::devcontainer::LIST_SCRIPT;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, script, &[], &[]).await?;
+    let files = parse_container_paths(&container_output(output)?)?;
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, super::devcontainer::LIST_DIRECTORIES_SCRIPT, &[], &[]).await?;
+    let directories = parse_container_paths(&container_output(output)?)?;
+    Ok(Json(serde_json::json!({"files": files, "directories": directories})))
+}
+
+pub(crate) async fn project_snapshot(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    let output = state.devcontainers.snapshot(&state.infra.container_execution.config, &name).await?;
+    let bytes = container_output(output)?;
+    let entries = parse_project_snapshot(&bytes)?;
+    Ok(Json(serde_json::json!({"entries": entries})))
+}
+
+pub(super) fn parse_project_snapshot(bytes: &[u8]) -> super::error::GatewayResult<Vec<serde_json::Value>> {
+    if bytes.len() > 8 * 1024 * 1024 { return Err(super::error::GatewayError::Message("项目文件监控快照过大".into())); }
+    if bytes.is_empty() || bytes.last() != Some(&0) { return Err(super::error::GatewayError::Message("文件监控快照不完整".into())); }
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut entries = Vec::new();
+    loop {
+        let Some(kind) = fields.next() else { break; };
+        if kind.is_empty() {
+            if fields.next().is_some() { return Err(super::error::GatewayError::Message("文件监控快照无效".into())); }
+            break;
+        }
+        let path = fields.next().ok_or_else(|| super::error::GatewayError::Message("文件监控快照不完整".into()))?;
+        let modified = fields.next().ok_or_else(|| super::error::GatewayError::Message("文件监控快照不完整".into()))?;
+        let size = fields.next().ok_or_else(|| super::error::GatewayError::Message("文件监控快照不完整".into()))?;
+        let path = std::str::from_utf8(path).map_err(|_| super::error::GatewayError::Message("文件路径不是有效的 UTF-8".into()))?;
+        if path == "." { continue; }
+        let path = path.strip_prefix("./").ok_or_else(|| super::error::GatewayError::Message("文件监控路径无效".into()))?;
+        super::devcontainer::validate_file_path(path)?;
+        let kind = match kind { b"f" => "file", b"d" => "directory", _ => return Err(super::error::GatewayError::Message("文件监控类型无效".into())) };
+        let modified = std::str::from_utf8(modified).map_err(|_| super::error::GatewayError::Message("文件监控元数据无效".into()))?;
+        let size = std::str::from_utf8(size).map_err(|_| super::error::GatewayError::Message("文件监控元数据无效".into()))?;
+        entries.push(serde_json::json!({"path": path, "kind": kind, "stamp": format!("{modified}:{size}")}));
+    }
+    Ok(entries)
+}
+
+fn parse_container_paths(data: &[u8]) -> super::error::GatewayResult<Vec<String>> {
+    let mut files = Vec::new();
+    for item in data.split(|byte| *byte == 0).filter(|item| !item.is_empty()) {
+        let file = std::str::from_utf8(item).map_err(|_| super::error::GatewayError::Message("文件路径不是有效的 UTF-8".into()))?;
+        if file != "." { files.push(file.strip_prefix("./").unwrap_or(file).to_owned()); }
+    }
+    files.sort();
+    Ok(files)
 }
 
 pub(crate) async fn read_project_file(
@@ -195,10 +311,10 @@ pub(crate) async fn read_project_file(
     axum::extract::Path(name): axum::extract::Path<String>,
     axum::extract::Query(query): axum::extract::Query<FileQuery>,
 ) -> super::error::GatewayResult<Json<serde_json::Value>> {
-    let workspace = project_workspace(&state, &name)?;
-    let contents = workspace
-        .read_text(&query.path)
-        .map_err(|e| super::error::GatewayError::Message(e.to_string()))?;
+    super::devcontainer::validate_file_path(&query.path)?;
+    let script = super::devcontainer::read_script();
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &script, &[&query.path], &[]).await?;
+    let contents = String::from_utf8(container_output(output)?).map_err(|_| super::error::GatewayError::Message("文件不是有效的 UTF-8".into()))?;
     Ok(Json(
         serde_json::json!({"path": query.path, "contents": contents}),
     ))
@@ -210,19 +326,16 @@ pub(crate) async fn save_project_file(
     Json(request): Json<SaveProjectFile>,
 ) -> super::error::GatewayResult<Json<serde_json::Value>> {
     use super::error::GatewayError;
-    let workspace = project_workspace(&state, &name)?;
-    let current = workspace
-        .read_text(&request.path)
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
-    if current != request.original {
-        return Err(GatewayError::Status(
-            axum::http::StatusCode::CONFLICT,
-            "File changed on disk; reload it before saving".into(),
-        ));
+    super::devcontainer::validate_file_path(&request.path)?;
+    if request.contents.len() > 1_048_576 || request.original.len() > 1_048_576 {
+        return Err(GatewayError::Message("文件超过大小限制".into()));
     }
-    workspace
-        .write_text(&request.path, &request.contents)
-        .map_err(|e| GatewayError::Message(e.to_string()))?;
+    let script = super::devcontainer::save_script();
+    let mut input = request.original.as_bytes().to_vec();
+    input.extend_from_slice(request.contents.as_bytes());
+    let length = request.original.len().to_string();
+    let output = state.devcontainers.exec(&state.infra.container_execution.config, &name, &script, &[&request.path, &length], &input).await?;
+    container_output(output)?;
     Ok(Json(
         serde_json::json!({"path": request.path, "contents": request.contents}),
     ))
