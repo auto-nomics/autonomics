@@ -196,6 +196,16 @@ impl PodmanConfig {
             // directory otherwise still defaults to /run/libpod in a user
             // namespace. Keep it explicit even with an empty environment.
             command.arg("--tmpdir").arg(root.join("libpod-tmp"));
+            if self.worker_runtime_dir.is_none() {
+                // Image-copy blob staging honours TMPDIR, not --tmpdir.
+                // Multi-GB pull staging must land on the private disk, not
+                // the host's tmpfs-backed /tmp (RAM pressure and hard
+                // ENOSPC under concurrent pulls). Workers keep their own
+                // redirect above.
+                let tmpdir = root.join("libpod-tmp");
+                let _ = std::fs::create_dir_all(&tmpdir);
+                command.env("TMPDIR", tmpdir);
+            }
         }
         if let Some(driver) = &self.storage_driver {
             command.arg("--storage-driver").arg(driver);
@@ -230,6 +240,13 @@ impl PodmanConfig {
         if let Some(root) = &self.run_root {
             command.arg("--runroot").arg(root);
             command.arg("--tmpdir").arg(root.join("libpod-tmp"));
+            if self.worker_runtime_dir.is_none() {
+                // Same disk-backed TMPDIR redirect as the async builder:
+                // pull staging must not hit the host's tmpfs /tmp.
+                let tmpdir = root.join("libpod-tmp");
+                let _ = std::fs::create_dir_all(&tmpdir);
+                command.env("TMPDIR", tmpdir);
+            }
         }
         if let Some(driver) = &self.storage_driver {
             command.arg("--storage-driver").arg(driver);
