@@ -68,8 +68,9 @@ impl NodeFactory for DownloadNodeFactory {
          runtime to discover them.\n\n\
          Files can be several hundred MiB — the node is long-running by \
          design. `file_to_dataframe` / `file_decompress` consume the FileSet \
-         downstream. For API-paginated per-variant statistics use \
-         `source_gwascatalog_summary_associations` instead."
+         downstream. For a filtered in-memory table of a study's statistics \
+         (p-value window, row cap) use `source_gwascatalog_summary_associations` \
+         instead."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

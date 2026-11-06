@@ -72,7 +72,9 @@ const PROMPT_GWASCATALOG: &str = "\n\
   `source_gwascatalog_associations`, `source_gwascatalog_study_associations`, \
   `source_gwascatalog_snps`, `source_gwascatalog_efo_traits`, \
   `source_gwascatalog_unpublished_studies`, and \
-  `source_gwascatalog_summary_associations`.\n\
+  `source_gwascatalog_summary_associations` (study-keyed: query by \
+  `study_accession` with `p_lower`/`p_upper` windows; the upstream Summary \
+  Statistics REST API was retired, so `variant_id` queries are unsupported).\n\
 - Use `gwascatalog_download_summary_stats` (tool) or the \
   `source_gwascatalog_download` node for the full per-study summary-statistics \
   files on the EBI FTP mirror.";

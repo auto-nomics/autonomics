@@ -6022,6 +6022,7 @@ dependencies = [
  "bib-types",
  "dag-core",
  "datafusion",
+ "flate2",
  "futures",
  "reqwest 0.13.5",
  "schemars 1.2.2",
