@@ -56,6 +56,9 @@ pub struct SshTarget {
     connect_timeout: Duration,
     command_timeout: Duration,
     transfer_timeout: Duration,
+    /// Keepalive cadence for connections that outlive a short command. Absent
+    /// means every connection is short-lived and needs no liveness probing.
+    keepalive: Option<(Duration, u32)>,
     pinned_configuration: Option<(FileRef, Vec<FileRef>)>,
 }
 
@@ -69,6 +72,7 @@ impl SshTarget {
             connect_timeout: Duration::from_secs(10),
             command_timeout: Duration::from_secs(120),
             transfer_timeout: Duration::from_secs(3600),
+            keepalive: None,
             pinned_configuration: None,
         }
     }
@@ -105,6 +109,17 @@ impl SshTarget {
 
     pub fn with_transfer_timeout(mut self, timeout: Duration) -> Self {
         self.transfer_timeout = timeout;
+        self
+    }
+
+    /// Probe liveness on connections that may stay open for a long task.
+    ///
+    /// A short command needs no keepalive, and every transport-managed
+    /// connection is short. A transport that waits on a remote task for hours
+    /// needs one: without it a silent network drop leaves the local side
+    /// waiting on a socket that will never answer again.
+    pub fn with_keepalive(mut self, interval: Duration, count: u32) -> Self {
+        self.keepalive = Some((interval, count.max(1)));
         self
     }
 
@@ -214,24 +229,26 @@ impl SshTarget {
         if let Some(endpoint) = &self.endpoint {
             command.args(endpoint.options());
         }
-        command
-            .args([
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "LogLevel=ERROR",
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                "ControlMaster=no",
-                "-o",
-                "ControlPath=none",
-                "-o",
-                "ControlPersist=no",
-                "-o",
-                connect.as_str(),
-            ])
-            .arg(&self.host);
+        let mut options: Vec<String> = vec![
+            "BatchMode=yes".into(),
+            "LogLevel=ERROR".into(),
+            "StrictHostKeyChecking=yes".into(),
+            "ControlMaster=no".into(),
+            "ControlPath=none".into(),
+            "ControlPersist=no".into(),
+            connect,
+        ];
+        if let Some((interval, count)) = &self.keepalive {
+            options.push(format!(
+                "ServerAliveInterval={}",
+                interval.as_secs().max(1)
+            ));
+            options.push(format!("ServerAliveCountMax={count}"));
+        }
+        for option in &options {
+            command.args(["-o", option.as_str()]);
+        }
+        command.arg(&self.host);
         Ok(command)
     }
 
@@ -256,6 +273,42 @@ impl SshTarget {
             &["bash", "-s"],
             StdinSource::Bytes(script.as_bytes()),
             self.command_timeout,
+            true,
+            None,
+        )
+        .await
+    }
+
+    /// Run one remote command under an explicit deadline.
+    ///
+    /// The default command timeout bounds short probes. A transport that
+    /// blocks on a remote task needs the task's own horizon instead, so the
+    /// caller states it rather than inheriting a fixed default.
+    pub async fn run_with_timeout(
+        &self,
+        remote_command: &str,
+        timeout: Duration,
+    ) -> Result<Output, DagError> {
+        self.execute(
+            &[remote_command],
+            StdinSource::Null,
+            timeout,
+            true,
+            None,
+        )
+        .await
+    }
+
+    /// Run `bash -s` under an explicit deadline. Read-only scripts only.
+    pub async fn run_script_with_timeout(
+        &self,
+        script: &str,
+        timeout: Duration,
+    ) -> Result<Output, DagError> {
+        self.execute(
+            &["bash", "-s"],
+            StdinSource::Bytes(script.as_bytes()),
+            timeout,
             true,
             None,
         )
@@ -823,7 +876,7 @@ struct StreamFailure {
 }
 
 /// Fail loud on a nonzero ssh exit; otherwise hand back stdout as text.
-fn ensure_ssh_success(output: Output, context: &str) -> Result<Output, DagError> {
+pub(super) fn ensure_ssh_success(output: Output, context: &str) -> Result<Output, DagError> {
     if output.status.success() {
         return Ok(output);
     }
@@ -853,7 +906,7 @@ fn queue_stdout_text(output: Output, context: &str) -> Result<String, DagError> 
     }
 }
 
-fn ssh_stdout_text(output: Output, context: &str) -> Result<String, DagError> {
+pub(super) fn ssh_stdout_text(output: Output, context: &str) -> Result<String, DagError> {
     ensure_ssh_success(output, context)
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
 }
@@ -861,12 +914,12 @@ fn ssh_stdout_text(output: Output, context: &str) -> Result<String, DagError> {
 /// Quote an arbitrary string as one shell word. Used for every env value
 /// and remote path embedded in generated scripts, so neither the
 /// coordinator nor a task spec can inject shell syntax.
-fn sh_single_quote(value: &str) -> String {
+pub(super) fn sh_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 /// Lowercase hex without pulling in a hex crate (house pattern).
-fn hex_encode(bytes: &[u8]) -> String {
+pub(super) fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -1069,24 +1122,8 @@ impl SlurmTaskTransport {
             &self.scratch_home,
         )
         .await?;
-        let attempt_key = match dispatch.spec.spec.get("_autonomics_attempt_key") {
-            None => dispatch.spec.id.as_str(),
-            Some(serde_json::Value::String(key))
-                if key.len() == 72
-                    && key.starts_with("attempt-")
-                    && key[8..]
-                        .bytes()
-                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
-            {
-                key
-            }
-            Some(_) => {
-                return Err(DagError::Schedule(
-                    "invalid remote task attempt namespace".into(),
-                ));
-            }
-        };
-        let task_dir = remote_task_dir(&scratch, attempt_key);
+        let attempt_key = attempt_key(&dispatch)?;
+        let task_dir = remote_task_dir(&scratch, &attempt_key);
 
         let mut environment =
             process_task_environment(&dispatch.spec.id, &task_dir, &process.env, &inputs_by_name)?;
@@ -1579,7 +1616,7 @@ fn poisoned_state() -> DagError {
 /// Pair uploaded artifacts with declared inputs by declaration order —
 /// the same contract [`super::remote::RemoteTaskExecutor`] uses when it
 /// uploads (`input-{port}-{index}` names, one artifact per staged path).
-fn match_uploaded_inputs(
+pub(super) fn match_uploaded_inputs(
     dispatch: &TaskDispatch,
     artifacts: Vec<FileRef>,
 ) -> Result<BTreeMap<String, Vec<PathBuf>>, DagError> {
@@ -1608,7 +1645,30 @@ fn match_uploaded_inputs(
 }
 
 /// Join a resolved (absolute) scratch dir with the sanitized task id.
-fn remote_task_dir(scratch_dir: &str, task_id: &str) -> String {
+/// The per-attempt remote namespace of one dispatched task.
+///
+/// The coordinator injects it before staging, so a retried attempt never
+/// shares a directory with the attempt it replaces. Every backend that owns
+/// a remote attempt directory resolves it the same way.
+pub(super) fn attempt_key(dispatch: &TaskDispatch) -> Result<String, DagError> {
+    match dispatch.spec.spec.get("_autonomics_attempt_key") {
+        None => Ok(dispatch.spec.id.clone()),
+        Some(serde_json::Value::String(key))
+            if key.len() == 72
+                && key.starts_with("attempt-")
+                && key[8..]
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) =>
+        {
+            Ok(key.clone())
+        }
+        Some(_) => Err(DagError::Schedule(
+            "invalid remote task attempt namespace".into(),
+        )),
+    }
+}
+
+pub(super) fn remote_task_dir(scratch_dir: &str, task_id: &str) -> String {
     format!(
         "{}/{}",
         scratch_dir.trim_end_matches('/'),
@@ -1621,7 +1681,7 @@ fn remote_task_dir(scratch_dir: &str, task_id: &str) -> String {
 /// and single-quoted shell arguments never expand `~`, so no tilde-prefixed
 /// path may cross an ssh command or a generated script — every path that
 /// reaches the cluster must be absolute.
-async fn resolve_remote_prefix(
+pub(super) async fn resolve_remote_prefix(
     ssh: &SshTarget,
     path: &str,
     home: &Mutex<Option<String>>,
@@ -1851,32 +1911,15 @@ fn render_sbatch_script(
         script.push_str(&format!("export {name}={}\n", sh_single_quote(value)));
     }
     script.push_str(&format!("cd {} || exit 90\n", sh_single_quote(task_dir)));
-    match &process.script {
-        Some(body) => {
-            script.push_str(&render_process_script(body, environment, inputs_by_name));
-            script.push('\n');
-        }
-        None => {
-            let rendered = process
-                .command
-                .iter()
-                .map(|argument| {
-                    sh_single_quote(&render_process_script(
-                        argument,
-                        environment,
-                        inputs_by_name,
-                    ))
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            script.push_str(&rendered);
-            script.push('\n');
-        }
-    }
+    script.push_str(&super::process::render_process_payload(
+        process,
+        environment,
+        inputs_by_name,
+    ));
     Ok(script)
 }
 
-fn heredoc_delimiter(base: &str, contents: &str) -> String {
+pub(super) fn heredoc_delimiter(base: &str, contents: &str) -> String {
     let mut delimiter = base.to_string();
     let mut sequence = 0usize;
     while contents.lines().any(|line| line == delimiter) {
@@ -1944,7 +1987,7 @@ cat submission.job-id
 /// `output-{port}-{index}`, reporting findings as protocol lines. A port
 /// with no matches simply reports nothing — the transport treats a missing
 /// port as the "matched no files" error, mirroring the local transport.
-fn render_collect_script(process: &ProcessTaskSpec, task_dir: &str) -> String {
+pub(super) fn render_collect_script(process: &ProcessTaskSpec, task_dir: &str) -> String {
     let mut script = String::from("set -u\nexport LC_ALL=C\n");
     script.push_str(&format!("cd {} || exit 90\n", sh_single_quote(task_dir)));
     for output in &process.outputs {

@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 use super::contract::{TaskAttemptReceipt, TaskDispatch, TaskResources, task_timeout};
 use super::local::LocalTaskExecutor;
 use super::resources::{LocalResourceBudget, LocalResourceLease};
+use super::slurm::sh_single_quote;
 use super::traits::{TaskLease, TaskTransport};
 use crate::dag::DagError;
 use crate::value::FileRef;
@@ -643,6 +644,42 @@ pub(super) fn render_process_script(
         rendered = rendered.replace(&format!("{{{{env.{name}}}}}"), value);
     }
     rendered
+}
+
+/// Render the payload a task actually executes: either its inline script or
+/// its argument vector, with input and environment placeholders expanded.
+///
+/// Shared by every backend that runs a `process` task — the local process
+/// transport, the Slurm job script and the direct SSH supervisor — so all
+/// three observe one payload contract.
+pub(super) fn render_process_payload(
+    process: &ProcessTaskSpec,
+    environment: &BTreeMap<String, String>,
+    inputs_by_name: &BTreeMap<String, Vec<PathBuf>>,
+) -> String {
+    match &process.script {
+        Some(body) => {
+            let mut rendered = render_process_script(body, environment, inputs_by_name);
+            rendered.push('\n');
+            rendered
+        }
+        None => {
+            let mut rendered = process
+                .command
+                .iter()
+                .map(|argument| {
+                    sh_single_quote(&render_process_script(
+                        argument,
+                        environment,
+                        inputs_by_name,
+                    ))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            rendered.push('\n');
+            rendered
+        }
+    }
 }
 
 /// Parse and cross-check the `process` payload of a dispatched task: the

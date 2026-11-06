@@ -33,6 +33,7 @@ mod remote;
 mod resources;
 mod retained_arrow;
 mod slurm;
+mod ssh_transport;
 mod traits;
 mod typed_publication;
 pub mod typed_worker;
@@ -59,6 +60,7 @@ pub use slurm::{
     SlurmSubmissionObservation, SlurmSubmissionRecorder, SlurmTaskTransport, SshArtifactStore,
     SshDataHome, SshTarget, slurm_backed_executor, slurm_queue_absent,
 };
+pub use ssh_transport::{SshSettings, SshTaskTransport};
 pub use traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
 pub use typed_worker::{
     PlacementTaskExecutor, TypedPodmanResourceControl, TypedPodmanSettings,
