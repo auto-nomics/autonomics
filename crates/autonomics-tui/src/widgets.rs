@@ -24,3 +24,4 @@ pub mod tab_bar;
 pub mod tasks_popup;
 pub mod toast;
 pub mod tree_picker;
+pub mod vfs_browser;

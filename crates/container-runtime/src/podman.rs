@@ -6,7 +6,10 @@
 //! Every Podman invocation detaches stdin (`Stdio::null()`). An attached
 //! `podman start` consumes inherited stdin even when the container was
 //! created without `--interactive`, which would steal terminal input from
-//! whatever host process (e.g. a TUI) shares that tty.
+//! whatever host process (e.g. a TUI) shares that tty. The single
+//! exception is `dev_exec`: its piped streams belong to a gateway
+//! WebSocket bridge that never touches a host tty, so interactive stdin
+//! is safe there (see the development-container section below).
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -389,6 +392,170 @@ impl PodmanConnection for PodmanRuntime {
         )
     }
 
+    // ── Development containers (devcontainer-style) ────────────────────
+    //
+    // Unlike the run path these containers outlive the call: no cleanup
+    // guard, no intent record, no timeout. The workspace bind mount is
+    // the only host state they reference, so remove/restart can never
+    // lose project files.
+
+    async fn dev_container_start(
+        &self,
+        spec: &crate::dev_container::DevContainerSpec,
+    ) -> Result<crate::dev_container::DevContainerStatus, ContainerRuntimeError> {
+        use crate::dev_container::DevContainerState;
+        if let Some((id, DevContainerState::Running)) = self.dev_ps_row(&spec.name).await? {
+            return Ok(crate::dev_container::DevContainerStatus {
+                state: DevContainerState::Running,
+                container_id: Some(id),
+            });
+        }
+        let existed = self.dev_ps_row(&spec.name).await?.is_some();
+        if !existed {
+            let args = crate::dev_container::build_dev_create_args(spec)?;
+            // CREATE_GATE serialization happens inside create_container.
+            // No cleanup guard: a failed create leaves nothing behind
+            // anyway, and a successful one must stay.
+            create_container(&self.config, args, None).await?;
+        }
+        self.dev_start_detached(&spec.name).await?;
+        let (id, state) =
+            self.dev_ps_row(&spec.name)
+                .await?
+                .ok_or_else(|| ContainerRuntimeError::Invalid(
+                    "dev container vanished immediately after start".into(),
+                ))?;
+        Ok(crate::dev_container::DevContainerStatus {
+            state,
+            container_id: Some(id),
+        })
+    }
+
+    async fn dev_container_stop(&self, name: &str) -> Result<(), ContainerRuntimeError> {
+        if self.dev_ps_row(name).await?.is_none() {
+            return Ok(()); // idempotent: nothing to stop
+        }
+        let program = &self.config.program;
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(CLEANUP_TIMEOUT_SECS),
+            self.config
+                .async_command()
+                .arg("stop")
+                .arg("--time=10")
+                .arg(name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        match stopped {
+            Ok(Ok(output)) if output.status.success() => Ok(()),
+            Ok(Ok(output)) => Err(ContainerRuntimeError::Invalid(format!(
+                "`{program} stop` failed with status {}: {}",
+                output.status.code().unwrap_or(1),
+                truncate_captured_bytes(&output.stderr)
+            ))),
+            Ok(Err(error)) => Err(ContainerRuntimeError::Invalid(format!(
+                "cannot spawn `{program} stop`: {error}"
+            ))),
+            Err(_) => Err(ContainerRuntimeError::Timeout {
+                timeout_secs: CLEANUP_TIMEOUT_SECS,
+            }),
+        }
+    }
+
+    async fn dev_container_remove(&self, name: &str) -> Result<(), ContainerRuntimeError> {
+        if self.dev_ps_row(name).await?.is_none() {
+            return Ok(()); // idempotent
+        }
+        remove_container(&self.config, name)
+            .await
+            .map_err(ContainerRuntimeError::Invalid)
+    }
+
+    async fn dev_container_status(
+        &self,
+        name: &str,
+    ) -> Result<crate::dev_container::DevContainerStatus, ContainerRuntimeError> {
+        Ok(match self.dev_ps_row(name).await? {
+            Some((id, state)) => crate::dev_container::DevContainerStatus {
+                state,
+                container_id: Some(id),
+            },
+            None => crate::dev_container::DevContainerStatus {
+                state: crate::dev_container::DevContainerState::NotFound,
+                container_id: None,
+            },
+        })
+    }
+
+    async fn dev_exec(
+        &self,
+        name: &str,
+        argv: &[String],
+        env: &[(String, String)],
+        tty: bool,
+    ) -> Result<crate::dev_container::DevExecStream, ContainerRuntimeError> {
+        use crate::dev_container::DevExecStream;
+        if argv.is_empty() {
+            return Err(ContainerRuntimeError::Invalid(
+                "dev exec `argv` cannot be empty".into(),
+            ));
+        }
+        let program = self.config.program.clone();
+        let mut command = self.config.async_command();
+        command.arg("exec").arg("--interactive");
+        if tty {
+            command.arg("--tty");
+        }
+        command.arg("--sig-proxy=false");
+        for (key, value) in env {
+            command.arg("--env").arg(format!("{key}={value}"));
+        }
+        command
+            .arg(name)
+            .args(argv)
+            // This is the one deliberate exception to the module's
+            // stdin-null policy: the streams are owned by a gateway
+            // WebSocket bridge, never a host tty (see the header note).
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().map_err(|error| {
+            ContainerRuntimeError::Invalid(format!("cannot spawn `{program} exec`: {error}"))
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| ContainerRuntimeError::Invalid("exec child lost stdin".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| ContainerRuntimeError::Invalid("exec child lost stdout".into()))?;
+        // With --tty podman merges stderr into the pty; keep the pipe
+        // (it simply stays empty) so callers have uniform handling.
+        let stderr = child.stderr.take();
+        let exit_program = program;
+        let exit = tokio::spawn(async move {
+            let status = child.wait().await.map_err(|error| {
+                ContainerRuntimeError::Invalid(format!(
+                    "`{exit_program} exec` wait failed: {error}"
+                ))
+            })?;
+            status.code().ok_or_else(|| {
+                ContainerRuntimeError::Invalid("`podman exec` terminated by a signal".into())
+            })
+        });
+        Ok(DevExecStream {
+            stdin,
+            stdout,
+            stderr,
+            exit,
+        })
+    }
+
     fn name(&self) -> &'static str {
         "podman"
     }
@@ -424,6 +591,99 @@ fn suppress_private_output(
 }
 
 impl PodmanRuntime {
+    /// Probe one container's `(id, state)` by exact name from
+    /// `podman ps -a`. Podman's `--filter name=` matches substrings, so
+    /// the exact-name comparison happens in
+    /// [`crate::dev_container::exact_container_row`].
+    async fn dev_ps_row(
+        &self,
+        name: &str,
+    ) -> Result<Option<(String, crate::dev_container::DevContainerState)>, ContainerRuntimeError>
+    {
+        let program = &self.config.program;
+        let listed = tokio::time::timeout(
+            Duration::from_secs(CLEANUP_TIMEOUT_SECS),
+            self.config
+                .async_command()
+                .args([
+                    "ps",
+                    "-a",
+                    "--filter",
+                    &format!("name={name}"),
+                    "--format",
+                    "{{.ID}}\t{{.State}}\t{{.Names}}",
+                ])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        let output = match listed {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                return Err(ContainerRuntimeError::Invalid(format!(
+                    "cannot spawn `{program} ps`: {error}"
+                )))
+            }
+            Err(_) => {
+                return Err(ContainerRuntimeError::Timeout {
+                    timeout_secs: CLEANUP_TIMEOUT_SECS,
+                })
+            }
+        };
+        if !output.status.success() {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "`{program} ps` failed with status {}: {}",
+                output.status.code().unwrap_or(1),
+                truncate_captured_bytes(&output.stderr)
+            )));
+        }
+        Ok(crate::dev_container::exact_container_row(
+            &String::from_utf8_lossy(&output.stdout),
+            name,
+        ))
+    }
+
+    /// Start an existing container detached (no `--attach`, so no output
+    /// capture is needed and the container keeps running past the call).
+    async fn dev_start_detached(&self, name: &str) -> Result<(), ContainerRuntimeError> {
+        let program = &self.config.program;
+        let started = tokio::time::timeout(
+            Duration::from_secs(CLEANUP_TIMEOUT_SECS),
+            self.config
+                .async_command()
+                .arg("start")
+                .arg(name)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        let output = match started {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
+                return Err(ContainerRuntimeError::Invalid(format!(
+                    "cannot spawn `{program} start`: {error}"
+                )))
+            }
+            Err(_) => {
+                return Err(ContainerRuntimeError::Timeout {
+                    timeout_secs: CLEANUP_TIMEOUT_SECS,
+                })
+            }
+        };
+        if !output.status.success() {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "`{program} start` failed with status {}: {}",
+                output.status.code().unwrap_or(1),
+                truncate_captured_bytes(&output.stderr)
+            )));
+        }
+        Ok(())
+    }
+
     async fn run_inner(
         &self,
         request: ContainerRunRequest,
@@ -873,7 +1133,7 @@ fn build_create_args_for_policies(
     Ok(args)
 }
 
-fn escape_mount_field(value: &str) -> String {
+pub(crate) fn escape_mount_field(value: &str) -> String {
     value.replace('\\', "\\\\").replace(',', "\\,")
 }
 

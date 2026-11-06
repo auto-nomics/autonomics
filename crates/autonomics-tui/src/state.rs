@@ -1007,6 +1007,8 @@ pub struct AppState {
     pub model_config_visible: bool,
     /// HPC (Slurm) site panel state and visibility.
     pub hpc_panel: crate::widgets::hpc_panel_widget::HpcPanelState,
+    /// VFS browser overlay (browse + preview + file management).
+    pub vfs_browser: crate::widgets::vfs_browser::VfsBrowserState,
     pub embedding_config_visible: bool,
     /// Per-agent runtime config popup state.
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,

@@ -287,3 +287,45 @@ sets containing 10-1000 genes.
 ## Central resource downloader
 
 Resource downloads are configured separately in `state_dir/resource-downloader.toml`. Missing manifests resolve to a deny-by-default policy. HTTP(S) allow rules can be added under `[[policy.allow]]`; S3/OSS profiles can be declared under `[[object_store_profiles]]`. Downloaded files are installed atomically in the agent VFS, by default under `/downloads`.
+
+## Browsing the VFS (humans)
+
+The daemon exposes the whole namespace over HTTP at `/api/v1/vfs`, and both
+frontends build their file browsers on it:
+
+- **GUI (workbench)** — the `VFS 文件` rail button opens the sidebar container:
+  a lazy directory tree with a lock badge on read-only mounts. Text files open
+  as `vfs-file` editor tabs (editable with Ctrl+S save and a stale-copy
+  conflict check), images preview inline, everything else downloads. The
+  toolbar creates folders/files and uploads into the active directory; row
+  actions cover rename and delete.
+- **TUI** — the command palette's `VFS browser` opens a two-pane overlay
+  (directory list + text preview). `Enter` descends/previews, `h`/`Backspace`
+  ascends, `m`/`n`/`R`/`d` run mkdir/new-file/rename/delete with inline input
+  and y/N confirmation; read-only mounts block creation shortcuts.
+
+### HTTP endpoints
+
+All endpoints enforce the mount table server-side: read-only mounts reject
+every mutation regardless of what the client allows. Errors answer
+`{"error": message}` with the status suggested by the error class
+(404/403/409/400/500).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /vfs/list?path=&recursive=&limit=&offset=` | Paginated, mount-aware directory listing (synthetic mount-point entries first) |
+| `GET /vfs/stat?path=` | Entry metadata plus the covering mount's `read_only` flag |
+| `GET /vfs/mounts` | The declarative mount table |
+| `GET /vfs/file?path=&download=` | Chunked byte stream; single-part `Range` supported (206/416) |
+| `GET /vfs/text?path=&max_bytes=` | Bounded UTF-8 read for editors (default 1 MiB, cap 10 MiB) |
+| `PUT /vfs/file?path=` | Raw byte upload (staging+rename atomic); group body limit 50 MiB |
+| `PUT /vfs/text` | `{path, contents, original}` editor save; stale `original` → 409 |
+| `POST /vfs/mkdir` | `{path}` |
+| `DELETE /vfs/entry?path=&recursive=` | Refuses `/`; non-empty dirs need `recursive` (else 409) |
+| `POST /vfs/move` | `{src, dst}` — writable on both ends |
+| `POST /vfs/copy` | `{src, dst}` — readable source, writable destination |
+
+The listing, mutation and safety semantics live in `vfs::browse`
+(`crates/vfs/src/browse.rs`), shared with the agent-facing `vfs` tool so the
+two surfaces cannot drift: what an agent sees through `vfs ls` is exactly what
+the browsers show.

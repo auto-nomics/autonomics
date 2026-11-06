@@ -3,6 +3,7 @@ mod execution_mount;
 mod ssh;
 mod ssh_endpoint;
 
+pub mod browse;
 pub mod mount;
 pub mod permission;
 pub mod storage;

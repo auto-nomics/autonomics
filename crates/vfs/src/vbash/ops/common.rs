@@ -66,17 +66,7 @@ pub(crate) fn tree_path_cmp(left: &str, right: &str) -> std::cmp::Ordering {
     }
 }
 
-pub(crate) fn entry_is_readable(
-    storage: &OpendalFileStorage,
-    path: &str,
-    is_directory: bool,
-) -> bool {
-    if is_directory {
-        storage.check_listable(path).is_ok()
-    } else {
-        storage.check_readable(path).is_ok()
-    }
-}
+pub(crate) use crate::browse::entry_is_readable;
 
 pub(crate) fn safe_local_join(root: &Path, remote: &str) -> PathBuf {
     let mut path = root.to_path_buf();
@@ -205,19 +195,7 @@ async fn collect_followed_directory(
     Ok(())
 }
 
-pub(crate) async fn followed_entry_metadata(
-    op: &opendal::Operator,
-    entry: &opendal::Entry,
-) -> Result<opendal::Metadata, String> {
-    if entry.metadata().is_dir() || entry.metadata().is_file() {
-        return Ok(entry.metadata().clone());
-    }
-    match op.stat(entry.path()).await {
-        Ok(metadata) => Ok(metadata),
-        Err(error) if error.kind() == opendal::ErrorKind::NotFound => Ok(entry.metadata().clone()),
-        Err(error) => Err(error.to_string()),
-    }
-}
+pub(crate) use crate::browse::followed_entry_metadata;
 
 /// Heuristic check for whether a byte slice is binary (non-text) data.
 ///

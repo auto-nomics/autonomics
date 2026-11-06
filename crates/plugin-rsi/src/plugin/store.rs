@@ -518,6 +518,30 @@ impl PluginStore {
         purpose: &str,
         catalog: &EnvironmentCatalog,
     ) -> Result<PluginOperator<'_>> {
+        self.create_with_options(plugin_name, environment_id, purpose, catalog, false)
+    }
+
+    /// Create a project with the runnable scaffold (demo node + script +
+    /// README) — the human entry point. Agent-driven creation stays bare
+    /// so agents never inherit a node they did not ask for.
+    pub fn create_scaffolded(
+        &self,
+        plugin_name: &str,
+        environment_id: &str,
+        purpose: &str,
+        catalog: &EnvironmentCatalog,
+    ) -> Result<PluginOperator<'_>> {
+        self.create_with_options(plugin_name, environment_id, purpose, catalog, true)
+    }
+
+    fn create_with_options(
+        &self,
+        plugin_name: &str,
+        environment_id: &str,
+        purpose: &str,
+        catalog: &EnvironmentCatalog,
+        scaffold: bool,
+    ) -> Result<PluginOperator<'_>> {
         crate::validate_plugin_name(plugin_name)?;
         validate_purpose(purpose)?;
         let environment = catalog.get(environment_id).ok_or_else(|| {
@@ -539,7 +563,7 @@ impl PluginStore {
         GitRepo::init(&path, &self.default_branch)?;
         let mut image = ImageMetadata::default();
         image.reference = reference;
-        let manifest = PluginManifest {
+        let mut manifest = PluginManifest {
             plugin_name: plugin_name.to_string(),
             status: PluginStatus::Draft,
             lifecycle: PluginLifecycleMetadata {
@@ -549,8 +573,19 @@ impl PluginStore {
             image,
             ..PluginManifest::default()
         };
+        // A runnable scaffold, not a bare manifest: one demo node whose
+        // kind derives from the plugin name (two scaffolded projects can
+        // never collide on kind), a script file, and a README walking the
+        // dev loop. Everything validates and test-runs out of the box.
+        if scaffold {
+            manifest.nodes = vec![scaffold_node(plugin_name)];
+        }
         let workspace = PluginWorkspace::new(&path);
         save_manifest(&workspace, &manifest)?;
+        if scaffold {
+            workspace.write_text("scripts/demo.sh", scaffold_script())?;
+            workspace.write_text("README.md", &scaffold_readme(plugin_name))?;
+        }
         let repo = GitRepo::open(path);
         repo.snapshot_commit(
             "plugin: create draft",
@@ -1126,5 +1161,104 @@ fn content_digest(bytes: &[u8]) -> String {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
+    )
+}
+
+// ── Creation scaffold ──────────────────────────────────────────────────
+
+/// One demo node for a freshly created plugin: kind derives from the
+/// plugin name (`-` → `_`) so scaffolded projects never collide, a file
+/// input port and a declared output make the inlet/outlet contract
+/// visible from the first edit.
+fn scaffold_node(plugin_name: &str) -> container_plugin::node_definition::NodeDefinition {
+    use container_plugin::node_definition::{
+        CommandSpec, NodeDefinition, OutputSpec, PortKind, PortLayout, PortSpec,
+    };
+    NodeDefinition {
+        kind: scaffold_kind(plugin_name),
+        desc: "Demo node: read the input text and write the declared output.".into(),
+        doc: format!(
+            "Demo node of `{plugin_name}`. Reads the `input_text` file port \
+             and writes `demo_out.txt`. Edit [nodes.{}] in manifest.toml to \
+             declare your own inlet/outlet ports, params, and command.",
+            scaffold_kind(plugin_name)
+        ),
+        deprecated: false,
+        timeout_secs: 60,
+        artifact_prefix: None,
+        ports: PortLayout {
+            inputs: vec![PortSpec {
+                r#type: PortKind::File,
+                label: Some("input_text".into()),
+                accepted_formats: vec!["text/plain".into()],
+                tuple: Vec::new(),
+            }],
+            outputs: vec![OutputSpec {
+                path: "demo_out.txt".into(),
+                format: Some("text/plain".into()),
+                label: Some("demo_out".into()),
+                tuple: Vec::new(),
+                optional: false,
+            }],
+        },
+        params: std::collections::BTreeMap::new(),
+        command: CommandSpec {
+            interpreter: "sh".into(),
+            argv: Vec::new(),
+            script: None,
+            script_file: Some("scripts/demo.sh".into()),
+            env: std::collections::BTreeMap::new(),
+            files: std::collections::BTreeMap::new(),
+        },
+        resources: Default::default(),
+    }
+}
+
+/// Scaffolded kind: the plugin name with `-` mapped to `_`.
+fn scaffold_kind(plugin_name: &str) -> String {
+    plugin_name.replace('-', "_")
+}
+
+/// The demo script: consumes the staged input through the standard
+/// AUTONOMICS_INPUT contract and writes the declared output.
+fn scaffold_script() -> &'static str {
+    r#"#!/bin/sh
+# Demo node script. The runtime stages every file input under
+# /work/.autonomics/inputs (paths exported as AUTONOMICS_INPUT<n>) and
+# requires declared outputs to be written via AUTONOMICS_OUTPUT<n>.
+set -eu
+
+in="${AUTONOMICS_INPUT0:?missing input_text}"
+out="${AUTONOMICS_OUTPUT0:?missing demo_out}"
+name="$(cat "$in")"
+printf 'Hello, %s!\n' "${name:-world}" > "$out"
+"#
+}
+
+fn scaffold_readme(plugin_name: &str) -> String {
+    format!(
+        r#"# {plugin_name}
+
+一个插件项目 = 一个 git 仓库 + `manifest.toml`（镜像引用、节点出入口声明、命令与资源）。
+
+## 开发循环
+
+1. 编辑 `manifest.toml` 与 `scripts/demo.sh`（文件在开发窗口与容器间实时同步）。
+2. 在 GUI 开发窗口点「校验」——六道校验门（manifest/策略/kind 冲突/脚本静态检查/注册编译/密钥扫描）。
+3. 点「激活」：校验通过后安装本地快照并热注册，节点以 `{plugin_name}/<kind>` 出现在 DAG。
+4. 点「试跑」：填入口样例数据，验证出口产出。
+
+## 结构
+
+- `manifest.toml` — 插件声明（固定入口）
+- `scripts/demo.sh` — 节点脚本示例
+- `.rsi/reports/` — 校验报告（工具生成）
+
+## 契约速查
+
+- 输入文件落在 `/work/.autonomics/inputs/`，环境变量 `AUTONOMICS_INPUT<n>` 给出路径。
+- 输出通过 `AUTONOMICS_OUTPUT<n>` 写出，路径必须在 `manifest.toml` 的 outputs 里声明。
+- 参数用 `{{{{param}}}}` 模板引用，见 `manifest.toml` 的 `[params]`。
+"#
     )
 }

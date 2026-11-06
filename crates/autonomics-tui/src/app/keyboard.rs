@@ -275,6 +275,7 @@ impl App {
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
                 Overlay::ModelConfig => self.handle_model_config_key(key),
                 Overlay::HpcPanel => self.handle_hpc_panel_key(key),
+                Overlay::VfsBrowser => self.handle_vfs_browser_key(key),
                 Overlay::AgentConfig => self.handle_agent_config_key(key),
                 // Captured above, before the global chords; handled here
                 // too so a future reorder degrades to "the confirm

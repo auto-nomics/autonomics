@@ -365,6 +365,13 @@ impl App {
                     frame.set_cursor_position(ratatui::layout::Position { x, y });
                 }
             }
+            Overlay::VfsBrowser => {
+                crate::widgets::vfs_browser::render_vfs_browser(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.vfs_browser,
+                );
+            }
             Overlay::HpcPanel => {
                 use ratatui::widgets::StatefulWidgetRef as _;
                 let popup_width = frame.area().width * 8 / 10;

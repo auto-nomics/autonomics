@@ -931,6 +931,7 @@ async fn build_engine_manager(
         execution: Arc::clone(container_execution),
         store: rsi.store(),
     }));
+    rsi.configure_dev_execution(Arc::clone(container_execution));
     spawn_plugin_distiller(rsi, &config.plugin_rsi);
     tracing::info!("SharedInfra::open: DataEngineManager created");
     Ok(engine_manager)

@@ -51,6 +51,8 @@ pub(super) enum Overlay {
     SkillLibrary,
     /// Bibliography browser.
     Bibliography,
+    /// VFS browser (files, mounts, container outputs).
+    VfsBrowser,
     /// Interactive DAG view.
     DagView,
     FlowView,
@@ -95,6 +97,7 @@ impl AppState {
             (EmbeddingConfig, self.embedding_config_visible),
             (SkillLibrary, self.skill_library.visible),
             (Bibliography, self.bibliography_visible),
+            (VfsBrowser, self.vfs_browser.visible),
             (DagView, self.dag_view_visible),
             (FlowView, self.flow_view_visible),
             (MessagePicker, self.message_picker.is_visible()),

@@ -47,6 +47,8 @@ pub enum CommandAction {
     ModelConfig,
     /// Open the HPC (Slurm) site config + job monitor panel.
     HpcPanel,
+    /// Open the VFS browser overlay (files, mounts, container outputs).
+    VfsBrowser,
     EmbeddingConfig,
     /// Open per-agent runtime settings for the active agent.
     AgentConfig,
@@ -358,6 +360,13 @@ fn default_commands() -> Vec<Command> {
                 .into(),
             category: "system".into(),
             action: CommandAction::HpcPanel,
+        },
+        Command {
+            title: "VFS browser".into(),
+            keywords: "vfs files browse mounts container outputs upload downloads rename delete mkdir"
+                .into(),
+            category: "system".into(),
+            action: CommandAction::VfsBrowser,
         },
         Command {
             title: "Embedding model".into(),

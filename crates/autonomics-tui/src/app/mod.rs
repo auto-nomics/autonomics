@@ -45,6 +45,7 @@ mod render;
 mod runtime_events;
 mod skill_library;
 mod terminal;
+mod vfs_browser;
 mod workspace;
 
 pub struct App {
