@@ -99,7 +99,7 @@ export function ActivityBar(props: {
           active={wikiActive}
           onClick={() => containerClick("wiki")}
         />
-        <RailButton label="插件项目" title="插件项目" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-projects" })} />
+        <RailButton label="插件管理" title="插件管理（开发窗口 / 已安装）" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-projects" })} />
         <RailButton
           label="VFS 文件"
           title="VFS 文件浏览器（挂载 / 容器输出 / 数据）"

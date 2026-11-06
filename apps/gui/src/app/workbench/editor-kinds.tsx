@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -22,6 +22,7 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { ProjectEditor } from "@/features/projects/project-editor";
+import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
 import { VfsFileEditorBody } from "@/features/vfs";
 import { ConfigView, DagView, FlowView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
@@ -286,11 +287,22 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "plugin-projects",
-    title: () => "插件项目",
+    title: () => "插件管理",
+    name: () => "Plugin manager",
     icon: () => FolderCode,
     body: ProjectEditor,
     mount: "keep-alive",
     confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
+  });
+  registerEditorKind({
+    kind: "plugin-dev",
+    title: (editor) => `开发 · ${String(editor.params.name ?? "")}`,
+    name: (editor) => `Plugin dev (${String(editor.params.name ?? "")})`,
+    icon: () => FlaskConical,
+    // keep-alive is load-bearing: the terminal session and unsaved file
+    // edits survive tab switches.
+    body: PluginDevEditorBody,
+    mount: "keep-alive",
   });
   registerEditorKind({
     kind: "vfs-file",
