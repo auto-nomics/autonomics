@@ -94,6 +94,9 @@ pub struct Meta {
 // ---------------------------------------------------------------------------
 
 /// Genomic coordinates of a target.
+///
+/// NOTE: `strand` is a GraphQL enum upstream (`POSITIVE` / `NEGATIVE`) — it
+/// used to be an Int and is kept as the raw string to survive such drift.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenomicLocation {
@@ -104,7 +107,7 @@ pub struct GenomicLocation {
     #[serde(default)]
     pub end: i64,
     #[serde(default)]
-    pub strand: i32,
+    pub strand: String,
 }
 
 /// A gene / target record.
@@ -299,4 +302,49 @@ pub struct Variant {
     pub db_xrefs: Vec<Value>,
     #[serde(default)]
     pub most_severe_consequence: Option<Value>,
+}
+
+/// One trait association for a variant: a study in which the variant is a
+/// member of a fine-mapped credible set (GWAS or QTL), with per-study
+/// statistics. This is the PheWAS-style view of a variant.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantAssociation {
+    /// Study identifier, e.g. `GCST90018729` or a GTEx QTL study.
+    #[serde(default)]
+    pub study_id: String,
+    /// `gwas`, `sqtl`, `eqtl`, …
+    #[serde(default)]
+    pub study_type: Option<String>,
+    #[serde(default)]
+    pub beta: Option<f64>,
+    #[serde(default)]
+    pub p_value_mantissa: f64,
+    #[serde(default)]
+    pub p_value_exponent: i32,
+    #[serde(default)]
+    pub effect_allele_frequency_from_source: Option<f64>,
+    /// Trait / study metadata for the association.
+    #[serde(default)]
+    pub study: Study,
+}
+
+impl VariantAssociation {
+    /// Combined p-value as `mantissa × 10^exponent`.
+    pub fn p_value(&self) -> f64 {
+        self.p_value_mantissa * 10f64.powi(self.p_value_exponent)
+    }
+}
+
+/// Variant → trait association result set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantAssociations {
+    #[serde(default)]
+    pub variant_id: String,
+    /// Total associations available server-side.
+    #[serde(default)]
+    pub count: i64,
+    #[serde(default)]
+    pub rows: Vec<VariantAssociation>,
 }

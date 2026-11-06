@@ -5,7 +5,7 @@
 //! are pure functions over the typed SDK structs.
 
 use crate::associations::{AssociatedDisease, AssociatedTarget};
-use crate::types::{Disease, Drug, Study, Target, Variant};
+use crate::types::{Disease, Drug, Study, Target, Variant, VariantAssociations};
 
 /// Format a single line of comma-joined datasource scores, keeping only the
 /// top contributors (score > 0) and capped to `max` entries.
@@ -39,7 +39,7 @@ pub fn format_target(t: &Target) -> String {
         t.genomic_location.chromosome,
         t.genomic_location.start,
         t.genomic_location.end,
-        strand_str(t.genomic_location.strand)
+        strand_str(&t.genomic_location.strand)
     ));
     if let Some(essential) = t.is_essential {
         out.push_str(&format!("- **Essential:** {}\n", essential));
@@ -53,13 +53,11 @@ pub fn format_target(t: &Target) -> String {
     out
 }
 
-fn strand_str(s: i32) -> &'static str {
-    if s < 0 {
-        "reverse"
-    } else if s > 0 {
-        "forward"
-    } else {
-        "unknown"
+fn strand_str(s: &str) -> &str {
+    match s {
+        "NEGATIVE" => "reverse",
+        "POSITIVE" => "forward",
+        _ => "unknown",
     }
 }
 
@@ -167,6 +165,56 @@ pub fn format_variant(v: &Variant) -> String {
     }
     if !v.variant_description.is_empty() {
         out.push_str(&format!("- **Description:** {}\n", v.variant_description));
+    }
+    out
+}
+
+/// Format variant → trait associations as a Markdown table (PheWAS-style).
+pub fn format_variant_associations(v: &VariantAssociations) -> String {
+    let mut out = String::with_capacity(2048);
+    out.push_str(&format!(
+        "**{} trait associations for {}** (credible-set memberships, sorted by p-value)\n\n",
+        v.rows.len(),
+        v.variant_id
+    ));
+    if v.rows.is_empty() {
+        return out;
+    }
+    let mut rows: Vec<_> = v.rows.iter().collect();
+    rows.sort_by(|a, b| {
+        a.p_value()
+            .partial_cmp(&b.p_value())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.push_str(
+        "| # | Trait | Study | Type | Beta | P | N | PMID |\n\
+         |---|-------|-------|------|------|---|---|------|\n",
+    );
+    for (i, a) in rows.iter().enumerate() {
+        let p = a.p_value();
+        let p_str = if p > 0.0 && p < 1e-3 {
+            format!("{p:.1e}")
+        } else {
+            format!("{p:.3}")
+        };
+        out.push_str(&format!(
+            "| {} | {} | `{}` | {} | {} | {} | {} | {} |\n",
+            i + 1,
+            if a.study.trait_from_source.is_empty() {
+                a.study_id.clone()
+            } else {
+                a.study.trait_from_source.replace('|', "\\|")
+            },
+            a.study_id,
+            a.study_type.as_deref().unwrap_or("-"),
+            a.beta.map(|b| format!("{b:.3}")).unwrap_or("-".into()),
+            p_str,
+            a.study
+                .n_samples
+                .map(|n| n.to_string())
+                .unwrap_or("-".into()),
+            a.study.pubmed_id.as_deref().unwrap_or("-"),
+        ));
     }
     out
 }

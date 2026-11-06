@@ -51,5 +51,5 @@ pub use search::{SearchResult, SearchResults};
 pub use tools::opentargets_registrations;
 pub use types::{
     ApiVersion, DataVersion, Disease, Drug, GenomicLocation, Meta, Sample, ScoredComponent, Study,
-    Target, Variant,
+    Target, Variant, VariantAssociation, VariantAssociations,
 };

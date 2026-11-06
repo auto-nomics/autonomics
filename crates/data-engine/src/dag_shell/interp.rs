@@ -1966,6 +1966,21 @@ impl<'a> Interp<'a> {
             .iter()
             .map(|port| port.index)
             .collect::<Vec<_>>();
+        if !ports.is_fixed_input() {
+            // Preserve declared port order, then allocate unused indices for
+            // variadic inputs. Empty layouts (e.g. SQL) bind to 0, 1, ... .
+            let mut bound = declared.clone();
+            for index in 0..=u8::MAX {
+                if bound.len() >= count {
+                    break;
+                }
+                if !declared.contains(&index) {
+                    bound.push(index);
+                }
+            }
+            bound.truncate(count);
+            return Ok(bound);
+        }
         if declared.is_empty() && count == 1 && spec.to_string().contains("{{item") {
             return Ok(vec![0]);
         }

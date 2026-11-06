@@ -585,3 +585,94 @@ commit()
     assert_eq!(traces[0].cascade, None);
     assert_eq!(traces[1].cascade, Some(true));
 }
+
+#[cfg(feature = "bundle-sql")]
+#[tokio::test]
+async fn shell_binds_variadic_sql_inputs_on_create_and_rebind() {
+    use crate::data_engine::DataEngine;
+    let (client, _handle) = crate::runtime::spawn_with_engine(DataEngine::builder().build());
+    let script = "left = process('left', 'core/sql', {'sql_query':'SELECT 2 AS value'})\nright = process('right', 'core/sql', {'sql_query':'SELECT 3 AS value'})\nprocess('join', 'core/sql', {'sql_query':'SELECT a.value * 10 + b.value AS total FROM port_0 a CROSS JOIN port_1 b'}, inputs=[left, right])\ncommit()\n";
+    let edit = client
+        .run_dag_shell(script.into(), false, None)
+        .await
+        .unwrap();
+    assert!(edit.applied, "{:?}", edit.error);
+    let report = client.run_flow(None, Default::default()).await.unwrap();
+    assert!(report.ok, "{:?}", report.instances);
+    let record = report
+        .instances
+        .iter()
+        .find(|record| record.process == "join")
+        .unwrap();
+    let crate::value::NodeValue::DataFrame(frame) = record.outputs.get(&0).unwrap() else {
+        panic!("SQL dataframe");
+    };
+    let batches = frame.clone().collect().await.unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_ref()
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            .unwrap()
+            .value(0),
+        23
+    );
+    let edit = client
+        .run_dag_shell(
+            "bind_inputs('join', [output('right'), output('left')])\ncommit()\n".into(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(edit.applied, "{:?}", edit.error);
+    let graph = client.get_flow().await.unwrap();
+    let wires = graph
+        .wires()
+        .iter()
+        .filter(|wire| wire.to == "join")
+        .collect::<Vec<_>>();
+    assert_eq!(wires.len(), 2);
+    assert!(
+        wires
+            .iter()
+            .any(|wire| wire.from == "right" && wire.to_port == 0)
+    );
+    assert!(
+        wires
+            .iter()
+            .any(|wire| wire.from == "left" && wire.to_port == 1)
+    );
+    let rebound = client.run_flow(None, Default::default()).await.unwrap();
+    assert!(rebound.ok);
+    let record = rebound
+        .instances
+        .iter()
+        .find(|record| record.process == "join")
+        .unwrap();
+    let crate::value::NodeValue::DataFrame(frame) = record.outputs.get(&0).unwrap() else {
+        panic!("SQL dataframe");
+    };
+    let batches = frame.clone().collect().await.unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_ref()
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            .unwrap()
+            .value(0),
+        32
+    );
+    let rejected = client.run_dag_shell("process('bad', 'table_transpose', {'id_column':'value'}, inputs=[output('left'), output('right')])\ncommit()\n".into(), false, None).await.unwrap();
+    assert!(!rejected.applied);
+    assert!(
+        rejected
+            .error
+            .unwrap()
+            .message
+            .contains("1 declared inputs")
+    );
+    assert!(client.get_flow().await.unwrap().process("bad").is_none());
+}
