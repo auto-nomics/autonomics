@@ -232,7 +232,6 @@ pub(crate) fn executor(
     remote_container_dispatch: bool,
 ) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
     let profile = read_profile(path)?;
-    let source_revision = profile.worker.expected_source_revision.clone();
     let mut store = SshArtifactStore::new(
         settings.ssh.clone(),
         settings.scratch_dir.clone(),
@@ -251,6 +250,20 @@ pub(crate) fn executor(
         Arc::new(store),
         workspace,
     ));
+    assemble_typed(path, remote, remote_container_dispatch)
+}
+
+/// Wrap one already-built remote executor with the pinned typed-worker
+/// placement profile: typed lowering, the concurrency limit and the local
+/// kind whitelist. The transport choice is the caller's — Slurm and the
+/// direct SSH backend differ only below this seam.
+pub(crate) fn assemble_typed(
+    path: &Path,
+    remote: Arc<dyn TaskExecutor>,
+    remote_container_dispatch: bool,
+) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
+    let profile = read_profile(path)?;
+    let source_revision = profile.worker.expected_source_revision.clone();
     let typed: Arc<dyn TaskExecutor> = Arc::new(
         TypedRemoteTaskExecutor::new(remote, profile.worker)
             .map_err(|error| Error::Other(error.to_string()))?,

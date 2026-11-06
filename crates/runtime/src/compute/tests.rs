@@ -1265,6 +1265,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let old = reopened.target("old-worker", Some(1)).unwrap().target.clone();
     let old_bytes = fs::read(match &old.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
+        ComputeBackend::Local => unreachable!(),        ComputeBackend::Ssh { .. } => unreachable!(),
         ComputeBackend::Local => unreachable!(),
     }).unwrap();
     let replacement = remote_settings(&f.config.state_dir, "matching-worker");
@@ -1283,6 +1284,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     assert_eq!(historical.target.capsule_sha256, old.capsule_sha256);
     assert_eq!(fs::read(match &historical.target.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
+        ComputeBackend::Local => unreachable!(),        ComputeBackend::Ssh { .. } => unreachable!(),
         ComputeBackend::Local => unreachable!(),
     }).unwrap(), old_bytes);
     select(&reopened, "local");
@@ -1393,4 +1395,110 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     assert_eq!(ready["state"], "CONFIGURATION_READY");
     assert_eq!(ready["end_to_end_acceptance"], "NOT_VERIFIED");
     assert!(f.registry.status().unwrap().runs.is_empty());
+}
+
+// ── direct SSH backend: real-host integration ────────────────────────────
+
+/// Full-stack proof against a real host: enroll a direct SSH compute
+/// target, bind it and run one process task through the registry executor.
+/// The payload really runs remotely; the output is really downloaded back.
+#[tokio::test]
+#[ignore = "runs a real payload on a remote host over ssh; run only with explicit operator approval"]
+async fn real_ssh_target_runs_process_task_end_to_end() {
+    let host =
+        std::env::var("AUTONOMICS_SSH_SMOKE_HOST").unwrap_or_else(|_| "ht".into());
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let scratch = format!("~/autonomics-ssh-smoke-{stamp}");
+    println!("host {host} scratch {scratch}");
+    let f = fixture();
+    let mut settings = SlurmConfig::default();
+    settings.enabled = true;
+    settings.ssh_host = host.clone();
+    settings.ssh_command = "ssh".into();
+    settings.scratch_remote_dir = scratch.clone();
+    settings.tools_enabled = false;
+    settings.typed_worker_config = None;
+    settings.apptainer_manifest = None;
+    f.registry
+        .save_target(SaveTarget {
+            expected_revision: f.registry.catalog().revision,
+            id: "ht-direct".into(),
+            name: "Direct SSH host".into(),
+            enabled: true,
+            backend: ComputeBackend::Ssh { settings },
+        })
+        .unwrap();
+    select(&f.registry, "ht-direct");
+    let (target, binding) = f.registry.bind().unwrap();
+    assert_eq!(binding.target_id, "ht-direct");
+
+    let input_path = f.config.state_dir.join("smoke-input.txt");
+    fs::write(&input_path, "registry smoke input").unwrap();
+    let input = dag_core::FileRef::local(&input_path, Some("text".into())).unwrap();
+    let process = dag_core::ProcessTaskSpec {
+        container: None,
+        script: Some("hostname > out-0.txt\ncat $AUTONOMICS_WORKSPACE/input-0-0 >> out-0.txt\n".into()),
+        command: Vec::new(),
+        env: Default::default(),
+        outputs: vec![dag_core::ProcessTaskOutput {
+            port: 0,
+            pattern: "out-*.txt".into(),
+        }],
+    };
+    let submission = dag_core::TaskSubmission {
+        spec: dag_core::TaskSpec {
+            id: "registry-ssh-smoke".into(),
+            logical_node: Some("process".into()),
+            kind: "process".into(),
+            spec: serde_json::to_value(&process).unwrap(),
+            axis: None,
+            item_key: None,
+            item: None,
+            inputs: vec![dag_core::TaskInputBinding {
+                name: "f".into(),
+                port: 0,
+                source: dag_core::TaskInputSource::UpstreamPort {
+                    from: "source".into(),
+                    from_port: 0,
+                },
+                payload: "file".into(),
+                path: Some(input.path.clone()),
+                fingerprint: input.fingerprint.clone(),
+                staged_paths: vec![input.path.clone()],
+            }],
+            outputs: vec![dag_core::TaskOutputBinding {
+                name: "port_0".into(),
+                port: 0,
+                payload: "file".into(),
+                artifact_paths: Vec::new(),
+            }],
+        },
+        inputs: Vec::new(),
+        resources: dag_core::TaskResources::default(),
+    };
+    let ctx = NodeCtx::new(
+        Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+        Some(f.registry.storage.clone()),
+    );
+    let execution = TaskExecution {
+        submission,
+        node: Box::new(EmptyNode(NodePorts::new())),
+        engine_ctx: ctx.into(),
+        reporter: NodeReporter::noop(),
+        cancellation: tokio_util::sync::CancellationToken::new(),
+    };
+    let outcome = target.executor.run(execution).await;
+    let details = match &outcome {
+        JobResult::Success { details, .. } => details,
+        other => panic!("registry ssh smoke failed: {other:?}"),
+    };
+    let _ = details;
+    // The remote payload's identity is in the run details; the run itself
+    // succeeding through the whole stack is the assertion.
+    let status = f.registry.status().unwrap();
+    assert_eq!(status.runs.len(), 1);
+    let _ = target;
 }

@@ -450,6 +450,29 @@ impl SlurmSiteProfile {
     }
 }
 
+/// Parse a Slurm-style walltime (`HH:MM:SS` or `D-HH:MM:SS`) into a
+/// duration. The direct SSH backend reuses the operator's familiar
+/// `default_time` spelling as its task horizon.
+pub fn parse_walltime(value: &str) -> Option<std::time::Duration> {
+    let (days, rest) = match value.split_once('-') {
+        Some((days, rest)) => (days.parse::<u64>().ok()?, rest),
+        None => (0, value),
+    };
+    let parts: Vec<_> = rest.split(':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let hours: u64 = parts[0].parse().ok()?;
+    let minutes: u64 = parts[1].parse().ok()?;
+    let seconds: u64 = parts[2].parse().ok()?;
+    if minutes > 59 || seconds > 59 {
+        return None;
+    }
+    Some(std::time::Duration::from_secs(
+        days * 86_400 + hours * 3_600 + minutes * 60 + seconds,
+    ))
+}
+
 #[cfg(test)]
 mod site_profile_tests {
     use super::*;

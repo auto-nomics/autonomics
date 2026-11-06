@@ -40,7 +40,10 @@ impl ComputeRegistry {
             blockers.push(json!({"code":"TARGET_DISABLED"}));
         }
         let mut images: std::collections::BTreeSet<String> = request.images.iter().cloned().collect();
-        let remote = matches!(target.target.backend, ComputeBackend::Slurm { .. });
+        let remote = matches!(
+            target.target.backend,
+            ComputeBackend::Slurm { .. } | ComputeBackend::Ssh { .. }
+        );
         for address in request.nodes.iter().collect::<std::collections::BTreeSet<_>>() {
             let found: Vec<_> = nodes.iter().filter(|n| &n.address == address).collect();
             if found.len() != 1 {

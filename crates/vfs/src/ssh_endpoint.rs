@@ -34,7 +34,17 @@ impl SshEndpoint {
             .ok_or("SSH port missing")?;
         let host_key_alias = value("hostkeyalias")
             .filter(|s| s != "none")
-            .unwrap_or_else(|| hostname.clone());
+            .unwrap_or_else(|| {
+                // OpenSSH keys non-default-port hosts in known_hosts as
+                // "[hostname]:port". A frozen alias must keep the spelling
+                // the operator's known_hosts actually uses, or strict host
+                // key checking can never match it.
+                if port != 22 {
+                    format!("[{hostname}]:{port}")
+                } else {
+                    hostname.clone()
+                }
+            });
         let result = Self {
             hostname,
             user,

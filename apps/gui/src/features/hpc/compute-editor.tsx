@@ -35,13 +35,14 @@ type TargetDraft = {
   name: string;
   enabled: boolean;
   /** null = local 后端 */
-  slurm: SlurmSettings | null;
+  remote: { kind: "slurm" | "ssh"; settings: SlurmSettings } | null;
 };
 
 function backendLabel(target: ComputeTarget): string {
   if (target.backend.type === "local") return "本地";
   const s = target.backend.settings;
-  return `Slurm · ${s.ssh_host ?? "?"}${s.typed_worker_config ? " · typed-worker" : ""}`;
+  const kind = target.backend.type === "ssh" ? "SSH" : "Slurm";
+  return `${kind} · ${s.ssh_host ?? "?"}${s.typed_worker_config ? " · typed-worker" : ""}`;
 }
 
 function emptySlurmDraft(): SlurmSettings {
@@ -61,10 +62,10 @@ function draftFromTarget(target: ComputeTarget): TargetDraft {
     id: target.id,
     name: target.name,
     enabled: target.enabled,
-    slurm:
-      target.backend.type === "slurm"
-        ? { ...target.backend.settings }
-        : null,
+    remote:
+      target.backend.type === "local"
+        ? null
+        : { kind: target.backend.type, settings: { ...target.backend.settings } },
   };
 }
 
@@ -270,11 +271,25 @@ export function ComputeEditorView() {
                   id: "",
                   name: "",
                   enabled: true,
-                  slurm: emptySlurmDraft(),
+                  remote: { kind: "slurm", settings: emptySlurmDraft() },
                 })
               }
             >
               新建 Slurm 目标
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setDraft({
+                  id: "",
+                  name: "",
+                  enabled: true,
+                  remote: { kind: "ssh", settings: emptySlurmDraft() },
+                })
+              }
+            >
+              新建 SSH 目标
             </Button>
           </div>
           <ul className="divide-y">
@@ -368,8 +383,11 @@ export function ComputeEditorView() {
             onCancel={() => setDraft(null)}
             onSave={(next) =>
               void run("save-target", async () => {
-                const backend = next.slurm
-                  ? { type: "slurm", settings: cleanSettings(next.slurm) }
+                const backend = next.remote
+                  ? {
+                      type: next.remote.kind,
+                      settings: cleanSettings(next.remote.settings),
+                    }
                   : { type: "local" };
                 await saveComputeTarget(revision, {
                   id: next.id,
@@ -553,7 +571,10 @@ function TargetForm({
   const setSlurm = (patch: Partial<SlurmSettings>) =>
     setCurrent({
       ...current,
-      slurm: { ...(current.slurm ?? emptySlurmDraft()), ...patch },
+      remote: {
+        kind: current.remote?.kind ?? "slurm",
+        settings: { ...(current.remote?.settings ?? emptySlurmDraft()), ...patch },
+      },
     });
   const creating = !draft.id;
   return (
@@ -577,59 +598,63 @@ function TargetForm({
             onChange={(e) => setCurrent({ ...current, name: e.target.value })}
           />
         </Field>
-        {current.slurm ? (
+        {current.remote ? (
           <>
             <Field label="SSH 主机 (别名)">
               <input
                 className={inputClass}
-                value={current.slurm.ssh_host ?? ""}
+                value={current.remote.settings.ssh_host ?? ""}
                 onChange={(e) => setSlurm({ ssh_host: e.target.value })}
               />
             </Field>
             <Field label="SSH 程序">
               <input
                 className={inputClass}
-                value={current.slurm.ssh_command ?? "ssh"}
+                value={current.remote.settings.ssh_command ?? "ssh"}
                 onChange={(e) => setSlurm({ ssh_command: e.target.value })}
               />
             </Field>
             <Field label="远端 scratch 根" hint="~/ 前缀展开为远端 home">
               <input
                 className={inputClass}
-                value={current.slurm.scratch_remote_dir ?? ""}
+                value={current.remote.settings.scratch_remote_dir ?? ""}
                 onChange={(e) =>
                   setSlurm({ scratch_remote_dir: e.target.value })
                 }
               />
             </Field>
+            {current.remote.kind === "slurm" ? (
+              <>
             <Field label="默认分区">
               <input
                 className={inputClass}
-                value={current.slurm.partition ?? ""}
+                value={current.remote.settings.partition ?? ""}
                 onChange={(e) => setSlurm({ partition: e.target.value })}
               />
             </Field>
             <Field label="GPU 分区">
               <input
                 className={inputClass}
-                value={current.slurm.gpu_partition ?? ""}
+                value={current.remote.settings.gpu_partition ?? ""}
                 onChange={(e) => setSlurm({ gpu_partition: e.target.value })}
               />
             </Field>
             <Field label="记账账户 (可选)">
               <input
                 className={inputClass}
-                value={current.slurm.account ?? ""}
+                value={current.remote.settings.account ?? ""}
                 onChange={(e) => setSlurm({ account: e.target.value || null })}
               />
             </Field>
+              </>
+            ) : null}
             <Field
               label="typed-worker 配置 (本地私有 JSON)"
               hint="钉定集群 worker 可执行文件/源修订;留空表示仅 process 路由"
             >
               <input
                 className={inputClass}
-                value={current.slurm.typed_worker_config ?? ""}
+                value={current.remote.settings.typed_worker_config ?? ""}
                 onChange={(e) =>
                   setSlurm({
                     typed_worker_config: e.target.value || null,
@@ -637,22 +662,24 @@ function TargetForm({
                 }
               />
             </Field>
-            <Field
-              label="Apptainer SIF 清单 (本地私有 JSON)"
-              hint="容器节点需要;留空则容器任务在远端失败关闭"
-            >
-              <input
-                className={inputClass}
-                value={current.slurm.apptainer_manifest ?? ""}
-                onChange={(e) =>
-                  setSlurm({ apptainer_manifest: e.target.value || null })
-                }
-              />
-            </Field>
+            {current.remote.kind === "slurm" ? (
+              <Field
+                label="Apptainer SIF 清单 (本地私有 JSON)"
+                hint="容器节点需要;留空则容器任务在远端失败关闭"
+              >
+                <input
+                  className={inputClass}
+                  value={current.remote.settings.apptainer_manifest ?? ""}
+                  onChange={(e) =>
+                    setSlurm({ apptainer_manifest: e.target.value || null })
+                  }
+                />
+              </Field>
+            ) : null}
             <Field label="数据传输 SSH 主机 (可选)">
               <input
                 className={inputClass}
-                value={current.slurm.data_ssh_host ?? ""}
+                value={current.remote.settings.data_ssh_host ?? ""}
                 onChange={(e) =>
                   setSlurm({ data_ssh_host: e.target.value || null })
                 }
@@ -661,7 +688,7 @@ function TargetForm({
             <Field label="远端 Python">
               <input
                 className={inputClass}
-                value={current.slurm.remote_python ?? "python3"}
+                value={current.remote.settings.remote_python ?? "python3"}
                 onChange={(e) => setSlurm({ remote_python: e.target.value })}
               />
             </Field>

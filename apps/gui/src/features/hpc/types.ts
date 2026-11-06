@@ -32,7 +32,8 @@ export type SlurmSettings = {
 
 export type ComputeBackend =
   | { type: "local" }
-  | { type: "slurm"; settings: SlurmSettings };
+  | { type: "slurm"; settings: SlurmSettings }
+  | { type: "ssh"; settings: SlurmSettings };
 
 export type SshEndpoint = {
   hostname: string;

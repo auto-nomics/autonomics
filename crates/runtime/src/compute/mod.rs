@@ -9,8 +9,8 @@ pub mod tools;
 use crate::{RuntimeConfig, config::SlurmConfig};
 use container_runtime::{ContainerExecutionInfra, PodmanConnection};
 use dag_core::{
-    TaskExecutor,
-    dag::execution::{local_task_executor, slurm_backed_executor},
+    ProcessRoutingTaskExecutor, RemoteTaskExecutor, TaskExecutor,
+    dag::execution::local_task_executor, dag::execution::slurm_backed_executor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -32,6 +32,12 @@ pub(crate) use routing::ImageBuilder as ComputeImageBuilder;
 pub enum ComputeBackend {
     Local,
     Slurm { settings: SlurmConfig },
+    /// A scheduler-free remote host: tasks run directly over ssh with no
+    /// queue, no priority and no enforced resource ceiling. The settings
+    /// reuses the `SlurmConfig` carrier for its ssh/scratch/artifact keys;
+    /// the scheduler-only keys (partition, account, qos, gpu_*, mem_per_cpu)
+    /// are ignored here and the editors do not offer them.
+    Ssh { settings: SlurmConfig },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +119,13 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
             resolved.slurm.apptainer_manifest = None;
         }
         ComputeBackend::Slurm { settings } => {
+            resolved.slurm = settings.clone();
+            resolved.slurm.enabled = true;
+            resolved.plugin_rsi.environment_dev.enabled = false;
+        }
+        ComputeBackend::Ssh { settings } => {
+            // A direct host has no scheduler keys to honor; only the ssh,
+            // scratch, artifact and worker-pinning keys are meaningful.
             resolved.slurm = settings.clone();
             resolved.slurm.enabled = true;
             resolved.plugin_rsi.environment_dev.enabled = false;
@@ -812,8 +825,9 @@ impl ComputeRegistry {
     }
 
     fn freeze_profile(&self, target: &mut ComputeTarget) -> Result<(), String> {
-        let ComputeBackend::Slurm { settings } = &mut target.backend else {
-            return Ok(());
+        let settings = match &mut target.backend {
+            ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings,
+            ComputeBackend::Local => return Ok(()),
         };
         let dir = self
             .root
@@ -875,20 +889,32 @@ impl ComputeRegistry {
     fn build(&self, target: ComputeTarget) -> Result<Arc<BuiltTarget>, String> {
         let monitor_key = key(&target.id, target.revision);
         let network_policy_sha256 = match &target.backend {
-            ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref()
+            ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings
+                .typed_worker_config
+                .as_ref()
                 .map(|path| crate::host::hpc_placement::pinned_network_policy(path)
                     .map_err(|error| error.to_string())).transpose()?.flatten(),
             ComputeBackend::Local => None,
         };
         let mut typed_worker_revision = match &target.backend {
-            ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref()
+            ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings
+                .typed_worker_config
+                .as_ref()
                 .map(|path| crate::host::hpc_placement::pinned_source_revision(path)
                     .map_err(|error| error.to_string())).transpose()?,
             ComputeBackend::Local => None,
         };
-        if let ComputeBackend::Slurm { settings } = &target.backend {
-            if target.id != "legacy-slurm" && settings.typed_worker_config.is_none() {
+        if let ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } = &target.backend {
+            if matches!(target.backend, ComputeBackend::Slurm { .. })
+                && target.id != "legacy-slurm"
+                && settings.typed_worker_config.is_none()
+            {
                 return Err("global Slurm targets require a pinned typed-worker profile; process-only routing is retained solely for legacy migration".into());
+            }
+            if matches!(target.backend, ComputeBackend::Ssh { .. })
+                && settings.apptainer_manifest.is_some()
+            {
+                return Err("container workloads are not available on direct SSH targets yet; enroll a Slurm target for container work".into());
             }
             for (name, path) in [
                 ("worker.json", &settings.typed_worker_config),
@@ -1019,6 +1045,75 @@ impl ComputeRegistry {
                         std::time::Duration::from_secs(settings.poll_interval_secs),
                     )?;
                     (executor, containers, Some(hpc))
+                }
+                ComputeBackend::Ssh { settings } => {
+                    let artifact_root = if settings.artifact_root.as_os_str().is_empty() {
+                        self.root
+                            .join("targets")
+                            .join(&monitor_key)
+                            .join("artifacts")
+                    } else {
+                        settings.artifact_root.clone()
+                    };
+                    // The blocking exit-code wait holds one connection for
+                    // the task's whole horizon: it needs keepalive.
+                    let mut ssh = dag_core::SshTarget::new(
+                        settings.ssh_command.clone(),
+                        settings.ssh_host.clone(),
+                    )
+                    .with_connect_timeout(std::time::Duration::from_secs(
+                        settings.ssh_connect_timeout_secs,
+                    ))
+                    .with_keepalive(std::time::Duration::from_secs(15), 2);
+                    if let Some(endpoint) = target.endpoints.get(&settings.ssh_host) {
+                        ssh = ssh.with_endpoint(endpoint.clone());
+                    }
+                    ssh = ssh.with_shared_endpoints(target.endpoints.clone());
+                    let workspace = self.root.join("targets").join(&monitor_key).join("tasks");
+                    self.mount_execution_evidence(&workspace)?;
+                    self.mount_execution_evidence(&artifact_root)?;
+                    let default_time = crate::config::slurm::parse_walltime(&settings.default_time)
+                        .ok_or_else(|| {
+                            format!(
+                                "invalid default_time `{}` on direct SSH target {}",
+                                settings.default_time, target.id
+                            )
+                        })?;
+                    let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
+                        Arc::new(dag_core::SshTaskTransport::new(dag_core::SshSettings {
+                            ssh: ssh.clone(),
+                            scratch_dir: settings.scratch_remote_dir.clone(),
+                            default_time,
+                        })),
+                        Arc::new(dag_core::SshArtifactStore::new(
+                            ssh,
+                            settings.scratch_remote_dir.clone(),
+                            artifact_root,
+                        )),
+                        workspace.clone(),
+                    ));
+                    let executor: Arc<dyn TaskExecutor> =
+                        if let Some(path) = &settings.typed_worker_config {
+                            let (executor, _, revision) =
+                                crate::host::hpc_placement::assemble_typed(path, remote, false)
+                                    .map_err(|e| e.to_string())?;
+                            typed_worker_revision = Some(revision);
+                            executor
+                        } else {
+                            Arc::new(ProcessRoutingTaskExecutor::new(
+                                local_task_executor(),
+                                Some(remote),
+                            ))
+                        };
+                    // No scheduler means no account/job tools and no
+                    // container runtime for this target.
+                    (
+                        executor,
+                        Arc::new(routing::UnavailableContainers {
+                            root: self.local.workspace_root().to_path_buf(),
+                        }),
+                        None,
+                    )
                 }
             };
         Ok(Arc::new(BuiltTarget {
