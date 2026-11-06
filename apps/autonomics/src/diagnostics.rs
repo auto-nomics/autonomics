@@ -287,8 +287,19 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
         Err(error) => return Category::Failed(error.to_string()),
     };
 
-    let program = container_runtime::PodmanConfig::from_env().program;
-    let local = match container_runtime::images::local_digests(&program).await {
+    // Inventory the exact private backend the daemon creates containers
+    // in — never an ambient/default store selected by the user's shell.
+    let infra = match container_runtime::ContainerExecutionInfra::for_operator_state_dir(
+        &config.state_dir,
+    ) {
+        Ok(infra) => infra,
+        Err(error) => {
+            return Category::Failed(format!(
+                "invalid container execution configuration: {error}"
+            ))
+        }
+    };
+    let local = match container_runtime::images::local_digests_with_config(&infra.config).await {
         Ok(local) => local,
         Err(error) => return Category::Failed(error.to_string()),
     };

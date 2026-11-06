@@ -2,16 +2,18 @@
 //!
 //! [`local_digests`] reads the whole store in one `podman images` call
 //! (one process instead of N per-image inspects); [`pull`] pre-fetches
-//! one digest-pinned reference. Callers pull **sequentially** — the
-//! `CREATE_GATE` precedent in `podman.rs` argues against concurrent
-//! storage mutation; layer parallelism inside a single `podman pull`
-//! still applies.
+//! one digest-pinned reference. Overlapping *pull* processes is safe —
+//! the store serialises mutations through its own file locks — while
+//! container *creation* keeps the `CREATE_GATE` precedent in
+//! `podman.rs`; layer parallelism inside a single `podman pull` still
+//! applies.
 
 use std::collections::BTreeSet;
 use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Deserialize;
+use tokio::io::AsyncBufReadExt;
 
 use crate::connection::truncate_captured_bytes;
 use crate::error::ContainerRuntimeError;
@@ -125,6 +127,79 @@ pub async fn pull_with_config(
     pull_command(config.async_command(), &config.program, reference).await
 }
 
+/// Rolling stderr tail kept for pull failure messages.
+const PULL_TAIL_LINES: usize = 8;
+
+/// [`pull_with_config`] with live progress: podman's stderr lines are
+/// relayed to `on_line` as they arrive. The relay is best effort —
+/// stderr closing early or staying silent never fails the pull.
+pub async fn pull_with_config_progress(
+    config: &PodmanConfig,
+    reference: &str,
+    mut on_line: impl FnMut(&str),
+) -> Result<(), ContainerRuntimeError> {
+    let timeout_secs = pull_timeout_secs();
+    let mut command = config.async_command();
+    command
+        .arg("pull")
+        .arg(reference)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().map_err(|error| {
+        ContainerRuntimeError::Invalid(format!(
+            "cannot spawn `{} pull`: {error}",
+            config.program
+        ))
+    })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| ContainerRuntimeError::Invalid("pull child had no stderr pipe".into()))?;
+    let mut tail: std::collections::VecDeque<String> = Default::default();
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    while let Some(line) = lines
+        .next_line()
+        .await
+        .map_err(|error| ContainerRuntimeError::Invalid(format!("pull stderr read failed: {error}")))?
+    {
+        let text = line.trim_end();
+        if text.is_empty() {
+            continue;
+        }
+        on_line(text);
+        tail.push_back(text.to_string());
+        if tail.len() > PULL_TAIL_LINES {
+            tail.pop_front();
+        }
+    }
+    let status = match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await
+    {
+        Ok(Ok(status)) => status,
+        Ok(Err(error)) => {
+            return Err(ContainerRuntimeError::Invalid(format!(
+                "cannot wait for `{} pull`: {error}",
+                config.program
+            )));
+        }
+        Err(_) => return Err(ContainerRuntimeError::Timeout { timeout_secs }),
+    };
+    if !status.success() {
+        let tail_text = tail
+            .iter()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(ContainerRuntimeError::Invalid(format!(
+            "`{} pull {reference}` failed with status {}:\n{tail_text}",
+            config.program,
+            status.code().unwrap_or(1),
+        )));
+    }
+    Ok(())
+}
+
 async fn pull_command(
     mut command: tokio::process::Command,
     program: &str,
@@ -224,6 +299,56 @@ mod tests {
             pull.extend(["pull".to_owned(), reference.clone()]);
             assert_eq!(&calls[calls.len() - 2..], &[inventory, pull]);
         }
+    }
+
+    /// Progress pull relays podman's stderr lines as they arrive and keeps
+    /// a rolling tail for the failure message. Same fake-executable
+    /// pattern; no Podman, network or store involved.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn progress_pull_relays_stderr_and_captures_failure_tail() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("fake-podman");
+        let fail_marker = directory.path().join("fail-mode");
+        let body = format!(
+            r#"#!/usr/bin/python3
+import os, sys
+if os.path.exists({fail_marker:?}):
+    sys.stderr.write("layer 1 done\n")
+    sys.stderr.write("layer 2 failed: 502\n")
+    sys.stderr.write("context line\n")
+    sys.exit(125)
+for index in range(200):
+    sys.stderr.write(f"copying blob {{index}}\n")
+sys.stdout.write("sha256:" + "0" * 64 + "\n")
+"#
+        );
+        std::fs::write(&program, body).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let reference = format!("docker.io/library/alpine@sha256:{}", "a".repeat(64));
+        let mut config = crate::ContainerExecutionInfra::for_state_dir(directory.path())
+            .unwrap()
+            .config;
+        config.program = program.to_string_lossy().into_owned();
+
+        let mut relayed = Vec::new();
+        pull_with_config_progress(&config, &reference, |line| relayed.push(line.to_owned()))
+            .await
+            .unwrap();
+        assert_eq!(relayed.len(), 200);
+        assert_eq!(relayed.first().map(String::as_str), Some("copying blob 0"));
+        assert_eq!(relayed.last().map(String::as_str), Some("copying blob 199"));
+
+        std::fs::write(&fail_marker, b"").unwrap();
+        let error = pull_with_config_progress(&config, &reference, |_| ())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("failed with status 125"), "{error}");
+        assert!(error.contains("layer 1 done"), "{error}");
+        assert!(error.contains("layer 2 failed: 502"), "{error}");
+        assert!(!error.contains("copying blob"), "{error}");
     }
 
     #[test]

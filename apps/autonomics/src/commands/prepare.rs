@@ -8,6 +8,8 @@
 //! already satisfies the readiness check.
 
 use std::collections::BTreeSet;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use color_eyre::Result;
 use container_plugin::factory::Plugin;
@@ -142,36 +144,138 @@ async fn install_model(config: &gateway::RuntimeConfig) -> Result<()> {
     Ok(())
 }
 
-/// Pre-pull every declared image missing from the local store, one at
-/// a time (concurrent storage mutation is what wedges podman's store).
+/// Default concurrent image pre-pull width. Overlapping `podman pull`
+/// processes is safe — podman serialises store mutations through its own
+/// file locks; container creation keeps its separate `CREATE_GATE`.
+/// `AUTONOMICS_IMAGE_PULL_CONCURRENCY` overrides (clamped to 1..=16;
+/// 1 restores a fully sequential pull).
+fn pull_concurrency() -> usize {
+    const DEFAULT: usize = 4;
+    std::env::var("AUTONOMICS_IMAGE_PULL_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|value| value.clamp(1, 16))
+        .unwrap_or(DEFAULT)
+}
+
+/// Short human label for a digest-pinned reference — the final path
+/// segment of the name part ("samtools" for
+/// "quay.io/biocontainers/samtools@sha256:…").
+fn short_label(reference: &str) -> &str {
+    let name = reference.split('@').next().unwrap_or(reference);
+    name.rsplit('/').next().unwrap_or(name)
+}
+
+/// Pre-pull every declared image missing from the local store, into the
+/// exact private backend the daemon creates containers in. Pulls run
+/// with bounded concurrency; podman's stderr progress is relayed per
+/// image and a summary line prints every 15 seconds.
 async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]) -> Result<()> {
     let declared: BTreeSet<String> = diagnostics::enumerate_images(config, plugins).await?;
-    let program = container_runtime::PodmanConfig::from_env().program;
-    let local = container_runtime::images::local_digests(&program)
+    let infra = container_runtime::ContainerExecutionInfra::for_operator_state_dir(
+        &config.state_dir,
+    )
+    .map_err(|error| {
+        color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
+    })?;
+    let local = container_runtime::images::local_digests_with_config(&infra.config)
         .await
         .map_err(|error| color_eyre::eyre::eyre!("cannot list local images: {error}"))?;
-    let missing: Vec<&String> = declared
+    let missing: Vec<String> = declared
         .iter()
         .filter(|reference| !local.contains(*reference))
+        .cloned()
         .collect();
     if missing.is_empty() {
         println!("images: {} declared, all present", declared.len());
         return Ok(());
     }
-
+    let concurrency = pull_concurrency();
     println!(
-        "images: {} declared, {} missing",
+        "images: {} declared, {} missing — pulling ({} concurrent)",
         declared.len(),
-        missing.len()
+        missing.len(),
+        concurrency
     );
-    for reference in &missing {
-        println!("  pulling {reference}");
-        container_runtime::images::pull(&program, reference)
+    let started = std::time::Instant::now();
+    let permits = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let done = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let failures: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let mut set = tokio::task::JoinSet::new();
+    for reference in missing {
+        let permit = permits
+            .clone()
+            .acquire_owned()
             .await
-            .map_err(|error| {
-                color_eyre::eyre::eyre!("image pull failed for {reference}: {error}")
-            })?;
+            .map_err(|error| color_eyre::eyre::eyre!("pull gate closed: {error}"))?;
+        let pull_config = infra.config.clone();
+        let done = done.clone();
+        let failed = failed.clone();
+        let failures = failures.clone();
+        set.spawn(async move {
+            let _permit = permit;
+            let label = short_label(&reference).to_string();
+            let pull_started = std::time::Instant::now();
+            println!("  → pulling {label}");
+            let result = container_runtime::images::pull_with_config_progress(
+                &pull_config,
+                &reference,
+                |line| println!("    {label} │ {line}"),
+            )
+            .await;
+            match result {
+                Ok(()) => {
+                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    println!(
+                        "  ✓ {label} in {:.1}s",
+                        pull_started.elapsed().as_secs_f32()
+                    );
+                }
+                Err(error) => {
+                    failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    println!("  ✗ {label}: {error}");
+                    failures.lock().unwrap().push(reference);
+                }
+            }
+        });
     }
-    println!("images: pulled {} missing images", missing.len());
+    // Periodic overall progress while the workers pull.
+    let ticker = {
+        let done = done.clone();
+        let failed = failed.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                println!(
+                    "images: {}/{} pulled, {} failed ({:.0}s elapsed)",
+                    done.load(std::sync::atomic::Ordering::Relaxed),
+                    done.load(std::sync::atomic::Ordering::Relaxed)
+                        + failed.load(std::sync::atomic::Ordering::Relaxed),
+                    failed.load(std::sync::atomic::Ordering::Relaxed),
+                    started.elapsed().as_secs_f32(),
+                );
+            }
+        })
+    };
+    while let Some(outcome) = set.join_next().await {
+        if let Err(error) = outcome {
+            eprintln!("images: pull worker panicked: {error}");
+        }
+    }
+    ticker.abort();
+    let failed_refs = failures.lock().unwrap().clone();
+    if !failed_refs.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "image pull failed for {} reference(s): {}",
+            failed_refs.len(),
+            failed_refs.join(", ")
+        ));
+    }
+    println!(
+        "images: pulled {} missing images in {:.1}s",
+        done.load(std::sync::atomic::Ordering::Relaxed),
+        started.elapsed().as_secs_f32()
+    );
     Ok(())
 }
