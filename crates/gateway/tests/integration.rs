@@ -350,7 +350,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 54);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 55);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -396,6 +396,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/vfs/entry",
         "/api/v1/vfs/move",
         "/api/v1/vfs/copy",
+        "/api/v1/plugin-projects/{name}/nodes",
         "/api/v1/plugin-projects/{name}/dev-session",
         "/api/v1/plugin-projects/{name}/validate",
         "/api/v1/plugin-projects/{name}/activate",
@@ -1168,6 +1169,42 @@ async fn plugin_dev_endpoints_scaffold_validate_and_report() {
         let missing = request.send().await.unwrap();
         assert_eq!(missing.status(), 404, "path {path}");
     }
+
+    gateway_daemon.stop().await;
+}
+
+/// The dev terminal WebSocket is guarded like every other /api/v1
+/// route: an unauthenticated handshake is refused before the upgrade.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugin_terminal_websocket_requires_authentication() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+
+    // A plain GET without credentials answers 401 — no upgrade.
+    let unauthenticated = reqwest::Client::new()
+        .get(format!("{base}/api/v1/plugin-projects/any/terminal"))
+        .header(reqwest::header::CONNECTION, "Upgrade")
+        .header(reqwest::header::UPGRADE, "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), 401);
+
+    // Unknown projects are refused with 404 even with credentials (the
+    // handshake is checked before the exec session would start).
+    let missing = reqwest::Client::new()
+        .get(format!("{base}/api/v1/plugin-projects/missing-plugin/terminal"))
+        .header(reqwest::header::CONNECTION, "Upgrade")
+        .header(reqwest::header::UPGRADE, "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .bearer_auth(&gateway_daemon.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
 
     gateway_daemon.stop().await;
 }

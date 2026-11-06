@@ -13,7 +13,7 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, compute, context, events, gui, hpc_config, hpc_jobs, hydration, lifecycle,
+    agents, compute, context, dev_terminal, events, gui, hpc_config, hpc_jobs, hydration, lifecycle,
     model_config, plugin_environments, plugins, settings, skills, storage, vfs,
 };
 
@@ -115,12 +115,14 @@ pub fn api_router(state: GatewayState) -> Router {
             get(plugins::list_projects).post(plugins::create_project),
         )
         .route("/plugin-projects/{name}/files", get(plugins::project_files))
+        .route("/plugin-projects/{name}/nodes", get(plugins::list_project_nodes))
         .route("/plugin-projects/{name}/file", get(plugins::read_project_file).put(plugins::save_project_file))
         .route("/plugin-projects/{name}/dev-session", get(plugins::dev_session_status).post(plugins::dev_session_action))
         .route("/plugin-projects/{name}/validate", post(plugins::validate_project))
         .route("/plugin-projects/{name}/activate", post(plugins::activate_project))
         .route("/plugin-projects/{name}/report", get(plugins::latest_report))
         .route("/plugin-projects/{name}/nodes/{kind}/test-run", post(plugins::test_run_node))
+        .route("/plugin-projects/{name}/terminal", get(dev_terminal::terminal))
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
         .route("/plugins/{name}/uninstall", post(plugins::uninstall_plugin))

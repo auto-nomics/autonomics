@@ -3,6 +3,7 @@
 
 mod agents;
 mod compute;
+mod dev_terminal;
 mod auth;
 mod context;
 mod docs;

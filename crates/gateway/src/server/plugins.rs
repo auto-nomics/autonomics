@@ -160,7 +160,7 @@ pub(crate) struct SaveProjectFile {
     original: String,
 }
 
-fn project_workspace(
+pub(crate) fn project_workspace(
     state: &GatewayState,
     name: &str,
 ) -> super::error::GatewayResult<plugin_rsi::PluginWorkspace> {
@@ -532,4 +532,47 @@ pub(crate) async fn rollback_plugin(
         .commit()
         .to_string();
     Ok(Json(serde_json::json!({ "name": name, "rolled_back": true, "commit": commit })))
+}
+
+/// `GET /plugin-projects/{name}/nodes` — the manifest's node
+/// declarations (kind + inlet/outlet ports) for the dev window's test
+/// panel.
+#[utoipa::path(get, path = "/api/v1/plugin-projects/{name}/nodes", tag = "plugins",
+    params(("name" = String, Path)),
+    responses((status = 200, description = "Node declarations: kinds with input port labels and declared outputs")))]
+pub(crate) async fn list_project_nodes(
+    State(state): State<GatewayState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> super::error::GatewayResult<Json<serde_json::Value>> {
+    let workspace = project_workspace(&state, &name)?;
+    let manifest: container_plugin::manifest::PluginManifest = toml::from_str(
+        &workspace
+            .read_text("manifest.toml")
+            .map_err(|error| super::error::GatewayError::Status(
+                axum::http::StatusCode::NOT_FOUND,
+                format!("cannot read manifest of `{name}`: {error}"),
+            ))?,
+    )
+    .map_err(|error| super::error::GatewayError::Message(format!("invalid manifest: {error}")))?;
+    let nodes: Vec<serde_json::Value> = manifest
+        .nodes
+        .iter()
+        .map(|node| {
+            serde_json::json!({
+                "kind": node.kind,
+                "desc": node.desc,
+                "inputs": node.ports.inputs.iter().map(|input| serde_json::json!({
+                    "label": input.label,
+                    "type": match input.r#type { container_plugin::node_definition::PortKind::File => "file", container_plugin::node_definition::PortKind::Tuple => "tuple" },
+                })).collect::<Vec<_>>(),
+                "outputs": node.ports.outputs.iter().map(|output| serde_json::json!({
+                    "path": output.path,
+                    "label": output.label,
+                    "optional": output.optional,
+                })).collect::<Vec<_>>(),
+                "params": serde_json::to_value(container_plugin::compile::compile_schema(&node.params)).unwrap_or_default(),
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({ "nodes": nodes, "count": nodes.len() })))
 }

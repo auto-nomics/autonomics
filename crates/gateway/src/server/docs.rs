@@ -54,6 +54,7 @@ use crate::proto::*;
         plugins::list_plugins,
         plugins::list_projects,
         plugins::create_project,
+        plugins::list_project_nodes,
         plugins::dev_session_status,
         plugins::dev_session_action,
         plugins::validate_project,
