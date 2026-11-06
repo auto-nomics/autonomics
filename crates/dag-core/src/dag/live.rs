@@ -148,12 +148,41 @@ impl LiveDagView {
             view.observed_at_ms = observation_time_ms();
         }
     }
+
+    /// A dropped or panicking run cannot leave nodes reported as executing.
+    pub fn cancel(&self) {
+        if let Some(view) = self.0.write().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            for node in &mut view.nodes {
+                if matches!(
+                    node.status,
+                    RuntimeStatus::Running | RuntimeStatus::Ready | RuntimeStatus::Pending
+                ) {
+                    node.status = RuntimeStatus::Cancelled;
+                }
+            }
+            view.running = false;
+            view.observed_at_ms = observation_time_ms();
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::node_event::{NodeEvent, NodeEventKind, NodeReporter};
     use super::*;
+
+    #[test]
+    fn cancel_ends_the_projection_and_marks_unfinished_nodes() {
+        let view = view();
+        view.status("s2", RuntimeStatus::Running);
+        view.cancel();
+        let snapshot = view.snapshot().unwrap();
+        assert!(!snapshot.running);
+        assert_eq!(
+            snapshot.node("s2").unwrap().status,
+            RuntimeStatus::Cancelled
+        );
+    }
 
     fn view() -> LiveDagView {
         let view = LiveDagView::default();

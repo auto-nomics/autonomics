@@ -735,7 +735,8 @@ impl DataEngine {
         &mut self,
         operations: Vec<GraphEditOp>,
     ) -> Result<serde_json::Value> {
-        let candidate = self.apply_graph_edit_ops_to_candidate(&operations)?;
+        let mut candidate = self.apply_graph_edit_ops_to_candidate(&operations)?;
+        candidate.live_view = self.dag.live_view.clone();
         self.dag = candidate;
         Ok(graph_summary(&self.dag))
     }
@@ -1547,6 +1548,7 @@ impl DataEngine {
         external_cancel: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<RunReport> {
         let run_id = uuid::Uuid::new_v4().to_string();
+        self.dag.live_view.bind_run(&run_id);
         let started_at = chrono::Utc::now().to_rfc3339();
         let manifest = self.dag.to_manifest();
         let manifest_hash = manifest.content_hash();

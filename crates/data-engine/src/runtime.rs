@@ -56,6 +56,8 @@ pub use storage::{
 struct AgentEngineActor {
     agent_id: String,
     engine: Arc<tokio::sync::Mutex<DataEngine>>,
+    live_view: crate::dag::live::LiveDagView,
+    live_valid: AtomicBool,
     running: Arc<AtomicBool>,
     shutdown: Arc<AtomicBool>,
     /// Set by the manager when this actor generation is being evicted.
@@ -109,6 +111,18 @@ impl AgentEngineActor {
     async fn handle(&self, msg: EngineMsg) {
         let EngineMsg { cmd } = msg;
 
+        // Any idle command may change the engine; invalidate the last run's
+        // projection conservatively before serving it. Run-time commands cannot
+        // mutate the graph and must not hide the active projection.
+        if !self.running.load(Ordering::SeqCst)
+            && !matches!(
+                &cmd,
+                DataEngineCmd::GetDagTuiSnapshot { .. } | DataEngineCmd::ViewDag { .. }
+            )
+        {
+            self.live_valid.store(false, Ordering::SeqCst);
+        }
+
         match cmd {
             // ── DAG execution (fire-and-forget) ──────────────────────────
             DataEngineCmd::RunDag {
@@ -149,7 +163,17 @@ impl AgentEngineActor {
                         }
                     }
                 }
+                {
+                    let engine = self.engine.lock().await;
+                    self.live_view.begin(
+                        engine
+                            .dag_tui_snapshot()
+                            .expect("snapshot creation is infallible"),
+                    );
+                    self.live_valid.store(true, Ordering::SeqCst);
+                }
                 let engine = Arc::clone(&self.engine);
+                let live_view = self.live_view.clone();
                 let running = Arc::clone(&self.running);
                 let agent_id = self.agent_id.clone();
                 let result_cache = Arc::clone(&self.result_cache);
@@ -194,6 +218,7 @@ impl AgentEngineActor {
                             tracing::info!(
                                 "DAG run cancelled by caller; releasing engine lock"
                             );
+                            live_view.cancel();
                             running.store(false, Ordering::SeqCst);
                             // reply receiver is already gone — send fails silently.
                             let _ = reply.send(Err(crate::error::Error::Custom(
@@ -203,6 +228,11 @@ impl AgentEngineActor {
                         }
                     };
 
+                    if !matches!(&result, Ok(Ok(_))) {
+                        live_view.cancel();
+                    } else {
+                        live_view.end();
+                    }
                     running.store(false, Ordering::SeqCst);
 
                     match result {
@@ -494,10 +524,17 @@ impl AgentEngineActor {
                 let _ = reply.send(Ok(engine.node_exists(&id)));
             }
             DataEngineCmd::ViewDag { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; view it after completion".to_string(),
-                    )));
+                if self.live_valid.load(Ordering::SeqCst) {
+                    let _ = reply.send(
+                        self.live_view
+                            .snapshot()
+                            .map(|snapshot| snapshot.to_dot())
+                            .ok_or_else(|| {
+                                crate::error::Error::Custom(
+                                    "DAG live snapshot is not available".to_string(),
+                                )
+                            }),
+                    );
                     return;
                 }
                 let engine = self
@@ -507,10 +544,12 @@ impl AgentEngineActor {
                 let _ = reply.send(engine.view_dag());
             }
             DataEngineCmd::GetDagTuiSnapshot { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; view it after completion".to_string(),
-                    )));
+                if self.live_valid.load(Ordering::SeqCst) {
+                    let _ = reply.send(self.live_view.snapshot().ok_or_else(|| {
+                        crate::error::Error::Custom(
+                            "DAG live snapshot is not available".to_string(),
+                        )
+                    }));
                     return;
                 }
                 let engine = self
@@ -1449,6 +1488,7 @@ impl DataEngineManager {
             .template
             .new_isolated_engine()
             .with_history_ref(history_ref);
+        let live_view = new_engine.dag().live_view.clone();
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let running = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -1456,6 +1496,8 @@ impl DataEngineManager {
         let server = AgentEngineActor {
             agent_id: agent_id.to_string(),
             engine: Arc::new(tokio::sync::Mutex::new(new_engine)),
+            live_view,
+            live_valid: AtomicBool::new(false),
             running: Arc::clone(&running),
             shutdown: Arc::clone(&shutdown),
             closing: Arc::clone(&closing),
@@ -1727,6 +1769,60 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             Ok(PortOutputs::new())
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_dot_remain_available_during_execution() {
+        let mut engine = DataEngine::builder().build();
+        engine
+            .add_node(
+                "slow".to_string(),
+                LongSleepNode(NodePorts::new().add_output_port(None)),
+            )
+            .unwrap();
+        let live_view = engine.dag().live_view.clone();
+        let manager = DataEngineManager::new(DataEngine::builder().build());
+        let (tx, rx) = mpsc::unbounded_channel();
+        let actor = AgentEngineActor {
+            agent_id: "live-test".into(),
+            engine: Arc::new(tokio::sync::Mutex::new(engine)),
+            live_view,
+            live_valid: AtomicBool::new(false),
+            running: Arc::new(AtomicBool::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            closing: Arc::new(AtomicBool::new(false)),
+            result_cache: manager.result_cache.clone(),
+            storage: manager.storage.clone(),
+            rx,
+        };
+        let client = DataEngineClient {
+            tx,
+            node_registry: manager.node_registry.clone(),
+            agent_id: "live-test".into(),
+            activity: manager.activity.clone(),
+        };
+        let task = tokio::spawn(actor.run());
+        let (_events, reply) = client.run_dag_stream(None, None);
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let snapshot = client.dag_tui_snapshot().await.unwrap();
+                if snapshot.running
+                    && snapshot.node("slow").is_some_and(|node| {
+                        node.status == crate::dag::runtime::RuntimeStatus::Running
+                    })
+                {
+                    break snapshot;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("live snapshot should be readable while the node runs");
+        assert!(snapshot.run_id.is_some());
+        assert!(client.view_dag().await.unwrap().contains("slow"));
+        assert!(reply.await.unwrap().unwrap().ok);
+        assert!(!client.dag_tui_snapshot().await.unwrap().running);
+        task.abort();
     }
 
     #[test]

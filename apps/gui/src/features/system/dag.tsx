@@ -109,6 +109,8 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
 
   useEffect(() => {
     void load(activeAgent);
+    const timer = window.setInterval(() => void load(activeAgent), 5000);
+    return () => window.clearInterval(timer);
   }, [activeAgent, load]);
 
   const layout = useMemo(() => {

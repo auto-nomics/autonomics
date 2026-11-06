@@ -112,7 +112,9 @@ pub struct CredibleSetLocus {
     pub study: Option<CredibleSetStudy>,
     #[serde(default)]
     pub variant: Option<CredibleSetVariant>,
-    #[serde(default)]
+    /// GraphQL spells this `l2GPredictions`; serde's camelCase of
+    /// `l2g_predictions` would be `l2gPredictions`, so pin the exact name.
+    #[serde(default, rename = "l2GPredictions")]
     pub l2g_predictions: L2GPredictionPage,
 }
 
