@@ -547,6 +547,7 @@ fn install_capture(
             registry: Arc::downgrade(registry),
         }),
         hpc: None,
+        ssh_probe: None,
         monitor_key: old.monitor_key.clone(),
     });
     registry
@@ -1021,6 +1022,7 @@ async fn containers_use_the_same_target_snapshot_as_the_dag_run() {
                 label: format!("container-{id}"),
             }),
             hpc: None,
+            ssh_probe: None,
             monitor_key: previous.monitor_key.clone(),
         });
         f.registry

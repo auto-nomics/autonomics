@@ -262,6 +262,9 @@ pub(crate) struct BuiltTarget {
     pub executor: Arc<dyn TaskExecutor>,
     pub containers: Arc<dyn PodmanConnection>,
     pub hpc: Option<Arc<hpc_tools::HpcClient>>,
+    /// The direct-host ssh identity, so a configuration check can observe
+    /// the connection a run would actually use. Absent on other backends.
+    pub ssh_probe: Option<dag_core::SshTarget>,
     pub monitor_key: String,
 }
 
@@ -640,6 +643,22 @@ impl ComputeRegistry {
         }
         let observation = if let Some(client) = &target.hpc {
             Some(client.run_json("import os,socket,json; print(json.dumps({'hostname':socket.gethostname(),'uid':os.getuid()}))", &serde_json::json!({}),false).await?)
+        } else if let Some(ssh) = &target.ssh_probe {
+            let probe = ssh
+                .run("hostname && id -u")
+                .await
+                .map_err(|e| format!("direct host connection check failed: {e}"))?;
+            let text = String::from_utf8_lossy(&probe.stdout);
+            let mut lines = text.lines();
+            let hostname = lines.next().unwrap_or_default().trim().to_owned();
+            let uid: i64 = lines
+                .next()
+                .and_then(|line| line.trim().parse().ok())
+                .unwrap_or_default();
+            if hostname.is_empty() {
+                return Err("direct host connection check returned no identity".into());
+            }
+            Some(serde_json::json!({"hostname": hostname, "uid": uid}))
         } else {
             None
         };
@@ -928,9 +947,9 @@ impl ComputeRegistry {
                 }
             }
         }
-        let (executor, containers, hpc): (Arc<dyn TaskExecutor>, Arc<dyn PodmanConnection>, _) =
+        let (executor, containers, hpc, ssh_probe): (Arc<dyn TaskExecutor>, Arc<dyn PodmanConnection>, _, Option<dag_core::SshTarget>) =
             match &target.backend {
-                ComputeBackend::Local => (self.local_executor.clone(), self.local.clone(), None),
+                ComputeBackend::Local => (self.local_executor.clone(), self.local.clone(), None, None),
                 ComputeBackend::Slurm { settings } => {
                     let mut config = self.config.clone();
                     config.slurm = settings.clone();
@@ -1044,7 +1063,7 @@ impl ComputeRegistry {
                         hpc.clone(),
                         std::time::Duration::from_secs(settings.poll_interval_secs),
                     )?;
-                    (executor, containers, Some(hpc))
+                    (executor, containers, Some(hpc), None)
                 }
                 ComputeBackend::Ssh { settings } => {
                     let artifact_root = if settings.artifact_root.as_os_str().is_empty() {
@@ -1079,6 +1098,7 @@ impl ComputeRegistry {
                                 settings.default_time, target.id
                             )
                         })?;
+                    let ssh_probe = ssh.clone();
                     let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
                         Arc::new(dag_core::SshTaskTransport::new(dag_core::SshSettings {
                             ssh: ssh.clone(),
@@ -1113,6 +1133,7 @@ impl ComputeRegistry {
                             root: self.local.workspace_root().to_path_buf(),
                         }),
                         None,
+                        Some(ssh_probe),
                     )
                 }
             };
@@ -1123,6 +1144,7 @@ impl ComputeRegistry {
             executor,
             containers,
             hpc,
+            ssh_probe,
             monitor_key,
         }))
     }
