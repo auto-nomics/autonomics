@@ -284,7 +284,7 @@ impl SharedInfra {
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
         let wiki = open_wiki(config, &file_storage).await?;
-        let deck = open_deck(config, &file_storage).await?;
+        let deck = open_deck(config, &file_storage, &bib).await?;
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
@@ -1127,6 +1127,7 @@ async fn open_writing(
 async fn open_deck(
     config: &RuntimeConfig,
     file_storage: &Arc<OpendalFileStorage>,
+    bib: &Arc<bib_base::BibShared>,
 ) -> Result<Arc<ppt_base::DeckShared>> {
     let deck_db_path = config.deck_db_path.clone();
     tracing::info!(
@@ -1156,6 +1157,7 @@ async fn open_deck(
     let deck = Arc::new(
         ppt_base::DeckShared::open_with(&deck_db_path.to_string_lossy(), assets, exports, exporter)
             .await?
+            .with_bib(Some(bib.bib.clone()))
             .with_queue(),
     );
     Ok(deck)

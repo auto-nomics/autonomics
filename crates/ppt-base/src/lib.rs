@@ -16,6 +16,7 @@
 //! - [`tools`] — agent tool registrations.
 
 pub mod assets;
+pub mod citation;
 pub mod export;
 pub mod shared;
 pub mod tools;

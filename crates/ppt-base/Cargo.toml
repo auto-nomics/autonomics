@@ -29,6 +29,10 @@ chromiumoxide.workspace = true
 browser-use = { path = "../browser-use" }
 zip.workspace = true
 
+# Citations
+bib-base = { path = "../bib-base" }
+bib-types = { path = "../bib-types" }
+
 # Agent tools
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }

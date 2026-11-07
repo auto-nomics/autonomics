@@ -47,8 +47,8 @@ async fn full_deck_lifecycle_through_tools() {
     let shared = DeckShared::open_in_memory().await.unwrap();
     let regs = deck_all_registrations(shared.clone());
 
-    // 5 deck + 4 slide + 1 asset + 2 export (export + status)
-    assert_eq!(regs.len(), 12);
+    // 5 deck + 4 slide + 1 asset + 2 export (export + status) + 1 citation
+    assert_eq!(regs.len(), 13);
 
     // 1. deck_create (meeting template)
     let created = call_tool(

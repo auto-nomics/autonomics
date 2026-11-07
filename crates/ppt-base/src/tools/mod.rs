@@ -6,6 +6,7 @@
 //! `Vec<ToolRegistration>` for a [`ToolRegistry`](agentik_core::tools::ToolRegistry).
 
 pub mod asset_tools;
+pub mod citation_tools;
 pub mod deck_tools;
 pub mod export_tools;
 pub mod slide_tools;
@@ -36,7 +37,8 @@ pub fn deck_all_registrations(shared: DeckShared) -> Vec<ToolRegistration> {
     regs.extend(deck_tools::registrations(state.clone()));
     regs.extend(slide_tools::registrations(state.clone()));
     regs.extend(asset_tools::registrations(state.clone()));
-    regs.extend(export_tools::registrations(state));
+    regs.extend(export_tools::registrations(state.clone()));
+    regs.extend(citation_tools::registrations(state));
     regs
 }
 

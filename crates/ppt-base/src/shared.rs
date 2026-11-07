@@ -18,6 +18,8 @@ pub type ExportQueueHandle = Option<tokio::sync::mpsc::Sender<crate::export::Exp
 #[derive(Clone)]
 pub struct DeckShared {
     pub store: Arc<DeckStore>,
+    /// Shared bibliography, for `{{cite:key}}` References generation.
+    pub bib: Option<Arc<bib_base::BibBase>>,
     /// Deck figures (prefix `deck-assets`).
     pub assets: BlobArea,
     /// Export artifacts (prefix `deck-exports`).
@@ -46,11 +48,18 @@ impl DeckShared {
         let store = DeckStore::open(db_path).await?;
         Ok(Self {
             store: Arc::new(store),
+            bib: None,
             assets,
             exports,
             exporter,
             export_queue: None,
         })
+    }
+
+    /// Attach the shared bibliography (citation tool support).
+    pub fn with_bib(mut self, bib: Option<Arc<bib_base::BibBase>>) -> Self {
+        self.bib = bib;
+        self
     }
 
     /// Attach the export queue worker (production wiring).
@@ -134,6 +143,7 @@ impl DeckShared {
         let store = DeckStore::open_in_memory().await?;
         Ok(Self {
             store: Arc::new(store),
+            bib: None,
             assets: BlobArea::in_memory("deck-assets"),
             exports: BlobArea::in_memory("deck-exports"),
             exporter: Arc::new(crate::export::NullExporter),

@@ -10883,6 +10883,8 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "base64 0.23.1",
+ "bib-base",
+ "bib-types",
  "browser-use",
  "chromiumoxide",
  "chrono",
