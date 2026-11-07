@@ -165,6 +165,9 @@ pub struct SharedInfra {
     /// `file_storage` 的 `wiki-attachments` 虚拟目录)。无条件启用:
     /// 每个 agent 挂读组工具,REST 端点始终可用。
     pub wiki: Arc<WikiHandle>,
+    /// Slide-deck engine (store + blob areas + exporter), opened **once**
+    /// per process. Deck 是写作交付物,与 writing 同一能力门控。
+    pub deck: Arc<ppt_base::DeckShared>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -281,6 +284,7 @@ impl SharedInfra {
         let bib = open_bibliography(config, &file_storage).await?;
         let writing = open_writing(config, &bib).await?;
         let wiki = open_wiki(config, &file_storage).await?;
+        let deck = open_deck(config, &file_storage).await?;
 
         tracing::info!("SharedInfra::open: all infrastructure ready");
 
@@ -338,6 +342,7 @@ impl SharedInfra {
             memory,
             kms,
             wiki,
+            deck,
             skills,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
@@ -626,6 +631,11 @@ impl SharedInfra {
                 ws.engine.clone(),
             );
             tools.extend(writing_tools);
+
+            // Slide decks are writing deliverables: same capability gate.
+            tools.extend(ppt_base::tools::deck_all_registrations(
+                (*self.deck).clone(),
+            ));
         }
 
         if let Some(kms) = self.kms.clone() {
@@ -1109,6 +1119,38 @@ async fn open_writing(
         .await?,
     );
     Ok(writing)
+}
+
+/// Open the slide-deck engine (deck.db + blob areas). Export pipeline
+/// starts as NullExporter; the Chromium exporter swaps in when the
+/// headless-browser export lands.
+async fn open_deck(
+    config: &RuntimeConfig,
+    file_storage: &Arc<OpendalFileStorage>,
+) -> Result<Arc<ppt_base::DeckShared>> {
+    let deck_db_path = config.deck_db_path.clone();
+    tracing::info!(
+        "SharedInfra::open: opening deck db at {}",
+        deck_db_path.display()
+    );
+    let assets = ppt_base::assets::BlobArea::on_vfs(
+        (**file_storage).clone(),
+        "deck-assets",
+    );
+    let exports = ppt_base::assets::BlobArea::on_vfs(
+        (**file_storage).clone(),
+        "deck-exports",
+    );
+    let deck = Arc::new(
+        ppt_base::DeckShared::open_with(
+            &deck_db_path.to_string_lossy(),
+            assets,
+            exports,
+            std::sync::Arc::new(ppt_base::export::NullExporter),
+        )
+        .await?,
+    );
+    Ok(deck)
 }
 
 /// Persist the skill usage counters periodically so telemetry survives

@@ -13,6 +13,8 @@ use ppt_types::range::parse_range_pages;
 
 use crate::parser::{extract_click_directives, headmatter, parse, revision_hash, SourceSlide};
 
+pub mod templates;
+
 /// A fully assembled deck: metadata + visible slides.
 #[derive(Debug, Clone)]
 pub struct Deck {
@@ -119,11 +121,14 @@ pub fn assemble(markdown: &str, id: &str, created_at: &str, updated_at: &str) ->
         mermaid: parsed.features.mermaid,
     };
 
+    // Deck title: headmatter `title`, falling back to the first visible
+    // slide's title (friendly for agent-authored frontmatter-less decks).
     let title = hm
         .get("title")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+        .map(str::to_string)
+        .or_else(|| slides.first().and_then(|s| s.title.clone()))
+        .unwrap_or_default();
 
     let meta = DeckMeta {
         id: id.to_string(),

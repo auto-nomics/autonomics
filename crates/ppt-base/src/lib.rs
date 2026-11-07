@@ -16,12 +16,18 @@
 //! - [`tools`] — agent tool registrations.
 
 pub mod assets;
+pub mod export;
+pub mod shared;
+pub mod tools;
 pub mod deck;
 pub mod operations;
 pub mod parser;
 pub mod store;
 
+pub use assets::BlobArea;
 pub use error::{Error, Result};
+pub use export::{DeckExporter, NullExporter};
+pub use shared::{CachedDeck, DeckShared};
 
 pub mod error;
 

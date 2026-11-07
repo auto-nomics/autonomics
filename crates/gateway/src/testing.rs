@@ -69,6 +69,7 @@ pub fn isolate_runtime_paths(config: &mut RuntimeConfig, data_dir: PathBuf, stat
     config.kms_db_path = state_dir.join("kms.db");
     config.knowledge_db_path = state_dir.join("knowledge.db");
     config.wiki_db_path = state_dir.join("wiki.db");
+    config.deck_db_path = state_dir.join("deck.db");
     config.dag_history_db = state_dir.join("dag_history.db");
     config.bib_db_path = state_dir.join("bib.db");
     config.writing_db_path = state_dir.join("writing.db");

@@ -10878,8 +10878,11 @@ dependencies = [
  "agentik-proc",
  "agentik-sdk",
  "async-trait",
+ "base64 0.23.1",
  "chrono",
  "ppt-types",
+ "regex",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -10889,6 +10892,7 @@ dependencies = [
  "tracing",
  "turso",
  "uuid",
+ "vfs",
 ]
 
 [[package]]
@@ -12217,6 +12221,7 @@ dependencies = [
  "opengwas",
  "opentargets",
  "plugin-rsi",
+ "ppt-base",
  "rcsb",
  "resource-downloader",
  "rusqlite",

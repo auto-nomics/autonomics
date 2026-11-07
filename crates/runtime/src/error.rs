@@ -31,6 +31,9 @@ pub enum Error {
     #[error("writing system init failed: {0}")]
     Writing(#[from] writing_base::Error),
 
+    #[error("slide-deck engine init failed: {0}")]
+    Deck(#[from] ppt_base::Error),
+
     #[error("knowledge store error: {0}")]
     Kms(#[from] kms::Error),
 

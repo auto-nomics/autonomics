@@ -62,6 +62,10 @@ pub struct RuntimeConfig {
     /// Path to the wiki knowledge database (Turso/SQLite).
     #[serde(default = "default_wiki_db_path")]
     pub wiki_db_path: PathBuf,
+
+    /// Path to the slide-deck engine database (Turso/SQLite).
+    #[serde(default = "default_deck_db_path")]
+    pub deck_db_path: PathBuf,
     // ── External service credentials ──────────────────────────────────
     /// OpenGWAS API token. If `None`, the runtime attempts to read it from
     /// the [`ENV_OPENGWAS_TOKEN`] env var at construction time.
@@ -224,6 +228,16 @@ fn default_wiki_db_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_WIKI_DB))
 }
 
+fn default_deck_db_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(|h| {
+            PathBuf::from(h)
+                .join(DEFAULT_STATE_DIR)
+                .join(DEFAULT_DECK_DB)
+        })
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_DECK_DB))
+}
+
 fn default_knowledge_db_path() -> PathBuf {
     std::env::var_os("HOME")
         .map(|h| {
@@ -314,6 +328,11 @@ impl RuntimeConfig {
             .and_then(|b| b.wiki_db_path.clone())
             .or_else(|| env_path(ENV_WIKI_DB))
             .unwrap_or_else(|| state_dir.join(DEFAULT_WIKI_DB));
+
+        let deck_db_path = base
+            .and_then(|b| b.deck_db_path.clone())
+            .or_else(|| env_path(ENV_DECK_DB))
+            .unwrap_or_else(|| state_dir.join(DEFAULT_DECK_DB));
         let browser_download_dir = base
             .and_then(|b| b.browser_download_dir.clone())
             .or_else(|| env_path(ENV_BROWSER_DOWNLOAD_DIR));
@@ -363,6 +382,7 @@ impl RuntimeConfig {
             knowledge_db_path,
             kms_db_path,
             wiki_db_path,
+            deck_db_path,
             opengwas_token,
             opengwas_cache_dir,
             agent_identity,

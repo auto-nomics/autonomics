@@ -29,6 +29,7 @@ pub struct RuntimeConfigBuilder {
     pub(crate) knowledge_db_path: Option<PathBuf>,
     pub(crate) kms_db_path: Option<PathBuf>,
     pub(crate) wiki_db_path: Option<PathBuf>,
+    pub(crate) deck_db_path: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
     pub(crate) opengwas_cache_dir: Option<PathBuf>,
     pub(crate) agent_identity: Option<String>,
@@ -129,6 +130,12 @@ impl RuntimeConfigBuilder {
     /// Override the wiki knowledge DB path.
     pub fn wiki_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.wiki_db_path = Some(path.into());
+        self
+    }
+
+    /// Override the slide-deck engine database path.
+    pub fn deck_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.deck_db_path = Some(path.into());
         self
     }
 

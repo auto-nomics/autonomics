@@ -36,6 +36,7 @@ pub(crate) const DEFAULT_KNOWLEDGE_DB: &str = "knowledge.db";
 pub(crate) const DEFAULT_KMS_DB: &str = "kms.db";
 /// Default file name of the wiki knowledge db under the state dir.
 pub(crate) const DEFAULT_WIKI_DB: &str = "wiki.db";
+pub(crate) const DEFAULT_DECK_DB: &str = "deck.db";
 
 /// Default bibliography database path.
 ///
@@ -77,6 +78,7 @@ pub const ENV_KMS_DB: &str = "AUTONOMICS_KMS_DB";
 
 /// Env var overriding the wiki knowledge DB path.
 pub const ENV_WIKI_DB: &str = "AUTONOMICS_WIKI_DB";
+pub const ENV_DECK_DB: &str = "AUTONOMICS_DECK_DB";
 
 /// Env var overriding the persistent-memory knowledge DB path.
 pub const ENV_KNOWLEDGE_DB: &str = "AUTONOMICS_KNOWLEDGE_DB";
