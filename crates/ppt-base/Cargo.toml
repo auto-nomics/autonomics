@@ -24,6 +24,11 @@ tokio = { workspace = true, features = ["sync", "macros", "rt"] }
 async-trait.workspace = true
 chrono = { workspace = true }
 
+# Headless-Chromium export
+chromiumoxide.workspace = true
+browser-use = { path = "../browser-use" }
+zip.workspace = true
+
 # Agent tools
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }

@@ -1141,14 +1141,22 @@ async fn open_deck(
         (**file_storage).clone(),
         "deck-exports",
     );
+    // The print page lives on this daemon's own loopback API; the same
+    // env resolution as the gateway bind address keeps them consistent.
+    let api_addr = std::env::var("AUTONOMICS_HTTP_API_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:8765".to_string());
+    let origin = format!("http://{api_addr}");
+    let exporter: std::sync::Arc<dyn ppt_base::DeckExporter> =
+        match browser_use::BrowserOptions::default() {
+            options => std::sync::Arc::new(ppt_base::export::chromium::ChromiumExporter {
+                origin,
+                options,
+            }),
+        };
     let deck = Arc::new(
-        ppt_base::DeckShared::open_with(
-            &deck_db_path.to_string_lossy(),
-            assets,
-            exports,
-            std::sync::Arc::new(ppt_base::export::NullExporter),
-        )
-        .await?,
+        ppt_base::DeckShared::open_with(&deck_db_path.to_string_lossy(), assets, exports, exporter)
+            .await?
+            .with_queue(),
     );
     Ok(deck)
 }

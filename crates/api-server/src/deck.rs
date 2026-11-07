@@ -689,42 +689,29 @@ async fn create_export(
         .map_err(|e| api_err(ppt_base::Error::BadRange(e)))?;
     let dpi = body.dpi.unwrap_or(192).clamp(96, 300);
 
-    // One-time print token (raw returned once; only the hash is stored).
-    let raw_token = uuid::Uuid::new_v4().simple().to_string();
-    let token_hash = print_token_hash(&raw_token);
-    let expires = (chrono::Utc::now() + chrono::Duration::seconds(PRINT_TOKEN_TTL_SECS))
-        .to_rfc3339();
-
-    let export_id = format!("exp-{}", uuid::Uuid::new_v4().simple());
-    let now = chrono::Utc::now().to_rfc3339();
-    let record = ExportRecord {
-        id: export_id.clone(),
-        deck_id: id.clone(),
-        format,
-        status: ExportStatus::Queued,
-        params: json!({ "dpi": dpi, "pages": pages.iter().map(|p| p + 1).collect::<Vec<_>>() })
-            .to_string(),
-        print_token_hash: Some(token_hash),
-        token_expires_at: Some(expires),
-        artifact_key: None,
-        artifact_mime: None,
-        artifact_size: None,
-        error: None,
-        created_at: now.clone(),
-        updated_at: now,
-    };
-    shared.store.create_export(&record).await.map_err(api_err)?;
+    // Token minting + queueing live in the engine (worker consumes the
+    // raw token; only its hash is persisted).
+    let (record, _token) = shared
+        .enqueue_export(
+            &id,
+            format,
+            dpi,
+            pages.iter().map(|p| p + 1).collect(),
+            deck.meta.canvas(),
+            deck.meta.canvas_height(),
+        )
+        .await
+        .map_err(api_err)?;
 
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({
-            "exportId": export_id,
+            "exportId": record.id,
             "deckId": id,
             "format": format.as_str(),
-            "status": "queued",
+            "status": record.status.as_str(),
             "dpi": dpi,
             "pages": pages.iter().map(|p| p + 1).collect::<Vec<_>>(),
-            "printToken": raw_token,
         })),
     )
         .into_response())

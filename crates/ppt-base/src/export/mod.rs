@@ -1,15 +1,14 @@
-//! Export backend trait + Null fallback.
-//!
-//! M8 wires the headless-Chromium exporter (print page + wait protocol +
-//! `Page::pdf` / clip screenshots / OOXML PPTX); until then the
-//! [`NullExporter`] records an actionable error on the export row, the
-//! same pattern as writing-base's `NullEngine`.
+//! Export backend trait + queue + Chromium implementation.
+
+pub mod chromium;
+pub mod pptx;
+pub mod queue;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// One slide page request for image exports.
+/// One export job (fully resolved: pages and print token included).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportJob {
@@ -19,11 +18,16 @@ pub struct ExportJob {
     /// PNG DPI (96 = 1x, up to 300).
     #[serde(default = "default_dpi")]
     pub dpi: u32,
-    /// Page range string (`"1,4-5"`); empty = all.
+    /// 1-based page numbers to capture (subset via deck range string).
     #[serde(default)]
-    pub range: String,
-    /// Loopback URL of the print page for this deck/export.
-    pub print_url: String,
+    pub pages: Vec<usize>,
+    /// Canvas size in px (from deck meta at enqueue time).
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    /// One-time print token minted at enqueue (raw; only the hash is
+    /// persisted).
+    #[serde(default)]
+    pub print_token: String,
 }
 
 fn default_dpi() -> u32 {

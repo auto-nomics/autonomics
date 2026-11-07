@@ -251,7 +251,7 @@ async fn put_source_with_revision_conflict() {
 
 #[tokio::test]
 async fn print_data_requires_valid_token() {
-    let (app, _shared) = app().await;
+    let (app, shared) = app().await;
 
     let res = app
         .clone()
@@ -289,7 +289,7 @@ async fn print_data_requires_valid_token() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
-    // mint a token via POST /exports
+    // API enqueue returns 202 (token stays engine-internal now)
     let res = app
         .clone()
         .oneshot(request(
@@ -301,7 +301,16 @@ async fn print_data_requires_valid_token() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::ACCEPTED);
     let minted = json_of(res.into_body()).await;
-    let token = minted["printToken"].as_str().unwrap().to_string();
+    let export_id = minted["exportId"].as_str().unwrap().to_string();
+    assert_eq!(minted["status"], "queued");
+    assert!(minted.get("printToken").is_none(), "token must not leak into the API response");
+
+    // The test mints its own token through the engine to exercise the
+    // print surface (production: the export worker builds the URL).
+    let (_record, token) = shared
+        .enqueue_export(&id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], 980, 551)
+        .await
+        .unwrap();
 
     // good token → full payload
     let res = app
@@ -318,7 +327,7 @@ async fn print_data_requires_valid_token() {
     assert!(payload["slides"].as_array().is_some());
     assert_eq!(payload["token"], token.as_str());
 
-    // export status visible
+    // export status visible (the API-minted row)
     let export_id = minted["exportId"].as_str().unwrap().to_string();
     let res = app
         .clone()

@@ -8,8 +8,11 @@ use ppt_types::new_deck_id;
 use crate::assets::BlobArea;
 use crate::deck::Deck;
 use crate::error::Result;
-use crate::store::{DeckRow, DeckStore};
+use crate::store::{DeckRow, DeckStore, ExportFormat, ExportRecord, ExportStatus};
 use crate::export::DeckExporter;
+
+/// Enqueue sender; `None` when the worker was never spawned (tests).
+pub type ExportQueueHandle = Option<tokio::sync::mpsc::Sender<crate::export::ExportJob>>;
 
 /// Deck engine shared state.
 #[derive(Clone)]
@@ -21,6 +24,8 @@ pub struct DeckShared {
     pub exports: BlobArea,
     /// Export backend (headless Chromium in production, Null in tests).
     pub exporter: Arc<dyn DeckExporter>,
+    /// Single-worker export queue; created via [`DeckShared::with_queue`].
+    pub export_queue: ExportQueueHandle,
 }
 
 /// Serde envelope for the parsed-deck cache stored in `decks.parsed_cache`.
@@ -44,7 +49,81 @@ impl DeckShared {
             assets,
             exports,
             exporter,
+            export_queue: None,
         })
+    }
+
+    /// Attach the export queue worker (production wiring).
+    pub fn with_queue(mut self) -> Self {
+        let worker = crate::export::queue::ExportWorker {
+            store: self.store.clone(),
+            exports: self.exports.clone(),
+            exporter: self.exporter.clone(),
+        };
+        self.export_queue = Some(crate::export::queue::ExportWorker::spawn(worker));
+        self
+    }
+
+    /// Mint a one-time print token + create a queued export row and push
+    /// it onto the queue. Returns `(record, raw_token)`.
+    pub async fn enqueue_export(
+        &self,
+        deck_id: &str,
+        format: ExportFormat,
+        dpi: u32,
+        pages: Vec<usize>,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Result<(ExportRecord, String)> {
+        let raw_token = uuid::Uuid::new_v4().simple().to_string();
+        let token_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(raw_token.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+        let expires = (chrono::Utc::now() + chrono::Duration::seconds(15 * 60)).to_rfc3339();
+        let export_id = format!("exp-{}", uuid::Uuid::new_v4().simple());
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = ExportRecord {
+            id: export_id.clone(),
+            deck_id: deck_id.to_string(),
+            format,
+            status: ExportStatus::Queued,
+            params: serde_json::json!({
+                "dpi": dpi,
+                "pages": pages,
+            })
+            .to_string(),
+            print_token_hash: Some(token_hash),
+            token_expires_at: Some(expires),
+            artifact_key: None,
+            artifact_mime: None,
+            artifact_size: None,
+            error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.store.create_export(&record).await?;
+        if let Some(tx) = &self.export_queue {
+            let job = crate::export::ExportJob {
+                deck_id: deck_id.to_string(),
+                export_id,
+                format,
+                dpi,
+                pages,
+                canvas_width,
+                canvas_height,
+                print_token: raw_token.clone(),
+            };
+            if tx.send(job).await.is_err() {
+                tracing::warn!("export queue receiver dropped; job stays queued");
+            }
+        } else if self.export_queue.is_none() {
+            // No queue (tests without a worker): leave the row queued —
+            // callers observe the record as-is.
+        }
+        Ok((record, raw_token))
     }
 
     /// Open an in-memory instance (tests): memory blobs + NullExporter.
@@ -55,6 +134,7 @@ impl DeckShared {
             assets: BlobArea::in_memory("deck-assets"),
             exports: BlobArea::in_memory("deck-exports"),
             exporter: Arc::new(crate::export::NullExporter),
+            export_queue: None,
         })
     }
 

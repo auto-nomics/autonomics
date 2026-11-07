@@ -47,8 +47,8 @@ async fn full_deck_lifecycle_through_tools() {
     let shared = DeckShared::open_in_memory().await.unwrap();
     let regs = deck_all_registrations(shared.clone());
 
-    // 5 deck + 4 slide + 1 asset + 1 export
-    assert_eq!(regs.len(), 11);
+    // 5 deck + 4 slide + 1 asset + 2 export (export + status)
+    assert_eq!(regs.len(), 12);
 
     // 1. deck_create (meeting template)
     let created = call_tool(
@@ -146,15 +146,24 @@ async fn full_deck_lifecycle_through_tools() {
     assert!(!blob.is_empty());
     assert_eq!(meta.provenance.as_deref(), Some("dag://run/1/plot"));
 
-    // 9. deck_export — NullExporter records an actionable error
+    // 9. deck_export — queued row (no worker in this test process; the
+    // row stays queued and status is observable)
     let exported = call_tool(
         &regs,
         "deck_export",
         json!({"deck_id": deck_id, "format": "pdf"}),
     )
     .await;
-    assert_eq!(exported["status"], "error");
-    assert!(exported["error"].as_str().unwrap().contains("no export backend"));
+    assert_eq!(exported["status"], "queued");
+    let export_id = exported["export_id"].as_str().unwrap().to_string();
+    let status = call_tool(
+        &regs,
+        "deck_export_status",
+        json!({"export_id": export_id}),
+    )
+    .await;
+    assert_eq!(status["status"], "queued");
+    assert_eq!(status["deck_id"], deck_id.as_str());
 
     // 10. deck_list
     let listed = call_tool(&regs, "deck_list", json!({"filter": "文献报告"})).await;

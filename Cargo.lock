@@ -10883,6 +10883,8 @@ dependencies = [
  "agentik-sdk",
  "async-trait",
  "base64 0.23.1",
+ "browser-use",
+ "chromiumoxide",
  "chrono",
  "ppt-types",
  "regex",
@@ -10897,6 +10899,7 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "zip 8.6.0",
 ]
 
 [[package]]

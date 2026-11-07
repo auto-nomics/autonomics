@@ -7,13 +7,16 @@ import { initTheme } from "@/lib/theme";
 
 const container = document.querySelector<HTMLDivElement>("#app");
 if (!container) throw new Error("#app missing");
-// Light / dark / follow-system, persisted in localStorage. The shell
-// defaults to dark until the user picks otherwise.
-initTheme();
-ReactDOM.createRoot(container).render(
-  <>
-    <ContextMenuPolicy />
-    <App />
-    <Toaster position="bottom-center" />
-  </>,
-);
+// Headless deck export uses a separate bootstrap.
+if (location.pathname === "/deck/print") {
+  void import("@/features/deck/print/print-main").then(m => m.bootPrintPage(container));
+} else {
+  initTheme();
+  ReactDOM.createRoot(container).render(
+    <>
+      <ContextMenuPolicy />
+      <App />
+      <Toaster position="bottom-center" />
+    </>,
+  );
+}
