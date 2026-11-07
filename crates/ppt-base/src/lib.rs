@@ -15,6 +15,7 @@
 //! - [`store`] — Turso persistence for decks/versions/assets/exports.
 //! - [`tools`] — agent tool registrations.
 
+pub mod assets;
 pub mod deck;
 pub mod operations;
 pub mod parser;

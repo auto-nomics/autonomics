@@ -10,6 +10,7 @@ description = "Slide-deck engine: Slidev-semantics parser, Turso storage, source
 ppt-types = { path = "../ppt-types" }
 turso.workspace = true
 regex = "1"
+vfs = { path = "../vfs", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng.workspace = true
@@ -30,6 +31,8 @@ agentik-sdk = { path = "../agentik-sdk" }
 workspace = true
 
 [features]
+# vfs-backed blob storage (deck assets / export artifacts).
+vfs = ["dep:vfs"]
 # End-to-end export tests that require a real headless Chromium.
 e2e = []
 
