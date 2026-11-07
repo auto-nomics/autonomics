@@ -376,7 +376,12 @@ impl RoutedTool {
             let remote: Vec<_> = catalog
                 .targets
                 .iter()
-                .filter(|t| matches!(t.backend, super::ComputeBackend::Slurm { .. }))
+                .filter(|t| {
+                    matches!(
+                        t.backend,
+                        super::ComputeBackend::Slurm { .. } | super::ComputeBackend::Ssh { .. }
+                    )
+                })
                 .collect();
             if remote.len() != 1 || revision.is_some() {
                 return Err(error(
@@ -387,6 +392,21 @@ impl RoutedTool {
                 .target(&remote[0].id, Some(remote[0].revision))
                 .map_err(error)?
         };
+        let name = self.template.definition.name.as_str();
+        // The account tools split by their dependency: job and cluster
+        // management speak to a scheduler, while file and transfer
+        // operations are plain ssh and work on any remote target.
+        let scheduler_tool = matches!(name, "hpc_jobs" | "hpc_cluster");
+        if scheduler_tool
+            && !matches!(
+                target.target.backend,
+                super::ComputeBackend::Slurm { .. }
+            )
+        {
+            return Err(error(
+                "this target has no scheduler; hpc_jobs and hpc_cluster require a scheduler-backed target. Run work with a `process` node, and use hpc_files or hpc_transfer for remote data",
+            ));
+        }
         if let super::ComputeBackend::Slurm { settings } = &target.target.backend {
             if !settings.tools_enabled {
                 return Err(error(
@@ -395,21 +415,32 @@ impl RoutedTool {
             }
         }
         let client = target.hpc.clone().ok_or_else(|| {
-            error("selected target is local; HPC operations require a remote target")
+            error(match target.target.backend {
+                super::ComputeBackend::Local => {
+                    "selected target is local; HPC operations require a remote target"
+                }
+                _ => "selected target has no remote account client",
+            })
         })?;
-        let hub = self
-            .registry
-            .monitors
-            .target_hub(&target.monitor_key)
-            .map_err(error)?;
-        let mut registrations = hpc_tools::jobs::monitored_registrations(
-            client.clone(),
-            hpc_tools::jobs::Monitoring {
-                hub,
-                agent_path: self.actor.clone(),
-                storage: self.storage.clone(),
-            },
-        );
+        let mut registrations = Vec::new();
+        if scheduler_tool {
+            // Only scheduler-backed targets own a job monitor hub.
+            let hub = self
+                .registry
+                .monitors
+                .target_hub(&target.monitor_key)
+                .map_err(error)?;
+            registrations.extend(hpc_tools::jobs::monitored_registrations(
+                client.clone(),
+                hpc_tools::jobs::Monitoring {
+                    hub,
+                    agent_path: self.actor.clone(),
+                    storage: self.storage.clone(),
+                },
+            ));
+        } else {
+            registrations.extend(hpc_tools::jobs::registrations(client.clone()));
+        }
         registrations.extend(hpc_tools::files::registrations(client.clone()));
         registrations.extend(hpc_tools::transfer::registrations(
             client,

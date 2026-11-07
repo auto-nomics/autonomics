@@ -1125,14 +1125,31 @@ impl ComputeRegistry {
                                 Some(remote),
                             ))
                         };
-                    // No scheduler means no account/job tools and no
-                    // container runtime for this target.
+                    // No scheduler means no job tools and no container
+                    // runtime, but the account file/transfer tools are plain
+                    // ssh and stay available: they need an ssh endpoint, not
+                    // an allocation.
+                    let account_state_dir = self.root.join("targets").join(&monitor_key).join("hpc-account");
+                    private_dir(&account_state_dir)?;
+                    let account = Arc::new(
+                        hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
+                            ssh_host: settings.ssh_host.clone(),
+                            data_ssh_host: settings.data_ssh_host.clone(),
+                            pi_ssh_host: None,
+                            ssh_command: settings.ssh_command.clone(),
+                            remote_python: settings.remote_python.clone(),
+                            state_dir: account_state_dir,
+                            default_partition: String::new(),
+                            default_account: None,
+                        })?
+                        .with_endpoints(target.endpoints.clone())?,
+                    );
                     (
                         executor,
                         Arc::new(routing::UnavailableContainers {
                             root: self.local.workspace_root().to_path_buf(),
                         }),
-                        None,
+                        Some(account),
                         Some(ssh_probe),
                     )
                 }
