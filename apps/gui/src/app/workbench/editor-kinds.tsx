@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -21,6 +21,7 @@ import {
   registerWikiOpener,
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
+import { DeckEditorBody, registerDeckOpener } from "@/features/deck";
 import { ProjectEditor } from "@/features/projects/project-editor";
 import { PluginManager } from "@/features/projects/plugin-manager";
 import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
@@ -39,9 +40,11 @@ import {
   allGroups,
   getGroup,
   openWikiEntryEditor,
+  openDeckEditor,
   patchEditorState,
   useWorkbenchState,
   type WikiEntryEditorState,
+  type DeckEditorState,
 } from "./workbench-store";
 import { useWorkbenchRuntime } from "./runtime-context";
 
@@ -72,6 +75,21 @@ function WikiGraphEditorBody() {
   const location = wikiState?.stack?.[wikiState.cursor];
   const entryId = location?.entryId ?? (editor ? String(editor.params.entryId ?? "") : "");
   return <WikiGraph entryId={entryId} title={location?.title || wikiState?.title || ""} />;
+}
+
+function DeckEditorBodyWrapper({ editor }: EditorContext) {
+  const deckId = String(editor.params.deckId ?? "");
+  const start = Number(editor.state && (editor.state as DeckEditorState).slideNo) || undefined;
+  return (
+    <DeckEditorBody
+      deckId={deckId}
+      startSlide={start}
+      onSlideSeen={(no) => {
+        const snapshot = (editor.state as DeckEditorState | null) ?? { title: "" };
+        patchEditorState(editor.id, { ...snapshot, slideNo: no });
+      }}
+    />
+  );
 }
 
 function ConfigEditorBody() {
@@ -269,6 +287,24 @@ export function registerWorkbenchEditorKinds(): void {
     commands: (editor) => [
       { id: "wiki-entry.close", title: "Close wiki entry", run: () => closeEditor(editor.id) },
     ],
+  });
+  registerEditorKind({
+    kind: "deck",
+    title: (editor) => {
+      const state = editor.state as DeckEditorState | null;
+      return state?.title || "未命名 deck";
+    },
+    name: (editor) => String(editor.params.deckId ?? ""),
+    icon: () => Presentation,
+    body: DeckEditorBodyWrapper,
+    mount: "keep-alive",
+    commands: (editor) => [
+      { id: "deck.close", title: "Close deck", run: () => closeEditor(editor.id) },
+    ],
+  });
+  // Deck opener bridge: features open deck tabs without the workbench.
+  registerDeckOpener((deckId, options) => {
+    openDeckEditor(deckId, { title: options.title, slideNo: options.slideNo, forceNew: options.forceNew });
   });
   registerEditorKind({
     kind: "wiki-graph",

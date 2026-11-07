@@ -225,3 +225,10 @@ export function renderWikiMarkdown(text: string): string {
 export function wikiLexer(content: string): Tokens.Generic[] {
   return wikiPipeline.lexer(content);
 }
+
+/**
+ * Escape hatch for feature-local pipelines (deck slides add asset-ref +
+ * click-directive handling on top of the same math/GFM base). The deck
+ * feature sanitizes with its own profile (it injects data-* attributes).
+ */
+export { createMarkdownPipeline, SANITIZE };

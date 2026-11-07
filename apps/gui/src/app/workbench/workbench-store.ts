@@ -69,6 +69,12 @@ export type WikiEntryEditorState = {
   title: string;
 };
 
+/** Per-tab deck state: last-viewed slide + resolved title. */
+export type DeckEditorState = {
+  title: string;
+  slideNo?: number;
+};
+
 /** Stable editor id: `kind:key` with recursively sorted object keys, so the
  *  same logical editor opened with differently-ordered params reuses the tab. */
 export function editorKey(params: Record<string, unknown>): string {
@@ -380,6 +386,30 @@ export function openWikiEntryEditor(entryId: string, options: { title?: string; 
     params: { entryId },
     state: { stack, cursor: 0, mode: options.mode ?? "read", title: options.title ?? "" },
     activate: true,
+  });
+}
+
+/** Stable id for a deck editor tab. */
+export function deckEditorId(deckId: string): EditorId {
+  return `deck:${editorKey({ deckId })}`;
+}
+
+/** Open (or focus) a deck tab; per-tab state keeps the last slide. */
+export function openDeckEditor(deckId: string, options: { title?: string; slideNo?: number; forceNew?: boolean } = {}): EditorId {
+  const id = `deck:${editorKey({ deckId })}`;
+  const existing = findEditor(id);
+  if (existing && !options.forceNew) {
+    if (options.title || options.slideNo) {
+      const state = (existing.state as DeckEditorState | null) ?? { title: "" };
+      patchEditorState(id, { ...state, title: options.title ?? state.title, slideNo: options.slideNo ?? state.slideNo });
+    }
+    activateEditorById(id);
+    return id;
+  }
+  return openEditor({
+    kind: "deck",
+    params: { deckId },
+    state: { title: options.title ?? "", slideNo: options.slideNo } satisfies DeckEditorState,
   });
 }
 
