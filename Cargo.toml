@@ -108,6 +108,8 @@ members = [
   "crates/skills",
   "crates/plugin-rsi",
   "crates/text-embedding", "crates/browser-use", "crates/wiki",
+  "crates/ppt-types",
+  "crates/ppt-base",
 ]
 resolver = "3"
 
@@ -123,6 +125,7 @@ pulldown-cmark = "0.13"
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml_ng = "0.10"
 thiserror = "2.0"
 opendal = { version = "0.57", features = [
   "services-fs",

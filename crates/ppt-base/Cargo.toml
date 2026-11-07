@@ -1,0 +1,36 @@
+[package]
+name = "ppt-base"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Slide-deck engine: Slidev-semantics parser, Turso storage, source operations, agent tools, export pipeline."
+
+[dependencies]
+ppt-types = { path = "../ppt-types" }
+turso.workspace = true
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync", "macros", "rt"] }
+async-trait.workspace = true
+chrono = { workspace = true }
+
+# Agent tools
+agentik-core = { path = "../agentik-core" }
+agentik-proc = { path = "../agentik-proc" }
+agentik-sdk = { path = "../agentik-sdk" }
+
+[lints]
+workspace = true
+
+[features]
+# End-to-end export tests that require a real headless Chromium.
+e2e = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
