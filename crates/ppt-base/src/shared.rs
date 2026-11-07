@@ -74,6 +74,7 @@ impl DeckShared {
         pages: Vec<usize>,
         canvas_width: u32,
         canvas_height: u32,
+        notes: Vec<String>,
     ) -> Result<(ExportRecord, String)> {
         let raw_token = uuid::Uuid::new_v4().simple().to_string();
         let token_hash = {
@@ -93,6 +94,7 @@ impl DeckShared {
             params: serde_json::json!({
                 "dpi": dpi,
                 "pages": pages,
+                "notes": notes.len(),
             })
             .to_string(),
             print_token_hash: Some(token_hash),
@@ -114,6 +116,7 @@ impl DeckShared {
                 pages,
                 canvas_width,
                 canvas_height,
+                notes,
                 print_token: raw_token.clone(),
             };
             if tx.send(job).await.is_err() {

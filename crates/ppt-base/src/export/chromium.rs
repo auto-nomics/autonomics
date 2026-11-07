@@ -148,7 +148,7 @@ impl ChromiumExporter {
                     &pngs,
                     canvas_w,
                     canvas_h,
-                    job.deck_id.clone(),
+                    &job.notes,
                 )?;
                 Ok(ExportOutput {
                     bytes,

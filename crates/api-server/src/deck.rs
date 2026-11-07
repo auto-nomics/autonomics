@@ -691,6 +691,10 @@ async fn create_export(
 
     // Token minting + queueing live in the engine (worker consumes the
     // raw token; only its hash is persisted).
+    let notes = pages
+        .iter()
+        .map(|p| deck.slide(p + 1).and_then(|s| s.note.clone()).unwrap_or_default())
+        .collect();
     let (record, _token) = shared
         .enqueue_export(
             &id,
@@ -699,6 +703,7 @@ async fn create_export(
             pages.iter().map(|p| p + 1).collect(),
             deck.meta.canvas(),
             deck.meta.canvas_height(),
+            notes,
         )
         .await
         .map_err(api_err)?;

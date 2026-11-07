@@ -75,6 +75,10 @@ impl ToolFunction for DeckExportTool {
         let canvas_w = deck.meta.canvas_width.unwrap_or(980);
         let canvas_h = deck.meta.canvas_height();
 
+        let notes = pages
+            .iter()
+            .map(|p| deck.slide(p + 1).and_then(|s| s.note.clone()).unwrap_or_default())
+            .collect();
         let (record, _token) = self
             .shared
             .enqueue_export(
@@ -84,6 +88,7 @@ impl ToolFunction for DeckExportTool {
                 pages.iter().map(|p| p + 1).collect(),
                 canvas_w,
                 canvas_h,
+                notes,
             )
             .await
             .map_err(tool_err)?;

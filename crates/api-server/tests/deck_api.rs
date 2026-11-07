@@ -308,7 +308,7 @@ async fn print_data_requires_valid_token() {
     // The test mints its own token through the engine to exercise the
     // print surface (production: the export worker builds the URL).
     let (_record, token) = shared
-        .enqueue_export(&id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], 980, 551)
+        .enqueue_export(&id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], 980, 551, vec![])
         .await
         .unwrap();
 

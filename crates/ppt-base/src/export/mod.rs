@@ -24,6 +24,9 @@ pub struct ExportJob {
     /// Canvas size in px (from deck meta at enqueue time).
     pub canvas_width: u32,
     pub canvas_height: u32,
+    /// Speaker note per captured page (PPTX notes slides; empty = none).
+    #[serde(default)]
+    pub notes: Vec<String>,
     /// One-time print token minted at enqueue (raw; only the hash is
     /// persisted).
     #[serde(default)]
