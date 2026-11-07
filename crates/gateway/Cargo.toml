@@ -17,6 +17,7 @@ plugin-rsi = { path = "../plugin-rsi" }
 skills = { path = "../skills" }
 api-server = { path = "../api-server" }
 wiki = { path = "../wiki", features = ["vfs"] }
+ppt-base = { path = "../ppt-base", features = ["vfs"] }
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 vfs = { path = "../vfs" }

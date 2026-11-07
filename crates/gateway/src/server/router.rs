@@ -272,6 +272,7 @@ pub fn router_with_bib(
     gateway_token: String,
     bib_shared: bib_base::BibShared,
     wiki: Arc<wiki::service::WikiHandle>,
+    deck_shared: Arc<ppt_base::DeckShared>,
     env_token: Option<String>,
 ) -> Router {
     let auth = Arc::new(AuthContext::new(gateway_token));
@@ -283,6 +284,8 @@ pub fn router_with_bib(
         SwaggerUi::new("/swagger-ui").url("/api/v1/api-docs/openapi.json", ApiDoc::openapi());
     let bib = api_server::bib::router(bib_shared);
     let wiki_router = api_server::wiki::router(wiki);
+    let deck_router = api_server::deck::router(deck_shared.clone());
+    let deck_open_router = api_server::deck::open_router(deck_shared);
     let gated = env_token.filter(|t| !t.trim().is_empty());
     let bib = match gated {
         Some(_) => bib.layer(axum::middleware::from_fn_with_state(
@@ -298,6 +301,15 @@ pub fn router_with_bib(
         )),
         None => wiki_router,
     };
+    // Deck REST 是会话资产;open 打印面由一次性 print token 自鉴权
+    // (headless 导出页没有 session cookie)。
+    let deck_router = match gated {
+        Some(_) => deck_router.layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            bearer_or_session,
+        )),
+        None => deck_router,
+    };
     let session: Router = Router::new()
         .route(
             "/api/session",
@@ -311,6 +323,8 @@ pub fn router_with_bib(
         .merge(session)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1/wiki", wiki_router)
+        .nest("/api/v1/deck", deck_router)
+        .nest("/api/v1/deck", deck_open_router)
         .nest("/api/v1", api)
         .merge(gui::router())
         .route("/api/health", get(health))

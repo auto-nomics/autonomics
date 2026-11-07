@@ -10,6 +10,7 @@ description = "Composable local HTTP API server hosted by the Autonomics gateway
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 axum = { version = "0.8", features = ["multipart"] }
+base64 = "0.23"
 chrono.workspace = true
 opendal = "0.57"
 serde.workspace = true
@@ -21,6 +22,8 @@ tracing.workspace = true
 uuid = { version = "1.23", features = ["v4"] }
 vfs = { path = "../vfs" }
 wiki = { path = "../wiki", features = ["vfs"] }
+ppt-base = { path = "../ppt-base", features = ["vfs"] }
+ppt-types = { path = "../ppt-types" }
 
 [dev-dependencies]
 turso.workspace = true

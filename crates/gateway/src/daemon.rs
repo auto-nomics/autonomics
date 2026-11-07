@@ -173,11 +173,13 @@ pub async fn run_daemon(
     // Clone for the extraction sweep before the move into the router.
     let sweep_shared = bib_shared.clone();
     let wiki_shared = state.infra.wiki.clone();
+    let deck_shared = state.infra.deck.clone();
     let router = router_with_bib(
         state,
         gateway_token.clone(),
         bib_shared,
         wiki_shared,
+        deck_shared,
         env_token.clone(),
     );
 
