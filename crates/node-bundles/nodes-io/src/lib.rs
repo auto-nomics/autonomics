@@ -16,6 +16,7 @@ pub mod http_fetch;
 pub mod image_registry;
 pub mod multiomic_concordance;
 pub mod parquet_sql;
+mod process_command;
 pub mod radiomics;
 pub mod script_nodes;
 pub mod source_chembl;
@@ -209,6 +210,7 @@ impl NodePlugin for Plugin {
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
         ));
         registry.register(Box::new(file_transform::FileTransformNodeFactory {}));
+        registry.register(Box::new(process_command::ProcessCommandNodeFactory));
         // `python_script` and `r_script` are intentionally NOT registered — they
         // are removed from the DAG surface so the Agent cannot list or add them.
         // The `script_nodes` module is retained for unit/integration tests of

@@ -3193,7 +3193,17 @@ impl TaskExecutor for ProcessRoutingTaskExecutor {
         "process-routing"
     }
 
-    async fn run(&self, execution: TaskExecution) -> JobResult {
+    async fn run(&self, mut execution: TaskExecution) -> JobResult {
+        // The graph records a node's registered address as its kind
+        // (`<plugin>/process`), while the remote contract speaks the bare
+        // `process` kind. The node payload itself declares which contract it
+        // implements, so route on that and normalize before dispatch — the
+        // same rewrite the typed-worker lowering performs.
+        if execution.submission.spec.kind != "process"
+            && execution.node.kind() == "process"
+        {
+            execution.submission.spec.kind = "process".into();
+        }
         if self.remote.is_none()
             && execution.submission.spec.kind == "process"
             && execution

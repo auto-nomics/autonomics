@@ -1449,6 +1449,10 @@ impl DataEngine {
     pub fn new_isolated_engine(&self) -> Self {
         let mut dag = DAG::default();
         dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
+        // Per-agent sessions answer to the same operator compute policy as
+        // the main engine: without the executor, every session DAG silently
+        // falls back to local execution and remote targets are never bound.
+        dag.set_task_executor(self.dag.task_executor());
         Self {
             ctx: self.ctx.clone(),
             engine_ctx: self.engine_ctx.clone(),
