@@ -855,12 +855,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         .bind_agent_context(uuid::Uuid::nil(), uuid::Uuid::nil())
         .await
         .unwrap();
-    let tools = super::tools::hpc_registrations(
-        f.registry.clone(),
-        "/root/test",
-        agents,
-        f.registry.storage.clone(),
-    );
+    let tools = super::tools::hpc_registrations(f.registry.clone(), "/root/test", agents);
     let tool = tools
         .iter()
         .find(|t| t.definition.name == "hpc_jobs")
@@ -937,7 +932,7 @@ async fn connection_identity_is_retained_when_alias_configuration_changes() {
 }
 
 #[tokio::test]
-async fn old_remote_files_remain_readable_after_switching_compute_to_local() {
+async fn old_job_addressing_survives_switching_compute_to_local() {
     use agentik_core::TursoAgentStorage;
     let f = fixture();
     let mut settings = remote_settings(&f.config.state_dir, "files-a");
@@ -962,12 +957,7 @@ else:
         .unwrap();
     let target = f.registry.target("a", Some(1)).unwrap();
     let storage = Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
-    let tools = super::tools::hpc_registrations(
-        f.registry.clone(),
-        "/root/test",
-        storage,
-        f.registry.storage.clone(),
-    );
+    let tools = super::tools::hpc_registrations(f.registry.clone(), "/root/test", storage);
     // Tool objects predate the switch and the disabling revision.
     select(&f.registry, "a");
     select(&f.registry, "local");
@@ -981,23 +971,15 @@ else:
             backend: target.target.backend.clone(),
         })
         .unwrap();
-    let source = f.config.state_dir.join("remote-original.txt");
-    fs::write(&source, b"retained remote input").unwrap();
-    let files = tools
-        .iter()
-        .find(|t| t.definition.name == "hpc_files")
-        .unwrap();
-    let result=files.implementation.execute(serde_json::json!({"target_id":"a","target_revision":1,"action":"read","path":source,"limit":100})).await.unwrap();
-    assert!(
-        serde_json::to_string(&result)
-            .unwrap()
-            .contains("retained remote input")
-    );
+    // Existing jobs remain addressable by their original revision after the
+    // switch, and new computation never falls back to the disabled target.
     let jobs = tools
         .iter()
         .find(|t| t.definition.name == "hpc_jobs")
         .unwrap();
     assert!(jobs.implementation.execute(serde_json::json!({"target_id":"a","target_revision":1,"action":"submit","submission_key":"no-fallback"})).await.is_err());
+    assert!(tools.iter().all(|t| t.definition.name != "hpc_files"));
+    assert!(tools.iter().all(|t| t.definition.name != "hpc_transfer"));
 }
 
 struct MarkerContainer {

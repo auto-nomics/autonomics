@@ -230,11 +230,12 @@ pub(crate) fn registrations(registry: Arc<ComputeRegistry>) -> Vec<ToolRegistrat
 
 /// Target-routed `hpc_*` tool registrations. Mounted for the hpc-ops
 /// agent kind only; every other kind sees no interactive cluster tools.
+/// Filesystem duties live on the VFS mount layer, not here: these are the
+/// scheduler tools (cluster inspection, job lifecycle).
 pub(crate) fn hpc_registrations(
     registry: Arc<ComputeRegistry>,
     agent_path: &str,
     storage: Arc<dyn AgentStorage>,
-    files: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
     // Definitions need no live connection or state-directory creation.
     let catalog = registry.catalog();
@@ -245,8 +246,7 @@ pub(crate) fn hpc_registrations(
             .and_then(|b| b.hpc.clone())
     });
     let client = candidate.unwrap_or_else(|| Arc::new(hpc_tools::HpcClient::definition_only()));
-    let mut templates = hpc_tools::registrations(client.clone());
-    templates.extend(hpc_tools::transfer::registrations(client, files.clone()));
+    let templates = hpc_tools::registrations(client);
     let mut tools = Vec::with_capacity(templates.len());
     for mut template in templates {
         template.definition.input_schema.properties.insert("target_id".into(), json!({"type":"string","description":"Operator compute target owning this account or existing job. Required when multiple remote targets exist. submit must match the global target."}));
@@ -259,7 +259,6 @@ pub(crate) fn hpc_registrations(
                 template,
                 actor: agent_path.into(),
                 storage: storage.clone(),
-                files: files.clone(),
             }),
         ));
     }
@@ -271,7 +270,6 @@ struct RoutedTool {
     template: ToolRegistration,
     actor: String,
     storage: Arc<dyn AgentStorage>,
-    files: Arc<vfs::OpendalFileStorage>,
 }
 impl RoutedTool {
     async fn invoke(
@@ -426,13 +424,15 @@ impl RoutedTool {
                 .map_err(error)?
         };
         let name = self.template.definition.name.as_str();
-        // The account tools split by their dependency: job and cluster
-        // management speak to a scheduler, while file and transfer
-        // operations are plain ssh and work on any remote target.
-        let scheduler_tool = matches!(name, "hpc_jobs" | "hpc_cluster");
-        if scheduler_tool && !matches!(target.target.backend, super::ComputeBackend::Slurm { .. }) {
+        // The remaining account tools are scheduler-bound. Filesystem duties
+        // moved to the VFS mount layer (explicit domain partitions), so a
+        // non-scheduler target has no hpc_* surface at all.
+        if !matches!(name, "hpc_jobs" | "hpc_cluster") {
+            return Err(error("unknown target tool"));
+        }
+        if !matches!(target.target.backend, super::ComputeBackend::Slurm { .. }) {
             return Err(error(
-                "this target has no scheduler; hpc_jobs and hpc_cluster require a scheduler-backed target. Run work with a `process` node, and use hpc_files or hpc_transfer for remote data",
+                "this target has no scheduler; hpc_jobs and hpc_cluster require a scheduler-backed target. Run work with a `process` node, and move data through the VFS domain mounts",
             ));
         }
         if let super::ComputeBackend::Slurm { settings } = &target.target.backend {
@@ -451,28 +451,19 @@ impl RoutedTool {
             })
         })?;
         let mut registrations = Vec::new();
-        if scheduler_tool {
-            // Only scheduler-backed targets own a job monitor hub.
-            let hub = self
-                .registry
-                .monitors
-                .target_hub(&target.monitor_key)
-                .map_err(error)?;
-            registrations.extend(hpc_tools::jobs::monitored_registrations(
-                client.clone(),
-                hpc_tools::jobs::Monitoring {
-                    hub,
-                    agent_path: self.actor.clone(),
-                    storage: self.storage.clone(),
-                },
-            ));
-        } else {
-            registrations.extend(hpc_tools::jobs::registrations(client.clone()));
-        }
-        registrations.extend(hpc_tools::files::registrations(client.clone()));
-        registrations.extend(hpc_tools::transfer::registrations(
-            client,
-            self.files.clone(),
+        // Only scheduler-backed targets own a job monitor hub.
+        let hub = self
+            .registry
+            .monitors
+            .target_hub(&target.monitor_key)
+            .map_err(error)?;
+        registrations.extend(hpc_tools::jobs::monitored_registrations(
+            client.clone(),
+            hpc_tools::jobs::Monitoring {
+                hub,
+                agent_path: self.actor.clone(),
+                storage: self.storage.clone(),
+            },
         ));
         let tool = registrations
             .into_iter()

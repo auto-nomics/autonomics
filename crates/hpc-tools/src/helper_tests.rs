@@ -12,7 +12,6 @@ fn python_remote_helper_regressions() {
     // bytes embedded in the actual tested tool, rather than a newer checkout.
     for (source, embedded) in [
         ("src/remote_jobs.py", crate::jobs::REMOTE_JOBS_HELPER),
-        ("src/remote_fs.py", crate::files::REMOTE_FS),
     ] {
         assert_eq!(fs::read(root.join(source)).unwrap(), embedded.as_bytes());
     }
@@ -20,7 +19,6 @@ fn python_remote_helper_regressions() {
     let mut results = Vec::new();
     for suite in [
         "jobs_remote_test.py",
-        "fs_helper_test.py",
         "quota_remote_test.py",
     ] {
         let output = Command::new(&python)
@@ -38,12 +36,9 @@ fn python_remote_helper_regressions() {
     for source in [
         "src/lib.rs",
         "src/jobs.rs",
-        "src/files.rs",
         "src/remote_jobs.py",
-        "src/remote_fs.py",
         "tests/jobs_remote_test.py",
         "tests/quota_remote_test.py",
-        "tests/fs_helper_test.py",
         "src/helper_tests.rs",
     ] {
         hashes.insert(

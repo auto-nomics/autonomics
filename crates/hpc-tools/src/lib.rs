@@ -1,12 +1,10 @@
 //! Account-scoped HPC tools. Authentication and filesystem authorization remain
 //! with OpenSSH and the remote operating system; these tools grant no new roles.
 
-pub mod files;
 mod followup;
 pub mod jobs;
 pub mod monitor;
 pub mod ssh;
-pub mod transfer;
 
 #[cfg(test)]
 mod helper_tests;
@@ -39,7 +37,7 @@ pub(crate) fn reject_placeholder_strings(
 }
 
 pub fn registrations(client: Arc<HpcClient>) -> Vec<ToolRegistration> {
-    let mut tools = files::registrations(client.clone());
-    tools.extend(jobs::registrations(client));
-    tools
+    // Scheduler duties only: cluster inspection and job lifecycle. File
+    // access moved to the VFS mount layer (explicit domain partitions).
+    jobs::registrations(client)
 }

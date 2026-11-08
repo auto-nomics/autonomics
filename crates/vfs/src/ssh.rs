@@ -590,7 +590,7 @@ impl SshWriter {
         child: &mut Child,
         stdout: Option<ChildStdout>,
     ) -> Result<Value> {
-        let Some(mut stdout) = stdout else {
+        let Some(stdout) = stdout else {
             return Err(failure(ErrorKind::Unexpected, "SSH response unavailable"));
         };
         let mut output = Vec::new();

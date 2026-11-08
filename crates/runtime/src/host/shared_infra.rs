@@ -525,7 +525,6 @@ impl SharedInfra {
                     registry.clone(),
                     agent_path.as_str(),
                     self.storage.clone(),
-                    file_storage.clone(),
                 ));
             }
         }
