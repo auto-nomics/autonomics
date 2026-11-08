@@ -20,6 +20,12 @@ pub struct DeckShared {
     pub store: Arc<DeckStore>,
     /// Shared bibliography, for `{{cite:key}}` References generation.
     pub bib: Option<Arc<bib_base::BibBase>>,
+    /// The process-wide VFS storage, for `asset_attach(vfs_path=…)` reads.
+    /// `None` in in-memory test builds — path-based attach errors clearly.
+    #[cfg(feature = "vfs")]
+    pub vfs: Option<std::sync::Arc<vfs::OpendalFileStorage>>,
+    #[cfg(not(feature = "vfs"))]
+    pub vfs: Option<()>,
     /// Deck figures (prefix `deck-assets`).
     pub assets: BlobArea,
     /// Export artifacts (prefix `deck-exports`).
@@ -49,11 +55,19 @@ impl DeckShared {
         Ok(Self {
             store: Arc::new(store),
             bib: None,
+            vfs: None,
             assets,
             exports,
             exporter,
             export_queue: None,
         })
+    }
+
+    /// Attach the shared VFS storage (path-based asset attachment).
+    #[cfg(feature = "vfs")]
+    pub fn with_vfs(mut self, storage: Option<std::sync::Arc<vfs::OpendalFileStorage>>) -> Self {
+        self.vfs = storage;
+        self
     }
 
     /// Attach the shared bibliography (citation tool support).
@@ -144,6 +158,7 @@ impl DeckShared {
         Ok(Self {
             store: Arc::new(store),
             bib: None,
+            vfs: None,
             assets: BlobArea::in_memory("deck-assets"),
             exports: BlobArea::in_memory("deck-exports"),
             exporter: Arc::new(crate::export::NullExporter),

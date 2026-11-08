@@ -1,4 +1,14 @@
 //! Asset tools: attach figures/images to decks with caption + provenance.
+//!
+//! Bytes come from a REAL source — never generated inline by the model:
+//!
+//! - `vfs_path` (preferred): read via the process-wide VFS. DAG node
+//!   outputs, container artifacts, and code-generated figures all land
+//!   on the VFS, so one path reference covers every workflow
+//!   (`/data/figures/fig1.png`, container work-dir outputs, …).
+//! - `data_base64`: small payloads only (tests, tiny diagrams). Models
+//!   must not synthesize image bytes; anything beyond a few KB belongs
+//!   on the VFS.
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
@@ -9,6 +19,11 @@ use sha2::{Digest, Sha256};
 
 use super::{tool_err, DeckToolState};
 use crate::shared::DeckShared;
+
+/// 50 MiB — same cap as the HTTP multipart route.
+const MAX_ASSET_BYTES: usize = 50 * 1024 * 1024;
+/// Inline base64 payloads beyond this are rejected with VFS guidance.
+const MAX_INLINE_BYTES: usize = 256 * 1024;
 
 /// Build asset tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
@@ -23,22 +38,30 @@ pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
 
 #[tool(
     name = "asset_attach",
-    description = "Attach an image/figure to a deck (base64 bytes). Assets are referenced in \
-                   slide content/frontmatter as `assets://{asset_id}` and resolved to URLs by \
-                   the renderer/exporter. Captions feed figure layouts; provenance records the \
-                   data lineage (e.g. dag://run/<id>/<node> or a file path). \
+    description = "Attach an image/figure file to a deck from a REAL source. Assets are \
+                   referenced in slide content/frontmatter as `assets://{asset_id}` and \
+                   resolved to URLs by the renderer/exporter. Captions feed figure layouts; \
+                   provenance records the data lineage (e.g. dag://run/<id>/<node>). \
+                  \
+                  **Preferred**: pass `vfs_path` — the VFS path where the bytes already exist \
+                  (DAG node output, container artifact, plot file written by code). \
+                  `data_base64` is for small (<256KB) payloads only; never synthesize image \
+                  bytes inline. Pass exactly one source. \
                   \
                   **Examples**: \
-                  • deck_id=\"deck-1\", filename=\"fig1.png\", data_base64=\"iVBORw0KGgo…\", \
-                    caption=\"Figure 1. Kaplan-Meier curves\", provenance=\"dag://run/42/km_plot\""
+                  • deck_id=\"deck-1\", vfs_path=\"/data/run42/km_plot.png\", \
+                    caption=\"Figure 1. Kaplan-Meier curves\", provenance=\"dag://run/42/km_plot\" \
+                  • deck_id=\"deck-1\", filename=\"seq.png\", data_base64=\"iVBORw0KGgo…\""
 )]
 pub struct AssetAttachInput {
     #[desc = "Deck ID"]
     pub deck_id: String,
-    #[desc = "Original filename (extension sets the blob type)"]
-    pub filename: String,
-    #[desc = "Base64-encoded file bytes"]
-    pub data_base64: String,
+    #[desc = "VFS path of the existing file (preferred source), e.g. /data/figures/fig1.png"]
+    pub vfs_path: Option<String>,
+    #[desc = "Base64-encoded bytes (small payloads <256KB only)"]
+    pub data_base64: Option<String>,
+    #[desc = "Display filename (default: basename of vfs_path)"]
+    pub filename: Option<String>,
     #[desc = "Figure caption (rendered in the caption slot of figure layouts)"]
     pub caption: Option<String>,
     #[desc = "Data provenance note (DAG node output, file path, or source)"]
@@ -55,27 +78,77 @@ impl ToolFunction for AssetAttachTool {
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         // Validate the deck exists.
-        let row = self
-            .shared
+        self.shared
             .store
             .get_deck_row(&input.deck_id)
             .await
             .map_err(tool_err)?;
-        let _ = &row;
 
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(input.data_base64.trim())
-            .map_err(|e| agentik_core::tools::ToolError::ExecutionFailed {
-                source: Box::new(crate::Error::Asset(format!("invalid base64: {e}"))),
-            })?;
+        // Exactly one source.
+        let (bytes, filename) = match (&input.vfs_path, &input.data_base64) {
+            (Some(path), Some(_)) => {
+                return Err(agentik_core::tools::ToolError::ExecutionFailed {
+                    source: Box::new(crate::Error::Asset(
+                        "pass exactly one source: vfs_path or data_base64".into(),
+                    )),
+                });
+            }
+            (None, None) => {
+                return Err(agentik_core::tools::ToolError::ExecutionFailed {
+                    source: Box::new(crate::Error::Asset(
+                        "no source: pass vfs_path (preferred) or data_base64".into(),
+                    )),
+                });
+            }
+            (Some(path), None) => {
+                let bytes = self.read_vfs(path).await?;
+                let name = input.filename.clone().unwrap_or_else(|| basename(path));
+                (bytes, name)
+            }
+            (None, Some(b64)) => {
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(b64.trim())
+                    .map_err(|e| agentik_core::tools::ToolError::ExecutionFailed {
+                        source: Box::new(crate::Error::Asset(format!(
+                            "invalid base64: {e} (note: for real files use vfs_path instead)"
+                        ))),
+                    })?;
+                if bytes.len() > MAX_INLINE_BYTES {
+                    return Err(agentik_core::tools::ToolError::ExecutionFailed {
+                        source: Box::new(crate::Error::Asset(format!(
+                            "inline payload too large ({} bytes > {MAX_INLINE_BYTES}); \
+                             write the file to the VFS and pass vfs_path instead",
+                            bytes.len()
+                        ))),
+                    });
+                }
+                let name = input.filename.clone().ok_or_else(|| {
+                    agentik_core::tools::ToolError::ExecutionFailed {
+                        source: Box::new(crate::Error::Asset(
+                            "filename is required when using data_base64".into(),
+                        )),
+                    }
+                })?;
+                (bytes, name)
+            }
+        };
+
         if bytes.is_empty() {
             return Err(agentik_core::tools::ToolError::ExecutionFailed {
                 source: Box::new(crate::Error::Asset("empty asset payload".into())),
             });
         }
+        if bytes.len() > MAX_ASSET_BYTES {
+            return Err(agentik_core::tools::ToolError::ExecutionFailed {
+                source: Box::new(crate::Error::Asset(format!(
+                    "asset too large: {} bytes (cap {MAX_ASSET_BYTES})",
+                    bytes.len()
+                ))),
+            });
+        }
 
         let asset_id = format!("asset-{}", uuid::Uuid::new_v4().simple());
-        let blob_key = crate::assets::asset_blob_key(&input.deck_id, &asset_id, &input.filename);
+        let blob_key = crate::assets::asset_blob_key(&input.deck_id, &asset_id, &filename);
         self.shared
             .assets
             .put(&blob_key, bytes.clone())
@@ -87,11 +160,11 @@ impl ToolFunction for AssetAttachTool {
             h.update(&bytes);
             format!("{:x}", h.finalize())
         };
-        let mime = guess_mime(&input.filename);
+        let mime = guess_mime(&filename);
         let meta = crate::store::AssetMeta {
             id: asset_id.clone(),
             deck_id: input.deck_id.clone(),
-            filename: input.filename.clone(),
+            filename: filename.clone(),
             mime: mime.into(),
             size: bytes.len() as i64,
             sha256: sha,
@@ -105,12 +178,61 @@ impl ToolFunction for AssetAttachTool {
         Ok(AgentToolResult::success_json(serde_json::json!({
             "asset_id": asset_id,
             "ref": format!("assets://{asset_id}"),
-            "filename": input.filename,
+            "filename": filename,
             "mime": mime,
             "size": bytes.len(),
             "blob_key": blob_key,
+            "usage": "reference as assets://{asset_id} in slide content or frontmatter image",
         })))
     }
+}
+
+impl AssetAttachTool {
+    /// Read bytes from the shared VFS (mount-routed; the sanctioned API,
+    /// no raw filesystem access).
+    async fn read_vfs(&self, vpath: &str) -> Result<Vec<u8>, ToolError> {
+        #[cfg(not(feature = "vfs"))]
+        {
+            let _ = vpath;
+            return Err(agentik_core::tools::ToolError::ExecutionFailed {
+                source: Box::new(crate::Error::Asset(
+                    "no VFS support in this build; pass data_base64 instead".into(),
+                )),
+            });
+        }
+        #[cfg(feature = "vfs")]
+        {
+        let storage = self.shared.vfs.as_ref().ok_or_else(|| {
+            agentik_core::tools::ToolError::ExecutionFailed {
+                source: Box::new(crate::Error::Asset(
+                    "no VFS attached in this deployment; pass data_base64 instead".into(),
+                )),
+            }
+        })?;
+        let normalized = vfs::OpendalFileStorage::normalize_path(vpath);
+        let operator = storage.resolve(&normalized);
+        let path = storage.resolve_path(&normalized);
+        let buffer = operator.read(&path).await.map_err(|e| {
+            agentik_core::tools::ToolError::ExecutionFailed {
+                source: Box::new(crate::Error::Asset(format!(
+                    "VFS read failed for {vpath}: {e} (check the path exists — e.g. ls it via \
+                     the file tools first)"
+                ))),
+            }
+        })?;
+        Ok(buffer.to_vec())
+        }
+    }
+}
+
+fn basename(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    trimmed
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("asset.bin")
+        .to_string()
 }
 
 /// Guess a mime type from a filename extension (small allowlist for
@@ -131,5 +253,17 @@ pub fn guess_mime(filename: &str) -> &'static str {
         "tif" | "tiff" => "image/tiff",
         "pdf" => "application/pdf",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basename_helpers() {
+        assert_eq!(basename("/data/figures/fig1.png"), "fig1.png");
+        assert_eq!(basename("trailing/"), "trailing");
+        assert_eq!(basename("plain.png"), "plain.png");
     }
 }

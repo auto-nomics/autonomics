@@ -1158,6 +1158,7 @@ async fn open_deck(
         ppt_base::DeckShared::open_with(&deck_db_path.to_string_lossy(), assets, exports, exporter)
             .await?
             .with_bib(Some(bib.bib.clone()))
+            .with_vfs(Some(file_storage.clone()))
             .with_queue(),
     );
     Ok(deck)
