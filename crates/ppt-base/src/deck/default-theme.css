@@ -1,0 +1,127 @@
+/* Biomedical research: calm contrast, clear hierarchy and room for data. */
+/* Optional chapter navigation: uncomment to show it on content slides.
+:scope:not([data-layout="cover"]):not([data-layout="section"]) {
+  --deck-section-nav-display: flex;
+  --deck-section-nav-active: #11767b;
+  --deck-section-nav-color: #526a7b;
+  padding-top: 88px;
+}
+:scope:not([data-layout="cover"]):not([data-layout="section"])::before { display: none; }
+*/
+:scope {
+  --bio-ink: #183047;
+  --bio-muted: #526a7b;
+  --bio-accent: #11767b;
+  --bio-line: #dbe5e8;
+  --bio-tint: #f2f7f7;
+  background: #ffffff;
+  color: var(--bio-ink);
+  font-family: Inter, "Noto Sans CJK SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 22px;
+  line-height: 1.38;
+  padding: 52px 70px 48px;
+}
+
+/* A restrained rule and folio unify pages without introducing decoration
+   into the scientific figure itself. */
+:scope::before {
+  content: "";
+  position: absolute;
+  left: 70px;
+  top: 28px;
+  width: 42px;
+  height: 3px;
+  background: var(--bio-accent);
+}
+:scope::after {
+  content: attr(data-slide-no);
+  position: absolute;
+  right: 70px;
+  bottom: 20px;
+  color: var(--bio-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.deck-prose { min-width: 0; overflow-wrap: break-word; }
+.deck-prose h1, .deck-prose h2, .deck-prose h3 {
+  color: inherit;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.16;
+}
+.deck-prose h1 { font-size: 1.82em; margin: 0 0 0.42em; }
+.deck-prose h2 { font-size: 1.42em; margin: 0 0 0.62em; }
+.deck-prose h3 { color: var(--bio-accent); font-size: 1.08em; margin: 0.8em 0 0.35em; }
+.deck-prose p { margin: 0.5em 0; line-height: 1.42; }
+.deck-prose ul, .deck-prose ol { margin: 0.45em 0; padding-left: 1.3em; line-height: 1.42; }
+.deck-prose ul { list-style: disc outside; }
+.deck-prose ol { list-style: decimal outside; }
+.deck-prose li { padding-left: 0.12em; margin: 0.34em 0; }
+.deck-prose li::marker { color: var(--bio-accent); }
+.deck-prose strong { color: #106b70; font-weight: 700; }
+.deck-prose a { color: #136c91; text-decoration-thickness: 1px; text-underline-offset: 0.14em; }
+.deck-prose blockquote {
+  margin: 0.8em 0; padding: 0.25em 0 0.25em 0.9em;
+  border-left: 3px solid var(--bio-accent); color: var(--bio-muted);
+}
+.deck-prose code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 0.84em; }
+.deck-prose pre { padding: 12px 16px; background: var(--bio-tint); border-radius: 5px; }
+.deck-prose img { object-fit: contain; }
+
+/* Tables favour comparison: no vertical grid, understated row separators. */
+.deck-prose table { width: 100%; border-collapse: collapse; font-size: 0.76em; line-height: 1.3; }
+.deck-prose th, .deck-prose td { border: 0; border-bottom: 1px solid var(--bio-line); padding: 9px 12px; text-align: left; }
+.deck-prose th { background: var(--bio-tint); color: var(--bio-ink); font-weight: 700; }
+.deck-prose td { font-variant-numeric: tabular-nums; }
+.deck-prose tr:last-child td { border-bottom: 2px solid var(--bio-line); }
+
+/* Opening and section slides frame the narrative without stock imagery. */
+:scope[data-layout="cover"], :scope[data-layout="section"], :scope[data-layout="end"] {
+  background: #173246;
+  color: #ffffff;
+}
+:scope[data-layout="cover"] { padding: 72px 86px; }
+:scope[data-layout="cover"]::before { left: 86px; top: 62px; width: 56px; background: #64c2bc; }
+:scope[data-layout="cover"]::after, :scope[data-layout="section"]::after, :scope[data-layout="end"]::after { color: #b8d0d4; }
+:scope[data-layout="cover"] .deck-prose { max-width: 790px; }
+:scope[data-layout="cover"] .deck-prose h1 { font-size: 2.05em; letter-spacing: -0.035em; }
+:scope[data-layout="cover"] .deck-prose h2,
+:scope[data-layout="cover"] .deck-prose p { color: #cee1e3; font-size: 0.95em; font-weight: 400; }
+:scope[data-layout="cover"] .deck-prose strong,
+:scope[data-layout="section"] .deck-prose strong,
+:scope[data-layout="end"] .deck-prose strong { color: #8bd9cf; }
+:scope[data-layout="section"]::before, :scope[data-layout="end"]::before { background: #64c2bc; }
+
+/* Figure layouts preserve image geometry and keep captions subordinate. */
+.deck-figure { min-width: 0; min-height: 0; }
+.deck-figure-img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; background: transparent; }
+.deck-caption, .deck-table-caption { color: var(--bio-muted); font-size: 0.65em; line-height: 1.35; }
+:scope[data-layout="figure-left"], :scope[data-layout="figure-right"],
+:scope[data-layout="image-left"], :scope[data-layout="image-right"] { gap: 32px; }
+:scope[data-layout="image-left"], :scope[data-layout="image-right"] {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
+}
+:scope[data-layout="image-left"] .deck-figure { grid-column: 1; grid-row: 1; }
+:scope[data-layout="image-left"] .deck-slide-body { grid-column: 2; grid-row: 1; }
+:scope[data-layout="image-right"] .deck-figure { grid-column: 2; grid-row: 1; }
+:scope[data-layout="image-right"] .deck-slide-body { grid-column: 1; grid-row: 1; }
+:scope[data-layout="figure-full"] { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 12px; }
+:scope[data-layout="figure-full"] .deck-figure { align-items: center; }
+:scope[data-layout="figure-full"] .deck-figure-img { min-height: 0; }
+:scope[data-layout="figure-full"] .deck-slide-body { font-size: 0.72em; }
+
+/* Panel placeholders sit alongside the narrative, with labels outside data. */
+:scope[data-layout="panel-grid"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 30px; }
+:scope[data-layout="panel-grid"] .deck-panel-grid { grid-column: 2; grid-row: 1; min-height: 0; }
+:scope[data-layout="panel-grid"] .deck-slide-body { grid-column: 1; grid-row: 1; align-self: center; font-size: 0.78em; }
+.deck-panel { background: #f8fbfb; border: 1px solid var(--bio-line); border-radius: 5px; }
+.deck-panel-letter { color: var(--bio-accent); font-size: 16px; font-weight: 750; }
+.deck-panel-caption { color: var(--bio-muted); font-size: 14px; }
+
+:scope[data-layout="references"] .deck-prose { font-size: 0.76em; line-height: 1.3; }
+:scope[data-layout="references"] .deck-prose h1,
+:scope[data-layout="references"] .deck-prose h2 { font-size: 1.7em; }
+:scope[data-layout="references"] .deck-prose ol { columns: 2; column-gap: 35px; }
+:scope[data-layout="references"] .deck-prose li { break-inside: avoid; margin-bottom: 0.6em; }

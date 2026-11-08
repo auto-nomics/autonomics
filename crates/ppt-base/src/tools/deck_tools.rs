@@ -75,6 +75,8 @@ impl ToolFunction for DeckCreateTool {
                             let md =
                                 row.markdown.replacen("aspectRatio: 16/9", &format!("aspectRatio: {ar}"), 1);
                             deck = s.save_markdown(&deck.meta.id, &md, "set aspect ratio").await?;
+                            let initial = s.theme_css(&deck.meta.id).await?;
+                            s.save_theme_css(&deck.meta.id, &crate::theme::starter_css(&deck.meta), &crate::shared::css_revision(&initial)).await?;
                         }
                         Ok(deck)
                     })
@@ -267,17 +269,25 @@ impl ToolFunction for DeckOutlineTool {
             .load_deck(&input.deck_id)
             .await
             .map_err(tool_err)?;
+        let hierarchy = crate::outline::build_outline(&deck.slides);
         let rows: Vec<serde_json::Value> = deck
             .slides
             .iter()
-            .map(|s| {
+            .zip(hierarchy.iter())
+            .map(|(s, node)| {
                 serde_json::json!({
                     "no": s.no(),
                     "title": s.title,
-                    "level": s.level,
+                    "level": node.level,
                     "layout": s.frontmatter.layout.clone().map(|l| l.to_string()),
                     "clicksTotal": s.click_plan.as_ref().map(|p| p.total),
                     "hasNote": s.note.is_some(),
+                    "depth": node.depth,
+                    "parent": node.parent,
+                    "isSection": node.is_section,
+                    "sectionTitle": node.section_title,
+                    "sectionPath": node.section_path,
+                    "hideInToc": node.hidden,
                 })
             })
             .collect();
@@ -327,6 +337,7 @@ impl ToolFunction for DeckDeleteTool {
                             let _ = s.exports.delete(key).await;
                         }
                     }
+                    let _ = s.assets.delete(&format!("themes/{deck_id}/theme.css")).await;
                     s.store.delete_deck(&deck_id).await?;
                     Ok(())
                 })

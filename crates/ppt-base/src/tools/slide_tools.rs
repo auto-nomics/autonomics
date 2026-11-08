@@ -27,6 +27,7 @@ async fn outline_delta(shared: &DeckShared, deck_id: &str) -> crate::Result<serd
     Ok(serde_json::json!({
         "revision": deck.meta.revision,
         "slide_count": deck.len(),
+        "diagnostics": crate::diagnostics::write_hook(shared, &deck),
         "outline": deck.slides.iter().map(|s| serde_json::json!({
             "no": s.no(),
             "title": s.title,

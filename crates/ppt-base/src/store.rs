@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS deck_exports (
 
 CREATE INDEX IF NOT EXISTS idx_deck_exports
     ON deck_exports(deck_id);
+
+CREATE TABLE IF NOT EXISTS deck_diagnostics (
+    deck_id        TEXT PRIMARY KEY REFERENCES decks(id) ON DELETE CASCADE,
+    revision       TEXT NOT NULL,
+    theme_revision TEXT NOT NULL,
+    rendered       INTEGER NOT NULL DEFAULT 0,
+    findings       TEXT NOT NULL DEFAULT '[]',
+    created_at     TEXT NOT NULL
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -212,6 +221,24 @@ pub struct ExportRecord {
     pub updated_at: String,
 }
 
+/// Latest aesthetics-diagnostics report for one deck (single row per
+/// deck, replaced on every run). `findings` is a JSON array of
+/// [`crate::diagnostics::Finding`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsRow {
+    pub deck_id: String,
+    /// Markdown revision the report was computed against.
+    pub revision: String,
+    /// Theme-CSS revision (sha256) the report was computed against.
+    pub theme_revision: String,
+    /// Whether render-tier rules ran (real Chromium layout) or only the
+    /// static markdown rules did.
+    pub rendered: bool,
+    pub findings: Vec<crate::diagnostics::Finding>,
+    pub created_at: String,
+}
+
 // ---------------------------------------------------------------------------
 // DeckStore
 // ---------------------------------------------------------------------------
@@ -313,7 +340,7 @@ impl DeckStore {
     pub async fn update_parsed_cache(&self, id: &str, revision: &str, parsed_cache: &str) -> Result<()> {
         self.conn
             .execute(
-                "UPDATE decks SET parsed_cache = ?2, revision = ?3 WHERE id = ?1",
+                "UPDATE decks SET parsed_cache = ?2 WHERE id = ?1 AND revision = ?3",
                 turso::params![id, parsed_cache, revision],
             )
             .await?;
@@ -399,7 +426,7 @@ impl DeckStore {
 
     /// Delete a deck and all child rows.
     pub async fn delete_deck(&self, id: &str) -> Result<()> {
-        for table in ["deck_versions", "deck_assets", "deck_exports"] {
+        for table in ["deck_versions", "deck_assets", "deck_exports", "deck_diagnostics"] {
             self.conn
                 .execute(&format!("DELETE FROM {table} WHERE deck_id = ?1"), turso::params![id])
                 .await?;
@@ -641,6 +668,60 @@ impl DeckStore {
         }
     }
 
+    /// Replace the stored diagnostics report for a deck (latest-wins).
+    pub async fn save_diagnostics(&self, row: &DiagnosticsRow) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO deck_diagnostics \
+                 (deck_id, revision, theme_revision, rendered, findings, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                turso::params![
+                    row.deck_id.clone(),
+                    row.revision.clone(),
+                    row.theme_revision.clone(),
+                    i64::from(row.rendered),
+                    serde_json::to_string(&row.findings)?,
+                    row.created_at.clone(),
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Latest diagnostics report for a deck, if one was ever stored.
+    pub async fn get_diagnostics(&self, deck_id: &str) -> Result<Option<DiagnosticsRow>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT deck_id, revision, theme_revision, rendered, findings, created_at \
+                 FROM deck_diagnostics WHERE deck_id = ?1",
+                turso::params![deck_id],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => Ok(Some(DiagnosticsRow {
+                deck_id: row.get(0)?,
+                revision: row.get(1)?,
+                theme_revision: row.get(2)?,
+                rendered: row.get::<i64>(3)? != 0,
+                findings: serde_json::from_str(&row.get::<String>(4)?).unwrap_or_default(),
+                created_at: row.get(5)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Drop the diagnostics row when a deck is deleted.
+    pub async fn delete_diagnostics(&self, deck_id: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM deck_diagnostics WHERE deck_id = ?1",
+                turso::params![deck_id],
+            )
+            .await?;
+        Ok(())
+    }
+
     fn export_from_row(row: &turso::Row) -> Result<ExportRecord> {
         Ok(ExportRecord {
             id: row.get(0)?,
@@ -713,6 +794,17 @@ mod tests {
             .unwrap();
         let row = s.get_deck_row("deck-1").await.unwrap();
         assert_eq!(row.parsed_cache, "{\"ok\":true}");
+    }
+
+    #[tokio::test]
+    async fn stale_cache_fill_cannot_revert_revision() {
+        let s = store().await;
+        s.create_deck("deck-cache", "T", "# old", "old", "old-cache").await.unwrap();
+        s.save_deck("deck-cache", "T", "# new", "new", "new-cache", "edit", None).await.unwrap();
+        s.update_parsed_cache("deck-cache", "old", "stale-cache").await.unwrap();
+        let row = s.get_deck_row("deck-cache").await.unwrap();
+        assert_eq!(row.revision, "new");
+        assert_eq!(row.parsed_cache, "new-cache");
     }
 
     #[tokio::test]

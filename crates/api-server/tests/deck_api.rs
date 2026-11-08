@@ -377,3 +377,147 @@ async fn bad_format_rejected() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn theme_and_slide_css_are_independent_versioned_and_follow_pages() {
+    let (app, handle) = app().await;
+    let markdown = "---\ntitle: T\n---\n\n# Cover\n\n---\nhide: true\n---\n\n# Hidden\n\n---\n\n# First\n\n---\n\n# Second\n";
+    let response = app.clone().oneshot(request("POST", "/decks", Some(json!({"title":"T", "markdown":markdown}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = json_of(response.into_body()).await;
+    let id = created["deck"]["id"].as_str().unwrap();
+    let initial_rev = created["deck"]["revision"].as_str().unwrap();
+    let theme_rev = created["themeRevision"].as_str().unwrap();
+    let theme = ":root { --deck-width: 1280px; --deck-height: 720px; } :scope { background: rgb(1, 2, 3); }";
+    let response = app.clone().oneshot(request("PUT", &format!("/decks/{id}/theme.css"), Some(json!({"css":theme,"revision":theme_rev}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app.clone().oneshot(request("PUT", &format!("/decks/{id}/theme.css"), Some(json!({"css":"stale", "revision":theme_rev}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = app.clone().oneshot(request("GET", &format!("/decks/{id}"), None)).await.unwrap();
+    let current = json_of(response.into_body()).await;
+    assert_eq!(current["themeCss"], theme);
+    assert_eq!(current["canvasSize"], json!({"width":1280,"height":720}));
+    assert_eq!(current["deck"]["revision"], initial_rev);
+    let invalid = app.clone().oneshot(request("PUT", &format!("/decks/{id}/theme.css"), Some(json!({"css":":root { --deck-width: 1280px; }", "revision":current["themeRevision"]}).to_string()))).await.unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    let export = app.clone().oneshot(request("POST", &format!("/decks/{id}/exports"), Some(json!({"format":"pptx"}).to_string()))).await.unwrap();
+    assert_eq!(export.status(), StatusCode::ACCEPTED);
+    let exports = handle.shared().store.list_exports(id).await.unwrap();
+    let params: Value = serde_json::from_str(&exports[0].params).unwrap();
+    assert_eq!((params["canvasWidth"].as_u64(), params["canvasHeight"].as_u64()), (Some(1280), Some(720)));
+
+    let css = ".deck-prose h1 { color: red; } /* --- */";
+    let response = app.clone().oneshot(request("PUT", &format!("/decks/{id}/slides/2/css"), Some(json!({"css":css,"revision":initial_rev}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let slide_rev = json_of(response.into_body()).await["revision"].as_str().unwrap().to_owned();
+    let response = app.clone().oneshot(request("PUT", &format!("/decks/{id}/slides/2/css"), Some(json!({"css":"stale", "revision":initial_rev}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = app.clone().oneshot(request("GET", &format!("/decks/{id}"), None)).await.unwrap();
+    let current = json_of(response.into_body()).await;
+    assert_eq!(current["slides"][1]["title"], "First");
+    assert_eq!(current["slides"][1]["frontmatter"]["slideCss"], css);
+    assert_eq!(current["slides"][2]["title"], "Second");
+    assert_eq!(current["deck"]["revision"], slide_rev);
+
+    // Source-level page move: the hidden page occupies position 2.
+    let response = app.clone().oneshot(request("POST", &format!("/decks/{id}/slides/3/move"), Some(json!({"to":4}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app.clone().oneshot(request("GET", &format!("/decks/{id}"), None)).await.unwrap();
+    let moved = json_of(response.into_body()).await;
+    assert_eq!(moved["slides"][2]["title"], "First");
+    assert_eq!(moved["slides"][2]["frontmatter"]["slideCss"], css);
+
+    let size = handle.shared().canvas_size(id, &handle.shared().load_deck(id).await.unwrap().meta).await.unwrap();
+    let (_, token) = handle.shared().enqueue_export(id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], size.width, size.height, vec![]).await.unwrap();
+    let current_theme = app.clone().oneshot(request("GET", &format!("/decks/{id}/theme.css"), None)).await.unwrap();
+    let theme_revision = json_of(current_theme.into_body()).await["revision"].as_str().unwrap().to_owned();
+    let updated = app.clone().oneshot(request("PUT", &format!("/decks/{id}/theme.css"), Some(json!({"css":":root { --deck-width: 1920px; --deck-height: 1080px; }", "revision":theme_revision}).to_string()))).await.unwrap();
+    assert_eq!(updated.status(), StatusCode::OK);
+    let default_theme = app.clone().oneshot(request("GET", &format!("/decks/{id}/default-theme.css"), None)).await.unwrap();
+    let default_css = json_of(default_theme.into_body()).await["css"].as_str().unwrap().to_owned();
+    assert!(default_css.contains("--deck-width: 1920px"));
+    assert!(default_css.contains("--deck-height: 1080px"));
+    assert!(default_css.contains("--bio-accent"));
+    let response = app.clone().oneshot(request("GET", &format!("/decks/{id}/print-data?token={token}"), None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let printed = json_of(response.into_body()).await;
+    assert_eq!(printed["canvasSize"], json!({"width":1280,"height":720}));
+    assert_eq!(printed["themeCss"], theme);
+    assert_eq!(printed["slides"][2]["frontmatter"]["slideCss"], css);
+    let response = app.clone().oneshot(request("DELETE", &format!("/decks/{id}"), None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(handle.shared().assets.get_optional(&format!("themes/{id}/theme.css")).await.unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn diagnostics_post_runs_and_get_serves_report() {
+    let (app, handle) = app().await;
+    let res = app
+        .clone()
+        .oneshot(request("POST", "/decks", Some(r#"{"title":"诊断","template":"meeting"}"#.into())))
+        .await
+        .unwrap();
+    let created = json_of(res.into_body()).await;
+    let id = created["deck"]["id"].as_str().unwrap().to_string();
+
+    // No report yet: GET reports null + fresh=false.
+    let res = app.clone().oneshot(request("GET", &format!("/decks/{id}/diagnostics"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let state = json_of(res.into_body()).await;
+    assert_eq!(state["report"], Value::Null);
+    assert_eq!(state["fresh"], json!(false));
+
+    // POST forces a synchronous run. NullExporter in tests → static tier
+    // only, rendered=false; the meeting template has no empty slides, so
+    // findings may legitimately be empty.
+    let res = app.clone().oneshot(request("POST", &format!("/decks/{id}/diagnostics"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let report = json_of(res.into_body()).await;
+    assert_eq!(report["deckId"], json!(id));
+    assert_eq!(report["rendered"], json!(false));
+
+    // GET now serves the stored report, fresh against current revisions.
+    let res = app.clone().oneshot(request("GET", &format!("/decks/{id}/diagnostics"), None)).await.unwrap();
+    let state = json_of(res.into_body()).await;
+    assert_eq!(state["fresh"], json!(true));
+    assert_eq!(state["report"]["revision"], report["revision"]);
+
+    // Deck payload carries the summary badge.
+    let res = app.clone().oneshot(request("GET", &format!("/decks/{id}"), None)).await.unwrap();
+    let payload = json_of(res.into_body()).await;
+    assert_eq!(payload["diagnostics"]["fresh"], json!(true));
+    assert_eq!(payload["diagnostics"]["rendered"], json!(false));
+
+    // Deleting the deck drops the report.
+    let res = app.clone().oneshot(request("DELETE", &format!("/decks/{id}"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(handle.shared().latest_diagnostics(&id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn outline_matches_between_viewer_and_print_and_tracks_edits() {
+    let (app, handle) = app().await;
+    let markdown = "# Cover\n\n---\nlayout: section\nsectionTitle: 方法\n---\n\n# 研究方法\n\n---\n\n## 队列\n\n---\nlayout: section\nlevel: 2\n---\n\n## 亚组\n\n---\nhideInToc: true\n---\n\n### 隐藏页面\n";
+    let response = app.clone().oneshot(request("POST", "/decks", Some(json!({"title":"Outline", "markdown":markdown}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = json_of(response.into_body()).await;
+    let id = created["deck"]["id"].as_str().unwrap();
+    assert_eq!(created["outline"][1]["sectionTitle"], "方法");
+    assert_eq!(created["outline"][2]["parent"], 2);
+    assert_eq!(created["outline"][4]["sectionPath"], json!([2,4]));
+    assert_eq!(created["outline"][4]["hidden"], true);
+    let (_, token) = handle.shared().enqueue_export(id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], 980, 551, vec![]).await.unwrap();
+    let response = app.clone().oneshot(request("GET", &format!("/decks/{id}/print-data?token={token}"), None)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_of(response.into_body()).await["outline"], created["outline"]);
+    let response = app.clone().oneshot(request("POST", &format!("/decks/{id}/slides/2/move"), Some(json!({"to":4}).to_string()))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app.oneshot(request("GET", &format!("/decks/{id}"), None)).await.unwrap();
+    let updated = json_of(response.into_body()).await;
+    assert_eq!(updated["outline"][3]["sectionTitle"], "方法");
+    assert_eq!(updated["outline"][3]["slide"], 4);
+}

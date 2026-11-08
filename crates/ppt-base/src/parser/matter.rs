@@ -27,11 +27,10 @@ pub enum FrontmatterStyle {
     YamlCodeblock,
 }
 
-/// `^---[^\n]*\r?\n([\s\S]*?)---` — anchored headmatter; the capture is
-/// lazy so it stops at the first `---` (Slidev's exact behavior, quirks
-/// included).
+/// Frontmatter ends at a standalone delimiter line, not `---` inside a
+/// YAML value (CSS commonly contains repeated dashes).
 static RE_FRONTMATTER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"(?s)^---[^\n]*\r?\n(.*?)---").expect("valid regex")
+    regex::Regex::new(r"(?ms)\A---[^\n]*\r?\n(.*?)^---[ \t]*\r?$").expect("valid regex")
 });
 
 /// `^\s*```ya?ml([\s\S]*?)````

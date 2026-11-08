@@ -1,7 +1,10 @@
+@layer deck-defaults, deck-theme, deck-override;
+
 /* deck feature styles — slide canvas, layouts, click states, editor chrome. */
 
 .deck-editor {
   display: flex;
+  flex-direction: column;
   min-height: 0;
   flex: 1;
   overflow: hidden;
@@ -108,7 +111,8 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
 }
 
 .deck-canvas {
@@ -173,7 +177,8 @@
 .deck-notes {
   border-top: 1px solid var(--deck-border, #e2e2e8);
   font-size: 13px;
-  max-height: 120px;
+  height: 120px;
+  flex: 0 0 120px;
   overflow-y: auto;
   padding: 8px 12px;
 }
@@ -186,16 +191,47 @@
   letter-spacing: 0.04em;
 }
 
+@layer deck-defaults {
 /* ── slide layouts (CSS-grid via data-layout) ───────────────────────── */
+
+/* Off until the deck theme opts in with --deck-section-nav-display: flex. */
+.deck-section-nav {
+  display: var(--deck-section-nav-display, none);
+  position: absolute;
+  top: var(--deck-section-nav-top, 18px);
+  left: var(--deck-section-nav-inset, 70px);
+  right: var(--deck-section-nav-inset, 70px);
+  z-index: 3;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--deck-section-nav-color, #647b8a);
+  font-size: var(--deck-section-nav-font-size, 14px);
+  line-height: 1.25;
+}
+.deck-section-nav-list { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; margin: 0; padding: 0; list-style: none; overflow: hidden; }
+.deck-section-nav-item { flex: 0 1 auto; min-width: 0; }
+.deck-section-nav-link { position: relative; display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 4px 0 6px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.deck-section-nav-link::after { content: ""; position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: currentColor; opacity: 0; }
+.deck-section-nav-link:disabled { opacity: 1; cursor: default; }
+.deck-section-nav-link[data-active="true"] { color: var(--deck-section-nav-active, #11767b); font-weight: 700; }
+.deck-section-nav-link[data-active="true"]::after { opacity: 1; }
+.deck-section-nav-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.deck-section-nav-number { opacity: .7; font-variant-numeric: tabular-nums; }
+.deck-section-nav-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-section-breadcrumb { display: flex; gap: 6px; min-width: 0; overflow: hidden; color: var(--deck-section-nav-active, #11767b); }
+.deck-section-breadcrumb-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.deck-section-breadcrumb-item::before { content: "/"; margin-right: 6px; opacity: .5; }
 
 .deck-slide {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  height: 100% !important;
+  box-sizing: border-box !important;
   overflow: hidden;
   padding: 56px 64px;
   position: relative;
-  width: 100%;
+  width: 100% !important;
 }
 
 .deck-slide[data-layout="cover"] {
@@ -387,3 +423,35 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+} /* deck-defaults */
+
+.deck-editor-toolbar { display: flex; align-items: stretch; min-width: 0; min-height: 42px; padding: 0 12px; border-bottom: 1px solid var(--border, #e2e2e8); }
+.deck-mode-tabs { display: flex; align-items: stretch; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.deck-mode-tabs::-webkit-scrollbar { display: none; }
+.deck-mode-tab { position: relative; display: inline-flex; align-items: center; gap: 7px; flex: none; padding: 0 12px; border: 0; background: transparent; color: var(--muted-foreground, #6b7280); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.deck-mode-tab:hover { color: var(--foreground, #202735); background: var(--accent, #f1f1f4); }
+.deck-mode-tab[aria-selected="true"] { color: var(--foreground, #202735); font-weight: 600; }
+.deck-mode-tab[aria-selected="true"]::after { content: ""; position: absolute; right: 11px; bottom: 0; left: 11px; height: 2px; border-radius: 2px 2px 0 0; background: var(--primary, #167b80); }
+.deck-mode-tab:focus-visible, .deck-save-btn:focus-visible { outline: 2px solid var(--ring, #4c6ef5); outline-offset: -2px; }
+.deck-mode-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--primary, #167b80); }
+.deck-outline-row { display: flex; align-items: center; min-width: 0; border-radius: 6px; }
+.deck-outline-row:hover { background: var(--accent, #f1f1f4); }
+.deck-outline-row.deck-toc-item--active { background: var(--accent, #e6e9ff); color: var(--accent-foreground, #202735); }
+.deck-outline-toggle { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; height: 26px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.deck-outline-link { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; padding: 5px 7px 5px 0; border: 0; background: transparent; color: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.deck-editor-actions { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; padding-left: 12px; }
+.deck-save-status { color: var(--muted-foreground, #6b7280); font-size: 12px; white-space: nowrap; }
+.deck-save-btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--foreground, #202735); font-size: 12px; cursor: pointer; }
+.deck-save-btn:hover:not(:disabled) { background: var(--accent, #f1f1f4); }
+.deck-save-btn:disabled { color: var(--muted-foreground, #6b7280); opacity: 0.55; cursor: default; }
+.deck-preview-panel:not([hidden]) { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.deck-source { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 12px; gap: 8px; }
+.deck-source-host:not([hidden]) { display: flex; flex: 1; min-height: 0; }
+.deck-monaco { flex: 1; min-width: 0; min-height: 0; border: 1px solid var(--deck-border, #999); }
+.deck-source [role="alert"] { color: #d44; }
+
+.deck-css-editor-host:not([hidden]) { display: flex; flex: 1; min-height: 0; }
+.deck-css-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.deck-css-toolbar select { max-width: 300px; color: inherit; background: var(--background); border: 1px solid var(--deck-border, #999); border-radius: 4px; padding: 5px; }
+.deck-css-help { color: var(--deck-muted, #6b7280); font-size: 12px; margin: 0; }

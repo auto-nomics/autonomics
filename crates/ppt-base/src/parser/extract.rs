@@ -73,11 +73,12 @@ pub fn extract_title_level(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
+    let stripped = strip_code_blocks(content);
     if let Some(t) = fm_title {
-        let level = frontmatter.get("level").and_then(Value::as_u64).map(|l| l as u8);
+        let level = frontmatter.get("level").and_then(Value::as_u64).map(|l| l as u8)
+            .or_else(|| RE_HEADING.captures(&stripped).and_then(|caps| caps.get(1)).and_then(|m| m.as_str().len().try_into().ok()));
         return (Some(t), level);
     }
-    let stripped = strip_code_blocks(content);
     match RE_HEADING.captures(&stripped) {
         Some(caps) => {
             let title = caps.get(2).map(|m| m.as_str().trim().to_string());
@@ -292,6 +293,13 @@ mod tests {
             extract_title_level("# Heading\n", &fm(json!({"title": "FM", "level": 1})));
         assert_eq!(title.as_deref(), Some("FM"));
         assert_eq!(level, Some(1));
+    }
+
+    #[test]
+    fn frontmatter_title_keeps_heading_depth_when_level_is_absent() {
+        let (title, level) = extract_title_level("## Heading\n", &fm(json!({"title": "Short title"})));
+        assert_eq!(title.as_deref(), Some("Short title"));
+        assert_eq!(level, Some(2));
     }
 
     #[test]

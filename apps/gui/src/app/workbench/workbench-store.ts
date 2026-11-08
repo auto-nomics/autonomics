@@ -58,7 +58,7 @@ function clampPercent(value: number, min: number, max: number, fallback: number)
 }
 
 function isContainerId(value: unknown): value is ContainerId {
-  return value === "bibliography" || value === "wiki" || value === "agents" || value === "projects" || value === "vfs";
+  return value === "bibliography" || value === "wiki" || value === "agents" || value === "projects" || value === "vfs" || value === "decks";
 }
 
 /** A wiki editor's per-instance state (history stack + cursor + mode). */

@@ -531,6 +531,25 @@ impl Tab {
         Ok(std::fs::write(path, bytes)?)
     }
 
+    /// Capture a screenshot with explicit params (clip region,
+    /// capture-beyond-viewport, scale) — the deck exporter renders
+    /// slides at exact canvas dimensions this way.
+    pub async fn screenshot_with(
+        &self,
+        params: chromiumoxide::page::ScreenshotParams,
+    ) -> Result<Vec<u8>> {
+        Ok(self.page.screenshot(params).await?)
+    }
+
+    /// Print the page to PDF (`Page.printToPDF`). Only supported in
+    /// headless Chromium.
+    pub async fn print_to_pdf(
+        &self,
+        params: chromiumoxide::cdp::browser_protocol::page::PrintToPdfParams,
+    ) -> Result<Vec<u8>> {
+        Ok(self.page.pdf(params).await?)
+    }
+
     /// Set the page's HTML content directly.
     pub async fn set_content(&self, html: &str) -> Result<()> {
         self.page.set_content(html).await?;

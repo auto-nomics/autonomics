@@ -1161,6 +1161,8 @@ async fn open_deck(
             .with_vfs(Some(file_storage.clone()))
             .with_queue(),
     );
+    // Post-write aesthetics diagnostics (render-tier via the same exporter).
+    deck.start_diagnostics_worker();
     Ok(Arc::new(ppt_base::DeckHandle::spawn(deck)))
 }
 

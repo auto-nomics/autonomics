@@ -34,6 +34,10 @@ pub struct DeckShared {
     pub exporter: Arc<dyn DeckExporter>,
     /// Single-worker export queue; created via [`DeckShared::with_queue`].
     pub export_queue: ExportQueueHandle,
+    /// Post-write diagnostics worker sender; installed once at wiring
+    /// time via [`DeckShared::start_diagnostics_worker`]. `None` (unset)
+    /// in tests unless explicitly started — writes then skip the trigger.
+    pub diagnostics_tx: std::sync::OnceLock<tokio::sync::mpsc::Sender<String>>,
 }
 
 /// Serde envelope for the parsed-deck cache stored in `decks.parsed_cache`.
@@ -60,6 +64,7 @@ impl DeckShared {
             exports,
             exporter,
             export_queue: None,
+            diagnostics_tx: std::sync::OnceLock::new(),
         })
     }
 
@@ -108,6 +113,7 @@ impl DeckShared {
         canvas_height: u32,
         notes: Vec<String>,
     ) -> Result<(ExportRecord, String)> {
+        let theme_css = self.theme_css(deck_id).await?;
         let raw_token = uuid::Uuid::new_v4().simple().to_string();
         let token_hash = {
             use sha2::{Digest, Sha256};
@@ -127,6 +133,9 @@ impl DeckShared {
                 "dpi": dpi,
                 "pages": pages,
                 "notes": notes.len(),
+                "canvasWidth": canvas_width,
+                "canvasHeight": canvas_height,
+                "themeCss": theme_css,
             })
             .to_string(),
             print_token_hash: Some(token_hash),
@@ -172,7 +181,60 @@ impl DeckShared {
             exports: BlobArea::in_memory("deck-exports"),
             exporter: Arc::new(crate::export::NullExporter),
             export_queue: None,
+            diagnostics_tx: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Spawn the post-write diagnostics worker and arm the write-hook
+    /// sender (idempotent; call once at wiring time).
+    pub fn start_diagnostics_worker(self: &Arc<Self>) {
+        if self.diagnostics_tx.get().is_some() {
+            return;
+        }
+        let tx = crate::diagnostics::spawn_worker(self.clone());
+        let _ = self.diagnostics_tx.set(tx);
+    }
+
+    /// Fire-and-forget diagnostics request; called at the end of every
+    /// write sink. Never blocks the write actor (try_send, drop on full).
+    pub fn notify_diagnostics(&self, deck_id: &str) {
+        if let Some(tx) = self.diagnostics_tx.get() {
+            if tx.try_send(deck_id.to_string()).is_err() {
+                tracing::debug!(deck = %deck_id, "diagnostics queue full or closed; skipping run");
+            }
+        }
+    }
+
+    /// Latest stored diagnostics report, if any.
+    pub async fn latest_diagnostics(
+        &self,
+        deck_id: &str,
+    ) -> Result<Option<crate::store::DiagnosticsRow>> {
+        self.store.get_diagnostics(deck_id).await
+    }
+
+    /// Per-deck CSS file, separate from the Markdown source.
+    pub async fn theme_css(&self, id: &str) -> Result<String> {
+        self.store.get_deck_row(id).await?;
+        let bytes = self.assets.get_optional(&format!("themes/{id}/theme.css")).await?.unwrap_or_default();
+        String::from_utf8(bytes).map_err(|e| crate::Error::Asset(format!("theme CSS is not UTF-8: {e}")))
+    }
+
+    pub async fn save_theme_css(&self, id: &str, css: &str, expected: &str) -> Result<String> {
+        let current = self.theme_css(id).await?;
+        let actual = css_revision(&current);
+        if actual != expected {
+            return Err(crate::Error::RevisionConflict { expected: actual, actual: expected.to_string() });
+        }
+        crate::theme::canvas_size(css, crate::theme::CanvasSize { width: 980, height: 551 })?;
+        self.assets.put(&format!("themes/{id}/theme.css"), css.as_bytes().to_vec()).await?;
+        self.notify_diagnostics(id);
+        Ok(css_revision(css))
+    }
+
+    pub async fn canvas_size(&self, id: &str, meta: &ppt_types::DeckMeta) -> Result<crate::theme::CanvasSize> {
+        let theme = self.theme_css(id).await?;
+        crate::theme::canvas_size(&theme, crate::theme::CanvasSize { width: meta.canvas(), height: meta.canvas_height() })
     }
 
     /// Load a deck: parsed-cache fast path keyed by revision, assemble
@@ -220,6 +282,12 @@ impl DeckShared {
         self.store
             .create_deck(&id, title, &markdown, &deck.meta.revision, &cache)
             .await?;
+        // Every new presentation owns an independent theme file. Legacy
+        // decks without one still read as an empty theme.
+        if let Err(error) = self.assets.put(&format!("themes/{id}/theme.css"), crate::theme::starter_css(&deck.meta).into_bytes()).await {
+            let _ = self.store.delete_deck(&id).await;
+            return Err(error);
+        }
         // Reload to pick up real timestamps from the row.
         let row = self.store.get_deck_row(&id).await?;
         let mut deck = deck;
@@ -249,6 +317,8 @@ impl DeckShared {
                 total: deck.len(),
             })?;
 
+        let theme_css = self.theme_css(deck_id).await?;
+        let canvas_size = crate::theme::canvas_size(&theme_css, crate::theme::CanvasSize { width: deck.meta.canvas(), height: deck.meta.canvas_height() })?;
         let raw_token = uuid::Uuid::new_v4().simple().to_string();
         let token_hash = {
             use sha2::{Digest, Sha256};
@@ -267,6 +337,9 @@ impl DeckShared {
                 "preview": true,
                 "slide": no,
                 "clicks": clicks,
+                "canvasWidth": canvas_size.width,
+                "canvasHeight": canvas_size.height,
+                "themeCss": theme_css,
             })
             .to_string(),
             print_token_hash: Some(token_hash),
@@ -288,8 +361,8 @@ impl DeckShared {
             format: crate::store::ExportFormat::Png,
             dpi,
             pages: vec![no],
-            canvas_width: deck.meta.canvas(),
-            canvas_height: deck.meta.canvas_height(),
+            canvas_width: canvas_size.width,
+            canvas_height: canvas_size.height,
             notes: Vec::new(),
             print_token: raw_token,
         };
@@ -325,6 +398,7 @@ impl DeckShared {
                 None,
             )
             .await?;
+        self.notify_diagnostics(id);
         Ok(deck)
     }
 }
@@ -384,4 +458,10 @@ mod tests {
     fn deck_raw(_id: &str) -> String {
         String::new()
     }
+}
+
+/// Content revision used for independent CSS file concurrency checks.
+pub fn css_revision(css: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(css.as_bytes()))
 }

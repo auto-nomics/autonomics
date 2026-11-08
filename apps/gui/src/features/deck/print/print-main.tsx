@@ -18,6 +18,8 @@ import { fetchPrintData } from "../deck-api-print";
 import { PrintDeck } from "./print-deck";
 
 export function bootPrintPage(container: HTMLDivElement): void {
+  document.documentElement.dataset.deckReady = "false";
+  delete document.documentElement.dataset.deckError;
   const params = new URLSearchParams(location.search);
   const deckId = params.get("deck") ?? "";
   const token = params.get("token") ?? "";
@@ -26,6 +28,7 @@ export function bootPrintPage(container: HTMLDivElement): void {
 
   if (!deckId || !token) {
     container.textContent = "print page requires ?deck= and ?token=";
+    document.documentElement.dataset.deckError = "print page requires ?deck= and ?token=";
     return;
   }
 
@@ -43,7 +46,7 @@ export function bootPrintPage(container: HTMLDivElement): void {
     })
     .catch((e: unknown) => {
       container.textContent = `print payload failed: ${String(e)}`;
-      // The exporter's wait protocol times out and reports the error.
+      // Surface the real initialization failure to the exporter immediately.
       document.documentElement.dataset.deckError = String(e);
     });
 }

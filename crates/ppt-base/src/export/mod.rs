@@ -65,6 +65,21 @@ pub trait DeckExporter: Send + Sync {
             "this backend does not support slide preview".into(),
         ))
     }
+
+    /// Aesthetics diagnostics: drive the print page to every
+    /// `(slide, clicks)` target and evaluate `window.__deckDiagnose()`
+    /// on each, returning a JSON object mapping slide number (string) to
+    /// the findings array for that slide. Default: unsupported (the
+    /// report degrades to the static tier).
+    async fn diagnose_slides(
+        &self,
+        _job: &ExportJob,
+        _targets: &[(u32, u32)],
+    ) -> Result<serde_json::Value> {
+        Err(Error::Export(
+            "this backend does not support layout diagnostics".into(),
+        ))
+    }
 }
 
 /// No-op exporter: every job fails with an actionable message.

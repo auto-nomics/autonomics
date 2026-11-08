@@ -1,21 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import * as monaco from "monaco-editor";
-import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker.js?worker&inline";
-import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker.js?worker&inline";
-import CssWorker from "monaco-editor/esm/vs/language/css/css.worker.js?worker&inline";
-import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker.js?worker&inline";
+import "@/components/editor/monaco-workers";
 import { useTheme } from "@/hooks/use-theme";
 import { LanguageClient } from "./language-client";
 import type { FileEdits } from "./workspace-edit";
-
-self.MonacoEnvironment = {
-  getWorker(_moduleId, label) {
-    if (label === "json") return new JsonWorker();
-    if (["css", "scss", "less"].includes(label)) return new CssWorker();
-    if (["html", "handlebars", "razor"].includes(label)) return new HtmlWorker();
-    return new EditorWorker();
-  },
-};
 
 // Project TypeScript intelligence comes from the development container, not
 // Monaco's browser worker, which cannot see the project's dependencies.

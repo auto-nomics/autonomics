@@ -64,6 +64,24 @@ impl BlobArea {
         }
     }
 
+    /// Read a blob if it exists, distinguishing absence from storage failures.
+    pub async fn get_optional(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        match &self.backend {
+            #[cfg(feature = "vfs")]
+            Backend::Vfs(storage) => {
+                let vpath = vfs::OpendalFileStorage::normalize_path(&self.vpath(key));
+                let operator = storage.resolve(&vpath);
+                let path = storage.resolve_path(&vpath);
+                match operator.read(&path).await {
+                    Ok(buf) => Ok(Some(buf.to_vec())),
+                    Err(e) if e.kind() == vfs::opendal::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(Error::Asset(format!("blob read {key}: {e}"))),
+                }
+            }
+            Backend::Memory(map) => Ok(map.lock().expect("blob map poisoned").get(&self.vpath(key)).cloned()),
+        }
+    }
+
     /// Read a blob; missing keys are [`Error::Asset`] with "not found".
     pub async fn get(&self, key: &str) -> Result<Vec<u8>> {
         match &self.backend {

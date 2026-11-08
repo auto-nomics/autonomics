@@ -4,9 +4,10 @@
  * title + template dialog. Wiki-sidebar shape, deck-sized.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Plus, Presentation, RefreshCw } from "lucide-react";
+import { Loader2, Plus, Presentation, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -15,8 +16,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { createDeck, fetchDeckList, type DeckSummary, type DeckTemplate } from "./deck-api";
+import { createDeck, fetchDeck, fetchDeckList, type DeckSummary, type DeckTemplate } from "./deck-api";
 import { openDeck } from "./deck-state";
+import { DeckOutline, outlineOrPages } from "./deck-outline";
+import { getGroup, useWorkbenchState } from "@/app/workbench/workbench-store";
+import type { DeckPayload } from "./deck-api";
 
 const TEMPLATES: readonly { id: DeckTemplate; label: string; hint: string }[] = [
   { id: "meeting", label: "组会/文献报告", hint: "背景·方法·panel-grid 结果·参考文献" },
@@ -26,8 +30,32 @@ const TEMPLATES: readonly { id: DeckTemplate; label: string; hint: string }[] = 
 ];
 
 export function DeckSidebarView(): React.ReactNode {
+  const workbench = useWorkbenchState();
+  const group = getGroup(workbench.groups, workbench.groups.active);
+  const active = group?.editors.find(e => e.id === group.activeId && e.kind === "deck");
+  const activeId = active?.params.deckId as string | undefined;
+  const [tab, setTab] = useState<"decks" | "slides">("decks");
+  const [payload, setPayload] = useState<DeckPayload | null>(null);
+  const [currentSlide, setCurrentSlide] = useState(1);
+  useEffect(() => {
+    let cancelled = false;
+    setPayload(null); setCurrentSlide(Number((active?.state as { slideNo?: number } | null)?.slideNo) || 1);
+    const refreshOutline = () => { if (activeId) void fetchDeck(activeId).then(p => { if (!cancelled) setPayload(p); }).catch(() => {}); };
+    refreshOutline();
+    const timer = window.setInterval(refreshOutline, 4000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [activeId]);
+  useEffect(() => {
+    const handler = (event: Event) => { const d = (event as CustomEvent<{deckId: string; slide: number}>).detail; if (d.deckId === activeId) setCurrentSlide(d.slide); };
+    window.addEventListener("deck-slide-changed", handler);
+    return () => window.removeEventListener("deck-slide-changed", handler);
+  }, [activeId]);
   const [decks, setDecks] = useState<DeckSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"name" | "recent">("recent");
+  const [error, setError] = useState<string | null>(null);
+  const shown = decks.filter(d => d.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())).sort((a, b) => sort === "name" ? a.title.localeCompare(b.title, undefined, { numeric: true }) : Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [template, setTemplate] = useState<DeckTemplate>("meeting");
@@ -37,9 +65,9 @@ export function DeckSidebarView(): React.ReactNode {
   const refresh = useCallback(async () => {
     try {
       const list = await fetchDeckList();
-      setDecks(list);
-    } catch {
-      // transient — keep the last list
+      setDecks(list); setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -69,45 +97,34 @@ export function DeckSidebarView(): React.ReactNode {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-deck-sidebar="">
-      <div className="flex shrink-0 items-center gap-1 px-2 py-1.5">
-        <span className="flex-1 text-xs text-muted-foreground">{decks.length} 个 deck</span>
-        <Button size="sm" variant="ghost" className="size-6 p-0" title="刷新" onClick={() => void refresh()}>
-          <RefreshCw className="size-3.5" />
-        </Button>
-        <Button size="sm" variant="secondary" className="gap-1 px-2" onClick={() => setDialogOpen(true)}>
-          <Plus className="size-3.5" /> 新建
-        </Button>
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-b px-3">
+        <span className="flex-1 truncate text-xs font-semibold tracking-wide text-muted-foreground">幻灯片</span>
+        <Button size="icon-sm" variant="ghost" aria-label="刷新幻灯片" title="刷新" onClick={() => void refresh()}><RefreshCw /></Button>
+        <Button size="icon-sm" variant="ghost" aria-label="新建幻灯片" title="新建" onClick={() => setDialogOpen(true)}><Plus /></Button>
       </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {loading ? (
-          <div className="flex items-center gap-2 px-2 py-4 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" /> 加载…
-          </div>
-        ) : decks.length === 0 ? (
-          <div className="px-2 py-4 text-xs text-muted-foreground">
-            还没有 deck。点“新建”,或让 agent 用 deck_create 生成。
-          </div>
-        ) : (
-          decks.map(deck => (
-            <button
-              key={deck.id}
-              type="button"
-              className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sidebar-accent"
-              title={`${deck.title} · ${deck.slideCount} 页`}
-              onClick={() => openDeck(deck.id, { title: deck.title })}
-            >
-              <Presentation className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs">{deck.title || "未命名 deck"}</span>
-                <span className="block text-[10px] text-muted-foreground">
-                  {deck.slideCount} 页 · {formatTime(deck.updatedAt)}
-                </span>
-              </span>
+      <div className="flex border-b px-2" role="tablist" aria-label="幻灯片侧栏">
+        <button role="tab" aria-selected={tab === "decks"} className="px-3 py-2 text-xs aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("decks")}>演示文稿</button>
+        <button role="tab" aria-selected={tab === "slides"} className="px-3 py-2 text-xs aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("slides")}>页面目录</button>
+      </div>
+      {tab === "slides" ? <ScrollArea className="min-h-0 flex-1" contentClassName="px-2 py-2">{!activeId ? <p className="px-2 py-3 text-xs text-muted-foreground">打开演示文稿以查看页面目录。</p> : !payload ? <p className="px-2 py-3 text-xs text-muted-foreground">加载页面目录…</p> : <DeckOutline entries={outlineOrPages(payload.outline, payload.slides)} currentSlide={currentSlide} onNavigate={slide => window.dispatchEvent(new CustomEvent("deck-go-slide", { detail: { deckId: activeId, slide } }))} />}</ScrollArea> : <>
+      <div className="shrink-0 px-3 pt-3"><div className="relative">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input aria-label="搜索幻灯片" placeholder="搜索幻灯片" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setQuery(""); }} className="h-8 pl-8 text-sm" />
+      </div></div>
+      <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-4 text-xs text-muted-foreground">
+        <span>{query.trim() ? `${shown.length} 条结果` : `已显示 ${decks.length} 个演示文稿`}</span>
+        <button type="button" className="shrink-0 hover:text-foreground" aria-label="切换幻灯片排序" onClick={() => setSort(sort === "name" ? "recent" : "name")}>{sort === "name" ? "名称 (A to Z)" : "最近更新"} ↕</button>
+      </div>
+      <ScrollArea className="min-h-0 flex-1" contentClassName="px-2 py-2">
+        {error && <div role="alert" className="px-2 py-2 text-xs text-destructive">加载失败：{error} <button type="button" className="underline" onClick={() => void refresh()}>重试</button></div>}
+        {loading ? <div className="px-2 py-3 text-xs text-muted-foreground">加载中…</div> : shown.length === 0 ? <div className="px-2 py-3 text-xs text-muted-foreground">{query.trim() ? "没有匹配的演示文稿。" : error ? "无法加载演示文稿。" : "还没有演示文稿。"}</div> :
+          <div role="list" aria-label="演示文稿列表">{shown.map(deck => <div role="listitem" key={deck.id}>
+            <button type="button" className="flex min-h-7 w-full items-start gap-1 rounded-sm px-1 py-1 text-left text-[13px] leading-5 text-muted-foreground hover:bg-accent hover:text-foreground" title={`${deck.title} · ${deck.slideCount} 页 · ${formatTime(deck.updatedAt)}`} onClick={() => openDeck(deck.id, { title: deck.title })}>
+              <Presentation className="mt-0.5 size-4 shrink-0 opacity-50" /><span className="min-w-0 flex-1 break-words">{deck.title || "未命名演示文稿"}</span><span className="shrink-0 text-xs opacity-70">{deck.slideCount} 页</span>
             </button>
-          ))
-        )}
-      </div>
+          </div>)}</div>}
+      </ScrollArea>
+      </>}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-sm">

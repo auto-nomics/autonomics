@@ -21,6 +21,9 @@ pub enum Error {
     #[error("slide 1 frontmatter is the deck headmatter and cannot be replaced here; patch the deck headmatter instead")]
     HeadmatterGuard,
 
+    #[error("invalid theme CSS: {0}")]
+    InvalidThemeCss(String),
+
     #[error("invalid aspect ratio: {0}")]
     BadAspectRatio(#[from] ppt_types::ParseAspectError),
 

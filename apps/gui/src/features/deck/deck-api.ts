@@ -31,6 +31,8 @@ export interface SlideFrontmatter {
   hideInToc?: boolean | null;
   title?: string | null;
   level?: number | null;
+  section?: boolean | null;
+  sectionTitle?: string | null;
   routeAlias?: string | null;
   zoom?: number | null;
   image?: string | null;
@@ -71,6 +73,19 @@ export interface SlideSpec {
   revision: string;
 }
 
+/** One visible slide's place in the server-computed outline. */
+export interface OutlineEntry {
+  slide: number;
+  title: string;
+  level: number;
+  depth: number;
+  parent: number | null;
+  isSection: boolean;
+  sectionTitle: string;
+  sectionPath: number[];
+  hidden: boolean;
+}
+
 export interface AssetMeta {
   assetId: string;
   filename?: string;
@@ -84,7 +99,11 @@ export interface AssetMeta {
 export interface DeckPayload {
   deck: DeckMeta;
   slides: SlideSpec[];
+  outline?: OutlineEntry[];
   assets: AssetMeta[];
+  themeCss?: string;
+  themeRevision?: string;
+  canvasSize?: { width: number; height: number };
 }
 
 export interface DeckSummary {
@@ -142,4 +161,19 @@ export function resolveAssetRefs(deckId: string, html: string, assets: AssetMeta
     if (!asset) return full;
     return assetUrl(deckId, id);
   });
+}
+
+export interface DeckSource { markdown: string; revision: string }
+export function fetchDeckSource(id: string): Promise<DeckSource> { return get<DeckSource>(`/deck/decks/${encodeURIComponent(id)}/source`); }
+export async function saveDeckSource(id: string, markdown: string, revision: string): Promise<void> { await gatewayRequest("PUT", `/deck/decks/${encodeURIComponent(id)}/source`, { markdown, revision }); }
+
+export async function saveDeckTheme(id: string, css: string, revision: string): Promise<void> {
+  await gatewayRequest("PUT", `/deck/decks/${encodeURIComponent(id)}/theme.css`, { css, revision });
+}
+
+export function fetchDefaultDeckTheme(id: string): Promise<{ css: string }> {
+  return get<{ css: string }>(`/deck/decks/${encodeURIComponent(id)}/default-theme.css`);
+}
+export async function saveSlideCss(id: string, slide: number, css: string, revision: string): Promise<void> {
+  await gatewayRequest("PUT", `/deck/decks/${encodeURIComponent(id)}/slides/${slide}/css`, { css, revision });
 }

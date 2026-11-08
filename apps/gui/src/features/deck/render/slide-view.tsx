@@ -6,10 +6,12 @@
  * `data-layout` attribute (see deck.css) — figure/panel slots render as
  * sibling elements the grid positions.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { AssetMeta, SlideSpec } from "../deck-api";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { AssetMeta, OutlineEntry, SlideSpec } from "../deck-api";
 import { figureImageSrc, renderSlideContent, renderMermaidBlocks } from "./markdown";
 import { applyClickVisibility, CLICK_HIDDEN } from "./deck-model";
+import { scopeSlideCss } from "./scoped-css";
+import { SectionNav } from "./section-nav";
 
 export interface SlideViewProps {
   slide: SlideSpec;
@@ -20,6 +22,11 @@ export interface SlideViewProps {
   dark: boolean;
   /** Reveal every click element regardless of position (export mode). */
   revealAll?: boolean;
+  themeCss?: string;
+  /** Print pages use the token-gated asset endpoint. */
+  printToken?: string;
+  outline?: OutlineEntry[];
+  onNavigate?: (slide: number) => void;
 }
 
 export function SlideView({
@@ -29,6 +36,10 @@ export function SlideView({
   currentClick,
   dark,
   revealAll,
+  themeCss = "",
+  printToken,
+  outline,
+  onNavigate,
 }: SlideViewProps): React.ReactNode {
   const html = useMemo(
     () => renderSlideContent(slide.content, { deckId, assets }),
@@ -39,6 +50,18 @@ export function SlideView({
     () => figureImageSrc(slide.frontmatter.image, { deckId, assets }),
     [slide.frontmatter.image, deckId, assets],
   );
+  const scopeId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
+  const scopedCss = useMemo(() => {
+    const resolve = (css: string) => css.replace(/assets:\/\/([A-Za-z0-9_-]+)/g, (ref, id: string) => {
+      if (!assets.some(asset => asset.assetId === id)) return ref;
+      const base = `/api/v1/deck/decks/${encodeURIComponent(deckId)}`;
+      return printToken
+        ? `${base}/print-assets/${encodeURIComponent(id)}?token=${encodeURIComponent(printToken)}`
+        : `${base}/assets/${encodeURIComponent(id)}/raw`;
+    });
+    const override = typeof slide.frontmatter.slideCss === "string" ? slide.frontmatter.slideCss : "";
+    return scopeSlideCss(resolve(themeCss), resolve(override), scopeId);
+  }, [scopeId, themeCss, slide.frontmatter.slideCss, deckId, assets, printToken]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const [mermaidDone, setMermaidDone] = useState(false);
 
@@ -72,12 +95,16 @@ export function SlideView({
   }, [slide.clickPlan, currentClick, html, mermaidDone, revealAll]);
 
   return (
+    <>
+    <style>{scopedCss}</style>
     <div
       className="deck-slide"
+      data-deck-style={scopeId}
       data-layout={layout}
       data-slide-no={slide.index + 1}
     >
-      {figureSrc && (layout === "figure-left" || layout === "figure-right" || layout === "image-left" || layout === "image-right") ? (
+      <SectionNav outline={outline} slide={slide.index + 1} onNavigate={onNavigate} />
+      {figureSrc && (layout === "figure-left" || layout === "figure-right" || layout === "image-left" || layout === "image-right" || layout === "figure-full") ? (
         <figure className="deck-figure">
           <img src={figureSrc} alt={slide.title ?? "figure"} className="deck-figure-img" />
           {slide.frontmatter.tableCaption ? (
@@ -103,5 +130,6 @@ export function SlideView({
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </div>
+    </>
   );
 }

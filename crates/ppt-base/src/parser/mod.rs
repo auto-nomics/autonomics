@@ -164,9 +164,9 @@ mod tests {
         assert_eq!(deck.slides[0].content, "# Slide 1");
         assert_eq!(deck.slides[1].content, "# Slide 2");
         // Slide 1's frontmatter IS the headmatter, so its title comes from
-        // the headmatter (Slidev behavior).
+        // the headmatter; heading depth is retained for the outline.
         assert_eq!(deck.slides[0].title.as_deref(), Some("Hello"));
-        assert_eq!(deck.slides[0].level, None);
+        assert_eq!(deck.slides[0].level, Some(1));
         // Slide 2 has no frontmatter — heading wins.
         assert_eq!(deck.slides[1].title.as_deref(), Some("Slide 2"));
         assert_eq!(deck.slides[1].level, Some(1));

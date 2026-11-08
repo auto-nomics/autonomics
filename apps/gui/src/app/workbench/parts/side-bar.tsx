@@ -228,7 +228,7 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
   const state = useWorkbenchState();
   return (
     <>
-      {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CONTAINER_TITLES[container]}
         </span>

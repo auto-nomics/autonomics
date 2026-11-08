@@ -75,22 +75,40 @@ fn urlencode(s: &str) -> String {
 
 /// Poll `deckReady` + `[data-waitfor]` drain (slidev export protocol).
 async fn wait_ready(tab: &Tab) -> Result<()> {
+    wait_for_page(tab, None).await
+}
+
+/// In addition to readiness, wait for React to commit the requested page and
+/// click state. The ready flag alone may still describe the previous render.
+async fn wait_for_page(tab: &Tab, expected: Option<(usize, u32)>) -> Result<()> {
     let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
     loop {
         let value = tab
             .evaluate(
                 "(() => ({ ready: document.documentElement.dataset.deckReady === 'true', \
+                 error: document.documentElement.dataset.deckError || null, \
+                 goto: typeof window.__deckGoto === 'function', \
+                 state: window.__deckState || null, \
                  waitfor: document.querySelectorAll('[data-waitfor]').length }))()",
             )
             .await
             .map_err(|e| Error::Export(format!("evaluate failed: {e}")))?;
         let (ready, waitfor) = parse_ready(&value);
-        if ready && waitfor == 0 {
+        if let Some(error) = value.get("error").and_then(Value::as_str) {
+            return Err(Error::Export(format!("print page initialization failed: {error}")));
+        }
+        let goto = value.get("goto").and_then(Value::as_bool).unwrap_or(false);
+        let state = value.get("state").unwrap_or(&Value::Null);
+        let matches = expected.is_none_or(|(slide, click)| {
+            state.get("slide").and_then(Value::as_u64) == Some(slide as u64)
+                && state.get("click").and_then(Value::as_u64) == Some(u64::from(click))
+        });
+        if ready && waitfor == 0 && goto && matches {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(Error::Export(format!(
-                "print page not ready within {READY_TIMEOUT:?} (ready={ready}, waitfor={waitfor})"
+                "print page not ready within {READY_TIMEOUT:?} (ready={ready}, waitfor={waitfor}, goto={goto}, state={state}, expected={expected:?})"
             )));
         }
         tokio::time::sleep(READY_POLL).await;
@@ -132,6 +150,14 @@ impl crate::export::DeckExporter for ChromiumExporter {
     async fn preview_png(&self, job: &ExportJob, slide_no: u32, clicks: u32) -> Result<Vec<u8>> {
         ChromiumExporter::preview_png(self, job, slide_no, clicks).await
     }
+
+    async fn diagnose_slides(
+        &self,
+        job: &ExportJob,
+        targets: &[(u32, u32)],
+    ) -> Result<Value> {
+        ChromiumExporter::diagnose_slides(self, job, targets).await
+    }
 }
 
 impl ChromiumExporter {
@@ -154,6 +180,67 @@ impl ChromiumExporter {
             .await;
         let _ = browser.close().await;
         result
+    }
+
+    /// Aesthetics diagnostics: same navigation contract as PNG capture,
+    /// but instead of a screenshot evaluate `window.__deckDiagnose()`
+    /// (mounted by the print page's diagnostics module) per slide at
+    /// scale 1.0 so CSS-px geometry matches canvas coordinates.
+    pub async fn diagnose_slides(
+        &self,
+        job: &ExportJob,
+        targets: &[(u32, u32)],
+    ) -> Result<Value> {
+        if job.print_token.is_empty() {
+            return Err(Error::Export("diagnostics job carries no print token".into()));
+        }
+        let mut browser = Browser::launch(self.options.clone())
+            .await
+            .map_err(|e| Error::Export(format!("browser launch failed: {e}")))?;
+        let result = self.diagnose_all(&browser, job, targets).await;
+        let _ = browser.close().await;
+        result
+    }
+
+    async fn diagnose_all(
+        &self,
+        browser: &Browser,
+        job: &ExportJob,
+        targets: &[(u32, u32)],
+    ) -> Result<Value> {
+        let tab = browser
+            .new_tab_at(&self.print_url(&job.deck_id, &job.print_token, "single", Some("all")))
+            .await
+            .map_err(|e| Error::Export(format!("tab open failed: {e}")))?;
+        // Scale 1.0: measurements must be in canvas CSS px.
+        let metrics = SetDeviceMetricsOverrideParams::builder()
+            .width(i64::from(job.canvas_width))
+            .height(i64::from(job.canvas_height))
+            .device_scale_factor(1.0)
+            .mobile(false)
+            .build()
+            .map_err(|e: String| Error::Export(format!("device metrics params: {e}")))?;
+        tab.page()
+            .execute(metrics)
+            .await
+            .map_err(|e| Error::Export(format!("device metrics: {e}")))?;
+        wait_ready(&tab).await?;
+
+        let mut out = serde_json::Map::new();
+        for (slide_no, clicks) in targets {
+            tab.evaluate(&format!("window.__deckGoto({slide_no}, {clicks})"))
+                .await
+                .map_err(|e| Error::Export(format!("goto slide {slide_no}: {e}")))?;
+            wait_for_page(&tab, Some((*slide_no as usize, *clicks))).await?;
+            let value = tab
+                .evaluate(
+                    "window.__deckDiagnose ? window.__deckDiagnose() : { unsupported: true }",
+                )
+                .await
+                .map_err(|e| Error::Export(format!("diagnose slide {slide_no}: {e}")))?;
+            out.insert(slide_no.to_string(), value);
+        }
+        Ok(Value::Object(out))
     }
 
     async fn capture_one(
@@ -179,10 +266,11 @@ impl ChromiumExporter {
             .execute(metrics)
             .await
             .map_err(|e| Error::Export(format!("device metrics: {e}")))?;
+        wait_ready(&tab).await?;
         tab.evaluate(&format!("window.__deckGoto({slide_no}, {clicks})"))
             .await
             .map_err(|e| Error::Export(format!("goto slide {slide_no}: {e}")))?;
-        wait_ready(&tab).await?;
+        wait_for_page(&tab, Some((slide_no as usize, clicks))).await?;
         tab.screenshot_with(
             ScreenshotParams::builder()
                 .format(CaptureScreenshotFormat::Png)
@@ -317,13 +405,15 @@ impl ChromiumExporter {
             .await
             .map_err(|e| Error::Export(format!("device metrics: {e}")))?;
 
+        wait_ready(&tab).await?;
+
         let mut pages = Vec::new();
         for (idx, page_no) in job.pages.iter().enumerate() {
             tab.evaluate(&format!("window.__deckGoto({page_no}, 0)"))
                 .await
                 .map_err(|e| Error::Export(format!("goto page {page_no}: {e}")))?;
             // Per-slide settle: the wait protocol re-arms per render pass.
-            wait_ready(&tab).await?;
+            wait_for_page(&tab, Some((*page_no, 0))).await?;
             let bytes = tab
                 .screenshot_with(
                     ScreenshotParams::builder()

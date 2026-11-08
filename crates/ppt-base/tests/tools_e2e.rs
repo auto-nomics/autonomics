@@ -48,8 +48,8 @@ async fn full_deck_lifecycle_through_tools() {
     let handle = DeckHandle::spawn_in_memory().await.unwrap();
     let regs = deck_all_registrations(handle.clone());
 
-    // 5 deck + 4 slide + 1 asset + 2 export + 1 preview + 1 citation
-    assert_eq!(regs.len(), 14);
+    // 5 deck + 4 slide + 1 asset + 2 export + 1 preview + 1 citation + 2 CSS + 1 diagnostics
+    assert_eq!(regs.len(), 17);
 
     // 1. deck_create (meeting template)
     let created = call_tool(
@@ -325,4 +325,113 @@ async fn slide_out_of_range_error_mentions_total() {
     .await;
     assert!(err.contains("99"), "{err}");
     assert!(err.contains("1-"), "error mentions valid range: {err}");
+}
+
+#[tokio::test]
+async fn css_tools_roundtrip_and_reject_stale_revisions() {
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle);
+    let created = call_tool(&regs, "deck_create", json!({"title":"CSS test"})).await;
+    let id = created["deck_id"].as_str().unwrap();
+    let theme = call_tool(&regs, "deck_css_get", json!({"deck_id":id})).await;
+    let theme_rev = theme["revision"].as_str().unwrap();
+    call_tool(&regs, "deck_css_set", json!({"deck_id":id,"css":":scope { color: red }","revision":theme_rev})).await;
+    let err = call_tool_err(&regs, "deck_css_set", json!({"deck_id":id,"css":"bad","revision":theme_rev})).await;
+    assert!(err.contains("revision conflict"));
+    let theme = call_tool(&regs, "deck_css_get", json!({"deck_id":id})).await;
+    assert_eq!(theme["css"], ":scope { color: red }");
+    let page = call_tool(&regs, "deck_css_get", json!({"deck_id":id,"no":1})).await;
+    call_tool(&regs, "deck_css_set", json!({"deck_id":id,"no":1,"css":"h1 { color: blue }","revision":page["revision"]})).await;
+    let page = call_tool(&regs, "deck_css_get", json!({"deck_id":id,"no":1})).await;
+    assert_eq!(page["css"], "h1 { color: blue }");
+}
+
+#[tokio::test]
+async fn new_deck_theme_dimensions_follow_requested_aspect_ratio() {
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle.clone());
+    let deck = call_tool(&regs, "deck_create", json!({"title":"Ratio", "aspect_ratio":"4/3"})).await;
+    let id = deck["deck_id"].as_str().unwrap();
+    let meta = handle.shared().load_deck(id).await.unwrap().meta;
+    let size = handle.shared().canvas_size(id, &meta).await.unwrap();
+    assert_eq!(size.width * 3, size.height * 4);
+    assert!(handle.shared().theme_css(id).await.unwrap().contains("--deck-width:"));
+}
+
+#[tokio::test]
+async fn theme_file_is_persisted_in_vfs_and_isolated_per_deck() {
+    use ppt_base::BlobArea;
+    use vfs::OpendalFileStorage;
+    let root = std::env::temp_dir().join(format!("deck-css-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = OpendalFileStorage::new(&root);
+    let assets = BlobArea::on_vfs(storage.clone(), "deck-assets");
+    let exports = BlobArea::on_vfs(storage.clone(), "deck-exports");
+    let shared = DeckShared::open_with(":memory:", assets, exports, std::sync::Arc::new(ppt_base::NullExporter)).await.unwrap();
+    let first = shared.create_deck("First", None).await.unwrap();
+    let second = shared.create_deck("Second", None).await.unwrap();
+    let fresh = shared.theme_css(&first.meta.id).await.unwrap();
+    shared.save_theme_css(&first.meta.id, ":scope { color: purple; }", &ppt_base::shared::css_revision(&fresh)).await.unwrap();
+    let reopened = BlobArea::on_vfs(OpendalFileStorage::new(&root), "deck-assets");
+    let first_path = format!("themes/{}/theme.css", first.meta.id);
+    let second_path = format!("themes/{}/theme.css", second.meta.id);
+    assert_eq!(reopened.get(&first_path).await.unwrap(), b":scope { color: purple; }");
+    assert_eq!(reopened.get(&second_path).await.unwrap(), ppt_base::theme::starter_css(&second.meta).as_bytes());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn write_results_inject_static_diagnostics_and_render_status() {
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle.clone());
+    let deck = call_tool(&regs, "deck_create", json!({"title":"注入", "template":"meeting"})).await;
+    let id = deck["deck_id"].as_str().unwrap().to_string();
+
+    // slide_patch result carries the diagnostics block; a patch that
+    // empties a slide surfaces the static empty-slide finding inline.
+    let patched = call_tool(
+        &regs,
+        "slide_patch",
+        json!({"deck_id": id, "no": 2, "content": "   ", "note": ""}),
+    )
+    .await;
+    let diagnostics = &patched["diagnostics"];
+    assert_eq!(diagnostics["renderTier"], json!("unavailable"), "no worker in tests");
+    assert!(
+        diagnostics["staticFindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule"] == json!("empty-slide") && f["slide"] == json!(2)),
+        "inline static findings must flag the emptied slide: {diagnostics}"
+    );
+
+    // slide_insert result carries the block too.
+    let inserted = call_tool(&regs, "slide_insert", json!({"deck_id": id, "after": 1})).await;
+    assert_eq!(inserted["diagnostics"]["renderTier"], json!("unavailable"));
+
+    // deck_css_set (slide branch) carries the block too.
+    let revision = handle.shared().load_deck(&id).await.unwrap().meta.revision;
+    let css = call_tool(
+        &regs,
+        "deck_css_set",
+        json!({"deck_id": id, "no": 2, "css": ":scope { background: #fff; }", "revision": revision}),
+    )
+    .await;
+    assert!(css["diagnostics"]["staticFindings"].is_array());
+}
+
+#[tokio::test]
+async fn outline_tool_exposes_parent_and_section_path() {
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle.clone());
+    let deck = call_tool(&regs, "deck_create", json!({"title":"T"})).await;
+    let id = deck["deck_id"].as_str().unwrap();
+    call_tool(&regs, "slide_insert", json!({"deck_id":id, "after":1, "content":"# 方法", "frontmatter_raw":"layout: section\nsectionTitle: Methods"})).await;
+    call_tool(&regs, "slide_insert", json!({"deck_id":id, "after":2, "content":"## 数据"})).await;
+    let outline = call_tool(&regs, "deck_outline", json!({"deck_id":id})).await;
+    assert_eq!(outline["outline"][1]["isSection"], true);
+    assert_eq!(outline["outline"][1]["sectionTitle"], "Methods");
+    assert_eq!(outline["outline"][2]["parent"], 2);
+    assert_eq!(outline["outline"][2]["sectionPath"], json!([2]));
 }

@@ -3,8 +3,8 @@
  * navigation (arrows/space step clicks then slides), click counter, and
  * the slide thumbnail rail.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Presentation } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { DeckPayload, SlideSpec } from "../deck-api";
 import { clickTotal } from "./deck-model";
 import { SlideView } from "./slide-view";
@@ -14,6 +14,7 @@ export interface DeckRendererProps {
   dark: boolean;
   /** 1-based start slide (from the opener). */
   startSlide?: number;
+  onSlideChange?: (slide: number) => void;
 }
 
 interface NavState {
@@ -21,11 +22,12 @@ interface NavState {
   click: number;
 }
 
-export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): React.ReactNode {
+export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckRendererProps): React.ReactNode {
   const { deck, slides } = payload;
-  const canvasWidth = deck.canvasWidth ?? 980;
+  const canvasWidth = payload.canvasSize?.width ?? deck.canvasWidth ?? 980;
   const aspect = deck.aspectRatio ?? { width: 16, height: 9 };
-  const canvasHeight = Math.round((canvasWidth * aspect.height) / aspect.width);
+  const canvasHeight = payload.canvasSize?.height ?? Math.round((canvasWidth * aspect.height) / aspect.width);
+  const slideDark = deck.colorSchema === "dark" ? true : deck.colorSchema === "light" ? false : dark;
 
   const [nav, setNav] = useState<NavState>({
     slide: Math.min(Math.max(startSlide ?? 1, 1), Math.max(slides.length, 1)),
@@ -33,6 +35,8 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
   });
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
 
   const slide: SlideSpec | undefined = slides[nav.slide - 1];
 
@@ -51,6 +55,24 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
     ro.observe(stage);
     return () => ro.disconnect();
   }, [canvasWidth, canvasHeight]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? stage.clientHeight : 1;
+      const dx = event.deltaX * unit;
+      const dy = event.deltaY * unit;
+      if (event.ctrlKey || event.metaKey) {
+        setZoom(value => Math.min(4, Math.max(0.25, value * Math.exp(-dy * 0.002))));
+      } else {
+        setPan(value => ({ x: value.x - (event.shiftKey ? (dy || dx) : dx), y: value.y - (event.shiftKey ? 0 : dy) }));
+      }
+    };
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, []);
 
   const total = slide ? clickTotal(slide) : 0;
   const clampedClick = Math.min(Math.max(nav.click, slide?.clickPlan?.clicksStart ?? 0), total);
@@ -82,6 +104,9 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      // Space activates focused controls (for example an outline expander)
+      // and must not simultaneously advance the presentation.
+      if (e.key === " " && e.target instanceof Element && e.target.closest("button, a, select, [contenteditable='true']")) return;
       if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
         e.preventDefault();
         go(1);
@@ -100,40 +125,21 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
   }, [nav.slide, slides]);
 
   const notes = slide?.note ?? null;
-  const toc = useMemo(
-    () =>
-      slides.map(s => ({
-        no: s.index + 1,
-        title: s.title ?? `(${s.index + 1})`,
-        level: s.level ?? 1,
-      })),
-    [slides],
-  );
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("deck-slide-changed", { detail: { deckId: deck.id, slide: nav.slide } }));
+    onSlideChange?.(nav.slide);
+  }, [deck.id, nav.slide, onSlideChange]);
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ deckId: string; slide: number }>).detail;
+      if (detail.deckId === deck.id) setNav({ slide: detail.slide, click: 0 });
+    };
+    window.addEventListener("deck-go-slide", handler);
+    return () => window.removeEventListener("deck-go-slide", handler);
+  }, [deck.id]);
 
   return (
     <div className={`deck-renderer ${dark ? "deck-renderer--dark" : "deck-renderer--light"}`}>
-      <aside className="deck-rail">
-        <div className="deck-rail-head">
-          <Presentation size={14} />
-          <span className="deck-rail-title">{deck.title || "未命名"}</span>
-        </div>
-        <div className="deck-toc">
-          {toc.map(item => (
-            <button
-              key={item.no}
-              type="button"
-              className={`deck-toc-item ${item.no === nav.slide ? "deck-toc-item--active" : ""}`}
-              onClick={() => setNav({ slide: item.no, click: 0 })}
-            >
-              <span className="deck-toc-no">{item.no}</span>
-              <span className="deck-toc-label" style={{ paddingLeft: (item.level - 1) * 10 }}>
-                {item.title}
-              </span>
-            </button>
-          ))}
-        </div>
-      </aside>
-
       <main className="deck-main">
         <div className="deck-stage" ref={stageRef} data-deck-stage="">
           <div
@@ -141,17 +147,20 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
             style={{
               width: canvasWidth,
               height: canvasHeight,
-              transform: `scale(${scale})`,
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * zoom})`,
             }}
           >
             {slide ? (
               <SlideView
                 key={`${slide.revision}:${slide.index}`}
                 slide={slide}
+                themeCss={payload.themeCss}
+                outline={payload.outline}
+                onNavigate={page => setNav({ slide: page, click: 0 })}
                 deckId={deck.id}
                 assets={payload.assets}
                 currentClick={clampedClick}
-                dark={dark}
+                dark={slideDark}
               />
             ) : (
               <div className="deck-empty">空 deck</div>
@@ -167,15 +176,16 @@ export function DeckRenderer({ payload, dark, startSlide }: DeckRendererProps): 
             {nav.slide} / {slides.length}
             {total > 0 ? <span className="deck-click-counter"> · click {clampedClick}/{total}</span> : null}
           </span>
+          <button type="button" className="deck-btn" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} title="重置画布缩放与位置" aria-label="重置画布缩放">{Math.round(zoom * 100)}%</button>
           <button type="button" className="deck-btn" onClick={() => go(1)} aria-label="下一页">
             <ChevronRight size={16} />
           </button>
         </div>
 
-        {notes ? (
+        {slides.some(s => s.note) ? (
           <div className="deck-notes">
             <div className="deck-notes-head">备注</div>
-            <div className="deck-notes-body">{notes}</div>
+            <div className="deck-notes-body">{notes || "此页没有备注"}</div>
           </div>
         ) : null}
       </main>

@@ -3,13 +3,16 @@
  * API). Lives outside deck-api.ts so the print bundle path stays free of
  * the gateway session client.
  */
-import type { AssetMeta, DeckMeta, SlideSpec } from "./deck-api";
+import type { AssetMeta, DeckMeta, OutlineEntry, SlideSpec } from "./deck-api";
 
 export interface PrintPayload {
   deck: DeckMeta;
   slides: SlideSpec[];
+  outline?: OutlineEntry[];
   assets: AssetMeta[];
   token: string;
+  themeCss?: string;
+  canvasSize?: { width: number; height: number };
 }
 
 export async function fetchPrintData(deckId: string, token: string): Promise<PrintPayload> {

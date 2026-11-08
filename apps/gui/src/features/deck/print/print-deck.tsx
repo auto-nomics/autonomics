@@ -10,6 +10,7 @@ import type { PrintPayload } from "../deck-api-print";
 import { printAssetUrl } from "../deck-api-print";
 import { SlideView } from "../render/slide-view";
 import { renderMermaidBlocks } from "../render/mermaid";
+import { diagnoseSlide } from "../render/diagnostics";
 
 export interface PrintDeckProps {
   payload: PrintPayload;
@@ -25,14 +26,16 @@ declare global {
   interface Window {
     __deckGoto?: (slide: number, click: number) => void;
     __deckState?: { slide: number; click: number };
+    /** Aesthetics rule engine for the exporter's diagnostics pass. */
+    __deckDiagnose?: () => unknown[];
   }
 }
 
 export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckProps): React.ReactNode {
   const { deck, slides, assets } = payload;
-  const canvasWidth = deck.canvasWidth ?? 980;
+  const canvasWidth = payload.canvasSize?.width ?? deck.canvasWidth ?? 980;
   const aspect = deck.aspectRatio ?? { width: 16, height: 9 };
-  const canvasHeight = Math.round((canvasWidth * aspect.height) / aspect.width);
+  const canvasHeight = payload.canvasSize?.height ?? Math.round((canvasWidth * aspect.height) / aspect.width);
 
   const [state, setState] = useState({ slide: 1, click: 0 });
   const rootRef = useMemo(() => ({ current: document.getElementById("app") }), []);
@@ -41,10 +44,22 @@ export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckPr
   useEffect(() => {
     window.__deckState = state;
     window.__deckGoto = (slide: number, click: number) => {
+      if (state.slide === slide && state.click === click) return;
+      // Invalidate synchronously before React schedules the render. Otherwise
+      // the exporter may observe the previous page's ready flag and capture it.
+      document.documentElement.dataset.deckReady = "false";
       setState({ slide, click });
+    };
+    // Aesthetics diagnostics: measure the CURRENT slide's real layout.
+    // Re-armed with the goto hook so the exporter always diagnoses the
+    // slide it navigated to, never the previous render.
+    window.__deckDiagnose = () => {
+      const slide = document.querySelector<HTMLElement>(".deck-print-stage .deck-slide");
+      return slide ? diagnoseSlide(slide, { slideNo: state.slide }) : [];
     };
     return () => {
       window.__deckGoto = undefined;
+      window.__deckDiagnose = undefined;
     };
   }, [state]);
 
@@ -89,19 +104,37 @@ export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckPr
 
     const waitForImages = () => {
       const imgs = Array.from(document.images);
-      return Promise.all(
-        imgs.map(img =>
+      const cssUrls = new Set<string>();
+      // CSS backgrounds and generated-content images are not in
+      // document.images, but must settle before PDF or screenshot capture.
+      document.querySelectorAll<HTMLElement>(".deck-slide, .deck-slide *").forEach(element => {
+        for (const pseudo of [null, "::before", "::after"]) {
+          const style = getComputedStyle(element, pseudo);
+          for (const property of ["background-image", "border-image-source", "list-style-image", "mask-image", "content"]) {
+            const value = style.getPropertyValue(property);
+            for (const match of value.matchAll(/url\(["']?([^"')]+)["']?\)/g)) cssUrls.add(match[1]);
+          }
+        }
+      });
+      return Promise.all([
+        ...imgs.map(img =>
           img.complete ? Promise.resolve() : new Promise<void>(resolve => {
             img.addEventListener("load", () => resolve(), { once: true });
             img.addEventListener("error", () => resolve(), { once: true });
           }),
         ),
-      );
+        ...Array.from(cssUrls, url => new Promise<void>(resolve => {
+          const image = new Image();
+          image.onload = image.onerror = () => resolve();
+          image.src = url;
+          if (image.complete) resolve();
+        })),
+      ]);
     };
 
     const finish = () => {
       if (cancelled) return;
-      waitForImages().then(() => {
+      Promise.all([waitForImages(), document.fonts.ready]).then(() => {
         if (cancelled) return;
         sentinel.remove();
         document.documentElement.dataset.deckReady = "true";
@@ -118,7 +151,7 @@ export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckPr
       cancelled = true;
       sentinel.remove();
     };
-  }, [state.slide, mode, deck.colorSchema]);
+  }, [state.slide, state.click, mode, deck.colorSchema]);
 
   const slide = slides[state.slide - 1];
   const dark = deck.colorSchema === "dark";
@@ -142,6 +175,9 @@ export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckPr
           {slides.map(s => (
             <div className="deck-print-page" key={s.revision + s.index}>
               <SlideView
+                themeCss={payload.themeCss}
+                printToken={token}
+                outline={payload.outline}
                 slide={s}
                 deckId={deck.id}
                 assets={assetsForPrint}
@@ -172,6 +208,9 @@ export function PrintDeck({ payload, token, revealAllClicks, mode }: PrintDeckPr
       <div className="deck-print-stage" data-deck-canvas-width={canvasWidth} data-deck-canvas-height={canvasHeight}>
         {slide ? (
           <SlideView
+                themeCss={payload.themeCss}
+                printToken={token}
+                outline={payload.outline}
             key={`${slide.revision}:${slide.index}:${state.click}`}
             slide={slide}
             deckId={deck.id}

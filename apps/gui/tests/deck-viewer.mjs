@@ -10,7 +10,7 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 
 const MOCK_PORT = 14401;
@@ -95,6 +95,15 @@ const deckPayload = {
     updatedAt: '2026-01-01T00:00:00Z',
   },
   slides,
+  outline: [
+    { slide: 1, title: 'Mock Deck', level: 1, depth: 0, parent: null, isSection: false, sectionTitle: 'Mock Deck', sectionPath: [], hidden: false },
+    { slide: 2, title: '方法', level: 1, depth: 0, parent: null, isSection: true, sectionTitle: '方法', sectionPath: [2], hidden: false },
+    { slide: 3, title: '结果', level: 2, depth: 1, parent: 2, isSection: true, sectionTitle: '核心结果', sectionPath: [2, 3], hidden: false },
+    { slide: 4, title: '流程', level: 1, depth: 0, parent: null, isSection: true, sectionTitle: '讨论', sectionPath: [4], hidden: false },
+    { slide: 5, title: '不显示', level: 2, depth: 1, parent: 4, isSection: false, sectionTitle: '不显示', sectionPath: [4], hidden: true },
+  ],
+  themeCss: readFileSync('../../crates/ppt-base/src/deck/default-theme.css', 'utf8'),
+  themeRevision: 'theme0',
   assets: [
     {
       assetId: 'asset-1',
@@ -111,6 +120,8 @@ const deckPayload = {
 let deckList = [
   { id: 'deck-mock', title: 'Mock Deck', slideCount: 4, version: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
 ];
+let markdownSource = '---\ntitle: Mock Deck\n---\n\n# Mock Deck\n';
+let markdownRevision = 'deckrev';
 let livePayload = null;
 function buildLivePayload(title) {
   return {
@@ -138,6 +149,30 @@ const mock = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     res.write(': ping\n\n');
     return;
+  }
+  if (path === '/api/v1/deck/decks/deck-mock/theme.css' && req.method === 'PUT') {
+    let body = ''; req.on('data', c => { body += c; }); req.on('end', () => {
+      const data = JSON.parse(body); deckPayload.themeCss = data.css; deckPayload.themeRevision = 'theme1';
+      if (data.css.includes('--deck-width: 1280px')) deckPayload.canvasSize = { width: 1280, height: 720 };
+      json({ revision: 'theme1' });
+    }); return;
+  }
+  if (path === '/api/v1/deck/decks/deck-mock/default-theme.css') return json({ css: ':root { --deck-width: 980px; --deck-height: 551px; }\n' + readFileSync('../../crates/ppt-base/src/deck/default-theme.css', 'utf8') });
+  if (path === '/api/v1/deck/decks/deck-mock/slides/2/css' && req.method === 'PUT') {
+    let body = ''; req.on('data', c => { body += c; }); req.on('end', () => {
+      const data = JSON.parse(body); deckPayload.slides[1].frontmatter.slideCss = data.css; deckPayload.deck.revision = 'deckrev-css'; json({ revision: 'deckrev-css' });
+    }); return;
+  }
+  if (path === '/api/v1/deck/decks/deck-mock/print-data') return json({ ...deckPayload, token: 'test' });
+  if (path === '/api/v1/deck/decks/deck-mock/source' && req.method === 'GET') return json({ markdown: markdownSource, revision: markdownRevision });
+  if (path === '/api/v1/deck/decks/deck-mock/source' && req.method === 'PUT') {
+    let body = ''; req.on('data', c => { body += c; }); req.on('end', () => {
+      const data = JSON.parse(body); markdownSource = data.markdown; markdownRevision = 'deckrev-source'; deckPayload.deck.revision = markdownRevision; json({ deck: deckPayload.deck });
+    }); return;
+  }
+  if (path === '/api/v1/deck/decks/deck-mock/print-assets/asset-1') {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+    res.writeHead(200, { 'content-type': 'image/png' }); return res.end(png);
   }
   if (path === '/api/v1/deck/decks/deck-mock') return json(deckPayload);
   if (path === '/api/v1/deck/decks/deck-live') return json(livePayload);
@@ -186,6 +221,12 @@ try {
   const executablePath = process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined);
   browser = await chromium.launch({ executablePath, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  async function setCode(language, value) {
+    const editor = page.locator(`[data-code-editor="${language}"]:visible`);
+    await editor.locator('.monaco-editor textarea.inputarea').focus();
+    await page.keyboard.press('ControlOrMeta+A');
+    await page.keyboard.insertText(value);
+  }
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
 
@@ -204,18 +245,126 @@ try {
   await page.waitForTimeout(300);
   const coverText = await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').innerText();
   assert.ok(coverText.includes('Mock Deck'), `cover text: ${coverText}`);
+  assert.equal(await page.locator('.deck-slide').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(23, 50, 70)', 'default cover uses the biomedical theme');
+  assert.equal(await page.locator('.deck-section-nav').isVisible(), false, 'section navigation is opt-in');
+  const listStyles = await page.locator('.deck-slide .deck-prose').evaluate(el => {
+    const ul = document.createElement('ul'); const ol = document.createElement('ol');
+    el.append(ul, ol);
+    const result = [getComputedStyle(ul).listStyleType, getComputedStyle(ol).listStyleType];
+    ul.remove(); ol.remove(); return result;
+  });
+  assert.deepEqual(listStyles, ['disc', 'decimal'], 'scientific lists and references retain visible markers');
   const canvasBox = await page.locator('.deck-canvas').boundingBox();
   assert.ok(canvasBox && canvasBox.height > 100, 'canvas sized');
+  if (process.env.DECK_UI_SCREENSHOT) await page.screenshot({ path: process.env.DECK_UI_SCREENSHOT });
+
+  // The view switcher exposes a keyboard-navigable tab list.
+  await page.getByRole('tab', { name: '预览', exact: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.getByRole('tab', { name: 'Markdown 源码' }).getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('End');
+  assert.equal(await page.getByRole('tab', { name: 'CSS 样式' }).getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('Home');
+  assert.equal(await page.getByRole('tab', { name: '预览', exact: true }).getAttribute('aria-selected'), 'true');
 
   // 2. Notes pane shows the cover note.
   await page.waitForTimeout(200);
   const notes = await page.locator('.deck-notes-body').innerText().catch(() => '');
   assert.ok(notes.includes('封面备注'), `notes: ${notes}`);
 
+  // CSS can be edited independently and remains scoped on the print surface.
+  await page.getByRole('tab', { name: 'CSS 样式' }).click();
+  await page.getByRole('button', { name: '载入默认主题' }).click();
+  await page.getByText('未保存', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '放弃更改并加载最新' }).click();
+  await page.getByText('已保存', { exact: true }).waitFor();
+  await setCode('css', ':root { --deck-width: 1280px; --deck-height: 720px; } @keyframes fade { from { opacity: .3; } to { opacity: .3; } } @font-face { font-family: Shared; src: local("Arial"); } :scope { background-color: rgb(1, 2, 3); background-image: url("assets://asset-1"); --deck-section-nav-display: flex; --anim: fade; --family: Shared; animation: var(--anim) 1s infinite; font-family: var(--family); } h1 { color: rgb(17, 34, 51); } .deck-prose h2 { color: red; } .deck-editor-toolbar { color: rgb(255, 0, 0); }');
+  await page.locator('[data-code-editor="css"] .view-line [class*="mtk"]').first().waitFor();
+  await page.waitForFunction(() => new Set(Array.from(document.querySelectorAll('[data-code-editor="css"] .view-line span[class*="mtk"]'), el => el.className)).size > 1);
+  await page.getByRole('tab', { name: '预览', exact: true }).click();
+  await page.getByRole('tab', { name: 'CSS 样式' }).click();
+  await page.waitForFunction(() => document.querySelector('[data-code-editor="css"] .view-lines')?.textContent?.includes('deck-width'));
+  await page.getByRole('button', { name: '保存 CSS' }).click();
+  await page.getByText('已保存', { exact: true }).waitFor();
+  await page.getByLabel('编辑样式').selectOption('2');
+  await setCode('css', '@keyframes fade { from { opacity: .8; } to { opacity: .8; } } @font-face { font-family: Shared; src: local("Times New Roman"); } :scope { --deck-section-nav-display: none; background-color: rgb(90, 80, 70); width: 20px !important; } h2 { color: rgb(10, 30, 50); }');
+  await page.keyboard.press('ControlOrMeta+S');
+  await page.getByText('已保存', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '预览', exact: true }).click();
+  assert.equal(await page.locator('.deck-canvas').evaluate(el => el.style.width), '1280px');
+  assert.equal(await page.locator('.deck-canvas').evaluate(el => el.style.height), '720px');
+  assert.equal((await page.locator('.deck-slide').evaluate(el => getComputedStyle(el).getPropertyValue('--deck-width'))).trim(), '1280px');
+  assert.equal(await page.locator('.deck-slide').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(1, 2, 3)');
+  assert.equal(await page.locator('.deck-slide h1').evaluate(el => getComputedStyle(el).color), 'rgb(17, 34, 51)');
+  assert.match(await page.locator('.deck-slide').evaluate(el => getComputedStyle(el).backgroundImage), /\/assets\/asset-1\/raw/);
+  assert.notEqual(await page.locator('.deck-editor-toolbar').evaluate(el => getComputedStyle(el).color), 'rgb(255, 0, 0)');
+
+  // Markdown uses the same core, with syntax highlighting and keyboard save.
+  await page.getByRole('tab', { name: 'Markdown 源码' }).click();
+  await setCode('markdown', '# Updated heading\n\n**bold** and `code`\n');
+  await page.locator('[data-code-editor="markdown"] .view-line [class*="mtk"]').first().waitFor();
+  await page.waitForFunction(() => new Set(Array.from(document.querySelectorAll('[data-code-editor="markdown"] .view-line span[class*="mtk"]'), el => el.className)).size > 1);
+  await page.keyboard.press('ControlOrMeta+S');
+  await page.waitForFunction(() => !document.querySelector('.deck-editor-toolbar')?.textContent?.includes('未保存'));
+  assert.match(markdownSource, /Updated heading/);
+  await page.getByRole('tab', { name: '预览', exact: true }).click();
+
+  const printPage = await browser.newPage();
+  await printPage.goto(`${origin}/deck/print?deck=deck-mock&token=test&mode=pdf`);
+  await printPage.locator('html[data-deck-ready="true"]').waitFor({ timeout: 15000 });
+  assert.equal(await printPage.locator('[data-deck-canvas-width]').first().getAttribute('data-deck-canvas-width'), '1280');
+  assert.equal(await printPage.locator('[data-deck-canvas-height]').first().getAttribute('data-deck-canvas-height'), '720');
+  assert.equal(await printPage.locator('.deck-slide').nth(0).evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(1, 2, 3)');
+  assert.equal(await printPage.locator('.deck-slide').nth(1).evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(90, 80, 70)');
+  assert.equal(await printPage.locator('.deck-slide').nth(1).locator('.deck-section-nav').isVisible(), false, 'page CSS can hide section navigation');
+  assert.equal(await printPage.locator('.deck-slide').nth(1).evaluate(el => el.getBoundingClientRect().width), 1280, 'per-slide CSS cannot change physical page size');
+  assert.equal(await printPage.locator('.deck-slide').nth(1).locator('h2').evaluate(el => getComputedStyle(el).color), 'rgb(10, 30, 50)');
+  assert.equal(await printPage.locator('.deck-slide').nth(2).evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(1, 2, 3)');
+  assert.equal(await printPage.locator('.deck-slide').nth(2).locator('.deck-section-nav-link[data-active="true"]').textContent(), '01方法');
+  assert.match(await printPage.locator('.deck-slide').nth(2).locator('.deck-section-breadcrumb').innerText(), /核心结果/);
+  await printPage.waitForTimeout(100);
+  const opacity = await printPage.locator('.deck-slide').evaluateAll(els => els.slice(0, 3).map(el => getComputedStyle(el).opacity));
+  assert.deepEqual(opacity, ['0.3', '0.8', '0.3'], 'per-page keyframes do not collide');
+  const fonts = await printPage.locator('.deck-slide').evaluateAll(els => els.slice(0, 2).map(el => getComputedStyle(el).fontFamily));
+  assert.notEqual(fonts[0], fonts[1], 'per-page font families do not collide');
+  assert.match(await printPage.locator('.deck-slide').nth(0).evaluate(el => getComputedStyle(el).backgroundImage), /\/print-assets\/asset-1\?token=test/);
+  await printPage.close();
+
+  const capturePage = await browser.newPage();
+  await capturePage.goto(`${origin}/deck/print?deck=deck-mock&token=test&mode=single`);
+  await capturePage.locator('html[data-deck-ready="true"]').waitFor({ timeout: 15000 });
+  const invalidated = await capturePage.evaluate(() => { window.__deckGoto(2, 0); return document.documentElement.dataset.deckReady; });
+  assert.equal(invalidated, 'false', 'navigation invalidates the previous ready state synchronously');
+  await capturePage.locator('.deck-slide[data-slide-no="2"]').waitFor();
+  await capturePage.waitForFunction(() => document.documentElement.dataset.deckReady === 'true' && window.__deckState?.slide === 2);
+  assert.equal(await capturePage.locator('.deck-slide').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(90, 80, 70)');
+  await capturePage.evaluate(() => window.__deckGoto(2, 1));
+  await capturePage.waitForFunction(() => document.documentElement.dataset.deckReady === 'true' && window.__deckState?.click === 1);
+  await capturePage.evaluate(() => window.__deckGoto(2, 1));
+  assert.equal(await capturePage.locator('html').getAttribute('data-deck-ready'), 'true', 'a no-op navigation stays ready');
+  await capturePage.evaluate(() => window.__deckGoto(3, 0));
+  await capturePage.waitForFunction(() => document.documentElement.dataset.deckReady === 'true' && window.__deckState?.slide === 3);
+  assert.equal(await capturePage.locator('.deck-section-nav-link[data-active="true"]').textContent(), '01方法');
+  assert.match(await capturePage.locator('.deck-section-breadcrumb').innerText(), /核心结果/);
+  await capturePage.close();
+
+  await page.locator('button[title="幻灯片(新建/浏览 deck,点开即编辑器标签)"]').click();
+  await page.getByRole('tab', { name: '页面目录' }).click();
+  await page.getByRole('button', { name: '折叠 方法' }).focus();
+  await page.keyboard.press('Space');
+  assert.equal(await page.getByRole('button', { name: '结果', exact: true }).count(), 0, 'collapse hides descendants');
+  assert.equal(await page.locator('.deck-slide').getAttribute('data-slide-no'), '1', 'space on an expander does not advance the slide');
+  await page.getByRole('button', { name: '展开 方法' }).click();
+  assert.equal(await page.getByRole('button', { name: '不显示', exact: true }).count(), 0, 'hideInToc excludes an entry');
+  await page.waitForTimeout(200);
+  const coverBox = await page.locator('.deck-canvas').boundingBox();
+
   // 3. Navigate to slide 2 (click demo) via TOC.
-  await page.locator('.deck-toc-item').nth(1).click();
+  await page.locator('.deck-outline-link').nth(1).click();
   await page.locator('.deck-canvas .deck-slide[data-slide-no="2"]').waitFor({ state: 'visible' });
   await page.waitForTimeout(200);
+  const secondBox = await page.locator('.deck-canvas').boundingBox();
+  assert.ok(Math.abs(coverBox.width - secondBox.width) < 0.1 && Math.abs(coverBox.height - secondBox.height) < 0.1, 'notes do not change display size');
 
   const clickBody = page.locator('.deck-canvas .deck-slide[data-slide-no="2"] .deck-slide-body');
   // click 0: everything hidden
@@ -239,21 +388,27 @@ try {
   assert.ok(counter.includes('click'), `counter click: ${counter}`);
 
   // 4. figure-left layout: figure slot + raw asset URL
-  await page.locator('.deck-toc-item').nth(2).click();
+  await page.locator('.deck-outline-link').nth(2).click();
   await page.locator('.deck-canvas .deck-slide[data-slide-no="3"]').waitFor({ state: 'visible' });
   await page.waitForTimeout(200);
   const figureSrc = await page.locator('.deck-slide[data-slide-no="3"] .deck-figure-img').getAttribute('src');
   assert.ok(figureSrc && figureSrc.includes('/assets/asset-1/raw'), `figure src: ${figureSrc}`);
+  assert.equal(await page.locator('.deck-section-nav').isVisible(), true, 'theme enables section navigation');
+  assert.equal(await page.locator('.deck-section-nav').getAttribute('data-current-section'), '2');
+  assert.equal(await page.locator('.deck-section-nav').getAttribute('data-current-subsection'), '3');
+  assert.equal(await page.locator('.deck-section-nav-link[data-active="true"]').textContent(), '01方法');
+  assert.match(await page.locator('.deck-section-breadcrumb').innerText(), /核心结果/);
+  if (process.env.DECK_SECTION_SCREENSHOT) await page.screenshot({ path: process.env.DECK_SECTION_SCREENSHOT });
   const caption = await page.locator('.deck-slide[data-slide-no="3"] .deck-caption').innerText();
   assert.ok(caption.includes('Figure 1'), `caption: ${caption}`);
 
-  // 5. mermaid slide renders SVG
-  await page.locator('.deck-toc-item').nth(3).click();
+  // 5. the section bar also navigates the presentation.
+  await page.locator('.deck-section-nav-link').filter({ hasText: '讨论' }).click();
   await page.locator('.deck-canvas .deck-slide[data-slide-no="4"] .deck-mermaid svg').waitFor({ state: 'visible', timeout: 10000 });
 
   // 6. live update: agent edits land in the open tab within a poll
   //    interval (4s poll — no reload, navigation preserved)
-  await page.locator('.deck-toc-item').nth(0).click();
+  await page.locator('.deck-outline-link').nth(0).click();
   await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').waitFor({ state: 'visible' });
   await page.waitForTimeout(200);
   assert.ok((await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').innerText()).includes('封面副标题'));
@@ -268,13 +423,13 @@ try {
 
   // 7. sidebar: decks container lists decks; 新建 dialog creates and
   //    opens the new deck tab
-  await page.locator('button[title="幻灯片(新建/浏览 deck,点开即编辑器标签)"]').click();
+  await page.getByRole('tab', { name: '演示文稿' }).click();
   await page.locator('[data-deck-sidebar]').waitFor({ state: 'visible' });
   await page.waitForTimeout(300);
   const railText = await page.locator('[data-deck-sidebar]').innerText();
   assert.ok(railText.includes('Mock Deck'), `sidebar lists deck: ${railText}`);
 
-  await page.locator('[data-deck-sidebar]').getByText('新建', { exact: true }).click();
+  await page.getByRole('button', { name: '新建幻灯片' }).click();
   await page.getByPlaceholder('deck 标题(如:组会 · 单细胞图谱)').fill('侧栏新 deck');
   await page.getByRole('radio', { name: /空白/ }).click();
   await page.getByRole('button', { name: '创建' }).click();
@@ -285,6 +440,50 @@ try {
   await page.waitForTimeout(300);
   const railAfter = await page.locator('[data-deck-sidebar]').innerText();
   assert.ok(railAfter.includes('侧栏新 deck'), `sidebar refreshed: ${railAfter}`);
+
+  // The default figure-full layout displays the original asset and caption.
+  deckPayload.themeCss = readFileSync('../../crates/ppt-base/src/deck/default-theme.css', 'utf8');
+  deckPayload.slides[2].frontmatter.layout = 'figure-full';
+  const figurePage = await browser.newPage();
+  await figurePage.goto(`${origin}/deck/print?deck=deck-mock&token=test&mode=pdf`);
+  await figurePage.locator('html[data-deck-ready="true"]').waitFor({ timeout: 15000 });
+  const fullFigure = figurePage.locator('.deck-slide[data-layout="figure-full"] .deck-figure-img');
+  await fullFigure.waitFor({ state: 'visible' });
+  assert.match(await fullFigure.getAttribute('src'), /print-assets\/asset-1/);
+  const figureBox = await fullFigure.boundingBox();
+  const slideBox = await figurePage.locator('.deck-slide[data-layout="figure-full"]').boundingBox();
+  assert.ok(figureBox.width <= slideBox.width && figureBox.height <= slideBox.height, 'figure stays within its page');
+  await figurePage.close();
+
+  // 5. Diagnostics rule engine: synthetic slide with known violations.
+  const findings = await page.evaluate(async () => {
+    const mod = await import('/src/features/deck/render/diagnostics.ts');
+    const stage = document.createElement('div');
+    stage.className = 'deck-slide';
+    stage.style.cssText = 'position:fixed;left:0;top:0;width:1280px;height:720px;background:#ffffff;color:#17324d;';
+    const overflowing = document.createElement('div');
+    overflowing.textContent = `wide text ${'overflow '.repeat(400)}`;
+    overflowing.style.cssText = 'font-size:9px;white-space:nowrap;';
+    stage.appendChild(overflowing);
+    const faint = document.createElement('div');
+    faint.textContent = 'low contrast text';
+    faint.style.cssText = 'color:#bbbbbb;';
+    stage.appendChild(faint);
+    document.body.appendChild(stage);
+    try {
+      return mod.diagnoseSlide(stage, { slideNo: 3 });
+    } finally {
+      stage.remove();
+    }
+  });
+  const rules = findings.map(f => f.rule);
+  assert.ok(rules.includes('text-overflow-canvas'), `overflow rule fires: ${JSON.stringify(rules)}`);
+  assert.ok(rules.includes('font-too-small'), `font rule fires: ${JSON.stringify(rules)}`);
+  assert.ok(rules.includes('low-contrast'), `contrast rule fires: ${JSON.stringify(rules)}`);
+  assert.ok(rules.includes('text-density'), `density rule fires: ${JSON.stringify(rules)}`);
+  const overflowFinding = findings.find(f => f.rule === 'text-overflow-canvas');
+  assert.equal(overflowFinding.severity, 'error');
+  assert.ok(overflowFinding.message.includes('Slide 3'), `message names the page: ${overflowFinding.message}`);
 
   // no page errors
   assert.deepEqual(errors.filter(e => !e.includes('ResizeObserver')), [], 'no page errors');

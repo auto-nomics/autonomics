@@ -7,7 +7,9 @@
 
 pub mod asset_tools;
 pub mod citation_tools;
+pub mod css_tools;
 pub mod deck_tools;
+pub mod diag_tools;
 pub mod export_tools;
 pub mod preview_tools;
 pub mod slide_tools;
@@ -33,7 +35,9 @@ pub fn deck_all_registrations(handle: DeckHandle) -> Vec<ToolRegistration> {
     regs.extend(asset_tools::registrations(state.clone()));
     regs.extend(export_tools::registrations(state.clone()));
     regs.extend(preview_tools::registrations(state.clone()));
-    regs.extend(citation_tools::registrations(state));
+    regs.extend(citation_tools::registrations(state.clone()));
+    regs.extend(css_tools::registrations(state.clone()));
+    regs.extend(diag_tools::registrations(state));
     regs
 }
 

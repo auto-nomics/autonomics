@@ -10888,6 +10888,7 @@ dependencies = [
  "browser-use",
  "chromiumoxide",
  "chrono",
+ "cssparser 0.36.0",
  "ppt-types",
  "regex",
  "schemars 1.2.2",

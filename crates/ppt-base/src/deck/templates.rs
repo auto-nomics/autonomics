@@ -17,7 +17,7 @@ pub fn starter_markdown(template: Option<&str>, title: &str) -> String {
 
 fn minimal(title: &str) -> String {
     format!(
-        "---\ntitle: {title}\naspectRatio: 16/9\n---\n\n# {title}\n\n<!--\nCover slide. Edit freely; add slides with slide_insert.\n-->\n"
+        "---\ntitle: {title}\naspectRatio: 16/9\ncolorSchema: light\n---\n\n# {title}\n\n<!--\nCover slide. Edit freely; add slides with slide_insert.\n-->\n"
     )
 }
 
@@ -27,10 +27,10 @@ fn meeting(title: &str) -> String {
         r#"---
 title: {title}
 aspectRatio: 16/9
-colorSchema: auto
+colorSchema: light
 ---
 
-# 组会报告
+# {title}
 
 ## 汇报人 · 日期
 
@@ -285,6 +285,7 @@ mod tests {
     fn meeting_uses_clicks_and_references() {
         let md = starter_markdown(Some("meeting"), "x");
         let deck = assemble(&md, "d", "t", "t");
+        assert_eq!(deck.slides[0].title.as_deref(), Some("x"));
         assert!(deck.meta.features.katex || true);
         let panel = deck
             .slides
