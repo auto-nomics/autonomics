@@ -125,6 +125,9 @@ impl ProcessTaskSpec {
 pub struct ProcessTaskOutput {
     pub port: u8,
     pub pattern: String,
+    /// A missing optional output produces no artifact for this port.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 /// A task transport that runs real OS processes in isolated workspaces.
@@ -395,6 +398,9 @@ impl ProcessTaskTransport {
                 }
                 files.sort();
                 if files.is_empty() {
+                    if output.optional {
+                        continue;
+                    }
                     return Err(DagError::Schedule(format!(
                         "process output port {} matched no files for `{}`",
                         output.port, output.pattern

@@ -46,6 +46,11 @@
 //!     source_revision TEXT NOT NULL,      -- git short sha at build time
 //!     run_report_json TEXT                -- serialized RunReport (snapshot_id backfilled)
 //! );
+//!
+//! CREATE TABLE flow_resume_cache (
+//!     agent_id   TEXT PRIMARY KEY,       -- isolated owner of this cache
+//!     cache_json TEXT NOT NULL           -- latest completed run cache
+//! );
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -464,10 +469,85 @@ impl DagHistory {
                     ON runs(snapshot_id);
                 CREATE INDEX IF NOT EXISTS idx_runs_started
                     ON runs(started_at);
+                CREATE INDEX IF NOT EXISTS idx_runs_flow_agent_hash
+                    ON runs(ref_name, trigger_source, manifest_hash, started_at);
+
+                CREATE TABLE IF NOT EXISTS flow_workspaces (
+                    agent_id TEXT PRIMARY KEY,
+                    flow_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS flow_resume_cache (
+                    agent_id   TEXT PRIMARY KEY,
+                    cache_json TEXT NOT NULL
+                );
                 ",
             )
             .await
             .map_err(|e| DagError::History(format!("schema init failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Load the last committed authored flow for an agent.
+    pub async fn load_flow_workspace(&self, agent_id: &str) -> Result<Option<String>, DagError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT flow_json FROM flow_workspaces WHERE agent_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_owned())]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("load flow workspace: {e}")))?;
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(text_value(&row, 0)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(DagError::History(format!("load flow workspace row: {e}"))),
+        }
+    }
+
+    /// Atomically replace an agent's authored flow.
+    pub async fn store_flow_workspace(
+        &self,
+        agent_id: &str,
+        flow_json: &str,
+    ) -> Result<(), DagError> {
+        self.conn.execute(
+            "INSERT INTO flow_workspaces (agent_id, flow_json) VALUES (?1, ?2) ON CONFLICT(agent_id) DO UPDATE SET flow_json = ?2",
+            params_from_iter([Value::Text(agent_id.to_owned()), Value::Text(flow_json.to_owned())]),
+        ).await.map_err(|e| DagError::History(format!("store flow workspace: {e}")))?;
+        Ok(())
+    }
+
+    /// Load the run cache belonging to a single agent session.
+    pub async fn load_flow_cache(&self, agent_id: &str) -> Result<Option<String>, DagError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT cache_json FROM flow_resume_cache WHERE agent_id = ?1",
+                params_from_iter([Value::Text(agent_id.to_owned())]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("load flow cache: {e}")))?;
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(text_value(&row, 0)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(DagError::History(format!("load flow cache row: {e}"))),
+        }
+    }
+
+    /// Atomically replace one agent's last completed cache snapshot.
+    pub async fn store_flow_cache(&self, agent_id: &str, cache_json: &str) -> Result<(), DagError> {
+        self.conn
+            .execute(
+                "INSERT INTO flow_resume_cache (agent_id, cache_json) VALUES (?1, ?2) \
+             ON CONFLICT(agent_id) DO UPDATE SET cache_json = ?2",
+                params_from_iter([
+                    Value::Text(agent_id.to_owned()),
+                    Value::Text(cache_json.to_owned()),
+                ]),
+            )
+            .await
+            .map_err(|e| DagError::History(format!("store flow cache: {e}")))?;
         Ok(())
     }
 
@@ -828,6 +908,23 @@ impl DagHistory {
         Ok(runs)
     }
 
+    /// Latest run for one agent and authored flow, including failed runs with no report.
+    pub async fn latest_flow_run(
+        &self,
+        agent_id: &str,
+        manifest_hash: &str,
+    ) -> Result<Option<RunRecord>, DagError> {
+        let mut rows = self.conn.query(
+            "SELECT id, ref_name, snapshot_id, manifest_hash, trigger_source, started_at, finished_at, ok, cancelled, error, message, engine_version, source_revision, run_report_json FROM runs WHERE ref_name = 'flow' AND trigger_source = ?1 AND manifest_hash = ?2 ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            params_from_iter([Value::Text(format!("agent:{agent_id}")), Value::Text(manifest_hash.to_owned())]),
+        ).await.map_err(|e| DagError::History(format!("latest flow run query: {e}")))?;
+        match rows.next().await {
+            Ok(Some(row)) => Ok(Some(row_to_run(&row)?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(DagError::History(format!("latest flow run row: {e}"))),
+        }
+    }
+
     /// Fetch a single run by id.
     pub async fn get_run(&self, id: &str) -> Result<Option<RunRecord>, DagError> {
         let mut rows = self
@@ -931,6 +1028,23 @@ fn is_torn_wal_error(error: &DagError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn flow_cache_is_upserted_per_agent() {
+        let history = DagHistory::open_in_memory().await.unwrap();
+        assert!(history.load_flow_cache("a").await.unwrap().is_none());
+        history.store_flow_cache("a", "first").await.unwrap();
+        history.store_flow_cache("b", "other").await.unwrap();
+        history.store_flow_cache("a", "second").await.unwrap();
+        assert_eq!(
+            history.load_flow_cache("a").await.unwrap().as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            history.load_flow_cache("b").await.unwrap().as_deref(),
+            Some("other")
+        );
+    }
 
     #[test]
     fn torn_wal_error_matches_turso_message() {
@@ -1180,34 +1294,6 @@ mod tests {
         assert_eq!(manifest.schema_version, 1);
         assert!(manifest.logical.graphs.is_empty());
         assert!(manifest.physical_jobs.is_empty());
-    }
-
-    #[test]
-    fn manifest_roundtrips_logical_and_physical_layers() {
-        let graph = super::super::LogicalGraph::builder()
-            .add_node(super::super::LogicalNode::for_each(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": "{{item.path}}"}),
-                "sample",
-                vec![serde_json::json!({"key": "a", "path": "/tmp/a.csv"})],
-            ))
-            .build();
-        let manifest = DagManifest {
-            logical: LogicalManifest {
-                graphs: vec![graph],
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        let encoded = serde_json::to_string(&manifest).unwrap();
-        let decoded: DagManifest = serde_json::from_str(&encoded).unwrap();
-
-        assert_eq!(decoded.schema_version, MANIFEST_SCHEMA_VERSION);
-        assert_eq!(decoded.logical.compiler_version, LOGICAL_COMPILER_VERSION);
-        assert_eq!(decoded.logical.graphs.len(), 1);
-        assert_eq!(decoded.logical.graphs[0].nodes()[0].id, "read");
     }
 
     #[tokio::test]

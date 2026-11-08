@@ -287,8 +287,6 @@ impl NodeFactory for FileReferenceNodeFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dag_core::dag::DAG;
-    use dag_core::dag::runtime::SchedulerConfig;
     use datafusion::prelude::SessionContext;
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
@@ -393,26 +391,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_file_flows_through_dag() {
+    async fn node_outputs_a_local_file_reference() {
         let input = tempfile::tempdir().unwrap();
         let path = input.path().join("input.txt");
         std::fs::write(&path, b"local-payload").unwrap();
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), None);
-        let mut dag = DAG::default();
-        dag.add_node(
-            "source".into(),
-            Box::new(FileReferenceNode::new(
-                path.to_string_lossy().into_owned(),
-                Some("txt".into()),
-            )),
-        )
-        .unwrap();
-
-        dag.run(&SchedulerConfig::default(), &ctx, None)
+        let mut node =
+            FileReferenceNode::new(path.to_string_lossy().into_owned(), Some("txt".into()));
+        let output = node
+            .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
             .await
             .unwrap();
-
-        let output = dag.output("source").unwrap().clone();
         let file = output.get(&0).unwrap().as_file().unwrap();
         assert_eq!(
             std::path::Path::new(&file.path),

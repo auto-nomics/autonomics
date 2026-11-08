@@ -1,4 +1,8 @@
 //! Listing and metadata operations: `ls`, `tree`, `wc`, `stat`, `mount_list`.
+//!
+//! `ls`, `stat` and `mount_list` are thin adapters over the typed
+//! [`crate::browse`] facade so the agent tool and the gateway VFS API
+//! share one mount-aware implementation.
 
 use agentik_core::tools::{ToolError, ToolResult};
 use agentik_sdk::types::ToolResult as AgentToolResult;
@@ -8,23 +12,19 @@ use super::common::{
     FollowedEntry, collect_followed_entries, entry_is_readable, followed_entry_metadata,
     local_backend_root, require_path, tree_path_cmp,
 };
+use crate::browse::BrowseError;
 use crate::storage::OpendalFileStorage;
 
-/// Default maximum entries returned by `ls` when no explicit `limit` is given.
-///
-/// Kept modest so a single listing does not flood the agent's context
-/// window. Callers may raise it via `limit`, or page with `offset`.
-const DEFAULT_LS_LIMIT: usize = 200;
 /// Default and hard maximum entry counts for a paginated `tree` response.
 const DEFAULT_TREE_LIMIT: usize = 500;
 const TREE_MAX_LIMIT: usize = 1000;
 
 /// `ls` — list directory entries.
 ///
-/// Results are paginated: `offset` entries are skipped, then up to `limit`
-/// entries (default [`DEFAULT_LS_LIMIT`]) are collected. The response
-/// includes a `truncated` flag and a `next_offset` hint so the caller can
-/// continue listing when more entries remain.
+/// Results are paginated: `offset` entries are skipped, then up to
+/// `limit` entries are collected. The response includes a `truncated`
+/// flag and a `next_offset` hint so the caller can continue listing when
+/// more entries remain.
 pub async fn op_ls(
     storage: &OpendalFileStorage,
     path: Option<&str>,
@@ -32,343 +32,45 @@ pub async fn op_ls(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
-    if let Err(error) = storage.check_listable(&vpath) {
-        return Ok(AgentToolResult::error(format!("ls: '{vpath}': {error}")));
-    }
-    let recursive = recursive.unwrap_or(false);
-    let max = limit.unwrap_or(DEFAULT_LS_LIMIT).max(1);
-    let skip = offset.unwrap_or(0);
-
-    // ── Composite listing helper ──
-    //
-    // We collect entries from (a) the default-fs backend (after
-    // dispatching through the mount table to find the covering mount
-    // if any), and (b) synthetic entries for mount descendants, into a
-    // single deduped, sorted, paginated list.
-    //
-    // The list returned has the form Vec<serde_json::Value> with one
-    // entry per `name`, `is_dir`, `size`.
-    let mut items: Vec<serde_json::Value> = Vec::with_capacity(max.min(1024));
-    let mut truncated = false;
-
-    let mount = storage.mounts.as_ref().and_then(|m| {
-        use datafusion::object_store::path::Path as DsPath;
-        let ds = DsPath::parse(&vpath).ok()?;
-        m.handle_for(&ds)
-    });
-    let base = vpath.trim_end_matches('/');
-    let child_mounts: Vec<String> = storage
-        .mounts
-        .as_ref()
-        .map(|m| {
-            m.mount_paths()
-                .into_iter()
-                .filter_map(|mount| {
-                    let mount = mount.trim_end_matches('/');
-                    if mount == base {
-                        return None;
-                    }
-                    let suffix = if base == "/" {
-                        mount.strip_prefix('/')?
-                    } else {
-                        mount.strip_prefix(base)?.strip_prefix('/')?
-                    };
-                    let first = suffix.split('/').next()?;
-                    if first.is_empty() {
-                        return None;
-                    }
-                    Some(if base == "/" {
-                        format!("/{first}")
-                    } else {
-                        format!("{base}/{first}")
-                    })
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect()
-        })
-        .unwrap_or_default();
-    let child_mounts = child_mounts
-        .into_iter()
-        .filter(|mount| storage.check_listable(mount).is_ok())
-        .collect::<Vec<_>>();
-
-    // ── Case 1: recursive — use ObjectStore-style stream via opendal ──
-    if recursive {
-        // For recursive listing we walk the path on the resolved
-        // operator (single backend), then append child mounts' contents.
-        let op = storage.resolve(&vpath);
-        let remote = storage.resolve_path(&vpath);
-        let scan = if remote.is_empty() {
-            "/".to_string()
-        } else if remote.ends_with('/') {
-            remote.clone()
-        } else {
-            format!("{remote}/")
-        };
-        let mut lister = op
-            .lister_with(&scan)
-            .recursive(true)
-            .await
-            .map_err(|e| e.to_string())?;
-        let scan_root = remote.trim_end_matches('/').to_string();
-        let mut idx = 0usize;
-        while let Some(entry) = lister.next().await {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let entry_path = entry.path().to_string();
-            // Remap the backend-local entry back into the virtual
-            // namespace for display and shadow checks.
-            let display = storage.remap_entry_to_virtual(&vpath, &entry_path);
-            if !entry_is_readable(storage, &display, entry.metadata().is_dir()) {
-                continue;
-            }
-            // Skip the scan-root self-entry.
-            if entry.metadata().is_dir() && entry_path.trim_end_matches('/') == scan_root {
-                continue;
-            }
-            // Skip entries shadowed by a child mount.
-            let trimmed = display.trim_end_matches('/');
-            if child_mounts
-                .iter()
-                .any(|m| m.trim_end_matches('/') == trimmed)
-            {
-                continue;
-            }
-            idx += 1;
-            if idx <= skip {
-                continue;
-            }
-            if items.len() >= max {
-                truncated = true;
-                break;
-            }
-            let meta = entry.metadata();
-            let is_dir = meta.is_dir();
-            let size = if is_dir { 0 } else { meta.content_length() };
-            items.push(serde_json::json!({
-                "name": display,
-                "is_dir": is_dir,
-                "size": size,
-            }));
+    let raw = path.unwrap_or("/");
+    let listing = match crate::browse::list(
+        storage,
+        raw,
+        recursive.unwrap_or(false),
+        limit,
+        offset,
+    )
+    .await
+    {
+        Ok(listing) => listing,
+        Err(error) => {
+            let vpath = OpendalFileStorage::normalize_path(raw);
+            return Ok(AgentToolResult::error(format!(
+                "ls: '{vpath}': {}",
+                error.message()
+            )));
         }
-
-        // If we still have room, append each child mount's contents.
-        if !truncated {
-            for mp in &child_mounts {
-                if let Some(mounts) = &storage.mounts {
-                    use datafusion::object_store::path::Path as DsPath;
-                    if let Ok(ds) = DsPath::parse(mp) {
-                        if let Some(h) = mounts.handle_for(&ds) {
-                            let child_op = (*h.backend_op).clone();
-                            let child_remote = storage.resolve_path(mp);
-                            let child_scan = if child_remote.is_empty() {
-                                "/".to_string()
-                            } else {
-                                child_remote
-                            };
-                            let mut ml =
-                                match child_op.lister_with(&child_scan).recursive(true).await {
-                                    Ok(l) => l,
-                                    Err(_) => continue,
-                                };
-                            while let Some(entry) = ml.next().await {
-                                if let Ok(entry) = entry {
-                                    let meta = entry.metadata();
-                                    let entry_path = entry.path().to_string();
-                                    let display = storage.remap_entry_to_virtual(mp, &entry_path);
-                                    let is_dir = meta.is_dir();
-                                    if !entry_is_readable(storage, &display, is_dir) {
-                                        continue;
-                                    }
-                                    idx += 1;
-                                    if idx <= skip {
-                                        continue;
-                                    }
-                                    if items.len() >= max {
-                                        truncated = true;
-                                        break;
-                                    }
-                                    let size = if is_dir { 0 } else { meta.content_length() };
-                                    items.push(serde_json::json!({
-                                        "name": display,
-                                        "is_dir": is_dir,
-                                        "size": size,
-                                    }));
-                                }
-                            }
-                            if truncated {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        // ── Case 2: non-recursive — list children of `vpath` ──
-        // If a single mount covers vpath entirely, list inside it.
-        if let Some(handle) = mount {
-            let op = (*handle.backend_op).clone();
-            let scan_remote = storage.resolve_path(&vpath);
-            let scan_remote_cmp = scan_remote.clone();
-            let scan = if scan_remote.ends_with('/') || scan_remote.is_empty() {
-                if scan_remote.is_empty() {
-                    "/".to_string()
-                } else {
-                    scan_remote
-                }
-            } else {
-                format!("{scan_remote}/")
-            };
-            let mut lister = op
-                .lister_with(&scan)
-                .recursive(false)
-                .await
-                .map_err(|e| e.to_string())?;
-            let mut idx = 0usize;
-
-            // Mount points are namespace boundaries, not merely entries that
-            // happen to exist in the covering backend. Emit them first so a
-            // truncated listing still exposes the mounted branch.
-            for mp in &child_mounts {
-                idx += 1;
-                if idx <= skip {
-                    continue;
-                }
-                if items.len() >= max {
-                    truncated = true;
-                    break;
-                }
-                items.push(serde_json::json!({
-                    "name": mp,
-                    "is_dir": true,
-                    "size": 0,
-                }));
-            }
-
-            while let Some(entry) = lister.next().await {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let entry_path_raw = entry.path().to_string();
-                let metadata = followed_entry_metadata(&op, &entry).await?;
-                if metadata.is_dir()
-                    && entry_path_raw.trim_end_matches('/') == scan_remote_cmp.trim_end_matches('/')
-                {
-                    continue;
-                }
-                idx += 1;
-                if idx <= skip {
-                    continue;
-                }
-                if items.len() >= max {
-                    truncated = true;
-                    break;
-                }
-                let is_dir = metadata.is_dir();
-                let size = if is_dir { 0 } else { metadata.content_length() };
-                // Remap to virtual form (strip the mount's backend
-                // source prefix, re-attach the virtual prefix).
-                let display = storage.remap_entry_to_virtual(&vpath, &entry_path_raw);
-                if !entry_is_readable(storage, &display, metadata.is_dir()) {
-                    continue;
-                }
-                if metadata.is_dir()
-                    && child_mounts
-                        .iter()
-                        .any(|m| m.trim_end_matches('/') == display.trim_end_matches('/'))
-                {
-                    continue;
-                }
-                items.push(serde_json::json!({
-                    "name": display,
-                    "is_dir": is_dir,
-                    "size": size,
-                }));
-            }
-        } else {
-            // Default-fs non-recursive + synthetic direct-child mounts.
-            let op = storage.resolve(&vpath);
-            let scan = if vpath.ends_with('/') {
-                vpath.clone()
-            } else {
-                format!("{vpath}/")
-            };
-            let mut lister = op
-                .lister_with(&scan)
-                .recursive(false)
-                .await
-                .map_err(|e| e.to_string())?;
-            let scan_root = vpath.trim_end_matches('/').to_string();
-            let mut idx = 0usize;
-
-            for mp in &child_mounts {
-                idx += 1;
-                if idx <= skip {
-                    continue;
-                }
-                if items.len() >= max {
-                    truncated = true;
-                    break;
-                }
-                items.push(serde_json::json!({
-                    "name": mp,
-                    "is_dir": true,
-                    "size": 0,
-                }));
-            }
-
-            while let Some(entry) = lister.next().await {
-                let entry = entry.map_err(|e| e.to_string())?;
-                let entry_path_raw = entry.path().to_string();
-                let trimmed = entry_path_raw.trim_end_matches('/').to_string();
-                let metadata = followed_entry_metadata(&op, &entry).await?;
-                if !entry_is_readable(storage, &entry_path_raw, metadata.is_dir()) {
-                    continue;
-                }
-                // Skip default-fs directories that are shadowed by mounts.
-                if metadata.is_dir()
-                    && child_mounts
-                        .iter()
-                        .any(|m| m.trim_end_matches('/') == trimmed)
-                {
-                    continue;
-                }
-                if metadata.is_dir() && trimmed == scan_root {
-                    continue;
-                }
-                idx += 1;
-                if idx <= skip {
-                    continue;
-                }
-                if items.len() >= max {
-                    truncated = true;
-                    break;
-                }
-                let is_dir = metadata.is_dir();
-                let size = if is_dir { 0 } else { metadata.content_length() };
-                items.push(serde_json::json!({
-                    "name": entry_path_raw,
-                    "is_dir": is_dir,
-                    "size": size,
-                }));
-            }
-        }
-    }
-
-    let returned = items.len();
-    let next_offset = if truncated {
-        Some(skip + returned)
-    } else {
-        None
     };
+
+    let items: Vec<serde_json::Value> = listing
+        .entries
+        .iter()
+        .map(|entry| {
+            serde_json::json!({
+                "name": entry.path,
+                "is_dir": entry.is_dir,
+                "size": entry.size,
+            })
+        })
+        .collect();
     let mut payload = serde_json::json!({
-        "path": vpath,
+        "path": listing.path,
         "entries": items,
-        "returned": returned,
-        "truncated": truncated,
+        "returned": listing.returned,
+        "truncated": listing.truncated,
     });
-    if let Some(no) = next_offset {
-        payload["next_offset"] = serde_json::json!(no);
+    if let Some(next_offset) = listing.next_offset {
+        payload["next_offset"] = serde_json::json!(next_offset);
     }
     Ok(AgentToolResult::success_json(payload))
 }
@@ -379,29 +81,19 @@ pub async fn op_stat(
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "stat")?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
-    if let Err(error) = storage.check_readable(&vpath) {
-        return Ok(AgentToolResult::error(format!(
-            "stat: '{raw_path}': {error}"
-        )));
+    match crate::browse::stat(storage, raw_path).await {
+        Ok(entry) => Ok(AgentToolResult::success_json(serde_json::json!({
+            "path": raw_path,
+            "is_dir": entry.is_dir,
+            "size": entry.size,
+            "last_modified": entry.last_modified.unwrap_or_default(),
+        }))),
+        Err(BrowseError::NotFound(message)) => Ok(AgentToolResult::error(message)),
+        Err(error) => Ok(AgentToolResult::error(format!(
+            "stat: '{raw_path}': {}",
+            error.message()
+        ))),
     }
-    let op = storage.resolve(&vpath);
-    let remote = storage.resolve_path(&vpath);
-    let meta = match op.stat(&remote).await {
-        Ok(m) => m,
-        Err(_) => {
-            return Ok(AgentToolResult::error(format!(
-                "File or directory does not exist: {raw_path}"
-            )));
-        }
-    };
-
-    Ok(AgentToolResult::success_json(serde_json::json!({
-        "path": raw_path,
-        "is_dir": meta.is_dir(),
-        "size": meta.content_length(),
-        "last_modified": meta.last_modified().map(|t| t.to_string()).unwrap_or_default(),
-    })))
 }
 
 /// `mount_list` — list every mount defined for this VFS.
@@ -410,8 +102,7 @@ pub async fn op_stat(
 /// read_only) so the agent can introspect the available
 /// mount points without needing them listed in the system prompt.
 pub async fn op_mount_list(storage: &OpendalFileStorage) -> Result<AgentToolResult, ToolError> {
-    let mounts: Vec<serde_json::Value> = storage
-        .mount_definitions()
+    let mounts: Vec<serde_json::Value> = crate::browse::mounts(storage)
         .into_iter()
         .map(|d| {
             serde_json::json!({

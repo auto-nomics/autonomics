@@ -13,7 +13,7 @@
 import { useSyncExternalStore } from "react";
 import { layoutGroups, removeLayoutGroup, resizeLayout, splitLayout, validLayout, type DropDirection, type EditorLayout } from "./editor-layout";
 
-export type ContainerId = "bibliography" | "wiki" | "agents" | "projects";
+export type ContainerId = "bibliography" | "wiki" | "agents" | "projects" | "vfs";
 export type GroupId = string;
 export type EditorId = string;
 export type PanelTab = "events" | "notices" | "terminal";
@@ -58,7 +58,7 @@ function clampPercent(value: number, min: number, max: number, fallback: number)
 }
 
 function isContainerId(value: unknown): value is ContainerId {
-  return value === "bibliography" || value === "wiki" || value === "agents" || value === "projects";
+  return value === "bibliography" || value === "wiki" || value === "agents" || value === "projects" || value === "vfs";
 }
 
 /** A wiki editor's per-instance state (history stack + cursor + mode). */
@@ -87,7 +87,7 @@ function defaultState(): WorkbenchState {
   return {
     revision: 0,
     sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography", width: 220 },
-    containerViews: { bibliography: "library", wiki: "browse", agents: "list", projects: "files" },
+    containerViews: { bibliography: "library", wiki: "browse", agents: "list", projects: "files", vfs: "tree" },
     panel: { visible: false, heightPercent: PANEL_HEIGHT_DEFAULT, tab: "events", unreadNotices: 0 },
     groups: { active: "main", main: { editors: [], activeId: null }, secondary: null, extra: {} },
     editorLayout: { group: "main" },

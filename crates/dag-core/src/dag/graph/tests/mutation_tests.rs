@@ -377,42 +377,6 @@ fn delete_edge_after_delete_node() {
     assert_eq!(dag.incoming_edges_with_ports("c").len(), 1);
 }
 
-#[tokio::test]
-async fn multi_input_tmp_df_register() {
-    let mut dag = DAG::default();
-    dag.add_node(
-        "a".into(),
-        Box::new(EchoNode::from_ports(NodePorts::new().add_output_port(None))),
-    )
-    .unwrap();
-    dag.add_node(
-        "b".into(),
-        Box::new(EchoNode::from_ports(NodePorts::new().add_output_port(None))),
-    )
-    .unwrap();
-    dag.add_node(
-        "c".into(),
-        Box::new(EchoNode::from_ports(
-            NodePorts::new()
-                .add_input_port(None)
-                .add_input_port(None)
-                .set_fixed_input(true),
-        )),
-    )
-    .unwrap();
-    dag.add_edge("a", "c", 0, 0).unwrap();
-    dag.add_edge("b", "c", 0, 1).unwrap();
-    dag.validate().unwrap();
-    assert_eq!(dag.node_ids().len(), 3);
-    assert_eq!(dag.successors("a").len(), 1);
-    assert_eq!(dag.predecessors("c").len(), 2);
-
-    dag.run(&SchedulerConfig::default(), &test_ctx(), None)
-        .await
-        .unwrap();
-    let output = dag.output("c").unwrap();
-    dbg!(output);
-}
 
 #[test]
 fn task_resources_reject_zero_requests() {

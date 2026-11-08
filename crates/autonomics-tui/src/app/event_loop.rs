@@ -152,7 +152,8 @@ impl App {
 
                     let agent_active = active_status.is_active()
                         || active_status == AgentStatus::Waiting;
-                    if self.dirty || agent_active {
+                    let scrolling = self.state.active_tab_state_mut().advance_scroll();
+                    if self.dirty || agent_active || scrolling {
                         terminal.draw(|f| self.render(f))?;
                         self.dirty = false;
                     }

@@ -40,6 +40,12 @@ pub struct ContainerCommandOutputSpec {
     pub path: String,
     /// Optional format label passed downstream (`bam`, `vcf`, `csv`, ...).
     pub format: Option<String>,
+    /// Optional ordered `val` inputs and this output `path`, emitted as a tuple.
+    #[serde(default)]
+    pub tuple: Vec<TupleOutputElement>,
+    /// Missing files suppress this output rather than failing the task.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 /// How inputs are materialized into the task work dir.
@@ -54,6 +60,63 @@ pub enum StageInMode {
     #[default]
     Symlink,
     Copy,
+}
+
+/// A tuple input mirrors Nextflow's `tuple val(name), path(name)` qualifiers.
+#[derive(Debug, Clone, JsonSchema, Deserialize, serde::Serialize)]
+pub struct TupleInput {
+    pub port: u8,
+    pub tuple: Vec<TupleInputElement>,
+}
+
+#[derive(Debug, Clone, JsonSchema, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TupleInputElement {
+    Val(String),
+    Path(String),
+    /// Same `path` qualifier with a Nextflow-style file-count constraint.
+    #[serde(untagged)]
+    PathWithArity {
+        path: String,
+        arity: String,
+    },
+}
+
+/// Output qualifiers mirror `tuple val(name), path(pattern, arity: ...)`.
+#[derive(Debug, Clone, JsonSchema, Deserialize, serde::Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TupleOutputElement {
+    Val {
+        val: String,
+    },
+    Path {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arity: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hidden: Option<bool>,
+    },
+}
+
+/// Nextflow path arity: exact count or inclusive range, with `*` as max.
+pub fn parse_path_arity(value: &str) -> Result<(usize, Option<usize>), String> {
+    let parse = |part: &str| {
+        part.parse::<usize>()
+            .map_err(|_| format!("invalid path arity `{value}`"))
+    };
+    let (min, max) = if let Some((min, max)) = value.split_once("..") {
+        (
+            parse(min)?,
+            if max == "*" { None } else { Some(parse(max)?) },
+        )
+    } else {
+        let n = parse(value)?;
+        (n, Some(n))
+    };
+    if max == Some(0) || (min == 0 && max == Some(1)) || max.is_some_and(|max| min > max) {
+        return Err(format!("invalid path arity `{value}`"));
+    }
+    Ok((min, max))
 }
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
@@ -72,12 +135,17 @@ pub struct ContainerCommandSpec {
     /// Extra environment variables inside the workload container.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Named tuple inputs, bound by input port. Values and staged paths are
+    /// exposed to the script as environment variables bearing these names.
+    #[serde(default)]
+    pub tuple_inputs: Vec<TupleInput>,
     /// Files that must exist after a successful container run.
     pub outputs: Vec<ContainerCommandOutputSpec>,
     /// Optional explicit work directory under the workspace root. When
-    /// omitted, a persistent content-addressed work dir is derived from the
-    /// node identity (image, command/script, files, env, outputs, panels,
-    /// plugin identity, and input identities) and reused across re-runs.
+    /// omitted, each execution claims an unused work dir under the task
+    /// identity (image, command/script, files, env, outputs, panels, plugin
+    /// identity, and input identities). Cached results refer to their original
+    /// directory; new attempts never overwrite it.
     pub workdir: Option<String>,
     /// How inputs are materialized into the work dir. See [`StageInMode`].
     #[serde(default)]
@@ -149,6 +217,38 @@ fn default_true() -> bool {
 }
 
 pub(crate) fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerCommandError> {
+    let mut tuple_ports = std::collections::BTreeSet::new();
+    let mut names = std::collections::BTreeSet::new();
+    for input in &spec.tuple_inputs {
+        if !tuple_ports.insert(input.port) || input.tuple.is_empty() {
+            return Err(ContainerCommandError::Invalid(
+                "tuple input ports must be unique and nonempty".into(),
+            ));
+        }
+        for element in &input.tuple {
+            let name = match element {
+                TupleInputElement::Val(name)
+                | TupleInputElement::Path(name)
+                | TupleInputElement::PathWithArity { path: name, .. } => name,
+            };
+            if let TupleInputElement::PathWithArity { arity, .. } = element {
+                parse_path_arity(arity).map_err(ContainerCommandError::Invalid)?;
+            }
+            let mut chars = name.chars();
+            if !chars
+                .next()
+                .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+                || !chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+                || name.starts_with("AUTONOMICS_")
+                || spec.env.contains_key(name)
+                || !names.insert(name)
+            {
+                return Err(ContainerCommandError::Invalid(format!(
+                    "invalid or duplicate tuple input name `{name}`"
+                )));
+            }
+        }
+    }
     if spec.image.trim().is_empty() {
         return Err(ContainerCommandError::Invalid(
             "`image` cannot be empty".into(),
@@ -182,6 +282,25 @@ pub(crate) fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerComma
             return Err(ContainerCommandError::Invalid(format!(
                 "output format `{format}` cannot contain NUL bytes"
             )));
+        }
+        if !output.tuple.is_empty() {
+            let mut has_path = false;
+            for element in &output.tuple {
+                match element {
+                    TupleOutputElement::Val { val: name } if spec.tuple_inputs.iter().any(|input| input.tuple.iter().any(|element| matches!(element, TupleInputElement::Val(value) if value == name))) => {},
+                    TupleOutputElement::Val { val: name } => return Err(ContainerCommandError::Invalid(format!("tuple output references unknown val `{name}`"))),
+                    TupleOutputElement::Path { path, arity, .. } => {
+                        utils::validate_workspace_relative_glob(path).map_err(|e| ContainerCommandError::Invalid(format!("invalid tuple output `{path}`: {e}")))?;
+                        if let Some(value) = arity { parse_path_arity(value).map_err(ContainerCommandError::Invalid)?; }
+                        has_path |= path == &output.path;
+                    },
+                }
+            }
+            if !has_path {
+                return Err(ContainerCommandError::Invalid(
+                    "tuple output must contain its output path".into(),
+                ));
+            }
         }
     }
     if let Some(prefix) = &spec.artifact_prefix
@@ -310,7 +429,9 @@ impl NodeFactory for ContainerCommandNodeFactory {
         inputs are staged into the work dir, by default as symlinks to their \
         sources with the source parent directories bind-mounted read-only \
         (`stage_in_mode: copy` forces byte copies); input paths are exposed as \
-        `$input0`, `$input1`, `AUTONOMICS_INPUT0`, and so on. Outputs must be \
+        `$input0`, `$input1`, `AUTONOMICS_INPUT0`, and so on. A mixed tuple \
+        can be declared with `tuple_inputs: [{\"port\":0,\"tuple\":[{\"val\":\"sample\"},{\"path\":\"reads\"}]}]`; \
+        the script receives `sample` and the staged `reads` path as environment variables. Outputs must be \
         safe paths relative to `/work` (globs allowed when they match exactly \
         one file) and are exposed as `$output0`, `AUTONOMICS_OUTPUT0`, and so \
         on; glob outputs substitute their pattern relative to `/work`. The \
@@ -495,9 +616,12 @@ mod tests {
             script: None,
             files: BTreeMap::new(),
             env: BTreeMap::new(),
+            tuple_inputs: Vec::new(),
             outputs: vec![ContainerCommandOutputSpec {
                 path: output.into(),
                 format: Some("txt".into()),
+                tuple: Vec::new(),
+                optional: false,
             }],
             workdir: None,
             stage_in_mode: StageInMode::default(),
@@ -636,6 +760,245 @@ mod tests {
             vec![image_one.parent().unwrap().to_path_buf()],
             "all sources share one parent, mounted exactly once (deduped)"
         );
+    }
+
+    #[tokio::test]
+    async fn stage_inputs_preserves_mixed_tuple_and_stages_nested_files() {
+        use dag_core::dag::execution::ChannelTransportValue as Value;
+        let env = test_env();
+        let source = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        let a = source.path().join("a.fastq");
+        let b = source.path().join("b.fastq");
+        std::fs::write(&a, b"reads-a").unwrap();
+        std::fs::write(&b, b"reads-b").unwrap();
+        let input = Value::Tuple(vec![
+            Value::Json(serde_json::json!("sample")),
+            Value::List(vec![
+                Value::File(FileRef::local(&a, Some("fastq".into())).unwrap()),
+                Value::File(FileRef::local(&b, Some("fastq".into())).unwrap()),
+            ]),
+        ]);
+        let fingerprints = input
+            .artifacts()
+            .iter()
+            .map(|f| f.fingerprint.clone())
+            .collect::<Vec<_>>();
+        let (staged, mounts) = stage_inputs(
+            &env.ctx,
+            env.workspace.path(),
+            &[NodeInput {
+                port: 0,
+                data: NodeValue::Structured(input),
+            }],
+            StageInMode::Copy,
+        )
+        .await
+        .unwrap();
+        assert!(mounts.is_empty());
+        let NodeValue::Structured(Value::Tuple(items)) = &staged[0].data else {
+            panic!("tuple expected")
+        };
+        assert!(matches!(&items[0], Value::Json(value) if value == "sample"));
+        let Value::List(files) = &items[1] else {
+            panic!("file list expected")
+        };
+        for (index, (item, expected)) in files
+            .iter()
+            .zip([b"reads-a".as_slice(), b"reads-b".as_slice()])
+            .enumerate()
+        {
+            let Value::File(file) = item else {
+                panic!("file expected")
+            };
+            assert_eq!(std::fs::read(&file.path).unwrap(), expected);
+            assert_eq!(file.fingerprint, fingerprints[index]);
+        }
+    }
+
+    #[tokio::test]
+    async fn tuple_val_and_path_are_bound_for_container_script() {
+        use dag_core::dag::execution::ChannelTransportValue as Value;
+        let env = test_env();
+        let file = env.workspace.path().join("reads.fastq");
+        std::fs::write(&file, b"reads").unwrap();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node_spec = spec("example/image", vec!["sh".into()], "result.txt");
+        node_spec.stage_in_mode = StageInMode::Copy;
+        node_spec.script = Some("printf '%s' \"$sample\"; cat \"$reads\"".into());
+        node_spec.tuple_inputs = vec![TupleInput {
+            port: 0,
+            tuple: vec![
+                TupleInputElement::Val("sample".into()),
+                TupleInputElement::Path("reads".into()),
+            ],
+        }];
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            node_spec,
+            runtime.clone(),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+        let input = NodeInput {
+            port: 0,
+            data: NodeValue::Structured(Value::Tuple(vec![
+                Value::Json(serde_json::json!("sample A")),
+                Value::File(FileRef::local(&file, Some("fastq".into())).unwrap()),
+            ])),
+        };
+        node.execute(
+            &env.ctx,
+            &[input],
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+        let requests = runtime.requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        assert!(
+            request
+                .env
+                .iter()
+                .any(|(name, value)| name == "sample" && value == "sample A")
+        );
+        let path = &request
+            .env
+            .iter()
+            .find(|(name, _)| name == "reads")
+            .unwrap()
+            .1;
+        assert!(path.starts_with("/work/"));
+        assert_eq!(std::fs::read(host_path(request, path)).unwrap(), b"reads");
+        assert!(
+            !request
+                .env
+                .iter()
+                .any(|(name, _)| name == "AUTONOMICS_INPUT0")
+        );
+    }
+
+    #[test]
+    fn tuple_bindings_reject_duplicate_names() {
+        let mut node_spec = spec("example/image", vec!["sh".into()], "result.txt");
+        node_spec.tuple_inputs = vec![TupleInput {
+            port: 0,
+            tuple: vec![
+                TupleInputElement::Val("sample".into()),
+                TupleInputElement::Path("sample".into()),
+            ],
+        }];
+        assert!(validate(&node_spec).is_err());
+    }
+
+    #[test]
+    fn tuple_glob_matches_are_sorted_and_require_at_least_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.dat"), b"b").unwrap();
+        std::fs::write(dir.path().join("a.dat"), b"a").unwrap();
+        std::fs::write(dir.path().join(".hidden.dat"), b"hidden").unwrap();
+        let matches = super::utils::resolve_output_matches("*.dat", dir.path()).unwrap();
+        assert_eq!(
+            matches
+                .iter()
+                .map(|path| path.file_name().unwrap().to_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["a.dat", "b.dat"]
+        );
+        assert!(super::utils::resolve_output_matches("*.missing", dir.path()).is_err());
+        assert!(super::utils::resolve_output("*.dat", dir.path()).is_err());
+        let hidden = super::utils::resolve_output_matches(".*.dat", dir.path()).unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].file_name().unwrap(), ".hidden.dat");
+        let including_hidden = super::utils::resolve_output_matches_with_options(
+            "*.dat",
+            dir.path(),
+            false,
+            Some(true),
+        )
+        .unwrap();
+        assert_eq!(including_hidden.len(), 3);
+        assert!(
+            super::utils::resolve_output_matches_with_options("*.missing", dir.path(), true, None)
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_file(dir.path().join("b.dat")).unwrap();
+        assert_eq!(
+            super::utils::resolve_output_matches("*.dat", dir.path())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn path_arity_accepts_nextflow_counts_and_ranges() {
+        assert_eq!(parse_path_arity("1").unwrap(), (1, Some(1)));
+        assert_eq!(parse_path_arity("2").unwrap(), (2, Some(2)));
+        assert_eq!(parse_path_arity("0..*").unwrap(), (0, None));
+        assert_eq!(parse_path_arity("1..3").unwrap(), (1, Some(3)));
+        for value in ["0", "0..1", "3..2", "x", "1..2..3"] {
+            assert!(parse_path_arity(value).is_err(), "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn json_tuple_paths_are_typed_before_transport_and_execute() {
+        use dag_core::dag::execution::ChannelTransportValue as Value;
+        let env = test_env();
+        let file = env.workspace.path().join("reads.fastq");
+        std::fs::write(&file, b"reads").unwrap();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let mut node_spec = spec("example/image", vec!["sh".into()], "result.txt");
+        node_spec.stage_in_mode = StageInMode::Copy;
+        node_spec.tuple_inputs = vec![TupleInput {
+            port: 0,
+            tuple: vec![
+                TupleInputElement::Val("sample".into()),
+                TupleInputElement::Path("reads".into()),
+            ],
+        }];
+        let mut node = ContainerCommandNode::new(
+            "container_command",
+            node_spec,
+            runtime.clone(),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+        let mut inputs = vec![NodeInput {
+            port: 0,
+            data: NodeValue::Channel(dag_core::value::ChannelValue {
+                items: vec![serde_json::json!([{"id":"A"}, file.to_str().unwrap()])],
+            }),
+        }];
+        node.prepare_task_inputs(&mut inputs).unwrap();
+        let NodeValue::Structured(Value::Tuple(items)) = &inputs[0].data else {
+            panic!("typed tuple expected")
+        };
+        assert!(matches!(&items[1], Value::File(f) if f.path == file.to_str().unwrap()));
+        node.prepare_task_inputs(&mut inputs).unwrap();
+        node.execute(
+            &env.ctx,
+            &inputs,
+            &dag_core::dag::node_event::NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+        let requests = runtime.requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        assert!(
+            request
+                .env
+                .iter()
+                .any(|(name, value)| name == "sample" && value == "{\"id\":\"A\"}")
+        );
+        let path = &request
+            .env
+            .iter()
+            .find(|(name, _)| name == "reads")
+            .unwrap()
+            .1;
+        assert_eq!(std::fs::read(host_path(request, path)).unwrap(), b"reads");
     }
 
     #[tokio::test]
@@ -872,7 +1235,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hash_work_dir_persists_after_success_and_wipes_on_rerun() {
+    async fn hash_work_dir_preserves_previous_attempt_on_rerun() {
         let env = test_env();
         let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
         let node_spec = spec("quay.io/example/tool", vec!["tool".into()], "out.txt");
@@ -915,8 +1278,7 @@ mod tests {
         assert_eq!(name.len(), 62, "hash remainder expected, got {name}");
         assert!(hash_dir.join("out.txt").is_file());
 
-        // A stale file from a crashed attempt must not survive a re-run
-        // into the same hash dir.
+        // A new attempt must never erase or reuse the earlier task directory.
         std::fs::write(hash_dir.join("stale.bin"), "stale").unwrap();
         let mut node = ContainerCommandNode::new(
             "container_command",
@@ -932,8 +1294,102 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!hash_dir.join("stale.bin").exists());
+        assert!(hash_dir.join("stale.bin").exists());
         assert!(hash_dir.join("out.txt").is_file());
+        let second = shard.join(format!("{name}-2"));
+        assert!(second.join("out.txt").is_file());
+        assert!(!second.join("stale.bin").exists());
+    }
+
+    #[test]
+    fn concurrent_identical_tasks_claim_distinct_work_dirs() {
+        let env = test_env();
+        let root = env.workspace.path().canonicalize().unwrap();
+        let node = Arc::new(
+            ContainerCommandNode::new(
+                "container_command",
+                spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+                Arc::new(FakeRuntime::new(&root)),
+                Arc::new(PanelCache::new(root.join("cache"))),
+            )
+            .unwrap(),
+        );
+        let paths = std::thread::scope(|scope| {
+            let jobs: Vec<_> = (0..16)
+                .map(|_| {
+                    let node = Arc::clone(&node);
+                    let root = &root;
+                    scope.spawn(move || node.resolve_workdir(root, &"a".repeat(64)).unwrap())
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|job| job.join().unwrap())
+                .collect::<std::collections::BTreeSet<_>>()
+        });
+        assert_eq!(paths.len(), 16);
+        assert!(paths.contains(&root.join("aa").join("a".repeat(62))));
+        assert!(paths.contains(&root.join("aa").join(format!("{}-16", "a".repeat(62)))));
+    }
+
+    #[tokio::test]
+    async fn local_executor_stores_receipt_inside_container_work_dir() {
+        use dag_core::dag::execution::{
+            LocalTaskExecutor, TaskExecution, TaskExecutor, TaskResources, TaskSpec, TaskSubmission,
+        };
+        use dag_core::dag::node_event::{JobResult, NodeReporter};
+
+        let env = test_env();
+        let runtime = Arc::new(FakeRuntime::new(env.workspace.path()));
+        let node = ContainerCommandNode::new(
+            "container_command",
+            spec("quay.io/example/tool", vec!["tool".into()], "out.txt"),
+            runtime.clone(),
+            Arc::new(PanelCache::new(env.workspace.path().join("cache"))),
+        )
+        .unwrap();
+        let receipts = tempfile::tempdir().unwrap();
+        let executor = LocalTaskExecutor::with_workspace_root(receipts.path());
+        let submission = TaskSubmission {
+            spec: TaskSpec {
+                id: "task-1".into(),
+                logical_node: None,
+                kind: "container_command".into(),
+                spec: serde_json::json!({}),
+                item_key: None,
+                item: None,
+                inputs: vec![],
+                outputs: vec![],
+            },
+            inputs: vec![],
+            resources: TaskResources::default(),
+        };
+        let result = executor
+            .run(TaskExecution {
+                submission,
+                node: Box::new(node),
+                engine_ctx: Arc::new(env.ctx.clone()),
+                reporter: NodeReporter::noop(),
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            })
+            .await;
+        let JobResult::Success {
+            details: Some(details),
+            ..
+        } = result
+        else {
+            panic!("container task failed: {result:?}")
+        };
+        let workdir = runtime.requests.lock().unwrap()[0]
+            .workspace
+            .host_path
+            .clone();
+        assert_eq!(details.workspace.as_deref(), workdir.to_str());
+        assert!(workdir.join("out.txt").is_file());
+        let manifest = PathBuf::from(&details.task_manifest.unwrap().path);
+        assert!(manifest.starts_with(workdir.join(".autonomics/receipts")));
+        assert!(manifest.is_file());
+        assert!(manifest.parent().unwrap().join("attempt.json").is_file());
+        assert_eq!(std::fs::read_dir(receipts.path()).unwrap().count(), 0);
     }
 
     #[tokio::test]

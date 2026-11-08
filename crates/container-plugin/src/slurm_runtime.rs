@@ -262,6 +262,11 @@ fn report_stopped_worker(
     Ok(())
 }
 
+#[cfg(test)]
+fn workspace_files(request: &ContainerRunRequest) -> Result<(Vec<String>, Vec<(Value, PathBuf)>)> {
+    workspace_files_observed(request, &dag_core::dag::node_event::NodeReporter::noop())
+}
+
 fn workspace_files_observed(
     request: &ContainerRunRequest,
     reporter: &dag_core::dag::node_event::NodeReporter,
@@ -286,7 +291,7 @@ fn workspace_files_observed(
                 .ok_or_else(|| invalid("UTF-8 workspace path required"))?
                 .to_string();
             relative(&rel)?;
-            if rel == container_runtime::gc::SCRATCH_LOCK_FILE {
+            if rel == container_runtime::gc::SCRATCH_LOCK_FILE || rel == ".autonomics/receipts" {
                 continue;
             }
             let info = path.symlink_metadata()?;
@@ -698,8 +703,9 @@ impl SlurmContainerRuntime {
         if let Some(recorder) = &self.submission_recorder {
             recorder.ensure_ready().map_err(mapped)?;
         }
+        let event_observer = observer.clone();
         let reporter = dag_core::dag::node_event::NodeReporter::noop().with_observer(move |o| {
-            observer.emit(container_runtime::observation::RuntimeObservation {
+            event_observer.emit(container_runtime::observation::RuntimeObservation {
                 phase: o.phase,
                 current: o.current,
                 total: o.total,
@@ -883,6 +889,7 @@ impl SlurmContainerRuntime {
             outputs: vec![ProcessTaskOutput {
                 port: 0,
                 pattern: "container-result.json".into(),
+                optional: false,
             }],
         };
         let dispatch = TaskDispatch {
@@ -891,7 +898,6 @@ impl SlurmContainerRuntime {
                 logical_node: None,
                 kind: "process".into(),
                 spec: serde_json::to_value(process).map_err(mapped)?,
-                axis: None,
                 item_key: None,
                 item: None,
                 inputs: vec![],
@@ -934,22 +940,57 @@ impl SlurmContainerRuntime {
         }
         let transport = Arc::new(transport);
         reporter.phase("submitting", "submitting the admitted Slurm job");
-        let lease = match transport.submit(dispatch, vec![]).await {
-            Ok(lease) => lease,
+        // Submission must survive cancellation: sbatch may have accepted a job
+        // even while the coordinator is still waiting for its response.
+        let submit_transport = Arc::clone(&transport);
+        let mut submission = PendingSubmission {
+            task: Some(tokio::spawn(async move {
+                submit_transport.submit(dispatch, vec![]).await
+            })),
+            transport: Arc::clone(&transport),
+            ssh: self.settings.ssh.clone(),
+            journal: journal.clone(),
+            observer: observer.clone(),
+        };
+        let submitted = submission.task.as_mut().expect("submission task").await;
+        submission.task.take();
+        let lease = match submitted {
             Err(error) => {
-                record_submission_failure(&journal, &mut state, &error)?;
+                return Err(invalid(format!(
+                    "remote_stop_unconfirmed: Slurm submission task failed: {error}"
+                )));
+            }
+            Ok(Ok(lease)) => lease,
+            Ok(Err(error)) => {
+                let unknown = transport.submission_failure_may_be_running(&error);
+                if let Err(journal_error) = record_submission_failure(&journal, &mut state, &error)
+                {
+                    return Err(if unknown {
+                        invalid(format!(
+                            "remote_stop_unconfirmed: submission may have started remote work: {error}; failed to record submission: {journal_error}"
+                        ))
+                    } else {
+                        journal_error
+                    });
+                }
+                if unknown {
+                    return Err(invalid(format!(
+                        "remote_stop_unconfirmed: submission may have started remote work: {error}"
+                    )));
+                }
                 return Err(mapped(error));
             }
         };
-        state["job_id"] = json!(lease.lease_id);
-        state["state"] = json!("SUBMITTED");
-        record(&journal, &state)?;
         let mut guard = RemoteCancelGuard {
             transport: Arc::clone(&transport),
             ssh: self.settings.ssh.clone(),
             lease: Some(lease.clone()),
             journal: journal.clone(),
+            observer: observer.clone(),
         };
+        state["job_id"] = json!(lease.lease_id);
+        state["state"] = json!("SUBMITTED");
+        record(&journal, &state)?;
         let receipt = match tokio::time::timeout(
             Duration::from_secs(request.timeout_secs.saturating_add(60)),
             transport.wait_observed(&lease, &reporter),
@@ -958,20 +999,22 @@ impl SlurmContainerRuntime {
         {
             Ok(Ok(receipt)) => receipt,
             _ => {
-                let _ = transport.cancel(&lease).await;
+                let cancellation = transport.cancel(&lease).await;
                 reporter.phase(
                     "checking_worker_stop",
                     "verifying the remote worker subtree has stopped",
                 );
                 let proof = stop_proof(&self.settings.ssh, &lease.lease_id).await?;
                 state["stop_proof"] = proof.clone();
-                state["state"] = json!(if proof["full_subtree_terminal"] == true {
+                state["state"] = json!(if cancellation.is_ok()
+                    && proof["full_subtree_terminal"] == true
+                {
                     "STOPPED_FAILED"
                 } else {
                     "STOP_UNKNOWN"
                 });
                 record(&journal, &state)?;
-                if proof["full_subtree_terminal"] == true {
+                if cancellation.is_ok() && proof["full_subtree_terminal"] == true {
                     guard.lease = None;
                     report_stopped_worker(&reporter, &root, &proof)?;
                 }
@@ -1232,8 +1275,100 @@ impl PodmanConnection for SlurmContainerRuntime {
                     stderr: "private container failed; captured output suppressed".into(),
                 }
             }
+            ContainerRuntimeError::Invalid(message) if message.contains("remote_stop_unconfirmed") => {
+                invalid("remote_stop_unconfirmed: private container execution failed; diagnostics suppressed")
+            }
             _ => invalid("private container execution failed; diagnostics suppressed"),
         })
+    }
+}
+
+struct PendingSubmission {
+    task: Option<tokio::task::JoinHandle<std::result::Result<TaskLease, dag_core::dag::DagError>>>,
+    transport: Arc<SlurmTaskTransport>,
+    ssh: SshTarget,
+    journal: PathBuf,
+    observer: container_runtime::observation::RunObserver,
+}
+
+impl Drop for PendingSubmission {
+    fn drop(&mut self) {
+        let Some(task) = self.task.take() else { return };
+        let transport = Arc::clone(&self.transport);
+        let ssh = self.ssh.clone();
+        let journal = self.journal.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let cleanup = handle.spawn(async move {
+                match task.await {
+                    Ok(Ok(lease)) => reconcile_cancel(transport, ssh, journal, lease).await,
+                    Ok(Err(error)) => Err(format!(
+                        "remote_stop_unconfirmed: submission was interrupted: {error}"
+                    )),
+                    Err(error) => Err(format!(
+                        "remote_stop_unconfirmed: submission task failed: {error}"
+                    )),
+                }
+            });
+            self.observer.register_cleanup(cleanup);
+        }
+    }
+}
+
+async fn reconcile_cancel(
+    transport: Arc<SlurmTaskTransport>,
+    ssh: SshTarget,
+    journal: PathBuf,
+    lease: TaskLease,
+) -> std::result::Result<(), String> {
+    let cancellation = transport.cancel(&lease).await;
+    let proof = stop_proof(&ssh, &lease.lease_id).await;
+    let confirmed = cancellation.is_ok()
+        && proof
+            .as_ref()
+            .is_ok_and(|proof| proof["full_subtree_terminal"] == true);
+    let raw = std::fs::read(&journal).map_err(|error| {
+        format!(
+            "remote_stop_unconfirmed: cannot read journal for {}: {error}",
+            lease.lease_id
+        )
+    })?;
+    let mut state = serde_json::from_slice::<Value>(&raw).map_err(|error| {
+        format!(
+            "remote_stop_unconfirmed: invalid journal for {}: {error}",
+            lease.lease_id
+        )
+    })?;
+    if !state["job_id"].is_null() && state["job_id"] != lease.lease_id {
+        return Err(format!(
+            "remote_stop_unconfirmed: journal does not match Slurm job {}",
+            lease.lease_id
+        ));
+    }
+    state["job_id"] = json!(lease.lease_id);
+    state["state"] = json!("STOP_UNKNOWN");
+    if let Ok(proof) = proof {
+        if confirmed {
+            state["state"] = json!("CANCELLED_STOPPED");
+        }
+        state["stop_proof"] = proof;
+    }
+    if let Err(error) = record(&journal, &state) {
+        return Err(format!(
+            "remote_stop_unconfirmed: cannot record stop state for {}: {error}",
+            lease.lease_id
+        ));
+    }
+    if confirmed {
+        Ok(())
+    } else {
+        Err(format!(
+            "remote_stop_unconfirmed: Slurm job {} has no verified cancellation and terminal stop proof{}",
+            lease.lease_id,
+            cancellation
+                .err()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default()
+        ))
     }
 }
 
@@ -1242,6 +1377,7 @@ struct RemoteCancelGuard {
     ssh: SshTarget,
     lease: Option<TaskLease>,
     journal: PathBuf,
+    observer: container_runtime::observation::RunObserver,
 }
 impl Drop for RemoteCancelGuard {
     fn drop(&mut self) {
@@ -1252,25 +1388,8 @@ impl Drop for RemoteCancelGuard {
         let ssh = self.ssh.clone();
         let journal = self.journal.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            handle.spawn(async move {
-                let _ = transport.cancel(&lease).await;
-                let proof = stop_proof(&ssh, &lease.lease_id).await;
-                if let Ok(raw) = std::fs::read(&journal) {
-                    if let Ok(mut state) = serde_json::from_slice::<Value>(&raw) {
-                        if state["job_id"] != lease.lease_id {
-                            return;
-                        }
-                        state["state"] = json!("STOP_UNKNOWN");
-                        if let Ok(proof) = proof {
-                            if proof["full_subtree_terminal"] == true {
-                                state["state"] = json!("CANCELLED_STOPPED");
-                            }
-                            state["stop_proof"] = proof;
-                        }
-                        let _ = record(&journal, &state);
-                    }
-                }
-            });
+            let task = handle.spawn(reconcile_cancel(transport, ssh, journal, lease));
+            self.observer.register_cleanup(task);
         }
         // The durable RUNNING record remains pending if the runtime is gone.
         // Neither branch removes remote scratch or infers a successful exit.
@@ -1380,6 +1499,7 @@ mod tests {
     #[test]
     fn submission_journal_uses_protocol_evidence_not_error_text() {
         let fixture = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let journal = fixture.path().join("STATE.json");
         for stopped in [true, false] {
             let mut state = json!({"state":"SUBMITTING", "dispatch":{"id":"original"}});
@@ -1662,6 +1782,12 @@ mod tests {
         std::fs::create_dir(&inputs).unwrap();
         std::fs::write(inputs.join("selected"), b"selected").unwrap();
         std::fs::write(inputs.join("unrelated"), b"must not upload").unwrap();
+        std::fs::create_dir_all(work.join(".autonomics/receipts/attempt")).unwrap();
+        std::fs::write(
+            work.join(".autonomics/receipts/attempt/task.json"),
+            b"coordinator receipt",
+        )
+        .unwrap();
         std::os::unix::fs::symlink(inputs.join("selected"), work.join("staged")).unwrap();
         let mut request = ContainerRunRequest {
             image: "unused".into(),

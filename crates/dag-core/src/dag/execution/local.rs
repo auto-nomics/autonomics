@@ -131,18 +131,34 @@ impl TaskExecutor for LocalTaskExecutor {
 
         let timeout = task_timeout(&execution.submission.resources);
         let cancellation = execution.cancellation.clone();
-        let mut workspace =
-            match LocalTaskWorkspace::create(&self.workspace_root, &execution.submission) {
-                Ok(workspace) => Some(workspace),
-                Err(error) => {
-                    return JobResult::Failed {
-                        id: task_id,
-                        error,
-                        duration: start.elapsed(),
-                        details: execution.reporter.take_run_details(),
-                    };
-                }
-            };
+        let prepared_workdir = match execution
+            .node
+            .prepare_local_workdir(&execution.submission.inputs)
+        {
+            Ok(workdir) => workdir,
+            Err(error) => {
+                return JobResult::Failed {
+                    id: task_id,
+                    error,
+                    duration: start.elapsed(),
+                    details: execution.reporter.take_run_details(),
+                };
+            }
+        };
+        let mut workspace = match match prepared_workdir.as_deref() {
+            Some(workdir) => LocalTaskWorkspace::create_in_workdir(workdir, &execution.submission),
+            None => LocalTaskWorkspace::create(&self.workspace_root, &execution.submission),
+        } {
+            Ok(workspace) => Some(workspace),
+            Err(error) => {
+                return JobResult::Failed {
+                    id: task_id,
+                    error,
+                    duration: start.elapsed(),
+                    details: execution.reporter.take_run_details(),
+                };
+            }
+        };
 
         execution.reporter.phase(
             "waiting_for_capacity",
@@ -261,38 +277,45 @@ impl TaskExecutor for LocalTaskExecutor {
         execution
             .reporter
             .phase("executing", "executing the admitted node");
-        let result = tokio::select! {
+        let outcome = tokio::select! {
             result = AssertUnwindSafe(execution.node.execute(
                     &execution.engine_ctx,
                     &execution.submission.inputs,
                     &execution.reporter,
                 ))
-                .catch_unwind() => result,
-            _ = cancellation.cancelled() => {
-                let duration = start.elapsed();
-                let mut details = execution.reporter.take_run_details();
-                let logs = execution.reporter.take_logs();
-                if let Some(workspace) = &workspace {
-                    workspace.complete(
-                        &task_id,
-                        self.name(),
-                        &mut details,
-                        logs,
-                        130,
-                        "cancelled",
-                        duration,
-                    );
-                }
-                return JobResult::Failed {
-                    id: task_id,
-                    error: DagError::Schedule(
-                        "task cancelled by DAG run cancellation".into(),
-                    ),
+                .catch_unwind() => Some(result),
+            _ = cancellation.cancelled() => None,
+            _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => None,
+        };
+        // A backend can start reconciliation while returning an error as well
+        // as when its future is cancelled. In both cases preserve its result.
+        let cleanup_error = execution.reporter.wait_cleanup().await.err();
+        if let Some(error) = cleanup_error.as_ref() {
+            let duration = start.elapsed();
+            let mut details = execution.reporter.take_run_details();
+            let logs = execution.reporter.take_logs();
+            if let Some(workspace) = &workspace {
+                workspace.complete(
+                    &task_id,
+                    self.name(),
+                    &mut details,
+                    logs,
+                    125,
+                    "remote_stop_unconfirmed",
                     duration,
-                    details,
-                };
-            },
-            _ = tokio::time::sleep(timeout.unwrap_or(Duration::MAX)), if timeout.is_some() => {
+                );
+            }
+            return JobResult::Failed {
+                id: task_id,
+                error: DagError::Schedule(error.clone()),
+                duration,
+                details,
+            };
+        }
+        let result = match outcome {
+            Some(result) => result,
+            None => {
+                let cancelled = cancellation.is_cancelled();
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -302,18 +325,28 @@ impl TaskExecutor for LocalTaskExecutor {
                         self.name(),
                         &mut details,
                         logs,
-                        124,
-                        "timeout",
+                        if cancelled { 130 } else { 124 },
+                        if cancelled { "cancelled" } else { "timeout" },
                         duration,
                     );
                 }
                 return JobResult::Failed {
                     id: task_id,
-                    error: DagError::Schedule(format!(
-                        "task `{}` exceeded max_duration_ms of {}",
-                        execution.submission.spec.id,
-                        execution.submission.resources.max_duration_ms.unwrap_or_default()
-                    )),
+                    error: DagError::Schedule({
+                        if cancelled {
+                            "task cancelled by DAG run cancellation".into()
+                        } else {
+                            format!(
+                                "task `{}` exceeded max_duration_ms of {}",
+                                execution.submission.spec.id,
+                                execution
+                                    .submission
+                                    .resources
+                                    .max_duration_ms
+                                    .unwrap_or_default()
+                            )
+                        }
+                    }),
                     duration,
                     details,
                 };

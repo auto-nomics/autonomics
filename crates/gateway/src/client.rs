@@ -362,6 +362,13 @@ impl GatewayClient {
             .await
     }
 
+    /// Stage-model flow view: the agent session's authored flow plus the
+    /// last run's per-process summary.
+    pub async fn flow_view(&self, agent: &str) -> Result<data_engine::flow::FlowView> {
+        self.get(&format!("/agents/{}/flow", encode_segment(agent)))
+            .await
+    }
+
     // ── context ──
 
     /// Request a fresh session list (arrives as `ContextList` agent frames
@@ -724,6 +731,91 @@ impl GatewayClient {
         self.request(reqwest::Method::PUT, "/hpc/config", Some(profile))
             .await
     }
+
+    // ── VFS browser (/vfs) ───────────────────────────────────────────
+
+    /// Mount-aware directory listing (one page).
+    pub async fn vfs_list(
+        &self,
+        path: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<vfs::browse::VfsListing> {
+        let limit = limit.to_string();
+        let offset = offset.to_string();
+        self.get_with_query("/vfs/list", &[("path", path), ("limit", &limit), ("offset", &offset)])
+            .await
+    }
+
+    /// Declarative mount table.
+    pub async fn vfs_mounts(&self) -> Result<crate::proto::VfsMountsReply> {
+        self.get("/vfs/mounts").await
+    }
+
+    /// Bounded UTF-8 text read (preview/editor).
+    pub async fn vfs_read_text(&self, path: &str) -> Result<vfs::browse::TextRead> {
+        self.get_with_query("/vfs/text", &[("path", path)]).await
+    }
+
+    /// Create a directory.
+    pub async fn vfs_mkdir(&self, path: &str) -> Result<serde_json::Value> {
+        self.request(
+            reqwest::Method::POST,
+            "/vfs/mkdir",
+            Some(&serde_json::json!({ "path": path })),
+        )
+        .await
+    }
+
+    /// Delete a file or directory.
+    pub async fn vfs_delete(&self, path: &str, recursive: bool) -> Result<serde_json::Value> {
+        let recursive = recursive.to_string();
+        let response = self
+            .http
+            .delete(self.url("/vfs/entry"))
+            .query(&[("path", path), ("recursive", recursive.as_str())])
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let message = response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| status.to_string());
+            return Err(ClientError::Api {
+                status: status.as_u16(),
+                message,
+            });
+        }
+        Ok(response.json().await?)
+    }
+
+    /// Rename/move an entry.
+    pub async fn vfs_move(&self, src: &str, dst: &str) -> Result<serde_json::Value> {
+        self.request(
+            reqwest::Method::POST,
+            "/vfs/move",
+            Some(&serde_json::json!({ "src": src, "dst": dst })),
+        )
+        .await
+    }
+
+    /// Create/overwrite a text file (`original: null` overwrites).
+    pub async fn vfs_write_text(
+        &self,
+        path: &str,
+        contents: &str,
+    ) -> Result<serde_json::Value> {
+        self.request(
+            reqwest::Method::PUT,
+            "/vfs/text",
+            Some(&serde_json::json!({ "path": path, "contents": contents, "original": null })),
+        )
+        .await
+    }
+
 }
 
 /// Percent-encode a path segment so agent paths containing `/` survive

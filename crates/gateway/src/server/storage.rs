@@ -57,7 +57,10 @@ pub(crate) async fn delete_storage_agent(
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     if let Some(record) = record {
-        state.control.shutdown_agent(&record.name);
+        // Eviction (cause `evicted`) + an identity event so every
+        // connected frontend — not just this caller — closes its views.
+        state.control.evict_agent(&record.name);
+        state.control.notify_identity_deleted(id, &record.name);
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -76,12 +79,29 @@ pub(crate) async fn rename_storage_agent(
         .ok_or_else(|| {
             GatewayError::Status(StatusCode::NOT_FOUND, format!("agent {id} not found"))
         })?;
+    let old_name = record.name.clone();
     record.name = req.path;
     record.last_active = chrono::Utc::now().timestamp_millis();
+    let renamed = old_name != record.name;
+    let new_name = record.name.clone();
     storage
         .upsert_agent(record)
         .await
         .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    // Evict any live instance still running under the old path — the
+    // identity's path of record changed. A stale instance would keep
+    // emitting under the old name (frontends would drop or misroute its
+    // events), and a later re-activation from storage could double-activate
+    // the identity under two paths — the same zombie hazard delete guards
+    // against. The identity re-activates under the new path on demand.
+    if renamed {
+        state.control.evict_agent(&old_name);
+    }
+    // Identity event: every connected frontend rebinds its views from the
+    // old path to the new one, not just the caller that issued the rename.
+    state
+        .control
+        .notify_identity_renamed(id, &old_name, &new_name);
     Ok(StatusCode::NO_CONTENT)
 }
 

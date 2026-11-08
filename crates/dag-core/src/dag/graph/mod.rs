@@ -9,22 +9,14 @@
 //! - [`topology`] — predecessor/successor/edge queries, topological sort,
 //!   cycle-path recovery, dot rendering, TUI snapshots.
 //! - [`validation`] — cycle / wiring / schema / path-aliasing validation.
-//! - [`scheduler`] — the async readiness scheduler (`DAG::run`).
-//! - [`streaming`] — channel item propagation between streaming nodes.
-//! - [`fanout`] — dynamic fanout job expansion.
-//! - [`reports`] — run-report assembly (`NodeReport`, logical summaries).
 //! - [`manifest`] — manifest export and retained-spec queries.
-//! - [`memory`] — memory-guard sampling helpers for the scheduler.
 //! - [`PortOutputs`] — per-port output values.
 
-mod fanout;
 mod manifest;
-mod memory;
 mod mutation;
 mod port_outputs;
+#[cfg(test)]
 mod reports;
-mod scheduler;
-mod streaming;
 mod topology;
 mod validation;
 
@@ -174,17 +166,6 @@ impl Clone for DAG {
 }
 
 impl DAG {
-    fn set_live_status(&mut self, id: NodeId, status: RuntimeStatus) -> Option<RuntimeStatus> {
-        self.live_view.status(&id, status);
-        self.statuses.insert(id, status)
-    }
-
-    fn publish_live_statuses(&self) {
-        let mut view = self.tui_snapshot();
-        view.running = true;
-        self.live_view.publish(view);
-    }
-
     /// Query the runtime status of a node. Returns `None` if the DAG has never
     /// been run.
     pub fn status(&self, id: &str) -> Option<RuntimeStatus> {

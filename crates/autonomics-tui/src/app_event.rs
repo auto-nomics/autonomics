@@ -77,6 +77,7 @@ pub(crate) enum AppEvent {
     },
     /// A structured DAG snapshot arrived for the interactive TUI view.
     DagSnapshotLoaded(std::result::Result<dag_core::dag::DagTuiSnapshot, String>),
+    FlowViewLoaded(std::result::Result<data_engine::flow::FlowView, String>),
     /// A bibliography popup snapshot arrived. The token discards replies from
     /// a superseded refresh/search.
     BibliographySnapshotLoaded {
@@ -144,13 +145,6 @@ pub(crate) enum AppEvent {
     /// A live agent seen in a `/state` snapshot that the UI doesn't know
     /// yet (reconcile after lag / reconnect).
     AgentUpserted(gateway::AgentInfo),
-    /// Re-activate a passivated identity and deliver a queued message
-    /// once registration lands. The record came from storage lookup; the
-    /// config travels with it so no second fetch is needed.
-    ReactivateAgent {
-        record: agentik_core::storage::AgentRecord,
-        text: String,
-    },
     /// Surface a background-task failure as a toast (async tasks cannot
     /// touch `state.toasts` directly).
     ShowError {
@@ -168,4 +162,12 @@ pub(crate) enum AppEvent {
     HpcJobsLoaded(serde_json::Value),
     /// Site profile persisted via `PUT /hpc/config`.
     HpcProfileSaved(std::result::Result<serde_json::Value, String>),
+    /// Directory listing from `GET /vfs/list` (cwd + entries).
+    VfsListingLoaded(std::result::Result<(String, Vec<vfs::browse::VfsEntry>), String>),
+    /// Text preview from `GET /vfs/text`.
+    VfsTextLoaded(std::result::Result<vfs::browse::TextRead, String>),
+    /// Mount table from `GET /vfs/mounts` (path, read_only).
+    VfsMountsLoaded(std::result::Result<Vec<(String, bool)>, String>),
+    /// A VFS mutation finished (status message or error).
+    VfsMutationDone(std::result::Result<String, String>),
 }

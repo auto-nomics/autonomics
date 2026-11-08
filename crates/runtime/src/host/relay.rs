@@ -213,19 +213,31 @@ impl RuntimeHost {
 
     /// Notify listeners that an agent has been shut down.
     /// Called from `shutdown_agent` / `shutdown_all_agents`.
-    fn notify_unregistered(&self, name: &str) {
+    fn notify_unregistered(&self, name: &str, cause: super::events::RemovalCause) {
         self.emit_host_event(HostEvent::AgentUnregistered {
             path: name.to_string(),
+            cause,
         });
     }
 
     /// Shut down a named agent and remove it from the registry.
     pub fn shutdown_agent(&mut self, name: &str) {
+        self.shutdown_agent_with(name, super::events::RemovalCause::Explicit);
+    }
+
+    /// Shut down a named agent and remove it from the registry, tagging
+    /// the `AgentUnregistered` event with why the instance left. The
+    /// identity survives in storage for every cause.
+    pub fn shutdown_agent_with(
+        &mut self,
+        name: &str,
+        cause: super::events::RemovalCause,
+    ) {
         self.fail_pending_delegations(name, "target agent shut down before completion");
         if let Some(entry) = self.agents.remove(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
-        self.notify_unregistered(name);
+        self.notify_unregistered(name, cause);
     }
 
     /// Shut down all registered agents and await their graceful exit.
@@ -249,7 +261,7 @@ impl RuntimeHost {
             relay_tasks.push(entry._relay_task);
         }
         for name in names {
-            self.notify_unregistered(&name);
+            self.notify_unregistered(&name, super::events::RemovalCause::DaemonShutdown);
         }
         // Wait for all relay tasks to finish. Each relay loop calls
         // `handle.join().await` before exiting, which in turn waits for
@@ -287,7 +299,7 @@ impl RuntimeHost {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);
         }
         for name in names {
-            self.notify_unregistered(&name);
+            self.notify_unregistered(&name, super::events::RemovalCause::DaemonShutdown);
         }
     }
 }

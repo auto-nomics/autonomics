@@ -260,6 +260,63 @@ impl RemoteTaskExecutor {
         engine_ctx: &NodeCtx,
     ) -> Result<NodeValue, DagError> {
         match payload {
+            "channel" => {
+                use std::io::Read;
+                let first = artifacts.first().ok_or_else(|| {
+                    DagError::Schedule("remote channel output is missing its artifact".into())
+                })?;
+                let file = std::fs::File::open(&first.path).map_err(|e| {
+                    DagError::Schedule(format!("cannot open remote Channel artifact: {e}"))
+                })?;
+                // Ordinary channel payloads are JSON arrays. Structured payloads
+                // are tagged JSON objects followed by their ordered artifacts.
+                let first_byte = std::io::BufReader::new(file)
+                    .bytes()
+                    .find(|byte| byte.as_ref().map_or(true, |b| !b.is_ascii_whitespace()))
+                    .transpose()
+                    .map_err(|e| {
+                        DagError::Schedule(format!("cannot read remote Channel artifact: {e}"))
+                    })?;
+                if first_byte == Some(b'{') {
+                    Box::pin(Self::load_output(
+                        artifacts,
+                        "structured_channel",
+                        engine_ctx,
+                    ))
+                    .await
+                } else {
+                    let [artifact] = artifacts else {
+                        return Err(DagError::Schedule(format!(
+                            "remote channel output expects one artifact, got {}",
+                            artifacts.len()
+                        )));
+                    };
+                    Self::load_artifact(artifact, "channel", engine_ctx).await
+                }
+            }
+            "structured_channel" => {
+                use std::io::Read;
+                const MAX_BYTES: u64 = 16 * 1024 * 1024;
+                let (manifest, artifacts) = artifacts.split_first().ok_or_else(|| {
+                    DagError::Schedule("structured channel input is missing its manifest".into())
+                })?;
+                let file = std::fs::File::open(&manifest.path).map_err(|e| {
+                    DagError::Schedule(format!("cannot open structured channel manifest: {e}"))
+                })?;
+                let mut bytes = Vec::new();
+                file.take(MAX_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| {
+                        DagError::Schedule(format!("cannot read structured channel manifest: {e}"))
+                    })?;
+                let mut value =
+                    super::ChannelTransportValue::decode(&bytes, MAX_BYTES as usize, 64, 100_000)
+                        .map_err(DagError::Schedule)?;
+                value
+                    .replace_artifacts(artifacts.to_vec())
+                    .map_err(DagError::Schedule)?;
+                Ok(NodeValue::Structured(value))
+            }
             "file" => {
                 let [artifact] = artifacts else {
                     return Err(DagError::Schedule(format!(
@@ -287,6 +344,10 @@ impl RemoteTaskExecutor {
 impl TaskExecutor for RemoteTaskExecutor {
     fn name(&self) -> &'static str {
         "remote"
+    }
+
+    fn requires_cancel_join(&self) -> bool {
+        true
     }
 
     async fn run(&self, execution: TaskExecution) -> JobResult {
@@ -368,7 +429,23 @@ impl TaskExecutor for RemoteTaskExecutor {
         };
 
         let output_contracts = dispatch.spec.outputs.clone();
+        let optional_output_ports = if dispatch.spec.kind == "process" {
+            super::process::parse_process_task(&dispatch)
+                .ok()
+                .map(|process| {
+                    process
+                        .outputs
+                        .into_iter()
+                        .filter(|output| output.optional)
+                        .map(|output| output.port)
+                        .collect::<std::collections::BTreeSet<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Default::default()
+        };
         let timeout = task_timeout(&dispatch.resources);
+        let mut submit_attempted = false;
         let submission_result = async {
             let mut uploaded_inputs = Vec::new();
             for (port, input) in dispatch.spec.inputs.iter().enumerate() {
@@ -398,6 +475,7 @@ impl TaskExecutor for RemoteTaskExecutor {
                 }
             }
 
+            submit_attempted = true;
             self.transport.submit(dispatch, uploaded_inputs).await
         }
         .await;
@@ -405,6 +483,8 @@ impl TaskExecutor for RemoteTaskExecutor {
         let lease = match submission_result {
             Ok(lease) => lease,
             Err(error) => {
+                let unknown =
+                    submit_attempted && self.transport.submission_failure_may_be_running(&error);
                 let duration = start.elapsed();
                 let mut details = execution.reporter.take_run_details();
                 let logs = execution.reporter.take_logs();
@@ -414,12 +494,22 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     127,
-                    "remote_submit_failed",
+                    if unknown {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "remote_submit_failed"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error,
+                    error: if unknown {
+                        DagError::Schedule(format!(
+                            "remote_stop_unconfirmed: submission may have started remote work: {error}"
+                        ))
+                    } else {
+                        error
+                    },
                     duration,
                     details,
                 };
@@ -441,7 +531,8 @@ impl TaskExecutor for RemoteTaskExecutor {
         let receipt = match outcome {
             WaitOutcome::Receipt(Ok(receipt)) => receipt,
             WaitOutcome::Receipt(Err(error)) => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     // An unconfirmed cancel must surface in logs: the remote
                     // job may still be running, so nothing may clean its
                     // workspace.
@@ -461,18 +552,29 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     125,
-                    "remote_failed",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "remote_failed"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error,
+                    error: match cancel_error {
+                        Some(cancel_error) => DagError::Schedule(format!(
+                            "remote_stop_unconfirmed: remote lease `{}` after failure {error}: {cancel_error}",
+                            lease.lease_id
+                        )),
+                        None => error,
+                    },
                     duration,
                     details,
                 };
             }
             WaitOutcome::Cancelled => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     tracing::warn!(
                         task = %task_id,
                         lease = %lease.lease_id,
@@ -489,18 +591,29 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     130,
-                    "cancelled",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "cancelled"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error: DagError::Schedule("remote task cancelled".into()),
+                    error: DagError::Schedule(match cancel_error {
+                        Some(error) => format!(
+                            "remote_stop_unconfirmed: cancellation of remote lease `{}` could not be confirmed: {error}",
+                            lease.lease_id
+                        ),
+                        None => "remote task cancelled".into(),
+                    }),
                     duration,
                     details,
                 };
             }
             WaitOutcome::TimedOut => {
-                if let Err(cancel_error) = self.transport.cancel(&lease).await {
+                let cancel_error = self.transport.cancel(&lease).await.err();
+                if let Some(cancel_error) = &cancel_error {
                     tracing::warn!(
                         task = %task_id,
                         lease = %lease.lease_id,
@@ -517,12 +630,22 @@ impl TaskExecutor for RemoteTaskExecutor {
                     &mut details,
                     logs,
                     124,
-                    "timeout",
+                    if cancel_error.is_some() {
+                        "remote_stop_unconfirmed"
+                    } else {
+                        "timeout"
+                    },
                     duration,
                 );
                 return JobResult::Failed {
                     id: task_id,
-                    error: DagError::Schedule("remote task timed out".into()),
+                    error: DagError::Schedule(match cancel_error {
+                        Some(error) => format!(
+                            "remote_stop_unconfirmed: timed out remote lease `{}`: {error}",
+                            lease.lease_id
+                        ),
+                        None => "remote task timed out".into(),
+                    }),
                     duration,
                     details,
                 };
@@ -670,6 +793,11 @@ impl TaskExecutor for RemoteTaskExecutor {
 
             let mut outputs = PortOutputs::new();
             for contract in &output_contracts {
+                if !local_outputs.contains_key(&contract.port)
+                    && optional_output_ports.contains(&contract.port)
+                {
+                    continue;
+                }
                 let artifacts = local_outputs
                     .get(&contract.port)
                     .ok_or_else(|| {

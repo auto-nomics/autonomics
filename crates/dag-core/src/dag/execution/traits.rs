@@ -24,6 +24,12 @@ pub trait TaskExecutor: Send + Sync {
         None
     }
 
+    /// The scheduler must join this executor after cancellation so it can
+    /// finish remote cancellation and retain any unconfirmed lease evidence.
+    fn requires_cancel_join(&self) -> bool {
+        false
+    }
+
     /// Inspect compiled requirements on the already-bound executor before any
     /// node starts. Dynamic nodes must also be checked at dispatch.
     fn preflight(&self, _nodes: &[(&str, &dyn crate::DagNode)]) -> Result<(), DagError> {
@@ -43,6 +49,10 @@ pub struct TaskLease {
 /// Transport for submitting memory-independent task work orders.
 #[async_trait::async_trait]
 pub trait TaskTransport: Send + Sync {
+    /// Whether a failed submit could still have started remote work.
+    fn submission_failure_may_be_running(&self, _error: &DagError) -> bool {
+        false
+    }
     /// Checked by coordinators before staging or remote input resolution.
     /// Formal transports retain their separate durable submission fence too.
     fn ensure_ready(&self) -> Result<(), DagError> {

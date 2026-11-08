@@ -585,13 +585,9 @@ impl SharedInfra {
 
         let engine_client = Arc::new(engine_client);
         tools.extend(data_engine_tools::registrations(Arc::clone(&engine_client)));
-        // Engine-bound skill tools (workflow instantiation, evals) share
-        // the registry with the pure skill tools and the session's DAG
-        // client, so template-built DAGs are ordinary session DAGs.
-        tools.extend(crate::skill_workflow_tools::skill_workflow_registrations(
-            self.skills.clone(),
-            engine_client,
-        ));
+        // The engine-bound skill workflow toolset (template DAG instantiation
+        // + evals) was removed with the node-graph run path; skill flows can
+        // be authored as stage-model flows instead.
 
         if kind.enable_bibliography() {
             let bib_shared = self.bib.clone();
@@ -924,26 +920,9 @@ async fn build_engine_manager(
     // ── DAG history ──────────────────────────────────────────────
     if config.enable_dag_history {
         let history_db = config.dag_history_db.clone();
-        if let Some(parent) = history_db.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        engine = match DagHistory::open(&history_db).await {
-            Ok(history) => {
-                tracing::info!(
-                    path = %history_db.display(),
-                    "DAG history store opened"
-                );
-                engine.with_history(history)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %history_db.display(),
-                    error = %e,
-                    "failed to open DAG history store; history/ref tools disabled"
-                );
-                engine
-            }
-        };
+        let history = open_dag_history(&history_db).await?;
+        tracing::info!(path = %history_db.display(), "DAG history store opened");
+        engine = engine.with_history(history);
     }
 
     let engine_manager = Arc::new(DataEngineManager::new(engine));
@@ -952,9 +931,30 @@ async fn build_engine_manager(
         execution: Arc::clone(container_execution),
         store: rsi.store(),
     }));
+    rsi.configure_dev_execution(Arc::clone(container_execution));
     spawn_plugin_distiller(rsi, &config.plugin_rsi);
     tracing::info!("SharedInfra::open: DataEngineManager created");
     Ok(engine_manager)
+}
+
+async fn open_dag_history(history_db: &std::path::Path) -> Result<DagHistory> {
+    if let Some(parent) = history_db
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            Error::Other(format!(
+                "cannot create DAG history directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    DagHistory::open(history_db).await.map_err(|error| {
+        Error::Other(format!(
+            "cannot open required DAG history store {}: {error}",
+            history_db.display()
+        ))
+    })
 }
 
 /// Open the shared agent storage — the one connection later upcast to
@@ -1201,4 +1201,27 @@ pub(crate) fn slurm_settings(config: &RuntimeConfig) -> Result<dag_execution::Sl
         default_time: config.slurm.default_time.clone(),
         poll_interval: std::time::Duration::from_secs(config.slurm.poll_interval_secs),
     })
+}
+
+#[cfg(test)]
+mod history_open_tests {
+    use super::open_dag_history;
+
+    #[tokio::test]
+    async fn history_open_creates_parent_and_reports_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/history.db");
+        assert!(open_dag_history(&path).await.is_ok());
+        let blocked = directory.path().join("not-a-directory");
+        std::fs::write(&blocked, b"file").unwrap();
+        let error = open_dag_history(&blocked.join("history.db"))
+            .await
+            .err()
+            .expect("must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("cannot create DAG history directory")
+        );
+    }
 }

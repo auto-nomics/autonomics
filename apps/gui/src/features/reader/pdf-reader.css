@@ -1010,8 +1010,8 @@
 .zotero-pdf-reader[data-hosted] .reader-toolbar { overflow-x: auto; }
 
 /* Auto-hide header toolbar: overlays the content top (no reserved space —
-   the content fills the full height) and fades in while the pointer
-   approaches the reader's top edge, hovers the toolbar, or focus sits
+   the content fills the full height) and fades in only while the pointer
+   enters the reader's top activation zone, hovers the toolbar, or focus sits
    inside (keyboard users). The box never moves (opacity-only) and stays
    interactive while faded, so hover-clicks stay reliable; moving the
    pointer onto the faded strip reveals it instantly. hover:none devices

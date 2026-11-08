@@ -29,9 +29,9 @@ const PROMPT_BIBLIOGRAPHY: &str = "\n\
   bioRxiv, OpenAlex, Crossref, Semantic Scholar), a `source_literature_fetch` \
   node (one article by DOI / PMID / arXiv / S2 / OpenAlex id), a \
   `source_literature_citations` node (papers citing a paper, or its reference \
-  list), or a `source_s2_recommendations` node, wire them through \
+  list), or a `source_s2_recommendations` node, bind their output channels to \
   `evidence_merge` when combining searches, add a `bib_save` node to import \
-  evidence into your library, then `run_dag` and `get_output` — \
+  evidence into your library, then call `run_flow` — \
   evidence outputs render as a compact citation list inline.\n\
 - Give every evidence node its own output `path`; chain `evidence_export` \
   (bibtex / ris / markdown) when a bibliography file is needed.\n\
@@ -79,7 +79,9 @@ const PROMPT_GWASCATALOG: &str = "\n\
   `source_gwascatalog_associations`, `source_gwascatalog_study_associations`, \
   `source_gwascatalog_snps`, `source_gwascatalog_efo_traits`, \
   `source_gwascatalog_unpublished_studies`, and \
-  `source_gwascatalog_summary_associations`.\n\
+  `source_gwascatalog_summary_associations` (study-keyed: query by \
+  `study_accession` with `p_lower`/`p_upper` windows; the upstream Summary \
+  Statistics REST API was retired, so `variant_id` queries are unsupported).\n\
 - Use `gwascatalog_download_summary_stats` (tool) or the \
   `source_gwascatalog_download` node for the full per-study summary-statistics \
   files on the EBI FTP mirror.";
@@ -186,20 +188,22 @@ const PROMPT_DAG_ENGINE: &str = "\n\
   schema handling, or computation, tell the user that the operation is unsupported instead of \
   assembling an equivalent manually.\n\
 \n\
-- **Channel/dataflow control**: registered typed nodes and logical graphs are both built through \
-`dag_shell`. When a workflow needs Channel operators (`of_items`, `map`, `filter`, `flatten`, \
-`mix`, `collect`, `combine`, `join`, `group_tuple`, `branch`) or logical strategies (`for_each`, \
-`dynamic_for_each`, `gather`), include `add_logical_graph` in the same transactional script. Do \
-not attempt to express these operators as SQL or an unregistered node kind.\n\
+- **Batch workflows**: use channel sources and one process per pipeline stage instead of \
+expanding per-item nodes. In `dag_shell`, use `reads = from_path('reads', 'data/*.fastq')` \
+and `qc = process('qc', kind='KIND', spec={...}, inputs=[reads])`; pass the returned channel \
+to downstream processes. Use `output('qc')` to refer to an existing process in a later edit. \
+Then execute with `run_flow` (omit `flow` to re-run the session's stored flow; pass \
+resume=true so only new or changed items execute; per-process error_strategy: fail (default), \
+ignore, or retry with max_retries/retry_delay_ms). Authored flows stay process-granular however \
+many items they expand to — never generate per-item nodes for batch work.\n\
 \n\
-- **Transactional graph edits**: use `dag_shell` for every node, edge, update, removal, or logical \
-  graph edit. It is especially useful with loops, conditionals, reusable script functions, or mixed \
-  logical graphs. Scripts use a sandboxed subset of Python syntax (dict/list literals, loops, \
+- **Transactional graph edits**: use `dag_shell` to bind process inputs to channel references, \
+and for updates or removal. Scripts use a sandboxed subset of Python syntax (dict/list literals, loops, \
   comprehensions, f-strings, plain functions; no imports, I/O, or classes) \
   and only orchestrate registered graph operations and query metadata; they cannot read files, \
   access the network/environment, inspect output data, or run arbitrary processes. Every mutation \
   script must call `commit()`; failures leave the DAG unchanged. `dag_shell` does not execute the \
-  workflow — call `run_dag` after a committed graph is ready.\n\
+  workflow — call `run_flow` after a committed graph is ready.\n\
 \n\
 - **Visualization**: the `visualization` manifest plugin is a terminal sink for \
   plot-ready data. Perform filtering, aggregation, normalization, modeling, and all \
@@ -209,9 +213,9 @@ not attempt to express these operators as SQL or an unregistered node kind.\n\
 - Use this when a task requires multi-step data processing or transformation.\n\
 \n\
 - **Build incrementally, layer by layer — never construct the full DAG in one shot.** \
-  Start with just the data source node, run_dag, and inspect the output columns to \
+  Start with just the data source node, run_flow, and inspect the output columns to \
   understand what you have. Then add the next processing node (a SQL transform, a filter, \
-  an analysis), wire it, run again, and verify the output matches expectations before \
+  an analysis), bind its input channels, run again, and verify the output matches expectations before \
   extending further. Repeat until the pipeline reaches the final analysis. \
   This feedback loop catches schema mismatches, wrong column names, and type errors \
   early — a single-shot full-DAG construction fails silently and wastes time debugging.\n\
@@ -325,7 +329,7 @@ and small synthetic or redacted fixtures. The requested handoff is code and a\n\
 usable node address, not scientific output.\n\
 \n\
 When the Developer returns, use the delivered `plugin/node` address in a DAG,\n\
-validate it incrementally with `dag_shell` and `run_dag`, and interpret the\n\
+validate it incrementally with `dag_shell` and `run_flow`, and interpret the\n\
 scientific result. If the node fails, return the exact error, spec, ports, and\n\
 failing DAG context to the Developer; do not attempt to patch the plugin\n\
 yourself.";

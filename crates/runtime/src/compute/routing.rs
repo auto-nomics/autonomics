@@ -47,6 +47,13 @@ struct BoundExecutor {
 }
 #[async_trait]
 impl TaskExecutor for BoundExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.target.executor.requires_cancel_join()
+            || matches!(
+                self.target.target.backend,
+                super::ComputeBackend::Slurm { .. }
+            )
+    }
     fn name(&self) -> &'static str {
         "bound-compute-target"
     }
@@ -72,10 +79,13 @@ impl TaskExecutor for BoundExecutor {
         if blockers.is_empty() {
             return Ok(());
         }
+        // A streaming workflow may already have dispatched other tasks before
+        // this preflight is reached.  Only the blocked nodes are guaranteed
+        // not to have been submitted by this call.
         Err(DagError::Schedule(
             serde_json::json!({"state":"WORKFLOW_BLOCKED",
             "target_id":self.binding.target_id,"target_revision":self.binding.target_revision,
-            "blockers":blockers,"new_job_submitted":false})
+            "blockers":blockers,"blocked_nodes_submitted":false})
             .to_string(),
         ))
     }
@@ -152,7 +162,6 @@ pub(crate) struct UnavailableContainers {
 
 /// Image preparation has a local implementation only. Background preparation
 /// and direct callers must obey the same policy as agent tool admission.
-/// Exercised by the compute test suite's policy checks.
 #[cfg(test)]
 pub(crate) struct ImageBuilder {
     pub registry: Arc<ComputeRegistry>,

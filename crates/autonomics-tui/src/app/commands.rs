@@ -124,6 +124,9 @@ impl App {
             CommandAction::HpcPanel => {
                 self.open_hpc_panel();
             }
+            CommandAction::VfsBrowser => {
+                self.open_vfs_browser();
+            }
             CommandAction::ModelConfig => {
                 self.state.model_config_visible = true;
                 // Align the ● marker with the active agent's real model
@@ -190,13 +193,38 @@ impl App {
             }
             CommandAction::CycleTheme => {
                 let name = crate::theme::cycle();
+                self.state.display_settings.version =
+                    self.state.display_settings.version.wrapping_add(1);
                 // The whole surface re-renders from tokens on the next
                 // frame; force one so the switch is visible immediately.
                 self.dirty = true;
-                self.state
-                    .toasts
-                    .info("Theme", Some(format!("Switched to the {name} theme")));
+                self.state.toasts.info(
+                    "Theme",
+                    Some(format!(
+                        "Switched to {} ({name})",
+                        crate::theme::active_label()
+                    )),
+                );
             }
+            CommandAction::SplitVertical | CommandAction::SplitHorizontal => {
+                let count = self.state.sessions.len();
+                if count < 2 {
+                    self.state.toasts.info("Split", Some("Open another agent first".into()));
+                } else {
+                    let current = self.state.active_agent_idx;
+                    let other = (current + 1) % count;
+                    self.split_leaf = Some((self.state.sessions[current].name.clone(), self.state.sessions[other].name.clone(), matches!(action, CommandAction::SplitVertical)));
+                    self.dirty = true;
+                }
+            }
+            CommandAction::FocusOtherSplit => {
+                if let Some((first, second, _)) = &self.split_leaf {
+                    let active = self.state.sessions.get(self.state.active_agent_idx).map(|s| s.name.as_str());
+                    let target = if active == Some(first.as_str()) { second } else { first };
+                    if let Some(index) = self.state.sessions.iter().position(|s| &s.name == target) { self.state.active_agent_idx = index; }
+                }
+            }
+            CommandAction::CloseSplit => { self.split_leaf = None; self.dirty = true; }
         }
     }
 }

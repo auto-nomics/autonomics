@@ -153,7 +153,10 @@ impl ChannelNode {
                 let items = items
                     .into_iter()
                     .map(|item| render_spec(&template, &item))
-                    .collect::<Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?
+                    .into_iter()
+                    .filter(|item| !item.is_null())
+                    .collect();
                 Ok(ChannelValue { items })
             }
             ChannelOperator::Filter { path, equals } => {
@@ -168,14 +171,7 @@ impl ChannelNode {
             ChannelOperator::Flatten => {
                 let mut items = Vec::new();
                 for item in channel_items(inputs, 0)? {
-                    match item {
-                        Value::Array(values) => items.extend(values),
-                        value => {
-                            return Err(DagError::Schedule(format!(
-                                "channel.flatten requires array items, got {value}"
-                            )));
-                        }
-                    }
+                    flatten_item(item, &mut items);
                 }
                 Ok(ChannelValue { items })
             }
@@ -200,6 +196,12 @@ impl ChannelNode {
                         NodeValue::DataFrame(_) => {
                             return Err(DagError::Schedule(
                                 "channel.collect cannot serialize DataFrame outputs".into(),
+                            ));
+                        }
+                        NodeValue::Structured(_) => {
+                            return Err(DagError::Schedule(
+                                "legacy channel.collect cannot serialize structured channel values"
+                                    .into(),
                             ));
                         }
                     }
@@ -350,6 +352,17 @@ fn input_type(operator: &ChannelOperator) -> PortType {
     }
 }
 
+fn flatten_item(value: Value, output: &mut Vec<Value>) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                flatten_item(item, output);
+            }
+        }
+        value => output.push(value),
+    }
+}
+
 fn channel_items(inputs: &[NodeInput], port: u8) -> Result<Vec<Value>> {
     let mut items = Vec::new();
     for input in inputs.iter().filter(|input| input.port == port) {
@@ -371,7 +384,8 @@ fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn branch_matches(branch: &ChannelBranch, item: &Value) -> bool {
+/// Evaluate a declarative branch predicate against an item projection.
+pub fn branch_matches(branch: &ChannelBranch, item: &Value) -> bool {
     let actual = item.pointer(&pointer_path(&branch.path));
     if actual.is_none() {
         return branch.exists == Some(false);
@@ -499,7 +513,12 @@ impl ChannelNode {
     ) -> Result<Vec<(u8, serde_json::Value)>> {
         let outputs = match self.operator.clone() {
             ChannelOperator::Map { template } => {
-                vec![(0, render_spec(&template, &item)?)]
+                let value = render_spec(&template, &item)?;
+                if value.is_null() {
+                    Vec::new()
+                } else {
+                    vec![(0, value)]
+                }
             }
             ChannelOperator::Filter { path, equals } => {
                 if item.pointer(&pointer_path(&path)) == Some(&equals) {
@@ -508,17 +527,11 @@ impl ChannelNode {
                     Vec::new()
                 }
             }
-            ChannelOperator::Flatten => match item {
-                serde_json::Value::Array(values) => values
-                    .into_iter()
-                    .map(|value| Ok((0, value)))
-                    .collect::<Result<Vec<_>>>()?,
-                value => {
-                    return Err(DagError::Schedule(format!(
-                        "channel.flatten requires array items, got {value}"
-                    )));
-                }
-            },
+            ChannelOperator::Flatten => {
+                let mut items = Vec::new();
+                flatten_item(item, &mut items);
+                items.into_iter().map(|value| (0, value)).collect()
+            }
             ChannelOperator::Branch { branches } => {
                 match branches
                     .iter()

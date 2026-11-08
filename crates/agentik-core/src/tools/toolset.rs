@@ -129,10 +129,14 @@ impl ToolRegistry {
 /// Coerce schema-declared string scalars to their native JSON types.
 ///
 /// This is deliberately narrow: only strings that parse exactly as booleans or
-/// numbers are changed, and only when the relevant JSON Schema property says
-/// the destination is that scalar type. This keeps arbitrary string payloads
+/// numbers — or the exact string `"null"` on a nullable property — are
+/// changed, and only when the relevant JSON Schema property says the
+/// destination is that scalar type. This keeps arbitrary string payloads
 /// intact while tolerating a caller that serialized `12`/`true` as `"12"`/
-/// `"true"`.
+/// `"true"`, or JSON `null` as the string `"null"` (an artifact observed from
+/// the ChatGPT-family backend, where every unset optional parameter arrives
+/// as `"field": "null"`; treated literally it once turned a single-file grep
+/// into a silent zero-scan false negative via the glob filter).
 fn coerce_string_scalars(
     input: &serde_json::Value,
     schema: &agentik_types::ToolInputSchema,
@@ -207,6 +211,12 @@ fn parse_string_scalar_for_schema(
     text: &str,
     schema: &serde_json::Value,
 ) -> Option<serde_json::Value> {
+    // The literal string "null" on a nullable property is the JSON null the
+    // caller meant to send. Only nullable destinations are coerced: on a
+    // required string field the literal "null" is data, not an absence marker.
+    if schema_declares_type(schema, "null") && text == "null" {
+        return Some(serde_json::Value::Null);
+    }
     if schema_declares_type(schema, "boolean") {
         parse_string_scalar(text, "boolean")
     } else if schema_declares_type(schema, "integer") {
@@ -751,6 +761,77 @@ mod tests {
 
         assert_ne!(result.is_error, Some(true));
         assert_eq!(result.text_content(), "ok");
+    }
+
+    // ── string "null" on nullable fields (vfs grep false-negative root cause) ──
+
+    #[tool(name = "test_null_echo_tool", description = "echoes optional fields")]
+    struct MockNullEchoInput {
+        reason: String,
+        note: Option<String>,
+        count: Option<usize>,
+    }
+
+    struct MockNullEchoTool;
+
+    #[async_trait]
+    impl ToolFunction for MockNullEchoTool {
+        type Input = MockNullEchoInput;
+
+        async fn run(
+            &self,
+            input: MockNullEchoInput,
+        ) -> Result<crate::tools::ToolResult, crate::tools::error::ToolError> {
+            let note = match &input.note {
+                Some(s) => format!("Some({s})"),
+                None => "None".to_string(),
+            };
+            let count = match input.count {
+                Some(c) => format!("Some({c})"),
+                None => "None".to_string(),
+            };
+            Ok(crate::tools::ToolResult::success(format!(
+                "note={note} count={count} reason={}",
+                input.reason
+            )))
+        }
+    }
+
+    async fn run_null_echo(input: Value) -> String {
+        let (tx, _rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let registry = build_registry(vec![MockNullEchoTool.into()]);
+        let toolset = Toolset::from_registry(registry, Some(tx));
+        let toolcalls = vec![ToolUse {
+            id: "call_null_echo".to_string(),
+            name: "test_null_echo_tool".to_string(),
+            input,
+        }];
+        let result = toolset
+            .execute(&toolcalls, None)
+            .await
+            .expect("null-echo tool must execute")
+            .pop()
+            .expect("one tool result");
+        assert_ne!(result.is_error, Some(true), "tool failed: {result:?}");
+        result.text_content()
+    }
+
+    #[tokio::test]
+    async fn string_null_on_nullable_fields_becomes_json_null() {
+        // 回归：ChatGPT 系后端把未设置的可选参数序列化为字符串 "null"
+        // （如 vfs grep 的 "glob":"null"）。按字面处理时单文件 grep 走进
+        // glob 过滤分支，静默返回 files_scanned=0 的假阴性。可空字段上的
+        // 字符串 "null" 必须还原为 JSON null（即 Option::None）。
+        let out = run_null_echo(json!({"reason": "keep", "note": "null", "count": "null"}))
+            .await;
+        assert_eq!(out, "note=None count=None reason=keep");
+    }
+
+    #[tokio::test]
+    async fn string_null_on_required_and_real_strings_is_preserved() {
+        // 非可空字段（reason）与真正的字符串值必须原样透传。
+        let out = run_null_echo(json!({"reason": "null", "note": "value"})).await;
+        assert_eq!(out, "note=Some(value) count=None reason=null");
     }
 
     #[test]

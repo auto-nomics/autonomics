@@ -109,7 +109,7 @@ try {
   await page.frameLocator('iframe[title="alpha VS Code 工作台"]').getByText('isolated workbench').waitFor();
   await side.getByRole('button', { name: 'src' }).click();
   await side.getByRole('button', { name: 'main.py' }).click();
-  assert.equal(await page.getByTitle('alpha VS Code 工作台').isVisible(), false);
+  await page.getByTitle('alpha VS Code 工作台').waitFor({ state: 'hidden' });
   const editor = page.locator('.monaco-editor textarea.inputarea');
   await editor.waitFor(); await editor.focus();
   await page.locator('.monaco-editor .view-line [class*="mtk"]').first().waitFor();

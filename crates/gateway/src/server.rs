@@ -4,6 +4,7 @@
 mod agents;
 mod auth;
 mod compute;
+mod dev_terminal;
 mod context;
 pub(crate) mod devcontainer;
 mod devcontainer_config;
@@ -27,6 +28,7 @@ mod settings;
 mod skills;
 mod state;
 mod storage;
+mod vfs;
 
 pub use error::GatewayError;
 pub(crate) use plugin_environments::DockerHubClient;

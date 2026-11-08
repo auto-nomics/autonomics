@@ -152,7 +152,10 @@ async fn search_file(
     // Size guard.
     let size = match op.stat(entry_path).await {
         Ok(m) => m.content_length(),
-        Err(_) => return (None, 0, 0),
+        // Count the file as skipped rather than vanishing it: a stat failure
+        // must be visible in files_skipped so a zero-match report can never
+        // masquerade as a clean scan of a file we could not even stat.
+        Err(_) => return (None, 0, 1),
     };
     if size > max_bytes {
         return (None, 0, 1);
@@ -161,7 +164,8 @@ async fn search_file(
     // Read content.
     let buf = match op.read(entry_path).await {
         Ok(b) => b,
-        Err(_) => return (None, 0, 0),
+        // Same auditability rule as the stat failure above.
+        Err(_) => return (None, 0, 1),
     };
     let data = buf.to_vec();
 

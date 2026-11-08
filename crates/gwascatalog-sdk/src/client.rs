@@ -183,6 +183,34 @@ impl GwasCatalogClient {
         ))
     }
 
+    /// Fetch a file over plain HTTPS and return its full body.
+    ///
+    /// Non-2xx answers come back as [`GwasCatalogError::Api`] naming the URL,
+    /// so a retired endpoint (the old Summary Statistics API answers 410 on
+    /// every route) produces an actionable error.
+    pub async fn http_get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let resp = self.client.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(GwasCatalogError::Api {
+                status: status.as_u16(),
+                message: format!("GET {url} failed"),
+            });
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Fetch a small text file over plain HTTPS; transport errors are
+    /// mapped to `None` so optional sidecar files (e.g. `-meta.yaml`) can
+    /// be probed without failing the caller.
+    pub async fn http_get_text_if_available(&self, url: &str) -> Result<Option<String>> {
+        match self.http_get_bytes(url).await {
+            Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+            Err(GwasCatalogError::Api { status: 404, .. }) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Fetch an HTTPS FTP-mirror directory listing and return the `href`
     /// values of all `<a>` tags that look like real entries (not `../`).
     ///

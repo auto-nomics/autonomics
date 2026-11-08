@@ -78,6 +78,39 @@ pub(crate) struct MdTokens {
 }
 
 impl MdTokens {
+    pub(crate) fn from_theme(theme: &crate::theme::Theme) -> Self {
+        Self {
+            surface: MdSurface {
+                raised: theme.strip_active,
+            },
+            text: MdText {
+                primary: theme.text,
+                muted: theme.text_faint,
+            },
+            syntax: MdSyntax {
+                inline_code: theme.success,
+                code_fg: theme.text,
+                code_border: theme.text_faint,
+            },
+            heading: MdHeading {
+                h1: theme.accent,
+                h2: theme.accent_alt,
+                h3: theme.info,
+                other: theme.text,
+            },
+            list: MdList {
+                marker: theme.accent,
+                task_marker: theme.success,
+                block_quote_fg: theme.text_dim,
+                block_quote_border: theme.text_faint,
+            },
+            table: MdTable {
+                header: theme.accent,
+                border: theme.text_faint,
+            },
+            accent: MdAccent { link: theme.info },
+        }
+    }
     /// Return hardcoded dark-theme tokens matching phloem-tui's palette.
     pub(crate) fn dark() -> Self {
         Self {
@@ -192,7 +225,11 @@ impl MdTokens {
 
     /// Syntect theme name for code-block highlighting.
     pub(crate) fn syntax_theme_name() -> &'static str {
-        "base16-ocean.dark"
+        if crate::theme::active_name() == "light" {
+            "InspiredGitHub"
+        } else {
+            "base16-ocean.dark"
+        }
     }
 }
 

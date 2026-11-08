@@ -204,9 +204,12 @@ fn container_spec(
         script: None,
         files: Default::default(),
         env: Default::default(),
+        tuple_inputs: Vec::new(),
         outputs: vec![ContainerCommandOutputSpec {
             path: "copied.csv".into(),
             format: Some("csv".into()),
+            tuple: Vec::new(),
+            optional: false,
         }],
         workdir: Some(workspace.to_string_lossy().into_owned()),
         stage_in_mode: Default::default(),

@@ -15,6 +15,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
+import { TokenUsageBadge } from "./token-usage";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
 import { renderMarkdown } from "@/lib/markdown";
 import type { AgentInfo, ChatItem, CompactionView, ModelRow, StoredAgent } from "@/types";
@@ -378,6 +379,7 @@ export type AgentWorkspaceProps = {
    *  and makes it the active tab. */
   onResumeAgent: (agent: StoredAgent) => void;
   onOpenDag: () => void;
+  onOpenFlow: () => void;
 };
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {
@@ -571,9 +573,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             <AgentStatusIcon status={statuses[activeAgent]} />
             <span className="shrink-0">{running}</span>
             {usage && (
-              <span className="ml-auto hidden shrink-0 sm:inline">
-                {usage.input} in / {usage.output} out{usage.cache ? ` / ${usage.cache} cache` : ""}
-              </span>
+              <TokenUsageBadge usage={usage} className="ml-auto hidden shrink-0 sm:inline-flex" />
             )}
           </>
         )}

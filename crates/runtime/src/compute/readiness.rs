@@ -128,8 +128,10 @@ impl ComputeRegistry {
             );
         }
         Ok(
-            json!({"state":if !blockers.is_empty() { "BLOCKED" } else if remote { "CONFIGURATION_READY" } else { "NOT_VERIFIED" },
-            "scope":"REQUESTED_RESIDENT_NODES_AND_IMAGE_MAPPINGS", "gateway_pid":std::process::id(),
+            json!({"state":if !blockers.is_empty() { "BLOCKED" } else if remote && !checks.is_empty() { "CONFIGURATION_READY" } else { "NOT_VERIFIED" },
+            "scope":"REQUESTED_RESIDENT_NODES_AND_IMAGE_MAPPINGS",
+            "verification_gaps": ["Runtime history persistence and artifact access are outside this configuration check", "No execution is performed; empty image/identity requirements verify no images/identities"],
+            "requested_images":request.images.len(), "requested_identities":request.expected_identities.len(), "gateway_pid":std::process::id(),
             "catalog_revision":catalog.revision,"policy":policy,"deployment":target.deployment(),
             "target_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&target.target).map_err(|e|e.to_string())?)),
             "capsule_sha256":target.target.capsule_sha256,"checks":checks,"blockers":blockers,

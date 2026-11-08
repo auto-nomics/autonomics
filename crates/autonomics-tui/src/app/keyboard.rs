@@ -128,12 +128,7 @@ impl App {
 
     /// Apply a batched scroll delta to the agent tab.
     pub(super) fn apply_scroll_delta(&mut self, delta: i32) {
-        let ts = self.state.active_tab_state_mut();
-        if delta > 0 {
-            ts.scroll_offset = ts.scroll_offset.saturating_add(delta as usize);
-        } else {
-            ts.scroll_offset = ts.scroll_offset.saturating_sub((-delta) as usize);
-        }
+        self.state.active_tab_state_mut().scroll_by(delta);
     }
 
     /// Feed one key to the pending leader prefix. Returns `true` when the
@@ -252,6 +247,13 @@ impl App {
             return;
         }
 
+        // Ctrl+Y opens the stage-model flow view (process granularity), the
+        // batch-workflow counterpart of the DAG overlay.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('y') {
+            self.open_flow_view();
+            return;
+        }
+
         // The top-most visible overlay captures all remaining keys. The
         // stack ([`AppState::overlay_stack`]) is the same ordered list the
         // render pass paints with, so the surface the user sees on top is
@@ -267,11 +269,13 @@ impl App {
                 Overlay::AgentEffortPicker => self.handle_agent_effort_picker_key(key),
                 Overlay::MessagePicker => self.handle_message_picker_key(key),
                 Overlay::DagView => self.handle_dag_view_key(key),
+                Overlay::FlowView => self.handle_flow_view_key(key),
                 Overlay::Bibliography => self.handle_bibliography_key(key),
                 Overlay::SkillLibrary => self.handle_skill_library_key(key),
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
                 Overlay::ModelConfig => self.handle_model_config_key(key),
                 Overlay::HpcPanel => self.handle_hpc_panel_key(key),
+                Overlay::VfsBrowser => self.handle_vfs_browser_key(key),
                 Overlay::AgentConfig => self.handle_agent_config_key(key),
                 // Captured above, before the global chords; handled here
                 // too so a future reorder degrades to "the confirm

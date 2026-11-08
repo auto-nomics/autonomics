@@ -14,6 +14,8 @@ use async_trait::async_trait;
 use crate::error::ContainerRuntimeError;
 use crate::types::{ContainerRunRequest, ContainerRunResult, PrivateEnvironment, WorkspaceRef};
 
+pub use crate::dev_container::{DevContainerSpec, DevContainerState, DevContainerStatus, DevExecStream};
+
 pub const DEFAULT_CONTAINER_WORKDIR: &str = "/work";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 3600 * 24;
 pub const MAX_CAPTURED_OUTPUT_BYTES: usize = 64 * 1024;
@@ -76,6 +78,62 @@ pub trait PodmanConnection: Send + Sync {
     ) -> Result<ContainerRunResult, ContainerRuntimeError> {
         Err(ContainerRuntimeError::Invalid(
             "runtime does not support private credential forwarding".into(),
+        ))
+    }
+
+    // ── Development containers (devcontainer-style, optional) ─────────
+    //
+    // Long-lived named containers with exec streams. Defaults refuse so
+    // test fakes and non-podman runtimes keep compiling untouched.
+
+    /// Idempotently ensure a dev container exists and is running:
+    /// Running → no-op, Created/Exited → start, NotFound → create+start.
+    /// The bind-mounted host workspace is never touched.
+    async fn dev_container_start(
+        &self,
+        _spec: &DevContainerSpec,
+    ) -> Result<DevContainerStatus, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "this runtime does not support development containers".into(),
+        ))
+    }
+
+    /// Stop a dev container (kept, not removed). Idempotent.
+    async fn dev_container_stop(&self, _name: &str) -> Result<(), ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "this runtime does not support development containers".into(),
+        ))
+    }
+
+    /// Force-remove a dev container. Idempotent; the bind-mounted host
+    /// workspace survives by construction.
+    async fn dev_container_remove(&self, _name: &str) -> Result<(), ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "this runtime does not support development containers".into(),
+        ))
+    }
+
+    /// Probe a dev container by exact name.
+    async fn dev_container_status(
+        &self,
+        _name: &str,
+    ) -> Result<DevContainerStatus, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "this runtime does not support development containers".into(),
+        ))
+    }
+
+    /// Start an interactive `exec` session inside a running dev
+    /// container, returning its live byte streams.
+    async fn dev_exec(
+        &self,
+        _name: &str,
+        _argv: &[String],
+        _env: &[(String, String)],
+        _tty: bool,
+    ) -> Result<DevExecStream, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "this runtime does not support development containers".into(),
         ))
     }
 
@@ -311,7 +369,7 @@ pub(crate) fn request_user_ids(request: &ContainerRunRequest) -> (i64, i64) {
         .unwrap_or(default)
 }
 
-pub(crate) fn truncate_captured_bytes(bytes: &[u8]) -> String {
+pub fn truncate_captured_bytes(bytes: &[u8]) -> String {
     if bytes.len() <= MAX_CAPTURED_OUTPUT_BYTES {
         return String::from_utf8_lossy(bytes).into_owned();
     }

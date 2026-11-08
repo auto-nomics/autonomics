@@ -8,8 +8,9 @@
 //! the FTP mirror as the sanctioned access path (no replacement API yet).
 //! The agent-facing tools no longer call these methods; they list the study's
 //! files on the FTP mirror instead (see `tools::summary_associations`). The
-//! methods stay for callers pinning `ENDPOINT_GWASCATALOG_SS_URL` at a live
-//! mirror.
+//! DAG node `source_gwascatalog_summary_associations` was migrated to the
+//! FTP path too. The methods stay for callers pinning
+//! `ENDPOINT_GWASCATALOG_SS_URL` at a live mirror.
 //!
 //! All endpoints are read-only (`GET`). Responses use HAL format with
 //! `_links` (pagination: `first`, `next`) and `_embedded` (data).

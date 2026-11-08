@@ -1644,7 +1644,7 @@ fi"#,
             });
         }
         for output in &job.process.outputs {
-            if !by_port.contains_key(&output.port) {
+            if !output.optional && !by_port.contains_key(&output.port) {
                 return Err(DagError::Schedule(format!(
                     "slurm output port {} matched no files for `{}`",
                     output.port, output.pattern
@@ -2059,6 +2059,15 @@ done < <(compgen -G {pattern} | sort)
 
 #[async_trait::async_trait]
 impl TaskTransport for SlurmTaskTransport {
+    fn submission_failure_may_be_running(&self, error: &DagError) -> bool {
+        !matches!(
+            error,
+            DagError::SubmissionNotSent {
+                local_ssh_stopped: true,
+                ..
+            }
+        )
+    }
     fn ensure_ready(&self) -> Result<(), DagError> {
         if let Some(recorder) = &self.recorder {
             recorder.ensure_ready()?;
@@ -3197,6 +3206,13 @@ impl ProcessRoutingTaskExecutor {
 
 #[async_trait::async_trait]
 impl TaskExecutor for ProcessRoutingTaskExecutor {
+    fn requires_cancel_join(&self) -> bool {
+        self.local.requires_cancel_join()
+            || self
+                .remote
+                .as_ref()
+                .is_some_and(|executor| executor.requires_cancel_join())
+    }
     fn name(&self) -> &'static str {
         "process-routing"
     }

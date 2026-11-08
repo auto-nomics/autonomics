@@ -306,7 +306,7 @@ impl RuntimeHost {
             .collect();
         for name in eligible {
             tracing::info!(agent = %name, ttl_secs = ttl.as_secs(), "passivating idle agent");
-            self.shutdown_agent(&name);
+            self.shutdown_agent_with(&name, super::events::RemovalCause::IdlePassivation);
         }
     }
 
@@ -653,7 +653,11 @@ mod status_tests {
         fn agent_path_or_test(&self) -> &str {
             match self {
                 HostEvent::AgentRegistered { path, .. } => path.as_str(),
-                HostEvent::AgentUnregistered { path } => path,
+                HostEvent::AgentUnregistered { path, .. } => path,
+                HostEvent::IdentityRenamed { .. } | HostEvent::IdentityDeleted { .. } => {
+                    // Identity-level events carry no live instance path.
+                    ""
+                }
                 HostEvent::AgentStatusChanged { path, .. } => path,
                 HostEvent::AgentModelChanged { path, .. } => path,
             }

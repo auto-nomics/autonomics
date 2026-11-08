@@ -180,8 +180,11 @@ pub struct AgentTabState {
     /// h/l horizontal scroll step (one viewport per press).
     pub chat_viewport_height: u16,
     pub messages: Vec<ChatLine>,
+    /// Local receipt times; historical messages have no timestamp in the wire format.
+    pub message_times: Vec<Option<i64>>,
     pub tool_tasks: Vec<ToolTaskInfo>,
     pub scroll_offset: usize,
+    pub scroll_target: Option<usize>,
     pub status: AgentStatus,
     pub input: InputArea,
     /// History of submitted prompts, newest at the back. Used by
@@ -307,8 +310,10 @@ impl Default for AgentTabState {
         Self {
             chat_viewport_height: 0,
             messages: Vec::new(),
+            message_times: Vec::new(),
             tool_tasks: Vec::new(),
             scroll_offset: 0,
+            scroll_target: None,
             status: AgentStatus::Idle,
             input: InputArea::new(),
             input_history: VecDeque::new(),
@@ -433,6 +438,7 @@ impl AgentTabState {
     pub fn push_line(&mut self, line: ChatLine) {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages.push(line);
+        self.message_times.push(Some(chrono::Utc::now().timestamp_millis()));
         self.msg_versions.push(self.msg_version_counter);
         self.cached_msg_row_counts.push(0);
     }
@@ -485,6 +491,7 @@ impl AgentTabState {
         let n = messages.len();
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages = messages;
+        self.message_times = vec![None; n];
         self.msg_versions = (0..n).map(|_| self.msg_version_counter).collect();
         self.cached_msg_lines = vec![Vec::new(); n];
         self.cached_msg_row_counts = vec![0; n];
@@ -510,7 +517,27 @@ impl AgentTabState {
 
     /// Re-enable auto-scroll so the next `clamp_scroll` call pins to the bottom.
     pub fn scroll_to_bottom(&mut self) {
+        self.scroll_target = None;
         self.auto_scroll = true;
+    }
+
+    pub fn scroll_by(&mut self, delta: i32) {
+        let max = self.content_line_count.saturating_sub(self.chat_viewport_height as usize);
+        let target = self.scroll_target.unwrap_or(self.scroll_offset);
+        self.scroll_target = Some(target.saturating_add_signed(delta as isize).min(max));
+        self.auto_scroll = false;
+    }
+
+    pub fn advance_scroll(&mut self) -> bool {
+        let Some(target) = self.scroll_target else { return false };
+        let max = self.content_line_count.saturating_sub(self.chat_viewport_height as usize);
+        let target = target.min(max);
+        let distance = self.scroll_offset.abs_diff(target);
+        if distance == 0 { self.scroll_target = None; return false; }
+        let step = distance.div_ceil(4);
+        if self.scroll_offset < target { self.scroll_offset += step; } else { self.scroll_offset -= step; }
+        if self.scroll_offset == target { self.scroll_target = None; }
+        true
     }
 
     /// Clamp scroll_offset based on content and viewport.
@@ -959,10 +986,6 @@ pub struct AppState {
     /// Under virtual-actor mode this waxes and wanes with idle-TTL
     /// passivation while `sessions` stays untouched.
     pub live_agents: Vec<LiveAgent>,
-    /// A message submitted from a leaf whose agent was passivated. Held
-    /// here while the identity re-activates; delivered the moment the
-    /// `AgentRegistered` frame for the pending path lands.
-    pub pending_outbound: Option<(String, String)>,
     /// Set once any leaf has been opened (initial view or user action).
     /// After that, reconcile/hydrate never auto-opens leaves again.
     pub opened_leaf: bool,
@@ -1016,6 +1039,8 @@ pub struct AppState {
     pub model_config_visible: bool,
     /// HPC (Slurm) site panel state and visibility.
     pub hpc_panel: crate::widgets::hpc_panel_widget::HpcPanelState,
+    /// VFS browser overlay (browse + preview + file management).
+    pub vfs_browser: crate::widgets::vfs_browser::VfsBrowserState,
     pub embedding_config_visible: bool,
     /// Per-agent runtime config popup state.
     pub agent_config: crate::widgets::agent_config_widget::AgentConfigState,
@@ -1029,6 +1054,14 @@ pub struct AppState {
     pub dag_view_state: crate::widgets::dag_view::DagViewState,
     /// Last DAG snapshot load error, shown inside the DAG overlay.
     pub dag_view_error: Option<String>,
+    /// Stage-model flow overlay visibility (Ctrl+G).
+    pub flow_view_visible: bool,
+    /// Latest flow view (authored flow + last run summary), if loaded.
+    pub flow_view: Option<data_engine::flow::FlowView>,
+    /// Last flow view load error.
+    pub flow_view_error: Option<String>,
+    /// Scroll offset of the flow overlay.
+    pub flow_view_scroll: usize,
     /// Global display preferences (collapse thinking/tool blocks).
     pub display_settings: DisplaySettings,
     /// Active default model as `provider:model`. Resolved and built by the
@@ -1110,11 +1143,6 @@ impl AppState {
         if let Some(entry) = self.live_agents.iter_mut().find(|e| e.name == name) {
             entry.status = status;
         }
-    }
-
-    /// Whether the daemon currently holds a live instance for this path.
-    pub fn is_agent_live(&self, name: &str) -> bool {
-        self.live_agents.iter().any(|e| e.name == name)
     }
 }
 

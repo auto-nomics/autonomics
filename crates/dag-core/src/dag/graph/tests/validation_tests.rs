@@ -100,58 +100,7 @@ fn add_edge_allows_declared_alternate_input_formats() {
     dag.add_edge("reference", "h2", 0, 0).unwrap();
 }
 
-#[tokio::test]
-async fn missing_upstream_output_fails_loudly_at_dispatch() {
-    // PortedNode declares one DataFrame output port but executes to an
-    // empty PortOutputs — the edge validates yet delivers nothing.
-    let mut dag = DAG::default();
-    dag.add_node(
-        "src".into(),
-        Box::new(PortedNode(NodePorts::new().add_output_port(None))),
-    )
-    .unwrap();
-    dag.add_node(
-        "sink".into(),
-        Box::new(PortedNode(
-            NodePorts::new().add_input_port(None).add_output_port(None),
-        )),
-    )
-    .unwrap();
-    dag.add_edge("src", "sink", 0, 0).unwrap();
 
-    let err = dag
-        .run(&SchedulerConfig::default(), &test_ctx(), None)
-        .await
-        .unwrap_err();
-    assert_matches!(
-        err,
-        DagError::MissingUpstreamOutput {
-            from_node,
-            from_port: 0,
-            to_node,
-            to_port: 0,
-        } if from_node == "src" && to_node == "sink"
-    );
-}
-
-#[tokio::test]
-async fn runtime_output_type_mismatch_fails_node() {
-    let mut dag = DAG::default();
-    dag.add_node("bad".into(), Box::new(MisdeclaredOutputNode::default()))
-        .unwrap();
-
-    let report = dag
-        .run(&SchedulerConfig::default(), &test_ctx(), None)
-        .await
-        .unwrap();
-
-    assert!(!report.ok);
-    assert_eq!(dag.status("bad"), Some(RuntimeStatus::Failed));
-    assert_matches!(
-        report.errors.get("bad"),
-        Some(DagError::PortTypeMismatch { .. })
-    );
-}
 
 #[test]
 fn validation_rejects_path_reference_aliased_to_an_in_dag_sink() {

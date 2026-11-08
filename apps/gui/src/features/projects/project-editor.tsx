@@ -104,7 +104,9 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
       setEnvironment((current) => current || env.environments[0]?.id || "");
       setFilesRevision(value => value + 1);
       setError("");
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause: unknown) {
+      setError(String((cause as { message?: string } | null)?.message ?? cause));
+    }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { autoShowVscode.current = true; setShowVscode(false); }, [project]);
@@ -400,7 +402,9 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     finally { setBusy(false); }
   };
   const create = async (event: React.FormEvent) => {
-    event.preventDefault(); if (!mayLeave()) return; setBusy(true); setError("");
+    event.preventDefault(); if (!mayLeave()) return;
+    setBusy(true);
+    setError("");
     try {
       await gatewayRequest("POST", "/plugin-projects", { name, environment_id: environment, purpose });
       await refresh(); setCreating(false); setName(""); setPurpose("");

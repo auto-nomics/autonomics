@@ -867,7 +867,7 @@ dependencies = [
  "log",
  "pin-project-lite",
  "tokio",
- "tungstenite",
+ "tungstenite 0.28.0",
 ]
 
 [[package]]
@@ -1032,6 +1032,8 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "dag-core",
+ "dag-engine",
+ "data-engine",
  "fuzzy-matcher",
  "gateway",
  "ignore",
@@ -1088,6 +1090,7 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "axum-macros",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -1107,8 +1110,10 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_urlencoded",
+ "sha1 0.10.7",
  "sync_wrapper",
  "tokio",
+ "tokio-tungstenite",
  "tower",
  "tower-layer",
  "tower-service",
@@ -3138,6 +3143,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dag-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "futures",
+ "glob",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "vfs",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3271,6 +3296,7 @@ dependencies = [
  "container-runtime",
  "csv",
  "dag-core",
+ "dag-engine",
  "datafusion",
  "evalue",
  "futures",
@@ -3299,6 +3325,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -3321,6 +3348,8 @@ dependencies = [
  "async-trait",
  "bib-base",
  "bib-types",
+ "container-runtime",
+ "dag-engine",
  "data-engine",
  "datafusion",
  "nodes-sql",
@@ -5220,6 +5249,7 @@ dependencies = [
  "container-plugin",
  "container-runtime",
  "dag-core",
+ "data-engine",
  "eventsource-stream",
  "futures",
  "gateway",
@@ -5242,12 +5272,14 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "toml 1.1.6+spec-1.1.0",
  "tower",
  "tracing",
  "tracing-subscriber",
  "utoipa",
  "utoipa-swagger-ui",
  "uuid",
+ "vfs",
  "wiki",
 ]
 
@@ -6006,6 +6038,7 @@ dependencies = [
  "bib-types",
  "dag-core",
  "datafusion",
+ "flate2",
  "futures",
  "reqwest 0.13.5",
  "schemars 1.2.2",
@@ -9073,6 +9106,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tisch",
  "tokio",
+ "tokio-util",
  "toml 1.1.6+spec-1.1.0",
  "tracing",
  "uniprot",
@@ -12137,6 +12171,7 @@ dependencies = [
  "container-plugin",
  "container-runtime",
  "dag-core",
+ "dag-engine",
  "data-catalog",
  "data-engine",
  "data-engine-tools",
@@ -14705,6 +14740,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite 0.29.0",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15079,6 +15126,22 @@ dependencies = [
  "sha1 0.10.7",
  "thiserror 2.0.20",
  "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c01152af293afb9c7c2a57e4b559c5620b421f6d133261c60dd2d0cdb38e6b8"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.5.0",
+ "httparse",
+ "log",
+ "rand 0.9.5",
+ "sha1 0.10.7",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -3,12 +3,12 @@ use dag_core::{
     DagNode, NodeInput, NodePorts, TaskExecution, TaskExecutor,
     dag::{
         DagError,
-        graph::{DAG, PortOutputs},
+        graph::PortOutputs,
         node_event::{JobResult, NodeReporter},
-        runtime::SchedulerConfig,
     },
     registry::NodeCtx,
 };
+use dag_engine::{FlowGraph, FlowRunConfig, FlowScheduler, Process, SourceResolution};
 use futures::StreamExt;
 use std::{
     any::Any,
@@ -649,31 +649,21 @@ async fn scheduler_binds_once_and_existing_agent_graphs_follow_next_run_policy()
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_capture(&f.registry, "local", calls.clone(), true);
     install_capture(&f.registry, "server-b", calls.clone(), false);
-    let mut graph = DAG::default();
-    graph.set_task_executor(Arc::new(ComputeExecutor(f.registry.clone())));
-    for id in ["first", "second"] {
-        graph
-            .add_node_with_spec(
-                id.into(),
-                Box::new(EmptyNode(NodePorts::new())),
-                "compute-test".into(),
-                serde_json::json!({}),
-            )
-            .unwrap();
-    }
+    let graph = FlowGraph::builder()
+        .process(Process::new("first", "compute-test", serde_json::json!({})))
+        .process(Process::new("second", "compute-test", serde_json::json!({})))
+        .build().unwrap();
     let ctx = NodeCtx::new(
         Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
         Some(f.registry.storage.clone()),
     );
-    let cfg = SchedulerConfig {
-        wave_size: Some(1),
-        ..Default::default()
-    };
-    let report = graph.run(&cfg, &ctx, None).await.unwrap();
+    let cfg = FlowRunConfig { max_concurrency: 1, resume: false };
+    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))), Arc::new(ctx));
+    let report = scheduler.run_dataflow(&graph, &SourceResolution::new(), &cfg, None).await.unwrap();
     assert!(report.ok);
     assert_eq!(report.execution_binding.unwrap()["target_id"], "local");
     assert_eq!(*calls.lock().unwrap(), vec!["local", "local"]);
-    let report = graph.run(&cfg, &ctx, None).await.unwrap();
+    let report = scheduler.run_dataflow(&graph, &SourceResolution::new(), &cfg, None).await.unwrap();
     assert!(report.ok);
     assert_eq!(report.execution_binding.unwrap()["target_id"], "server-b");
     assert_eq!(
@@ -1126,28 +1116,20 @@ async fn containers_use_the_same_target_snapshot_as_the_dag_run() {
             .unwrap()
             .insert(target.monitor_key.clone(), target);
     }
-    let mut graph = DAG::default();
-    graph.set_task_executor(Arc::new(ComputeExecutor(f.registry.clone())));
-    graph
-        .add_node_with_spec(
-            "container".into(),
-            Box::new(EmptyNode(NodePorts::new())),
-            "compute-test".into(),
-            serde_json::json!({}),
-        )
-        .unwrap();
+    let graph = FlowGraph::builder().process(Process::new("container", "compute-test", serde_json::json!({}))).build().unwrap();
     let ctx = NodeCtx::new(
         Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
         Some(f.registry.storage.clone()),
     );
-    let first = graph
-        .run(&SchedulerConfig::default(), &ctx, None)
+    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))), Arc::new(ctx));
+    let first = scheduler
+        .run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig::default(), None)
         .await
         .unwrap();
     assert!(first.ok);
     assert_eq!(first.execution_binding.unwrap()["target_id"], "local");
-    let second = graph
-        .run(&SchedulerConfig::default(), &ctx, None)
+    let second = scheduler
+        .run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig::default(), None)
         .await
         .unwrap();
     assert!(second.ok);
@@ -1500,7 +1482,7 @@ impl DagNode for RequiredImageNode {
 }
 
 #[tokio::test]
-async fn readiness_blocks_missing_images_before_any_node_and_keeps_bound_target() {
+async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     let f = fixture();
     let image = format!("example/present@sha256:{}", "a".repeat(64));
     let missing = format!("example/missing@sha256:{}", "b".repeat(64));
@@ -1544,58 +1526,36 @@ async fn readiness_blocks_missing_images_before_any_node_and_keeps_bound_target(
         .unwrap();
     assert_eq!(valid["state"], "CONFIGURATION_READY");
     assert_eq!(valid["end_to_end_acceptance"], "NOT_VERIFIED");
+    assert_eq!(f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap()["state"], "NOT_VERIFIED");
     assert_eq!(valid["remote_sif_bytes_verified"], false);
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_capture(&f.registry, "readiness", calls.clone(), false);
-    let mut graph = DAG::default();
-    graph.set_task_executor(Arc::new(ComputeExecutor(f.registry.clone())));
-    graph
-        .add_node_with_spec(
-            "ordinary".into(),
-            Box::new(EmptyNode(NodePorts::new())),
-            "compute-test".into(),
-            serde_json::json!({}),
-        )
-        .unwrap();
-    let node = RequiredImageNode {
-        ports: NodePorts::new(),
-        image: missing,
-    };
-    graph
-        .add_node_with_spec(
-            "missing".into(),
-            Box::new(node.clone()),
-            "readiness-probe".into(),
-            serde_json::json!({}),
-        )
-        .unwrap();
-    let ctx = NodeCtx::new(
-        Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
-        Some(f.registry.storage.clone()),
-    );
-    let error = graph
-        .run(&SchedulerConfig::default(), &ctx, None)
-        .await
-        .unwrap_err();
+    let node = RequiredImageNode { ports:NodePorts::new(), image:missing };
+    let graph = FlowGraph::builder()
+        .process(Process::new("a_ordinary", "compute-test", serde_json::json!({})))
+        .process(Process::new("z_missing", "readiness-probe", serde_json::json!({})))
+        .build().unwrap();
+    let ctx = NodeCtx::new(Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+        Some(f.registry.storage.clone()));
+    let required = node.clone();
+    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(move |kind, _| {
+        match kind {
+            "compute-test" => Ok(Box::new(EmptyNode(NodePorts::new()))),
+            _ => Ok(Box::new(required.clone())),
+        }
+    }), Arc::new(ctx));
+    let error = scheduler.run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig { max_concurrency: 1, resume: false }, None).await.unwrap_err();
     assert!(error.to_string().contains("WORKFLOW_BLOCKED"));
-    assert!(calls.lock().unwrap().is_empty());
-    let executor = ComputeExecutor(f.registry.clone())
-        .bind_run()
-        .await
-        .unwrap()
-        .unwrap();
+    // The streaming scheduler checks each instance at dispatch time, so a
+    // preceding task may already have run when another image is rejected.
+    assert_eq!(*calls.lock().unwrap(), vec!["readiness"]);
+    let executor = ComputeExecutor(f.registry.clone()).bind_run().await.unwrap().unwrap();
     select(&f.registry, "local");
-    assert!(
-        executor
-            .preflight(&[("dynamic", &node)])
-            .unwrap_err()
-            .to_string()
-            .contains("IMAGE_MAPPING_UNAVAILABLE")
-    );
-    assert_eq!(
-        executor.execution_binding().unwrap()["target_id"],
-        "readiness"
-    );
+    let blocked = executor.preflight(&[("dynamic", &node)]).unwrap_err().to_string();
+    assert!(blocked.contains("IMAGE_MAPPING_UNAVAILABLE"));
+    assert!(blocked.contains("\"blocked_nodes_submitted\":false"));
+    assert!(!blocked.contains("\"new_job_submitted\""));
+    assert_eq!(executor.execution_binding().unwrap()["target_id"], "readiness");
 }
 
 #[tokio::test]
@@ -1614,12 +1574,11 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
         .unwrap();
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["blockers"][0]["code"], "NODE_NOT_REGISTERED");
-    assert_eq!(
-        f.registry
-            .readiness(&ReadinessRequest::default(), &[])
-            .unwrap()["state"],
-        "NOT_VERIFIED"
-    );
+    let empty = f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap();
+    assert_eq!(empty["state"], "NOT_VERIFIED");
+    assert_eq!(empty["requested_images"], 0);
+    assert_eq!(empty["requested_identities"], 0);
+    assert!(!empty["verification_gaps"].as_array().unwrap().is_empty());
     assert_eq!(f.registry.catalog().revision, before);
     assert!(f.registry.status().unwrap().runs.is_empty());
 }
@@ -1735,6 +1694,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
         outputs: vec![dag_core::ProcessTaskOutput {
             port: 0,
             pattern: "out-*.txt".into(),
+            optional: false,
         }],
     };
     let submission = dag_core::TaskSubmission {
@@ -1743,7 +1703,6 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
             logical_node: Some("process".into()),
             kind: "process".into(),
             spec: serde_json::to_value(&process).unwrap(),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![dag_core::TaskInputBinding {

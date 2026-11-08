@@ -13,6 +13,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 arrow.workspace = true
 arrow-array.workspace = true
 data-engine = { path = "../data-engine" }
+dag-engine = { path = "../dag-engine" }
 bib-types = { path = "../bib-types" }
 nodes-sql = { path = "../node-bundles/nodes-sql" }
 datafusion.workspace = true
@@ -22,6 +23,7 @@ serde_json.workspace = true
 tokio = { workspace = true }
 
 [dev-dependencies]
+container-runtime = { path = "../container-runtime" }
 vfs = { path = "../vfs" }
 bib-base = { path = "../bib-base" }
 tempfile = "3.27.0"

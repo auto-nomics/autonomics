@@ -21,6 +21,146 @@ fn result_json(script: &str) -> serde_json::Value {
 }
 
 #[test]
+fn file_channel_type_option_survives_shell_translation() {
+    for source in ["from_path", "from_file_pairs"] {
+        let script = format!("{source}('input', 'data/*', type='dir')\ncommit()\n");
+        let execution = eval(&script).unwrap();
+        let GraphEditOp::AddNode { spec, .. } = &execution.operations[0] else {
+            panic!("expected source");
+        };
+        assert_eq!(spec["pathType"], "dir");
+        let parsed: dag_engine::SourceSpec = serde_json::from_value(spec.clone()).unwrap();
+        assert!(matches!(
+            parsed,
+            dag_engine::SourceSpec::Glob {
+                path_type: dag_engine::model::PathType::Dir,
+                ..
+            } | dag_engine::SourceSpec::FilePairs {
+                path_type: dag_engine::model::PathType::Dir,
+                ..
+            }
+        ));
+        let bad = format!("{source}('input', 'data/*', type='device')\ncommit()\n");
+        assert!(eval(&bad).is_err());
+    }
+}
+
+#[test]
+fn channel_function_uses_captures_and_cannot_edit_graph() {
+    let (registry, snapshot) = sandbox();
+    let captures = serde_json::json!({"factor": 3})
+        .as_object()
+        .unwrap()
+        .clone();
+    let result = interp::run_pure_function(
+        "def transform(item):\n    return item * factor\n",
+        &captures,
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(result, serde_json::json!(21));
+    let error = interp::run_pure_function(
+        "def transform(item):\n    commit()\n    return item\n",
+        &captures,
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap_err();
+    assert!(error.message.contains("graph operations are not available"));
+}
+
+#[test]
+fn channel_function_preserves_file_metadata_when_returned() {
+    use dag_core::value::{FileFingerprint, FileRef, NodeValue};
+    let (registry, snapshot) = sandbox();
+    let input = NodeValue::File(FileRef {
+        path: "/tmp/sample.fastq".into(),
+        format: Some("fastq".into()),
+        fingerprint: Some(FileFingerprint {
+            size: 5,
+            mtime_ns: 10,
+            content_hash: Some("hash".into()),
+            immutable_remote: false,
+        }),
+    });
+    let output = interp::run_pure_node_function(
+        "def identity(item):\n    return item\n",
+        &serde_json::Map::new(),
+        None,
+        Some(&input),
+        None,
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    let NodeValue::File(file) = output else {
+        panic!("expected a file")
+    };
+    assert_eq!(file.path, "/tmp/sample.fastq");
+    assert_eq!(file.format.as_deref(), Some("fastq"));
+    assert_eq!(
+        file.fingerprint.unwrap().content_hash.as_deref(),
+        Some("hash")
+    );
+}
+
+#[test]
+fn channel_function_preserves_file_sets_and_their_fingerprints() {
+    use dag_core::value::{FileFingerprint, FileRef, NodeValue};
+    let (registry, snapshot) = sandbox();
+    let fingerprint = FileFingerprint {
+        size: 5,
+        mtime_ns: 10,
+        content_hash: Some("hash".into()),
+        immutable_remote: false,
+    };
+    let input = NodeValue::FileSet(vec![FileRef {
+        path: "/tmp/sample.fastq".into(),
+        format: Some("fastq".into()),
+        fingerprint: Some(fingerprint.clone()),
+    }]);
+    let output = interp::run_pure_node_function(
+        "def copy(item):\n    return item[:]\n",
+        &serde_json::Map::new(),
+        None,
+        Some(&input),
+        None,
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    let NodeValue::FileSet(files) = output else {
+        panic!("expected a file set")
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].fingerprint.as_ref(), Some(&fingerprint));
+}
+
+#[test]
+fn node_spec_persists_a_channel_function_and_its_captures() {
+    let script = "factor = 3\ndef transform(item):\n    return item * factor\nnode('mapped', 'channel', {'operator': 'map', 'function': transform})\ncommit()\n";
+    let execution = eval(script).unwrap();
+    let GraphEditOp::AddNode { spec, .. } = &execution.operations[0] else {
+        panic!("expected node")
+    };
+    let function = &spec["function"]["__dag_shell_function__"];
+    assert_eq!(function["captures"]["factor"], 3);
+    let (registry, snapshot) = sandbox();
+    let result = interp::run_pure_function(
+        function["source"].as_str().unwrap(),
+        function["captures"].as_object().unwrap(),
+        &[serde_json::json!(7)],
+        &snapshot,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(result, serde_json::json!(21));
+}
+
+#[test]
 fn timeout_is_normalized() {
     assert_eq!(
         normalize_timeout(None).unwrap(),
@@ -47,32 +187,6 @@ fn rejects_oversized_script_before_compilation() {
     let error =
         execute_script(&script, Duration::from_millis(10), &snapshot, &registry).unwrap_err();
     assert_eq!(error.code, "script_too_large");
-}
-
-#[test]
-fn large_logical_graph_can_be_staged() {
-    let (registry, snapshot) = sandbox();
-    // Reproduce the field's 127-node / 246-edge graph shape. The map-property
-    // budget counts nested properties recursively, so edges matter here.
-    let script = r#"
-nodes = []
-edges = []
-for i in range(127):
-    node_id = "n" + str(i)
-    nodes.append({
-        "id": node_id,
-        "definition": {"Registry": {"kind": "core/echo", "spec": {}}},
-        "strategy": "Once",
-    })
-    edges.append({"from": node_id, "from_port": 0, "to": node_id, "to_port": 0})
-    edges.append({"from": node_id, "from_port": 0, "to": node_id, "to_port": 1})
-add_logical_graph({"nodes": nodes, "edges": edges})
-commit()
-"#;
-    let execution = execute_script(script, Duration::from_millis(1000), &snapshot, &registry)
-        .expect("a 127-node, 246-edge logical graph must be stageable");
-    assert_eq!(execution.operations.len(), 1);
-    assert!(execution.committed);
 }
 
 #[test]
@@ -470,4 +584,95 @@ commit()
     let traces = operation_traces(&removal.operations);
     assert_eq!(traces[0].cascade, None);
     assert_eq!(traces[1].cascade, Some(true));
+}
+
+#[cfg(feature = "bundle-sql")]
+#[tokio::test]
+async fn shell_binds_variadic_sql_inputs_on_create_and_rebind() {
+    use crate::data_engine::DataEngine;
+    let (client, _handle) = crate::runtime::spawn_with_engine(DataEngine::builder().build());
+    let script = "left = process('left', 'core/sql', {'sql_query':'SELECT 2 AS value'})\nright = process('right', 'core/sql', {'sql_query':'SELECT 3 AS value'})\nprocess('join', 'core/sql', {'sql_query':'SELECT a.value * 10 + b.value AS total FROM port_0 a CROSS JOIN port_1 b'}, inputs=[left, right])\ncommit()\n";
+    let edit = client
+        .run_dag_shell(script.into(), false, None)
+        .await
+        .unwrap();
+    assert!(edit.applied, "{:?}", edit.error);
+    let report = client.run_flow(None, Default::default()).await.unwrap();
+    assert!(report.ok, "{:?}", report.instances);
+    let record = report
+        .instances
+        .iter()
+        .find(|record| record.process == "join")
+        .unwrap();
+    let crate::value::NodeValue::DataFrame(frame) = record.outputs.get(&0).unwrap() else {
+        panic!("SQL dataframe");
+    };
+    let batches = frame.clone().collect().await.unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_ref()
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            .unwrap()
+            .value(0),
+        23
+    );
+    let edit = client
+        .run_dag_shell(
+            "bind_inputs('join', [output('right'), output('left')])\ncommit()\n".into(),
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(edit.applied, "{:?}", edit.error);
+    let graph = client.get_flow().await.unwrap();
+    let wires = graph
+        .wires()
+        .iter()
+        .filter(|wire| wire.to == "join")
+        .collect::<Vec<_>>();
+    assert_eq!(wires.len(), 2);
+    assert!(
+        wires
+            .iter()
+            .any(|wire| wire.from == "right" && wire.to_port == 0)
+    );
+    assert!(
+        wires
+            .iter()
+            .any(|wire| wire.from == "left" && wire.to_port == 1)
+    );
+    let rebound = client.run_flow(None, Default::default()).await.unwrap();
+    assert!(rebound.ok);
+    let record = rebound
+        .instances
+        .iter()
+        .find(|record| record.process == "join")
+        .unwrap();
+    let crate::value::NodeValue::DataFrame(frame) = record.outputs.get(&0).unwrap() else {
+        panic!("SQL dataframe");
+    };
+    let batches = frame.clone().collect().await.unwrap();
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_ref()
+            .as_any()
+            .downcast_ref::<datafusion::arrow::array::Int64Array>()
+            .unwrap()
+            .value(0),
+        32
+    );
+    let rejected = client.run_dag_shell("process('bad', 'table_transpose', {'id_column':'value'}, inputs=[output('left'), output('right')])\ncommit()\n".into(), false, None).await.unwrap();
+    assert!(!rejected.applied);
+    assert!(
+        rejected
+            .error
+            .unwrap()
+            .message
+            .contains("1 declared inputs")
+    );
+    assert!(client.get_flow().await.unwrap().process("bad").is_none());
 }

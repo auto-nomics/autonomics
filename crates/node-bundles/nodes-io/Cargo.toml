@@ -82,6 +82,7 @@ reqwest = { version = "0.13", features = ["stream"] }
 toml.workspace = true
 
 [dev-dependencies]
+tokio-util = { version = "0.7", features = ["rt"] }
 data-catalog = { path = "../../data-catalog" }
 tokio = { workspace = true, features = ["net"] }
 arrow-buffer.workspace = true

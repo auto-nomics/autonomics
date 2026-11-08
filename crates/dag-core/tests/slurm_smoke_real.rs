@@ -200,6 +200,7 @@ async fn real_cluster_runs_process_task_end_to_end() {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.txt".into(),
+            optional: false,
         }],
     };
     let submission = TaskSubmission {
@@ -208,7 +209,6 @@ async fn real_cluster_runs_process_task_end_to_end() {
             logical_node: Some("process".into()),
             kind: "process".into(),
             spec: serde_json::to_value(&process).unwrap(),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![input_binding(&input)],
@@ -286,6 +286,7 @@ async fn real_cluster_cancel_paths() {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.txt".into(),
+            optional: false,
         }],
     };
 
@@ -303,7 +304,6 @@ async fn real_cluster_cancel_paths() {
             logical_node: Some("process".into()),
             kind: "process".into(),
             spec: serde_json::to_value(process).unwrap(),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![input_binding(&input)],

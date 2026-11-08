@@ -40,7 +40,7 @@ async fn run_tool(name: &str, input: serde_json::Value) -> String {
 #[test]
 fn registrations_exclude_migrated_search() {
     let tools = registrations();
-    assert_eq!(tools.len(), 5, "expected 5 Open Targets tools");
+    assert_eq!(tools.len(), 6, "expected 6 Open Targets tools");
     assert!(
         !tools
             .iter()
@@ -49,38 +49,10 @@ fn registrations_exclude_migrated_search() {
     );
 }
 
-#[tokio::test]
-#[ignore = "hits the live Open Targets API"]
-async fn associated_diseases_tool_runs() {
-    let text = run_tool(
-        "opentargets_associated_diseases",
-        json!({
-            "ensembl_id": "ENSG00000012048",
-            "size": 5,
-            "b_filter": "breast",
-            "min_score": 0.1
-        }),
-    )
-    .await;
-    assert!(text.contains("Score"));
-    assert!(text.to_lowercase().contains("breast"));
-}
-
-#[tokio::test]
-#[ignore = "hits the live Open Targets API"]
-async fn associated_diseases_tool_fetch_all() {
-    let text = run_tool(
-        "opentargets_associated_diseases",
-        json!({
-            "ensembl_id": "ENSG00000012048",
-            "b_filter": "cancer",
-            "min_score": 0.4,
-            "fetch_all": true
-        }),
-    )
-    .await;
-    assert!(text.contains("associated diseases"));
-}
+// NOTE: `opentargets_associated_diseases` / `opentargets_associated_targets`
+// tool tests were removed with the tools themselves — the ranked association
+// tables are served by the DAG nodes `source_opentargets_associated_diseases`
+// / `source_opentargets_associated_targets` (see data-engine live tests).
 
 #[tokio::test]
 #[ignore = "hits the live Open Targets API"]
@@ -98,4 +70,43 @@ async fn target_tool_runs() {
 async fn disease_tool_runs() {
     let text = run_tool("opentargets_disease", json!({ "efo_id": "MONDO_0004975" })).await;
     assert!(text.to_lowercase().contains("alzheimer"));
+}
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_tool_runs() {
+    let text = run_tool("opentargets_variant", json!({ "variant_id": "2_655222_G_A" })).await;
+    assert!(text.contains("2_655222_G_A"));
+    assert!(text.contains("rs13029479"));
+}
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_associations_tool_runs() {
+    let text = run_tool(
+        "opentargets_variant_associations",
+        json!({ "variant_id": "2_655222_G_A" }),
+    )
+    .await;
+    assert!(text.contains("trait associations"));
+    // Known BMI/weight signal at this locus (Galánin-like peptide region).
+    assert!(
+        text.to_lowercase().contains("body mass index") || text.to_lowercase().contains("weight"),
+        "expected a BMI/weight association in: {text}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_tool_unknown_id_is_error_result() {
+    let reg = registrations()
+        .into_iter()
+        .find(|r| r.definition.name == "opentargets_variant")
+        .unwrap();
+    let res = reg
+        .implementation
+        .execute(json!({ "variant_id": "22_0_IG_NO_RE" }))
+        .await
+        .expect("tool call failed");
+    assert!(res.is_error.unwrap_or(false), "unknown ID must be an error result");
 }

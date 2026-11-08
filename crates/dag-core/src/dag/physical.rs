@@ -1,10 +1,11 @@
-//! Expanded physical execution graph produced from a logical workflow graph.
+//! Physical-job provenance and the synthetic coordinator nodes.
 //!
-//! A physical graph is intentionally close to the existing scheduler: every
-//! [`PhysicalNode`] is one runnable job, every [`PhysicalEdge`] routes exactly
-//! one output, and node ids are stable across runs. Logical provenance is
-//! retained in [`PhysicalJobRef`] so reports and snapshots can explain why a
-//! job exists.
+//! The compile path that expanded logical graphs into physical jobs was
+//! removed with the logical authoring layer (stage-model flows in
+//! `dag-engine` own cardinality now). What remains is load-bearing for
+//! persisted state: [`PhysicalJobRef`] (job provenance on the runtime DAG),
+//! and the synthetic `GatherNode` / `DynamicFanoutNode` kinds that stored
+//! manifests rebuild on restore.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -33,72 +34,8 @@ pub struct PhysicalJobRef {
     pub item: Option<serde_json::Value>,
 }
 
-/// One concrete runtime job after logical expansion.
-pub struct PhysicalNode {
-    pub id: NodeId,
-    pub job: PhysicalJobRef,
-    pub kind: String,
-    pub spec: serde_json::Value,
-    pub node: Box<dyn DagNode>,
-}
-
-/// One concrete runtime edge after logical expansion.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PhysicalEdge {
-    pub from: NodeId,
-    pub from_port: u8,
-    pub to: NodeId,
-    pub to_port: u8,
-}
-
-/// The scheduler-facing graph produced by logical expansion.
-pub struct PhysicalGraph {
-    nodes: Vec<PhysicalNode>,
-    edges: Vec<PhysicalEdge>,
-}
-
-impl PhysicalGraph {
-    pub(crate) fn new(nodes: Vec<PhysicalNode>, edges: Vec<PhysicalEdge>) -> Self {
-        Self { nodes, edges }
-    }
-
-    pub fn nodes(&self) -> &[PhysicalNode] {
-        &self.nodes
-    }
-
-    pub fn edges(&self) -> &[PhysicalEdge] {
-        &self.edges
-    }
-
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
-    pub fn edge_count(&self) -> usize {
-        self.edges.len()
-    }
-
-    pub fn job_refs(&self) -> BTreeMap<NodeId, PhysicalJobRef> {
-        self.nodes
-            .iter()
-            .map(|node| (node.id.clone(), node.job.clone()))
-            .collect()
-    }
-}
-
-/// Summary returned after installing a physical graph into a scheduler DAG.
-#[derive(Debug, Clone, Serialize)]
-pub struct PhysicalInstallReport {
-    pub node_count: usize,
-    pub edge_count: usize,
-    pub jobs: BTreeMap<NodeId, PhysicalJobRef>,
-}
-
-/// Built-in logical gather operation.
-///
-/// Scatter jobs are joined into one DataFrame or one flattened FileSet. This
-/// is a physical operator rather than a registry node: its input cardinality
-/// is known only after logical expansion.
+/// Collapse node produced by the retired logical compile path; persisted
+/// manifests still restore it by kind `logical_gather`.
 #[derive(Clone)]
 pub struct GatherNode {
     ports: NodePorts,
@@ -256,69 +193,6 @@ impl DagNode for DynamicFanoutNode {
 }
 
 impl DAG {
-    /// Install a logical graph together with its already-expanded physical form.
-    pub fn install_compiled_graph(
-        &mut self,
-        logical: LogicalGraph,
-        graph: PhysicalGraph,
-    ) -> Result<PhysicalInstallReport> {
-        logical.validate()?;
-        let jobs = graph.job_refs();
-        let logical_ids = logical
-            .nodes()
-            .iter()
-            .map(|node| node.id.as_str())
-            .collect::<BTreeSet<_>>();
-        for job in jobs.values() {
-            if !logical_ids.contains(job.logical_node.as_str()) {
-                return Err(DagError::Schedule(format!(
-                    "physical job provenance references missing logical node `{}`",
-                    job.logical_node
-                )));
-            }
-        }
-        for existing_graph in &self.logical_graphs {
-            for node in existing_graph.nodes() {
-                if logical_ids.contains(node.id.as_str()) {
-                    return Err(DagError::DuplicateNode(node.id.clone()));
-                }
-            }
-        }
-
-        let installed = self.install_physical_graph(graph)?;
-        self.logical_graphs.push(logical);
-        Ok(installed)
-    }
-
-    /// Install an already-expanded physical graph and retain its provenance.
-    pub fn install_physical_graph(
-        &mut self,
-        graph: PhysicalGraph,
-    ) -> Result<PhysicalInstallReport> {
-        for node in graph.nodes() {
-            if self.nodes.contains_key(&node.id) {
-                return Err(DagError::DuplicateNode(node.id.clone()));
-            }
-        }
-
-        let jobs = graph.job_refs();
-        let edge_count = graph.edge_count();
-        for node in graph.nodes {
-            self.add_node_with_spec(node.id, node.node, node.kind, node.spec)?;
-        }
-        for edge in graph.edges {
-            self.add_edge(edge.from, edge.to, edge.from_port, edge.to_port)?;
-        }
-        self.physical_jobs.extend(jobs.clone());
-
-        let node_count = jobs.len();
-        Ok(PhysicalInstallReport {
-            node_count,
-            edge_count,
-            jobs,
-        })
-    }
-
     pub fn physical_job(&self, id: &str) -> Option<&PhysicalJobRef> {
         self.physical_jobs.get(id)
     }
@@ -400,168 +274,5 @@ impl DAG {
         self.logical_task_resources = logical.logical_task_resources.into_iter().collect();
         self.task_resources = logical.physical_task_resources.into_iter().collect();
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::FileRef;
-    use crate::dag::LogicalNode;
-
-    #[derive(Clone)]
-    struct SourceNode {
-        meta: NodePorts,
-    }
-
-    impl Default for SourceNode {
-        fn default() -> Self {
-            Self {
-                meta: NodePorts::new().add_output_port(None),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl DagNode for SourceNode {
-        fn ports(&self) -> &NodePorts {
-            &self.meta
-        }
-
-        async fn execute(
-            &mut self,
-            _ctx: &crate::registry::NodeCtx,
-            _inputs: &[NodeInput],
-            _reporter: &crate::dag::node_event::NodeReporter,
-        ) -> Result<PortOutputs> {
-            Ok(PortOutputs::new())
-        }
-
-        fn clone_box(&self) -> Box<dyn DagNode> {
-            Box::new(self.clone())
-        }
-
-        fn kind(&self) -> &'static str {
-            "test_source"
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    async fn execute_gather(inputs: Vec<NodeInput>) -> Result<PortOutputs> {
-        let ctx = crate::registry::NodeCtx::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        );
-        let (event_tx, _event_rx) = tokio::sync::mpsc::channel(1);
-        let reporter = NodeReporter::new("gather", event_tx);
-        GatherNode::default()
-            .execute(&ctx, &inputs, &reporter)
-            .await
-    }
-
-    #[tokio::test]
-    async fn gathers_files_in_port_order() {
-        let inputs = vec![
-            NodeInput {
-                port: 1,
-                data: NodeValue::File(FileRef::new("/second.csv", Some("csv".into()))),
-            },
-            NodeInput {
-                port: 0,
-                data: NodeValue::File(FileRef::new("/first.csv", Some("csv".into()))),
-            },
-        ];
-        let output = execute_gather(inputs).await.unwrap();
-        let NodeValue::FileSet(files) = &output[&0] else {
-            panic!("gather should produce a FileSet");
-        };
-        assert_eq!(files[0].path, "/first.csv");
-        assert_eq!(files[1].path, "/second.csv");
-    }
-
-    #[tokio::test]
-    async fn flattens_file_sets_in_port_order() {
-        let inputs = vec![
-            NodeInput {
-                port: 2,
-                data: NodeValue::FileSet(vec![FileRef::new("/third.csv", None)]),
-            },
-            NodeInput {
-                port: 1,
-                data: NodeValue::FileSet(vec![
-                    FileRef::new("/first.csv", None),
-                    FileRef::new("/second.csv", None),
-                ]),
-            },
-        ];
-        let output = execute_gather(inputs).await.unwrap();
-        let NodeValue::FileSet(files) = &output[&0] else {
-            panic!("gather should produce a flattened FileSet");
-        };
-        let paths = files
-            .iter()
-            .map(|file| file.path.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(paths, vec!["/first.csv", "/second.csv", "/third.csv"]);
-    }
-
-    #[tokio::test]
-    async fn rejects_mixed_file_payloads() {
-        let inputs = vec![
-            NodeInput {
-                port: 0,
-                data: NodeValue::File(FileRef::new("/first.csv", None)),
-            },
-            NodeInput {
-                port: 1,
-                data: NodeValue::FileSet(vec![FileRef::new("/second.csv", None)]),
-            },
-        ];
-        let error = execute_gather(inputs).await.unwrap_err();
-        assert!(error.to_string().contains("homogeneous inputs"));
-    }
-
-    #[test]
-    fn deleting_one_scatter_job_keeps_source_graph_while_siblings_remain() {
-        let logical = LogicalGraph::builder()
-            .add_node(LogicalNode::for_each(
-                "read",
-                "test_source",
-                serde_json::json!({"path": "{{item.path}}"}),
-                "sample",
-                vec![
-                    serde_json::json!({"key": "a", "path": "/a.csv"}),
-                    serde_json::json!({"key": "b", "path": "/b.csv"}),
-                ],
-            ))
-            .build();
-        let physical = logical
-            .compile(|_, _| Ok(Box::new(SourceNode::default()) as Box<dyn DagNode>))
-            .unwrap();
-        let mut dag = DAG::default();
-        dag.install_compiled_graph(logical, physical).unwrap();
-
-        dag.delete_node("read#sample=a").unwrap();
-        let manifest = dag.to_manifest();
-        manifest.validate_layers().unwrap();
-        dag.restore_layers(manifest.logical.graphs, manifest.physical_jobs)
-            .unwrap();
-        assert_eq!(dag.logical_graphs().len(), 1);
-        assert_eq!(
-            dag.physical_job("read#sample=b")
-                .unwrap()
-                .item_key
-                .as_deref(),
-            Some("b")
-        );
-
-        dag.delete_node("read#sample=b").unwrap();
-        let manifest = dag.to_manifest();
-        manifest.validate_layers().unwrap();
-        assert!(manifest.logical.graphs.is_empty());
-        assert!(manifest.physical_jobs.is_empty());
     }
 }

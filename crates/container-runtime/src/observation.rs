@@ -18,16 +18,36 @@ pub struct RuntimeObservation {
 }
 
 #[derive(Clone, Default)]
-pub struct RunObserver(Option<Arc<dyn Fn(RuntimeObservation) + Send + Sync>>);
+pub struct RunObserver {
+    callback: Option<Arc<dyn Fn(RuntimeObservation) + Send + Sync>>,
+    cleanup: Option<Arc<dyn Fn(tokio::task::JoinHandle<Result<(), String>>) + Send + Sync>>,
+}
 
 impl RunObserver {
     pub fn new(callback: impl Fn(RuntimeObservation) + Send + Sync + 'static) -> Self {
-        Self(Some(Arc::new(callback)))
+        Self {
+            callback: Some(Arc::new(callback)),
+            cleanup: None,
+        }
+    }
+
+    pub fn with_cleanup_handler(
+        mut self,
+        handler: impl Fn(tokio::task::JoinHandle<Result<(), String>>) + Send + Sync + 'static,
+    ) -> Self {
+        self.cleanup = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn register_cleanup(&self, task: tokio::task::JoinHandle<Result<(), String>>) {
+        if let Some(handler) = &self.cleanup {
+            handler(task);
+        }
     }
 
     pub fn emit(&self, mut observation: RuntimeObservation) {
         observation.observed_at_ms = now_ms();
-        if let Some(callback) = &self.0 {
+        if let Some(callback) = &self.callback {
             callback(observation);
         }
     }

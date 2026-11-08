@@ -23,7 +23,7 @@ use crate::associations::{AssociatedDisease, AssociatedTarget, AssociationPage, 
 use crate::error::{OpenTargetsError, Result};
 use crate::genetics::{CREDIBLE_SET_FRAGMENT, CredibleSetPage};
 use crate::search::SearchResults;
-use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
+use crate::types::{Disease, Drug, Meta, Study, Target, Variant, VariantAssociations};
 
 fn env_endpoint(env: &str, fallback: &str) -> String {
     std::env::var(env).unwrap_or_else(|_| fallback.to_string())
@@ -84,12 +84,31 @@ discoverySamples { sampleSize ancestry }
 replicationSamples { sampleSize ancestry }
 "#;
 
+// NOTE: `alleleFrequencies`, `transcriptConsequences`, `mostSevereConsequence`
+// and `variantEffect` are object/list types and REQUIRE sub-selections — a
+// bare field name yields a 400 from the API.
 const VARIANT_FRAGMENT: &str = r#"
 id chromosome position referenceAllele alternateAllele
 variantDescription hgvsId rsIds
-alleleFrequencies
-transcriptConsequences
-mostSevereConsequence
+dbXrefs { id source }
+alleleFrequencies { populationName alleleFrequency }
+transcriptConsequences {
+  transcriptId impact aminoAcidChange codons isEnsemblCanonical
+  lofteePrediction siftPrediction polyphenPrediction
+}
+mostSevereConsequence { id label }
+variantEffect { method assessment score normalisedScore }
+"#;
+
+// Variant → study associations via credible-set membership (PheWAS-style
+// view: one row per study where the variant appears in a fine-mapped
+// credible set, with effect size and p-value).
+const VARIANT_ASSOC_FRAGMENT: &str = r#"
+studyId studyType beta pValueMantissa pValueExponent effectAlleleFrequencyFromSource
+study {
+  id traitFromSource studyType pubmedId
+  nSamples nCases nControls
+}
 "#;
 
 const ASSOC_DISEASE_FRAGMENT: &str = r#"
@@ -266,6 +285,34 @@ impl OpenTargetsClient {
         let q =
             format!("query($id: String!) {{ variant(variantId: $id) {{ {VARIANT_FRAGMENT} }} }}");
         self.field(&q, json!({ "id": variant_id }), "variant").await
+    }
+
+    /// Variant → trait associations (PheWAS-style): every GWAS/QTL study in
+    /// which the variant is a member of a fine-mapped credible set, with the
+    /// per-study effect size (`beta`) and p-value, plus trait metadata.
+    ///
+    /// Returns `None` when the variant ID is unknown to the API.
+    pub async fn variant_associations(
+        &self,
+        variant_id: &str,
+    ) -> Result<Option<VariantAssociations>> {
+        let q = format!(
+            "query($id: String!) {{ variant(variantId: $id) {{
+                id
+                credibleSets {{ count rows {{ {VARIANT_ASSOC_FRAGMENT} }} }} }} }}"
+        );
+        let data: Value = self.query(&q, json!({ "id": variant_id })).await?;
+        let variant = &data["variant"];
+        if variant.is_null() {
+            return Ok(None);
+        }
+        let id = variant["id"].as_str().unwrap_or_default().to_string();
+        let sets = &variant["credibleSets"];
+        Ok(Some(VariantAssociations {
+            variant_id: id,
+            count: sets["count"].as_i64().unwrap_or(0),
+            rows: serde_json::from_value(sets["rows"].clone())?,
+        }))
     }
 
     // ----- search --------------------------------------------------------

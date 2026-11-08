@@ -17,6 +17,16 @@ pub trait DagNode: Send + Sync {
     /// Return this node's static metadata (declared ports).
     fn ports(&self) -> &NodePorts;
 
+    /// Allocate a node-owned local work directory for this execution attempt.
+    /// When present, the local executor places its receipt and staging data
+    /// underneath it, keeping task evidence together with the node's output.
+    fn prepare_local_workdir(
+        &mut self,
+        _inputs: &[NodeInput],
+    ) -> Result<Option<std::path::PathBuf>, DagError> {
+        Ok(None)
+    }
+
     /// Minimum executor resources implied by this loaded node's compiled
     /// behavior. A remote adapter may fill absent task directives from this
     /// declaration, but must reject explicit budgets below it. This is not
@@ -129,6 +139,12 @@ pub trait DagNode: Send + Sync {
     /// Omit fallback spec inputs when a connected port takes precedence.
     fn file_input_spec_pointers(&self, _inputs: &[NodeInput]) -> Vec<&'static str> {
         Vec::new()
+    }
+
+    /// Resolve declared input qualifiers before fingerprinting or transport.
+    /// Implementations must be deterministic and safe to call more than once.
+    fn prepare_task_inputs(&self, _inputs: &mut [NodeInput]) -> Result<(), DagError> {
+        Ok(())
     }
 
     /// Output directory spec pointers and their FileSet ports. Remote workers

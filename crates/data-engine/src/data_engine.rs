@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use container_runtime::ContainerExecutionInfra;
 use dag_core::resource::MemoryGuardConfig;
-use dag_core::{BundleRegistry, FileRef, NodePorts, PortType};
+use dag_core::{BundleRegistry, FileRef};
 use datafusion::{
     execution::{object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     prelude::SessionContext,
@@ -12,9 +12,7 @@ use serde::Serialize;
 use vfs::{MountedObjectStore, OpendalFileStorage};
 
 use crate::dag::{
-    ChannelNode, DAG, DagError, DagHistory, GatherNode, LogicalEdge, LogicalExecutionStrategy,
-    LogicalGraph, LogicalNodeDefinition, PhysicalInstallReport, PhysicalJobRef, RunRecord,
-    RunReport, RuntimeStatus, SchedulerConfig,
+    DAG, DagError, DagHistory, GatherNode, RunRecord, RunReport, RuntimeStatus, SchedulerConfig,
 };
 use crate::dag_shell::{
     DagShellError, DagShellOutcome, DagShellSnapshot, GraphEditOp, execute_script, graph_summary,
@@ -35,15 +33,6 @@ pub struct ClearDagOutcome {
     pub warnings: Vec<String>,
 }
 
-/// Result of compiling and installing a logical graph.
-#[derive(Debug, Clone, Serialize)]
-pub struct LogicalInstallReport {
-    pub logical_node_count: usize,
-    pub physical_job_count: usize,
-    pub physical_edge_count: usize,
-    pub jobs: std::collections::BTreeMap<String, PhysicalJobRef>,
-}
-
 /// `DataEngine` is the core object that implements the data analysis engine.
 /// It orchestrates ingestion, transformation, and querying of datasets via a
 /// [`DAG`] of nodes executed by an async scheduler.
@@ -53,21 +42,32 @@ pub struct DataEngine {
     /// `run` so each node `execute` can build a fresh isolated `SessionContext`
     /// via `NodeCtx::session()`. Owned here (not in the graph or the nodes) so
     /// mutable `SessionContext` state can never accumulate across runs.
-    engine_ctx: crate::node_registry::registry::NodeCtx,
-    dag: DAG,
+    pub(crate) engine_ctx: crate::node_registry::registry::NodeCtx,
+    pub(crate) dag: DAG,
     /// Shared, immutable after construction. Wrapped in `Arc` so that
     /// [`DataEngine::new_isolated_engine`] can share it across per-agent engines
     /// without rebuilding the ~70 factories.
-    node_registry: Arc<NodeRegistry>,
+    pub(crate) node_registry: Arc<NodeRegistry>,
     /// Process-wide container execution resources, injected by the runtime
     /// host and shared with the IO node registry.
     container_execution: Arc<ContainerExecutionInfra>,
     config: SchedulerConfig,
+    /// Cross-run instance results shared by runners of this session only.
+    pub(crate) flow_cache: std::sync::Arc<tokio::sync::Mutex<dag_engine::InstanceCache>>,
+    /// The session's authored flow (`run_flow`). Interior mutability so flow
+    /// execution — which never needs the engine lock — can read the current
+    /// graph while other commands edit it. Isolated engines start with their
+    /// own empty flow and deliberately do NOT inherit this state.
+    pub(crate) flow: std::sync::Arc<std::sync::RwLock<dag_engine::FlowGraph>>,
+    /// The most recent flow run's grouped report, for view surfaces (TUI /
+    /// GUI / gateway). `None` until the session runs a flow.
+    pub(crate) flow_report:
+        std::sync::Arc<std::sync::RwLock<Option<crate::flow::FlowRunReportSummary>>>,
     /// Optional DAG history store. When `Some`, every `run()` automatically
     /// commits a snapshot of the current DAG manifest + run report.
     /// `DagHistory` wraps a `turso::Connection` (Arc-backed, `Clone`), so
     /// cloned engines share the same DB file.
-    history: Option<DagHistory>,
+    pub(crate) history: Option<DagHistory>,
     /// The history ref that [`Self::run`] commits to (default `"main"`).
     /// Switch via [`Self::set_history_ref`] to isolate unrelated analysis
     /// tasks into independent snapshot lineages.
@@ -81,6 +81,75 @@ pub struct DataEngine {
     /// `run()`; consumed (cleared) on each `run()`.
     run_trigger: Option<String>,
 }
+
+pub(crate) fn channel_info() -> crate::node_registry::NodeInfo {
+    crate::node_registry::NodeInfo {
+        address: "channel".into(),
+        plugin: "core".into(),
+        kind: "channel".into(),
+        desc: "Built-in dataflow channel operators; see get_node_spec for options".into(),
+        deprecated: false,
+        data_bundles: vec![],
+        resident_plugin: None,
+    }
+}
+pub(crate) fn channel_schema() -> Result<schemars::Schema> {
+    serde_json::from_value(dag_engine::dataflow::channel_operator_schema())
+        .map_err(|e| Error::Custom(e.to_string()))
+}
+pub(crate) fn channel_ports(
+    spec: Option<&serde_json::Value>,
+) -> Result<crate::nodes::meta::NodePorts> {
+    use crate::value::PortType;
+    let op = spec
+        .and_then(|value| value.get("operator"))
+        .and_then(|value| value.as_str());
+    if let Some(value) = spec {
+        let valid = op.is_some_and(|op| {
+            dag_engine::dataflow::channel_operator_schema()["oneOf"]
+                .as_array()
+                .is_some_and(|variants| {
+                    variants
+                        .iter()
+                        .any(|variant| variant["properties"]["operator"]["const"] == op)
+                })
+        });
+        if !valid {
+            return Err(Error::Custom(format!(
+                "unknown channel operator in {value}"
+            )));
+        }
+    }
+    let inputs = match op {
+        Some("of_items") => 0,
+        Some("mix" | "concat" | "combine" | "join") => 2,
+        _ => 1,
+    };
+    let mut ports = crate::nodes::meta::NodePorts::new();
+    for _ in 0..inputs {
+        ports = ports.add_input_port_of_type(None, PortType::Any);
+    }
+    if op.is_none() || matches!(op, Some("mix" | "concat")) {
+        ports = ports.set_fixed_input(false);
+    }
+    if op == Some("branch") {
+        let branches = spec
+            .and_then(|v| v.get("branches"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| Error::Custom("branch requires branches".into()))?;
+        for branch in branches {
+            let name = branch
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| Error::Custom("branch requires name".into()))?;
+            ports = ports.add_output_port_of_type_with_label(None, PortType::Any, name);
+        }
+    } else {
+        ports = ports.add_output_port_of_type(None, PortType::Any);
+    }
+    Ok(ports)
+}
+pub(crate) const CHANNEL_DOC: &str = "Built-in dataflow channel operator. Configure with an operator from get_node_spec. Unary operators use input 0; join/combine use inputs 0 and 1; mix/concat accept multiple inputs; branch emits on its branch ports. Channel sources are constructed with from_list, from_path, from_file_pairs or channel_value. Supported operators accept persisted dag_shell functions as documented in their schemas.";
 
 impl DataEngine {
     const DISABLED_NODE_KIND: &str = "container_command";
@@ -203,6 +272,7 @@ impl DataEngine {
         opendal: Option<Arc<OpendalFileStorage>>,
         bundle_registry: Arc<BundleRegistry>,
         container_execution: Arc<ContainerExecutionInfra>,
+        plugins_root: Option<std::path::PathBuf>,
     ) -> Self {
         let bundle_registry = crate::data_bundles::registry_with_builtins(&bundle_registry);
         // Global concurrency limiter shared across all agents.
@@ -228,7 +298,7 @@ impl DataEngine {
                 opendal.clone(),
                 bundle_registry,
                 Arc::clone(&container_execution),
-                None,
+                plugins_root,
             );
         let node_registry = Arc::new(node_registry);
         let mut dag = DAG::default();
@@ -243,6 +313,9 @@ impl DataEngine {
                 memory_guard: Self::memory_guard_from_env(),
                 ..SchedulerConfig::default()
             },
+            flow_cache: std::default::Default::default(),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
+            flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: None,
             history_ref: "main".to_string(),
             pending_commit_message: None,
@@ -339,296 +412,6 @@ impl DataEngine {
         Ok(())
     }
 
-    /// Compile a logical graph into physical jobs and install them in the DAG.
-    pub fn add_logical_graph(&mut self, graph: LogicalGraph) -> Result<LogicalInstallReport> {
-        self.validate_logical_graph_execution(&graph)?;
-        let logical_node_count = graph.nodes().len();
-        let physical = graph.clone().compile(|kind, spec| {
-            Self::ensure_node_kind_allowed(kind).map_err(|error| {
-                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
-            })?;
-            self.node_registry
-                .build_node(kind, spec)
-                .map_err(|error| DagError::Schedule(error.to_string()))
-        })?;
-        let installed = self.dag.install_compiled_graph(graph, physical)?;
-        Ok(LogicalInstallReport {
-            logical_node_count,
-            physical_job_count: installed.node_count,
-            physical_edge_count: installed.edge_count,
-            jobs: installed.jobs,
-        })
-    }
-
-    fn install_logical_graph(
-        &self,
-        dag: &mut DAG,
-        graph: LogicalGraph,
-    ) -> Result<PhysicalInstallReport> {
-        self.validate_logical_graph_execution(&graph)?;
-        let physical = graph.clone().compile(|kind, spec| {
-            Self::ensure_node_kind_allowed(kind).map_err(|error| {
-                DagError::Schedule(format!("cannot install logical node `{kind}`: {error}"))
-            })?;
-            self.node_registry
-                .build_node(kind, spec)
-                .map_err(|error| DagError::Schedule(error.to_string()))
-        })?;
-        Ok(dag.install_compiled_graph(graph, physical)?)
-    }
-
-    /// Validate the parts of a logical graph that are knowable before
-    /// execution: registry availability, concrete spec buildability, and the
-    /// payload contracts hidden behind logical coordinators.
-    fn validate_logical_graph_execution(&self, graph: &LogicalGraph) -> Result<()> {
-        graph.validate().map_err(Error::Dag)?;
-
-        let mut ports = HashMap::<&str, NodePorts>::new();
-        for node in graph.nodes() {
-            let node_ports = match &node.definition {
-                LogicalNodeDefinition::Registry { kind, spec } => {
-                    Self::ensure_node_kind_allowed(kind)?;
-                    self.node_registry
-                        .build_node(kind, spec.clone())
-                        .map_err(|error| {
-                            Error::Custom(format!(
-                                "logical node `{}` cannot build registry kind `{kind}`: {error}",
-                                node.id
-                            ))
-                        })?;
-                    self.node_registry
-                        .get_node_ports_for_spec(kind, spec.clone())?
-                }
-                LogicalNodeDefinition::Channel(operator) => {
-                    ChannelNode::new(operator.clone()).ports().clone()
-                }
-                LogicalNodeDefinition::Gather => GatherNode::default().ports().clone(),
-            };
-            ports.insert(node.id.as_str(), node_ports);
-        }
-
-        let incoming = graph.edges().iter().fold(
-            HashMap::<&str, Vec<&LogicalEdge>>::new(),
-            |mut incoming, edge| {
-                incoming.entry(edge.to.as_str()).or_default().push(edge);
-                incoming
-            },
-        );
-        let mut gather_types = HashMap::<&str, PortType>::new();
-        let mut deferred = graph
-            .nodes()
-            .iter()
-            .filter(|node| matches!(node.definition, LogicalNodeDefinition::Gather))
-            .map(|node| node.id.as_str())
-            .collect::<HashSet<_>>();
-        while !deferred.is_empty() {
-            let mut next = HashSet::new();
-            let mut progressed = false;
-            for gather in &deferred {
-                let mut source_types = Vec::new();
-                let mut waiting = false;
-                for edge in &incoming[gather] {
-                    let Some(source_type) =
-                        Self::logical_output_type_opt(edge, &ports, &gather_types)
-                    else {
-                        if ports[edge.from.as_str()]
-                            .output_port(edge.from_port)
-                            .is_some()
-                            || gather_types.contains_key(edge.from.as_str())
-                        {
-                            return Err(Error::Custom(format!(
-                                "logical gather `{gather}` cannot resolve input `{}`",
-                                edge.from
-                            )));
-                        }
-                        waiting = true;
-                        break;
-                    };
-                    source_types.push(source_type);
-                }
-                if waiting {
-                    next.insert(*gather);
-                    continue;
-                }
-
-                let Some(source_type) = source_types.pop() else {
-                    return Err(Error::Custom(format!(
-                        "logical gather `{gather}` requires at least one input"
-                    )));
-                };
-                if !matches!(
-                    source_type,
-                    PortType::DataFrame | PortType::File | PortType::FileSet
-                ) || source_types.iter().any(|other| *other != source_type)
-                {
-                    let mut all_types = vec![source_type];
-                    all_types.extend(source_types);
-                    let rendered = all_types
-                        .iter()
-                        .map(|kind| kind.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(Error::Custom(format!(
-                        "logical gather `{gather}` requires homogeneous DataFrame, File, or FileSet inputs, got: {rendered}"
-                    )));
-                }
-                let output_type = if source_type == PortType::File {
-                    PortType::FileSet
-                } else {
-                    source_type
-                };
-                gather_types.insert(gather, output_type);
-                progressed = true;
-            }
-            deferred = next;
-            if !deferred.is_empty() && !progressed {
-                return Err(Error::Custom(format!(
-                    "cannot resolve logical gather input types for: {}",
-                    deferred.iter().copied().collect::<Vec<_>>().join(", ")
-                )));
-            }
-        }
-
-        for edge in graph.edges() {
-            let source_type = self.logical_output_type(edge, &ports, &gather_types)?;
-            let target = graph
-                .nodes()
-                .iter()
-                .find(|node| node.id == edge.to)
-                .expect("LogicalGraph::validate checked edge endpoints");
-
-            if matches!(
-                target.strategy,
-                LogicalExecutionStrategy::DynamicForEach { .. }
-            ) && source_type != PortType::Channel
-            {
-                return Err(Error::Custom(format!(
-                    "dynamic fanout `{}` requires a Channel input, got {source_type} on edge {} -> {}",
-                    edge.to, edge.from, edge.to
-                )));
-            }
-            if matches!(
-                target.strategy,
-                LogicalExecutionStrategy::DynamicForEach { .. }
-            ) {
-                continue;
-            }
-
-            if let LogicalNodeDefinition::Channel(operator) = &target.definition {
-                match operator {
-                    dag_core::dag::ChannelOperator::Collect => {
-                        if !matches!(
-                            source_type,
-                            PortType::Channel | PortType::File | PortType::FileSet
-                        ) {
-                            return Err(Error::Custom(format!(
-                                "channel.collect cannot serialize {} output from `{}`; use a File/FileSet producer or materialize the value before collecting",
-                                source_type, edge.from
-                            )));
-                        }
-                    }
-                    _ => {
-                        let target_port = ports[edge.to.as_str()]
-                            .input_port(edge.to_port)
-                            .ok_or_else(|| {
-                                Error::Custom(format!(
-                                    "edge {} -> {} uses undefined channel input port {}",
-                                    edge.from, edge.to, edge.to_port
-                                ))
-                            })?;
-                        if !PortType::Channel.accepts(source_type) {
-                            return Err(Error::Custom(format!(
-                                "channel operator on `{}` requires Channel input, got {source_type} on edge {} -> {}",
-                                edge.to, edge.from, edge.to
-                            )));
-                        }
-                        let source_port = ports[edge.from.as_str()]
-                            .output_port(edge.from_port)
-                            .expect("source type was resolved from this port");
-                        if !target_port.accepts_format(source_port.format.as_deref()) {
-                            return Err(Error::Custom(format!(
-                                "edge {} -> {} has incompatible channel formats: expected {}, got {}",
-                                edge.from,
-                                edge.to,
-                                target_port.format.as_deref().unwrap_or("unspecified"),
-                                source_port.format.as_deref().unwrap_or("unspecified")
-                            )));
-                        }
-                    }
-                }
-                continue;
-            }
-
-            if matches!(target.definition, LogicalNodeDefinition::Gather) {
-                continue;
-            }
-
-            let source_port = ports[edge.from.as_str()]
-                .output_port(edge.from_port)
-                .ok_or_else(|| {
-                    Error::Custom(format!(
-                        "edge {} -> {} uses undefined output port {}",
-                        edge.from, edge.to, edge.from_port
-                    ))
-                })?;
-            let target_ports = &ports[edge.to.as_str()];
-            // Variadic-input nodes (e.g. `sql`) accept any port index; the
-            // runtime scheduler skips declared-port checks when fixed_input
-            // is false (see `DAG::add_edge`). Mirror that here so logical
-            // graphs with variadic registry nodes preflight cleanly.
-            if target_ports.is_fixed_input() {
-                let target_port = target_ports.input_port(edge.to_port).ok_or_else(|| {
-                    Error::Custom(format!(
-                        "edge {} -> {} uses undefined input port {}",
-                        edge.from, edge.to, edge.to_port
-                    ))
-                })?;
-                if !target_port.data_type.accepts(source_type) {
-                    return Err(Error::Custom(format!(
-                        "edge {} -> {} carries {} but target port {} expects {}",
-                        edge.from, edge.to, source_type, edge.to_port, target_port.data_type
-                    )));
-                }
-                if !target_port.accepts_format(source_port.format.as_deref()) {
-                    return Err(Error::Custom(format!(
-                        "edge {} -> {} has incompatible formats: expected {}, got {}",
-                        edge.from,
-                        edge.to,
-                        target_port.format.as_deref().unwrap_or("unspecified"),
-                        source_port.format.as_deref().unwrap_or("unspecified")
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn logical_output_type(
-        &self,
-        edge: &LogicalEdge,
-        ports: &HashMap<&str, NodePorts>,
-        gather_types: &HashMap<&str, PortType>,
-    ) -> Result<PortType> {
-        Self::logical_output_type_opt(edge, ports, gather_types).ok_or_else(|| {
-            Error::Custom(format!(
-                "edge {} -> {} uses an unresolved output type",
-                edge.from, edge.to
-            ))
-        })
-    }
-
-    fn logical_output_type_opt(
-        edge: &LogicalEdge,
-        ports: &HashMap<&str, NodePorts>,
-        gather_types: &HashMap<&str, PortType>,
-    ) -> Option<PortType> {
-        if let Some(kind) = gather_types.get(edge.from.as_str()) {
-            return Some(*kind);
-        }
-        let port = ports[edge.from.as_str()].output_port(edge.from_port)?;
-        Some(port.data_type)
-    }
-
     fn remove_node_cascade(dag: &mut DAG, id: &str) -> std::result::Result<(), DagError> {
         if dag.get_node(id).is_none() {
             return Err(DagError::UnknownNode(id.to_string()));
@@ -697,6 +480,9 @@ impl DataEngine {
                     .add_edge(from.clone(), to.clone(), *from_port, *to_port)
                     .map(|_| ())
                     .map_err(Error::from),
+                GraphEditOp::AddCollectEdge { .. } => Err(Error::Custom(
+                    "collect_edge is only supported for flow graphs".into(),
+                )),
                 GraphEditOp::RemoveEdge {
                     from,
                     from_port,
@@ -705,9 +491,6 @@ impl DataEngine {
                 } => candidate
                     .delete_edge(from.clone(), to.clone(), *from_port, *to_port)
                     .map_err(Error::from),
-                GraphEditOp::AddLogicalGraph { graph } => self
-                    .install_logical_graph(&mut candidate, graph.clone())
-                    .map(|_| ()),
             };
             if let Err(error) = result {
                 return Err(Error::Custom(format!(
@@ -809,13 +592,187 @@ impl DataEngine {
         }
     }
 
+    /// Evaluate the existing sandbox against a snapshot, then apply the staged
+    /// operations atomically to the authored process/channel graph.
+    pub fn run_flow_shell(
+        &mut self,
+        script: &str,
+        dry_run: bool,
+        timeout_ms: Option<u64>,
+    ) -> DagShellOutcome {
+        let timeout = match normalize_timeout(timeout_ms) {
+            Ok(t) => t,
+            Err(e) => return shell_failure(dry_run, e),
+        };
+        let old = self.flow.read().expect("flow lock").clone();
+        let snapshot = DagShellSnapshot::from_flow(&old);
+        let execution = match execute_script(script, timeout, &snapshot, &self.node_registry) {
+            Ok(e) => e,
+            Err(e) => return shell_failure(dry_run, e),
+        };
+        let traces = operation_traces(&execution.operations);
+        let summary = |g: &dag_engine::FlowGraph| serde_json::json!({"process_count":g.processes().len(), "source_count":g.sources().len(), "wire_count":g.wires().len()});
+        if !execution.committed {
+            return DagShellOutcome {
+                ok: true,
+                applied: false,
+                dry_run,
+                committed: false,
+                result: Some(execution.result),
+                operations: traces,
+                graph: summary(&old),
+                error: None,
+            };
+        }
+        let result = (|| -> Result<dag_engine::FlowGraph> {
+            let mut json = serde_json::to_value(&old).map_err(|e| Error::Custom(e.to_string()))?;
+            for (index, op) in execution.operations.iter().enumerate() {
+                let edit = (|| -> Result<()> {
+                    match op {
+                        GraphEditOp::AddNode { id, kind, spec } => {
+                            if kind == "__channel_source" {
+                                json["sources"]
+                                    .as_array_mut()
+                                    .expect("source array")
+                                    .push(serde_json::json!({"id":id,"spec":spec}));
+                            } else {
+                                Self::ensure_node_kind_allowed(kind)?;
+                                json["processes"]
+                                    .as_array_mut()
+                                    .expect("process array")
+                                    .push(serde_json::json!({"id":id,"kind":kind,"spec":spec}));
+                            }
+                        }
+                        GraphEditOp::UpdateNode { id, spec } => {
+                            let process = json["processes"]
+                                .as_array_mut()
+                                .expect("process array")
+                                .iter_mut()
+                                .find(|p| p["id"] == *id)
+                                .ok_or_else(|| Error::Custom(format!("unknown process `{id}`")))?;
+                            process["spec"] = spec.clone();
+                        }
+                        GraphEditOp::RemoveNode { id, cascade } => {
+                            let connected = json["wires"]
+                                .as_array()
+                                .expect("wires")
+                                .iter()
+                                .any(|w| w["from"] == *id || w["to"] == *id);
+                            if connected && !cascade {
+                                return Err(Error::Custom(format!(
+                                    "node `{id}` has connected wires"
+                                )));
+                            }
+                            let mut removed = false;
+                            for field in ["processes", "sources"] {
+                                let list = json[field].as_array_mut().expect("graph array");
+                                let before = list.len();
+                                list.retain(|v| v["id"] != *id);
+                                removed |= before != list.len();
+                            }
+                            if !removed {
+                                return Err(Error::Custom(format!("unknown node `{id}`")));
+                            }
+                            if *cascade {
+                                json["wires"]
+                                    .as_array_mut()
+                                    .expect("wires")
+                                    .retain(|w| w["from"] != *id && w["to"] != *id);
+                            }
+                        }
+                        GraphEditOp::AddEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        }
+                        | GraphEditOp::AddCollectEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } => {
+                            let mode = if matches!(op, GraphEditOp::AddCollectEdge { .. }) {
+                                "collect"
+                            } else {
+                                "direct"
+                            };
+                            json["wires"].as_array_mut().expect("wires").push(serde_json::json!({"from":from,"from_port":from_port,"to":to,"to_port":to_port,"op":mode}));
+                        }
+                        GraphEditOp::RemoveEdge {
+                            from,
+                            from_port,
+                            to,
+                            to_port,
+                        } => {
+                            let wires = json["wires"].as_array_mut().expect("wires");
+                            let before = wires.len();
+                            wires.retain(|w| {
+                                !(w["from"] == *from
+                                    && w["from_port"] == *from_port
+                                    && w["to"] == *to
+                                    && w["to_port"] == *to_port)
+                            });
+                            if before == wires.len() {
+                                return Err(Error::Custom("unknown wire".into()));
+                            }
+                        }
+                    }
+                    Ok(())
+                })();
+                edit.map_err(|e| {
+                    Error::Custom(format!("operation {index} ({}) failed: {e}", op.kind()))
+                })?;
+            }
+            let graph: dag_engine::FlowGraph =
+                serde_json::from_value(json).map_err(|e| Error::Custom(e.to_string()))?;
+            graph.validate().map_err(|e| Error::Custom(e.to_string()))?;
+            dag_engine::dataflow::Dataflow::<()>::new(&graph).map_err(Error::Custom)?;
+            Ok(graph)
+        })();
+        match result {
+            Ok(candidate) => {
+                let graph = summary(&candidate);
+                if !dry_run {
+                    *self.flow.write().expect("flow lock") = candidate;
+                }
+                DagShellOutcome {
+                    ok: true,
+                    applied: !dry_run,
+                    dry_run,
+                    committed: !dry_run,
+                    result: Some(execution.result),
+                    operations: traces,
+                    graph,
+                    error: None,
+                }
+            }
+            Err(error) => DagShellOutcome {
+                ok: false,
+                applied: false,
+                dry_run,
+                committed: false,
+                result: None,
+                operations: traces,
+                graph: summary(&old),
+                error: Some(transaction_error(error)),
+            },
+        }
+    }
+
     /// Query the JSON Schema of a registered node kind.
     pub fn get_node_spec(&self, kind: &str) -> Result<schemars::Schema> {
+        if kind == "channel" {
+            return channel_schema();
+        }
         Ok(self.node_registry.get_node_spec(kind)?)
     }
 
     /// Query the input/output port layout of a registered node kind.
     pub fn get_node_ports(&self, kind: &str) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" {
+            return channel_ports(None);
+        }
         Ok(self.node_registry.get_node_ports(kind)?)
     }
 
@@ -825,11 +782,17 @@ impl DataEngine {
         kind: &str,
         spec: serde_json::Value,
     ) -> Result<crate::nodes::meta::NodePorts> {
+        if kind == "channel" {
+            return channel_ports(Some(&spec));
+        }
         Ok(self.node_registry.get_node_ports_for_spec(kind, spec)?)
     }
 
     /// Query the documentation string of a registered node kind.
     pub fn get_node_doc(&self, kind: &str) -> Result<String> {
+        if kind == "channel" {
+            return Ok(CHANNEL_DOC.into());
+        }
         Ok(self.node_registry.get_node_doc(kind)?)
     }
 
@@ -1053,7 +1016,16 @@ impl DataEngine {
             .history
             .as_ref()
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
-        history.get_run(run_id).await.map_err(Error::Dag)
+        let run_id = run_id.trim();
+        if let Some(run) = history.get_run(run_id).await.map_err(Error::Dag)? { return Ok(Some(run)); }
+        if run_id.is_empty() { return Ok(None); }
+        let candidates = history.list_runs(1000, None).await.map_err(Error::Dag)?;
+        let mut matches = candidates.into_iter().filter(|run| run.id.starts_with(run_id));
+        let first = matches.next();
+        if matches.next().is_some() {
+            return Err(Error::Custom(format!("ambiguous run id prefix `{run_id}`; use a longer prefix or the full id")));
+        }
+        Ok(first)
     }
 
     /// Export one recorded run as deliverable provenance evidence — a W3C
@@ -1447,7 +1419,7 @@ impl DataEngine {
     ///
     /// The new engine starts with `history_ref = "main"`.
     pub fn new_isolated_engine(&self) -> Self {
-        let mut dag = DAG::default();
+        let mut dag = self.dag.empty_with_execution_policy();
         dag.set_dynamic_node_builder(Self::dynamic_node_builder(Arc::clone(&self.node_registry)));
         // Per-agent sessions answer to the same operator compute policy as
         // the main engine: without the executor, every session DAG silently
@@ -1460,6 +1432,9 @@ impl DataEngine {
             node_registry: Arc::clone(&self.node_registry),
             container_execution: Arc::clone(&self.container_execution),
             config: self.config.clone(),
+            flow_cache: std::default::Default::default(),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
+            flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: self.history.clone(),
             history_ref: "main".to_string(),
             pending_commit_message: None,
@@ -1515,137 +1490,11 @@ impl DataEngine {
         &self.container_execution
     }
 
-    /// Validate and run every node of the DAG.
-    ///
-    /// If a [`DagHistory`] is attached ([`Self::with_history`]), a snapshot
-    /// manifest is captured *before* execution and committed with the
-    /// [`RunReport`] *after* execution under the current history ref
-    /// ([`Self::history_ref`]); every invocation also appends one execution
-    /// record to the history's `runs` audit trail.
-    pub async fn run(&mut self) -> Result<RunReport> {
-        // Route every entry point through the same tail so each execution
-        // leaves a snapshot decision + run record. The dummy sink's receiver
-        // is dropped immediately; `try_send` failures are ignored, matching
-        // the no-sink semantics.
-        let (sink, _dropped_sink) = tokio::sync::mpsc::channel(1);
-        self.run_with_events_and_cancel(sink, None).await
-    }
-
-    /// Like [`run`](Self::run) but also streams lightweight per-node events
-    /// (status/progress/log/finished) to `event_sink` as the run progresses.
-    /// The returned [`RunReport`] is identical to [`run`].
-    pub async fn run_with_events(
-        &mut self,
-        event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
-    ) -> Result<RunReport> {
-        self.run_with_events_and_cancel(event_sink, None).await
-    }
-
-    /// Run a DAG while propagating an external cancellation token to spawned
-    /// node tasks.
-    ///
-    /// Every invocation — success, failed nodes, or an engine-level error —
-    /// appends one row to the history's `runs` audit trail before returning.
-    pub async fn run_with_events_and_cancel(
-        &mut self,
-        event_sink: tokio::sync::mpsc::Sender<crate::dag::node_event::NodeEvent>,
-        external_cancel: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<RunReport> {
-        let run_id = uuid::Uuid::new_v4().to_string();
-        self.dag.live_view.bind_run(&run_id);
-        let started_at = chrono::Utc::now().to_rfc3339();
-        let manifest = self.dag.to_manifest();
-        let manifest_hash = manifest.content_hash();
-        // Capture before the commit consumes it, so the run record always
-        // carries the message even when the manifest was unchanged.
-        let message = self.pending_commit_message.clone();
-
-        let run_result = match external_cancel {
-            Some(token) => {
-                self.dag
-                    .run_with_external_cancel(
-                        &self.config,
-                        &self.engine_ctx,
-                        Some(event_sink),
-                        token,
-                    )
-                    .await
-            }
-            None => {
-                self.dag
-                    .run(&self.config, &self.engine_ctx, Some(event_sink))
-                    .await
-            }
-        };
-        let mut report = match run_result {
-            Ok(report) => report,
-            Err(error) => {
-                // The run itself errored (schedule/validation failure) — no
-                // RunReport exists, but the execution still leaves a trace.
-                self.persist_run_record(
-                    run_id,
-                    started_at,
-                    manifest_hash,
-                    message,
-                    None,
-                    Some(&error.to_string()),
-                )
-                .await;
-                return Err(error.into());
-            }
-        };
-        let mut recorded_manifest_hash = manifest_hash.clone();
-        self.commit_history_snapshot(&manifest, manifest_hash.clone(), &mut report)
-            .await;
-        let checkpoint_manifest = self.dag.to_manifest();
-        let checkpoint_hash = checkpoint_manifest.content_hash();
-        if checkpoint_hash != recorded_manifest_hash
-            && let Some(history) = self.history.clone()
-        {
-            match history
-                .commit(
-                    &self.history_ref,
-                    &checkpoint_manifest,
-                    Some(&report),
-                    "dynamic execution checkpoint",
-                )
-                .await
-            {
-                Ok(snapshot_id) => {
-                    report.snapshot_id = Some(snapshot_id);
-                    recorded_manifest_hash = checkpoint_hash;
-                }
-                Err(error) => {
-                    let warning = format!("DAG execution checkpoint was not persisted: {error}");
-                    tracing::warn!(ref = %self.history_ref, error = %error, "{warning}");
-                    report.warnings.push(warning);
-                }
-            }
-        }
-        if let Some(warning) = self
-            .persist_run_record(
-                run_id.clone(),
-                started_at,
-                recorded_manifest_hash,
-                message,
-                Some(&report),
-                None,
-            )
-            .await
-        {
-            report.warnings.push(warning);
-        }
-        // Backfill the run id so the agent's `run_dag` tool result can be
-        // used directly as `dag_runs_log(run_id=<that value>)` without
-        // re-listing runs to discover the id.
-        report.run_id = Some(run_id);
-        Ok(report)
-    }
-
     /// Append this execution's audit record to the history `runs` table.
     ///
     /// Returns a warning string when the record could not be persisted — the
     /// run itself is never failed by an audit write.
+    #[expect(dead_code, reason = "retained for legacy DAG run history")]
     async fn persist_run_record(
         &mut self,
         run_id: String,
@@ -1690,6 +1539,7 @@ impl DataEngine {
         None
     }
 
+    #[expect(dead_code, reason = "retained for legacy DAG run history")]
     async fn commit_history_snapshot(
         &mut self,
         manifest: &crate::dag::DagManifest,
@@ -1911,6 +1761,7 @@ pub struct DataEngineBuilder {
     opendal: Option<Arc<OpendalFileStorage>>,
     bundle_registry: Arc<BundleRegistry>,
     container_execution: Arc<ContainerExecutionInfra>,
+    plugins_root: Option<std::path::PathBuf>,
 }
 
 impl Default for DataEngineBuilder {
@@ -1922,11 +1773,17 @@ impl Default for DataEngineBuilder {
             opendal: None,
             bundle_registry: Arc::new(BundleRegistry::new()),
             container_execution: Arc::new(ContainerExecutionInfra::from_env()),
+            plugins_root: None,
         }
     }
 }
 
 impl DataEngineBuilder {
+    /// Use an explicit host-owned plugin root for this engine instance.
+    pub fn with_plugins_root(mut self, root: impl Into<std::path::PathBuf>) -> Self {
+        self.plugins_root = Some(root.into());
+        self
+    }
     pub fn register_opendal_fs(self, file_session: Arc<OpendalFileStorage>) -> Result<Self> {
         let object_url = ObjectStoreUrl::parse("file://")
             .map_err(|e| Error::Custom(format!("cannot parse datafusion url: {e}")))?;
@@ -2002,6 +1859,7 @@ impl DataEngineBuilder {
             self.opendal,
             self.bundle_registry,
             self.container_execution,
+            self.plugins_root,
         )
     }
 }
@@ -2258,140 +2116,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_ref_head_materializes_the_ref_head_into_a_fresh_session() {
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history);
-        engine
-            .add_node_from_registry(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": datasets_dir().join("Iris.csv").to_string_lossy()}),
-            )
-            .unwrap();
-
-        let report = engine.run().await.unwrap();
-        assert!(report.snapshot_id.is_some(), "run must commit a snapshot");
-
-        // A fresh session starts with an empty DAG...
-        let mut session = engine.new_isolated_engine();
-        assert!(!session.node_exists("read"));
-        // ...and restore_ref_head materializes the ref head into it.
-        assert!(session.restore_ref_head().await.unwrap());
-        assert!(session.node_exists("read"));
-
-        // A non-empty DAG is never clobbered by a restore.
-        assert!(!session.restore_ref_head().await.unwrap());
-        assert!(session.node_exists("read"));
-
-        // A ref with no snapshots restores nothing.
-        let mut fresh = engine.new_isolated_engine().with_history_ref("never-run");
-        assert!(!fresh.restore_ref_head().await.unwrap());
-    }
-
-    #[tokio::test]
-    async fn dynamic_checkpoint_restores_file_jobs_for_resume() {
-        let history = DagHistory::open_in_memory().await.unwrap();
-        let input_dir = tempfile::tempdir().unwrap();
-        let first_path = input_dir.path().join("one.txt");
-        let second_path = input_dir.path().join("two.txt");
-        std::fs::write(&first_path, b"one").unwrap();
-
-        let graph = LogicalGraph::builder()
-            .add_node(LogicalNode::channel(
-                "source",
-                ChannelOperator::OfItems {
-                    items: vec![
-                        first_path.to_string_lossy().into(),
-                        second_path.to_string_lossy().into(),
-                    ],
-                },
-            ))
-            .add_node(LogicalNode::dynamic_for_each(
-                "process",
-                "file_reference",
-                serde_json::json!({"path": "{{item}}"}),
-                "item",
-            ))
-            .add_node(LogicalNode::channel("collect", ChannelOperator::Collect))
-            .add_edge("source", "process", 0, 0)
-            .add_edge("process", "collect", 0, 0)
-            .build();
-
-        let mut engine = DataEngine::builder().build().with_history(history.clone());
-        engine.add_logical_graph(graph).unwrap();
-        engine.set_incremental(true);
-        engine.set_wave_size(1).unwrap();
-        let first = engine.run().await.unwrap();
-        assert!(!first.ok, "{first:?}");
-
-        let mut actual_ids = first
-            .nodes
-            .iter()
-            .filter(|node| node.logical_node.as_deref() == Some("process"))
-            .filter(|node| node.item_key.is_some())
-            .map(|node| node.id.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(actual_ids.len(), 2, "{first:?}");
-        actual_ids.sort_unstable();
-        let successful_id = actual_ids[0].clone();
-        let failed_id = actual_ids[1].clone();
-        assert_eq!(
-            first
-                .nodes
-                .iter()
-                .find(|node| node.id == successful_id)
-                .unwrap()
-                .status,
-            RuntimeStatus::Success,
-            "{first:?}"
-        );
-        assert_eq!(
-            first
-                .nodes
-                .iter()
-                .find(|node| node.id == failed_id)
-                .unwrap()
-                .status,
-            RuntimeStatus::Failed,
-            "{first:?}"
-        );
-
-        std::fs::write(&second_path, b"two").unwrap();
-
-        let mut restored = DataEngine::builder().build().with_history(history);
-        assert!(restored.restore_ref_head().await.unwrap());
-        assert!(restored.node_exists(&successful_id));
-        assert_eq!(
-            restored.node_status(&successful_id),
-            Some(RuntimeStatus::Success)
-        );
-        assert!(!restored.is_node_dirty(&successful_id));
-        assert_eq!(restored.node_status(&failed_id), None);
-        assert!(restored.is_node_dirty(&failed_id));
-
-        restored.set_incremental(true);
-        restored.set_wave_size(1).unwrap();
-        let second = restored.run().await.unwrap();
-        assert!(second.ok, "{second:?}");
-        let successful = second
-            .nodes
-            .iter()
-            .find(|node| node.id == successful_id)
-            .unwrap_or_else(|| panic!("missing `{successful_id}` in {second:?}"));
-        assert!(successful.reused, "{second:?}");
-        let failed_then_retried = second
-            .nodes
-            .iter()
-            .find(|node| node.id == failed_id)
-            .unwrap_or_else(|| panic!("missing `{failed_id}` in {second:?}"));
-        assert_eq!(failed_then_retried.status, RuntimeStatus::Success);
-        assert!(!failed_then_retried.reused, "{second:?}");
-    }
-
-    #[tokio::test]
     async fn clear_dag_commits_a_recoverable_pre_clear_snapshot() {
         let directory = tempfile::tempdir().unwrap();
         let history = DagHistory::open(&directory.path().join("history.db"))
@@ -2488,579 +2212,6 @@ mod tests {
     // ── DAG pipeline tests (migrated from tests/dag_pipeline.rs) ────────
 
     #[tokio::test]
-    async fn insurance_pipeline_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv_path = datasets_dir().join("insurance.csv");
-        let out_path = std::env::temp_dir().join("dag_insurance_out.csv");
-        let out_path = out_path.to_string_lossy().into_owned();
-        let _ = std::fs::remove_file(&out_path);
-
-        engine
-            .add_node_from_registry(
-                "load",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv_path.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "agg",
-                "sql",
-                // agg's single input (port 0) is registered as "port_0".
-                serde_json::json!({"sql_query": "SELECT region, CAST(AVG(charges) AS BIGINT) AS avg_chg \
-                 FROM port_0 GROUP BY region"}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "out",
-                "dataframe_to_file",
-                serde_json::json!({"path": out_path, "format": "csv"}),
-            )
-            .unwrap();
-        // Default edges: each node has a single relevant port, resolved automatically.
-        engine.add_edge("load", "agg", 0, 0).unwrap();
-        engine.add_edge("agg", "out", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok, "all nodes should succeed: {:?}", report.statuses);
-        for n in ["load", "agg", "out"] {
-            assert_eq!(report.status(n), Some(RuntimeStatus::Success), "{n}");
-        }
-
-        // 4 regions in the insurance dataset → 4 data rows + 1 header.
-        let lines = std::fs::read_to_string(&out_path).unwrap();
-        assert_eq!(lines.lines().count(), 5, "expected 4 region rows + header");
-    }
-
-    #[tokio::test]
-    async fn fanout_branch() {
-        // One source → two independent SqlNodes (fan-out from one output port).
-        let mut engine = DataEngine::builder().build();
-        let iris = datasets_dir().join("Iris.csv");
-
-        engine
-            .add_node_from_registry(
-                "load",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        // Note: DataFusion lowercases unquoted identifiers, so quote the
-        // mixed-case column name "Species".
-        engine
-            .add_node_from_registry(
-                "setosa",
-                "sql",
-                serde_json::json!({"sql_query": r#"SELECT * FROM port_0 WHERE "Species" = 'Iris-setosa'"#}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "virginica",
-                "sql",
-                serde_json::json!({"sql_query": r#"SELECT * FROM port_0 WHERE "Species" = 'Iris-virginica'"#}),
-            )
-            .unwrap();
-        engine.add_edge("load", "setosa", 0, 0).unwrap();
-        engine.add_edge("load", "virginica", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(
-            report.ok,
-            "statuses: {:?}; errors: {:?}",
-            report.statuses, report.errors
-        );
-        for n in ["load", "setosa", "virginica"] {
-            assert_eq!(report.status(n), Some(RuntimeStatus::Success), "{n}");
-        }
-    }
-
-    #[tokio::test]
-    async fn fanout_concurrent() {
-        // Fan-out under concurrency=2 — verifies no SessionContext registration
-        // collision between concurrent consumers of the same source port.
-        let mut engine = DataEngine::builder().build().with_config(SchedulerConfig {
-            max_concurrency: 2,
-            ..SchedulerConfig::default()
-        });
-        let iris = datasets_dir().join("Iris.csv");
-
-        engine
-            .add_node_from_registry(
-                "load",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "a",
-                "sql",
-                serde_json::json!({"sql_query": r#"SELECT COUNT(*) AS cnt FROM port_0 WHERE "Species" = 'Iris-setosa'"#}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "b",
-                "sql",
-                serde_json::json!({"sql_query": r#"SELECT COUNT(*) AS cnt FROM port_0 WHERE "Species" = 'Iris-virginica'"#}),
-            )
-            .unwrap();
-        engine.add_edge("load", "a", 0, 0).unwrap();
-        engine.add_edge("load", "b", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(
-            report.ok,
-            "statuses: {:?}; errors: {:?}",
-            report.statuses, report.errors
-        );
-        for n in ["load", "a", "b"] {
-            assert_eq!(report.status(n), Some(RuntimeStatus::Success), "{n}");
-        }
-    }
-
-    #[tokio::test]
-    async fn logical_scatter_compiles_to_physical_jobs_and_gathers() {
-        let mut engine = DataEngine::builder().build();
-        let iris = datasets_dir().join("Iris.csv");
-        let graph = crate::dag::LogicalGraph::builder()
-            .add_node(crate::dag::LogicalNode::for_each(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": "{{item.path}}"}),
-                "sample",
-                vec![
-                    serde_json::json!({
-                        "key": "setosa",
-                        "path": iris.to_str().unwrap()
-                    }),
-                    serde_json::json!({
-                        "key": "virginica",
-                        "path": iris.to_str().unwrap()
-                    }),
-                ],
-            ))
-            .add_node(crate::dag::LogicalNode::registry(
-                "filter",
-                "sql",
-                serde_json::json!({
-                    "sql_query": r#"SELECT * FROM port_0 WHERE "Species" = 'Iris-{{item.key}}'"#
-                }),
-            ))
-            .add_node(crate::dag::LogicalNode::gather("gather"))
-            .add_node(crate::dag::LogicalNode::registry(
-                "summary",
-                "sql",
-                serde_json::json!({"sql_query": "SELECT COUNT(*) AS cnt FROM port_0"}),
-            ))
-            .add_edge("read", "filter", 0, 0)
-            .add_edge("filter", "gather", 0, 0)
-            .add_edge("gather", "summary", 0, 0)
-            .build();
-
-        let installed = engine.add_logical_graph(graph).unwrap();
-        assert_eq!(installed.logical_node_count, 4);
-        assert_eq!(installed.physical_job_count, 6);
-        assert_eq!(installed.physical_edge_count, 5);
-        assert!(installed.jobs.contains_key("read#sample=setosa"));
-        assert!(installed.jobs.contains_key("filter#sample=virginica"));
-        assert!(installed.jobs.contains_key("gather#0"));
-
-        let report = engine.run().await.unwrap();
-        assert!(
-            report.ok,
-            "statuses: {:?}; errors: {:?}",
-            report.statuses, report.errors
-        );
-        let read = report
-            .nodes
-            .iter()
-            .find(|node| node.id == "read#sample=setosa")
-            .unwrap();
-        assert_eq!(read.logical_node.as_deref(), Some("read"));
-        assert_eq!(read.scatter_axis.as_deref(), Some("sample"));
-        assert_eq!(read.item_key.as_deref(), Some("setosa"));
-        let gather = report
-            .nodes
-            .iter()
-            .find(|node| node.id == "gather#0")
-            .unwrap();
-        assert_eq!(gather.node_type, "logical_gather");
-        assert_eq!(gather.logical_node.as_deref(), Some("gather"));
-        assert_eq!(report.status("summary#0"), Some(RuntimeStatus::Success));
-        assert_eq!(report.logical_nodes.len(), 4);
-        let read_summary = report
-            .logical_nodes
-            .iter()
-            .find(|summary| summary.logical_node == "read")
-            .unwrap();
-        assert_eq!(read_summary.status, RuntimeStatus::Success);
-        assert_eq!(read_summary.execution_strategy, Some("for_each"));
-        assert_eq!(
-            read_summary.logical_node_type.as_deref(),
-            Some("file_to_dataframe")
-        );
-        assert_eq!(read_summary.physical_job_count, 2);
-        assert_eq!(read_summary.status_counts.get("success"), Some(&2));
-        assert_eq!(read_summary.scatter_axis.as_deref(), Some("sample"));
-        assert_eq!(read_summary.item_keys, vec!["setosa", "virginica"]);
-        assert!(read_summary.failed_item_keys.is_empty());
-        assert_eq!(
-            read_summary.physical_job_ids,
-            vec!["read#sample=setosa", "read#sample=virginica"]
-        );
-        let gather_summary = report
-            .logical_nodes
-            .iter()
-            .find(|summary| summary.logical_node == "gather")
-            .unwrap();
-        assert_eq!(gather_summary.execution_strategy, Some("gather"));
-        assert_eq!(
-            gather_summary.logical_node_type.as_deref(),
-            Some("logical_gather")
-        );
-        assert_eq!(gather_summary.physical_job_count, 1);
-        let encoded = serde_json::to_value(&report).unwrap();
-        assert!(encoded["logical_nodes"].is_array());
-    }
-
-    #[tokio::test]
-    async fn history_restore_preserves_logical_and_physical_layers() {
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history);
-        let iris = datasets_dir().join("Iris.csv");
-        let graph = crate::dag::LogicalGraph::builder()
-            .add_node(crate::dag::LogicalNode::for_each(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": "{{item.path}}"}),
-                "sample",
-                vec![
-                    serde_json::json!({"key": "setosa", "path": iris.to_str().unwrap()}),
-                    serde_json::json!({"key": "virginica", "path": iris.to_str().unwrap()}),
-                ],
-            ))
-            .build();
-
-        engine.add_logical_graph(graph).unwrap();
-        let first_run = engine.run().await.unwrap();
-        assert!(first_run.ok);
-
-        let head = engine.dag_log(Some("main"), 1).await.unwrap().remove(0);
-        let manifest = head.manifest().unwrap();
-        assert_eq!(manifest.schema_version, 2);
-        assert_eq!(manifest.logical.graphs.len(), 1);
-        assert!(manifest.physical_jobs.contains_key("read#sample=setosa"));
-        assert!(manifest.physical_jobs.contains_key("read#sample=virginica"));
-
-        engine.new_dag_ref("empty").await.unwrap();
-        engine.switch_dag_ref("main").await.unwrap();
-        let restored_run = engine.run().await.unwrap();
-        assert!(restored_run.ok);
-        let read = restored_run
-            .nodes
-            .iter()
-            .find(|node| node.id == "read#sample=setosa")
-            .unwrap();
-        assert_eq!(read.logical_node.as_deref(), Some("read"));
-        assert_eq!(read.scatter_axis.as_deref(), Some("sample"));
-        assert_eq!(read.item_key.as_deref(), Some("setosa"));
-    }
-
-    #[tokio::test]
-    async fn history_restores_v1_physical_only_manifest() {
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history.clone());
-        let iris = datasets_dir().join("Iris.csv");
-        engine
-            .add_node_from_registry(
-                "load",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        assert!(engine.run().await.unwrap().ok);
-
-        let current = engine.dag_log(Some("main"), 1).await.unwrap().remove(0);
-        let mut legacy = current.manifest().unwrap();
-        legacy.schema_version = 1;
-        legacy.logical = Default::default();
-        legacy.physical_jobs.clear();
-        history
-            .commit(
-                "legacy",
-                &legacy,
-                None::<&crate::dag::RunReport>,
-                "physical-only snapshot",
-            )
-            .await
-            .unwrap();
-
-        engine.new_dag_ref("empty").await.unwrap();
-        engine.switch_dag_ref("legacy").await.unwrap();
-        let report = engine.run().await.unwrap();
-        assert!(report.ok);
-        assert_eq!(report.nodes[0].logical_node, None);
-        let head = engine.dag_log(Some("legacy"), 1).await.unwrap().remove(0);
-        let manifest = head.manifest().unwrap();
-        assert_eq!(manifest.schema_version, 2);
-        assert!(manifest.logical.graphs.is_empty());
-        assert!(manifest.physical_jobs.is_empty());
-    }
-
-    /// A multi-input join: two sources feed a single SqlNode's `left`/`right`
-    /// input ports, exercising named ports and `add_edge_port`.
-    #[tokio::test]
-    async fn join_named_ports() {
-        let mut engine = DataEngine::builder().build();
-        let iris = datasets_dir().join("Iris.csv");
-        let out = std::env::temp_dir().join("dag_join_out.csv");
-        let out = out.to_string_lossy().into_owned();
-
-        engine
-            .add_node_from_registry(
-                "src_a",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "src_b",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        // A join node with two named input ports. Inputs are registered as
-        // "port_0" and "port_1" by the SqlNode (one table per upstream port).
-        engine
-            .add_node(
-                "join",
-                nodes_sql::sql_node::SqlNode::from_ports(
-                    NodePorts::new()
-                        .add_input_port(None)
-                        .add_input_port(None)
-                        .add_output_port(None),
-                    r#"SELECT COUNT(*) AS cnt FROM port_0"#.to_string(),
-                ),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "out",
-                "dataframe_to_file",
-                serde_json::json!({"path": out, "format": "csv"}),
-            )
-            .unwrap();
-        engine
-            .add_edge("src_a", "join", 0, 0)
-            .unwrap()
-            .add_edge("src_b", "join", 0, 1)
-            .unwrap()
-            .add_edge("join", "out", 0, 0)
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(
-            report.ok,
-            "statuses: {:?}; errors: {:?}",
-            report.statuses, report.errors
-        );
-        for n in ["src_a", "src_b", "join", "out"] {
-            assert_eq!(report.status(n), Some(RuntimeStatus::Success), "{n}");
-        }
-    }
-
-    #[tokio::test]
-    async fn bio_source_reads_vcf() {
-        // SourceNode auto-detects the VCF.gz format from the extension.
-        let mut engine = DataEngine::builder().build();
-        let vcf = datasets_dir().join("sample.vcf.gz");
-
-        engine
-            .add_node_from_registry(
-                "vcf",
-                "file_to_dataframe",
-                serde_json::json!({"path": vcf.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("vcf"), Some(RuntimeStatus::Success));
-    }
-
-    /// Regression: with default `compute_row_counts = false`, running a
-    /// source-only VCF DAG must NOT eagerly `count()` the dataset. The
-    /// `output_rows` field of the report should stay `None`, which proves the
-    /// eager COUNT(*) scan never ran.
-    ///
-    /// Before the fix, `build_node_reports` unconditionally called `df.count()`
-    /// on every output, forcing a full decompression + parse of the VCF — the
-    /// worst-case behavior for "source node, no downstream consumer".
-    #[tokio::test]
-    async fn vcf_source_skips_count_by_default() {
-        let mut engine = DataEngine::builder().build();
-        let vcf = datasets_dir().join("sample.vcf.gz");
-
-        engine
-            .add_node_from_registry(
-                "vcf",
-                "file_to_dataframe",
-                serde_json::json!({"path": vcf.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("vcf"), Some(RuntimeStatus::Success));
-
-        let node = report
-            .nodes
-            .iter()
-            .find(|n| n.id == "vcf")
-            .expect("source node should be in the report");
-
-        // The whole point of the fix: default config must NOT compute rows.
-        assert!(
-            node.output_rows.is_none(),
-            "default config should skip row counting; got {:?}",
-            node.output_rows
-        );
-    }
-
-    /// Opt-in path: when the caller explicitly sets
-    /// `compute_row_counts = true`, the report must contain a row count for
-    /// every successful source node — proving that the parallel `join_all`
-    /// path works end-to-end.
-    #[tokio::test]
-    async fn vcf_source_computes_rows_when_opted_in() {
-        let mut engine = DataEngine::builder().build().with_config(SchedulerConfig {
-            compute_row_counts: true,
-            ..SchedulerConfig::default()
-        });
-        let vcf = datasets_dir().join("sample.vcf.gz");
-
-        engine
-            .add_node_from_registry(
-                "vcf",
-                "file_to_dataframe",
-                serde_json::json!({"path": vcf.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-
-        let node = report
-            .nodes
-            .iter()
-            .find(|n| n.id == "vcf")
-            .expect("source node should be in the report");
-
-        let rows = node
-            .output_rows
-            .expect("opted-in run must populate row counts");
-        assert!(
-            rows > 0,
-            "sample VCF should report a positive row count, got {rows}"
-        );
-
-        // Output schema should still be populated regardless of the count
-        // setting — `schema()` inspects the LogicalPlan only, not data.
-        assert!(
-            node.output_schema.is_some(),
-            "schema should be visible from the LogicalPlan without execution"
-        );
-    }
-
-    #[tokio::test]
-    #[ignore = "cycle will be detected and rejected earlier in edge creation"]
-    async fn cycle_is_rejected() {
-        let mut engine = DataEngine::builder().build();
-        engine
-            .add_node_from_registry("a", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
-            .unwrap();
-        engine
-            .add_node_from_registry("b", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
-            .unwrap();
-        engine
-            .add_edge("a", "b", 0, 0)
-            .unwrap()
-            .add_edge("b", "a", 0, 0)
-            .unwrap();
-
-        let err = engine.run().await.unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("cycle"), "{msg}");
-    }
-
-    #[tokio::test]
-    async fn disconnected_input_port_rejected() {
-        // A fixed-input node with no incoming edge → validation must reject the
-        // dangling input port. LinearRegressionNode declares exactly one required
-        // (fixed) input port. Variadic nodes like SqlNode are exempt: they
-        // declare no ports and accept any number of inputs, so this check only
-        // applies to fixed-input nodes. Validation runs before execution, so the
-        // placeholder column names never get used.
-        let mut engine = DataEngine::builder().build();
-        engine
-            .add_node_from_registry(
-                "lr",
-                "linear_regression",
-                serde_json::json!({"x_columns": ["x"], "y_column": "y", "intercept": true}),
-            )
-            .unwrap();
-
-        let err = engine.run().await.unwrap_err();
-        assert!(
-            matches!(err, Error::Dag(DagError::PortDisconnected { ref node, .. }) if node == "lr"),
-            "expected PortDisconnected, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn overconnected_input_port_rejected() {
-        // Two edges into one input port (strict 1:1 violation).
-        let mut engine = DataEngine::builder().build();
-        let iris = datasets_dir().join("Iris.csv");
-        engine
-            .add_node_from_registry(
-                "s1",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "s2",
-                "file_to_dataframe",
-                serde_json::json!({"path": iris.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry("c", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
-            .unwrap();
-        engine.add_edge("s1", "c", 0, 0).unwrap();
-        engine.add_edge("s2", "c", 0, 0).unwrap();
-
-        let err = engine.run().await.unwrap_err();
-        assert!(
-            matches!(err, Error::Dag(DagError::PortOverconnected { ref node, .. }) if node == "c"),
-            "expected PortOverconnected, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
     async fn unknown_port_rejected() {
         let mut engine = DataEngine::builder().build();
         engine
@@ -3137,117 +2288,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn failure_cascades() {
-        let mut engine = DataEngine::builder().build();
-        // Source-like boom node (no input ports) so it passes port validation.
-        let boom_ports = NodePorts::new().add_output_port(None);
-        engine.add_node("boom", BoomNode(boom_ports)).unwrap();
-        engine
-            .add_node_from_registry("child", "sql", serde_json::json!({"sql_query": "SELECT 1"}))
-            .unwrap();
-        engine.add_edge("boom", "child", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run completes even on failure");
-        assert!(!report.ok, "run should report failure");
-        assert_eq!(report.status("boom"), Some(RuntimeStatus::Failed));
-        assert_eq!(
-            report.status("child"),
-            Some(RuntimeStatus::Skipped),
-            "descendant of a failed node must be skipped"
-        );
-    }
-
-    #[tokio::test]
-    async fn every_execution_records_a_run_row() {
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history);
-        engine
-            .add_node_from_registry(
-                "read",
-                "file_to_dataframe",
-                serde_json::json!({"path": datasets_dir().join("Iris.csv").to_string_lossy()}),
-            )
-            .unwrap();
-
-        let first = engine.run().await.unwrap();
-        assert!(first.ok);
-        let snapshot_id = first
-            .snapshot_id
-            .clone()
-            .expect("first run commits a snapshot");
-
-        // Second run of the *same* manifest: no new snapshot — but a second
-        // run row linking to the same head (the head-hit backfill).
-        let second = engine.run().await.unwrap();
-        assert!(second.ok);
-        assert_eq!(
-            second.snapshot_id.as_deref(),
-            Some(snapshot_id.as_str()),
-            "unchanged manifest links the run to the existing head"
-        );
-
-        let runs = engine.list_runs(10, None).await.unwrap();
-        assert_eq!(runs.len(), 2, "every execution leaves a row");
-        assert!(
-            runs.iter()
-                .all(|run| run.snapshot_id.as_deref() == Some(snapshot_id.as_str()))
-        );
-        assert!(runs.iter().all(|run| run.ok));
-        assert!(runs.iter().all(|run| run.run_report_json.is_some()));
-        assert_eq!(runs[0].engine_version, dag_core::engine_version());
-        assert_eq!(runs[0].source_revision, dag_core::source_revision());
-        // The persisted report's snapshot_id is backfilled (unlike the
-        // snapshot-embedded copy, which is serialized before assignment).
-        let persisted: serde_json::Value =
-            serde_json::from_str(runs[0].run_report_json.as_deref().unwrap()).unwrap();
-        assert_eq!(persisted["snapshot_id"], serde_json::json!(snapshot_id));
-
-        // Definitions stay deduplicated: one manifest change, one snapshot.
-        let log = engine.dag_log(None, 10).await.unwrap();
-        assert_eq!(log.len(), 1);
-
-        // The trigger is recorded for the run that carried it, and consumed.
-        engine.set_run_trigger(Some("agent:/root/researcher".into()));
-        let _ = engine.run().await.unwrap();
-        let runs = engine.list_runs(10, None).await.unwrap();
-        assert_eq!(runs.len(), 3);
-        assert_eq!(runs[0].trigger.as_deref(), Some("agent:/root/researcher"));
-        assert!(runs[1].trigger.is_none(), "trigger is per-run");
-
-        let fetched = engine.get_run(&runs[0].id).await.unwrap().unwrap();
-        assert_eq!(fetched.id, runs[0].id);
-    }
-
-    #[tokio::test]
-    async fn failed_nodes_record_a_failed_run_row() {
-        let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db"))
-            .await
-            .unwrap();
-        let mut engine = DataEngine::builder().build().with_history(history);
-        let boom_ports = NodePorts::new().add_output_port(None);
-        engine.add_node("boom", BoomNode(boom_ports)).unwrap();
-
-        let report = engine.run().await.expect("run completes even on failure");
-        assert!(!report.ok);
-
-        let runs = engine.list_runs(10, None).await.unwrap();
-        assert_eq!(runs.len(), 1);
-        assert!(!runs[0].ok);
-        assert!(!runs[0].cancelled);
-        // Node failures live inside the run report, not the top-level error
-        // field (which is reserved for engine-level errors).
-        assert_eq!(runs[0].error, None);
-        let persisted: serde_json::Value =
-            serde_json::from_str(runs[0].run_report_json.as_deref().unwrap()).unwrap();
-        assert_eq!(persisted["ok"], serde_json::json!(false));
-        assert_eq!(persisted["statuses"]["boom"], serde_json::json!("failed"));
-    }
-
     /// A node that sleeps — for the parallelism test. No inputs, no real output.
     #[derive(Clone)]
     struct SleepNode(NodePorts);
@@ -3273,41 +2313,6 @@ mod tests {
         ) -> Result<PortOutputs, DagError> {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             Ok(PortOutputs::new())
-        }
-    }
-
-    #[tokio::test]
-    async fn scheduler_runs_in_parallel() {
-        use std::time::{Duration, Instant};
-
-        // 4 independent sleep nodes, concurrency 4 → ~100ms; concurrency 1 → ~400ms.
-        for &concurrency in &[4usize, 1] {
-            let mut engine = DataEngine::builder().build().with_config(SchedulerConfig {
-                max_concurrency: concurrency,
-                ..SchedulerConfig::default()
-            });
-            for i in 0..4 {
-                let id = format!("s{i}");
-                // No input ports: standalone nodes pass port validation.
-                let meta = NodePorts::new().add_output_port(None);
-                engine.add_node(id, SleepNode(meta)).unwrap();
-            }
-            let start = Instant::now();
-            let report = engine.run().await.unwrap();
-            let elapsed = start.elapsed();
-            assert!(report.ok);
-            assert_eq!(report.status("s0"), Some(RuntimeStatus::Success));
-            if concurrency == 4 {
-                assert!(
-                    elapsed < Duration::from_millis(350),
-                    "parallel run took too long: {elapsed:?}"
-                );
-            } else {
-                assert!(
-                    elapsed >= Duration::from_millis(350),
-                    "serial run was too fast: {elapsed:?}"
-                );
-            }
         }
     }
 
@@ -3407,288 +2412,9 @@ mod tests {
         );
     }
 
-    /// Malformed spec → SpecDeserialize
-    #[tokio::test]
-    async fn add_node_via_registry_bad_spec() {
-        let mut engine = DataEngine::builder().build();
-
-        // sql requires { sql_query: String }; passing an empty object fails.
-        let err = engine
-            .add_node_from_registry("n", "sql", serde_json::json!({}))
-            .unwrap_err();
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("sql_query") || msg.contains("missing field"),
-            "sql with empty spec should fail deserialization; got: {msg}"
-        );
-
-        // A path-less file_to_dataframe is buildable so it can be wired to an
-        // upstream File value; running it disconnected remains an error.
-        engine
-            .add_node_from_registry("n", "file_to_dataframe", serde_json::json!({"type": "ftp"}))
-            .expect("path-less file_to_dataframe can be wired to a file output");
-        let report = engine.run().await.expect("scheduler should return report");
-        assert!(
-            !report.ok && report.errors.contains_key("n"),
-            "disconnected path-less file_to_dataframe should fail at execution"
-        );
-    }
-
     // ── Per-kind smoke tests: create via registry + run a minimal DAG ──
 
-    /// sql node: create via registry, wire to a source, run.
-    #[tokio::test]
-    async fn registry_sql_node_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "agg",
-                "sql",
-                serde_json::json!({"sql_query": "SELECT region, CAST(AVG(charges) AS BIGINT) AS avg_chg FROM port_0 GROUP BY region"}),
-            )
-            .unwrap();
-
-        engine.add_edge("src", "agg", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("agg"), Some(RuntimeStatus::Success));
-    }
-
-    /// source node (file): create via registry, run.
-    #[tokio::test]
-    async fn registry_source_node_file_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("src"), Some(RuntimeStatus::Success));
-    }
-
-    /// sink node (file): create via registry, wire source→sink, run.
-    #[tokio::test]
-    async fn registry_sink_node_file_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-        let out = std::env::temp_dir().join("dag_registry_sink_test.csv");
-        let out = out.to_string_lossy().into_owned();
-        let _ = std::fs::remove_file(&out);
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "out",
-                "dataframe_to_file",
-                serde_json::json!({"path": out, "format": "csv"}),
-            )
-            .unwrap();
-
-        engine.add_edge("src", "out", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("out"), Some(RuntimeStatus::Success));
-        assert!(std::path::Path::new(&out).exists());
-    }
-
-    /// linear_regression node: create via registry, succeeds execution.
-    #[tokio::test]
-    async fn registry_linear_regression_node_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "lr",
-                "linear_regression",
-                serde_json::json!({"x_columns": ["age"], "y_column": "charges"}),
-            )
-            .unwrap();
-
-        engine.add_edge("src", "lr", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("lr"), Some(RuntimeStatus::Success));
-    }
-
-    /// linear_regression with intercept defaulting to true.
-    #[tokio::test]
-    async fn registry_linear_regression_default_intercept() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        // omit intercept → defaults to true.
-        engine
-            .add_node_from_registry(
-                "lr",
-                "linear_regression",
-                serde_json::json!({"x_columns": ["bmi"], "y_column": "charges"}),
-            )
-            .unwrap();
-
-        engine.add_edge("src", "lr", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok);
-        assert_eq!(report.status("lr"), Some(RuntimeStatus::Success));
-    }
-
-    /// Multiple registry-created nodes wired together end-to-end.
-    #[tokio::test]
-    async fn registry_full_pipeline() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-        let out = std::env::temp_dir().join("dag_registry_full_pipeline.csv");
-        let out = out.to_string_lossy().into_owned();
-        let _ = std::fs::remove_file(&out);
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "filter",
-                "sql",
-                serde_json::json!({"sql_query": "SELECT * FROM port_0 WHERE age > 30"}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "lr",
-                "linear_regression",
-                serde_json::json!({"x_columns": ["age", "bmi"], "y_column": "charges"}),
-            )
-            .unwrap();
-
-        engine
-            .add_node_from_registry(
-                "out",
-                "dataframe_to_file",
-                serde_json::json!({"path": out, "format": "csv"}),
-            )
-            .unwrap();
-
-        // src → filter → lr → out
-        engine.add_edge("src", "filter", 0, 0).unwrap();
-        engine.add_edge("filter", "lr", 0, 0).unwrap();
-        engine.add_edge("lr", "out", 0, 0).unwrap();
-
-        let report = engine.run().await.expect("run should succeed");
-        assert!(report.ok, "full pipeline failed: {:?}", report.statuses);
-        for n in ["src", "filter", "lr", "out"] {
-            assert_eq!(
-                report.status(n),
-                Some(RuntimeStatus::Success),
-                "node {n} should succeed"
-            );
-        }
-        assert!(std::path::Path::new(&out).exists());
-    }
-
     // ── update_node tests ────────────────────────────────────────────
-
-    /// update_node can change a sql node's query and the DAG still runs
-    /// correctly with the downstream edges preserved.
-    #[tokio::test]
-    async fn update_node_changes_sql_and_runs() {
-        let mut engine = DataEngine::builder().build();
-        let csv = datasets_dir().join("insurance.csv");
-        let out = std::env::temp_dir().join("dag_update_sql_test.csv");
-        let out = out.to_string_lossy().into_owned();
-        let _ = std::fs::remove_file(&out);
-
-        engine
-            .add_node_from_registry(
-                "src",
-                "file_to_dataframe",
-                serde_json::json!({"path": csv.to_str().unwrap()}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "agg",
-                "sql",
-                serde_json::json!({"sql_query": "SELECT region, CAST(AVG(charges) AS BIGINT) AS avg_chg FROM port_0 GROUP BY region"}),
-            )
-            .unwrap();
-        engine
-            .add_node_from_registry(
-                "out",
-                "dataframe_to_file",
-                serde_json::json!({"path": out, "format": "csv"}),
-            )
-            .unwrap();
-        engine.add_edge("src", "agg", 0, 0).unwrap();
-        engine.add_edge("agg", "out", 0, 0).unwrap();
-
-        // First run with original SQL.
-        let report1 = engine.run().await.expect("run should succeed");
-        assert!(report1.ok);
-
-        // Update agg to a different query.
-        engine
-            .update_node(
-                "agg",
-                serde_json::json!({"sql_query": "SELECT COUNT(*) AS cnt FROM port_0"}),
-            )
-            .expect("update_node should succeed");
-
-        // Second run with updated SQL — edges preserved.
-        let report2 = engine.run().await.expect("run after update should succeed");
-        assert!(report2.ok, "{report2:?}");
-        for n in ["src", "agg", "out"] {
-            assert_eq!(report2.status(n), Some(RuntimeStatus::Success), "{n}");
-        }
-    }
 
     /// update_node rejects a non-existent node id.
     #[tokio::test]
@@ -3714,4 +2440,24 @@ mod tests {
             "expected deserialization error, got {err}"
         );
     }
+    #[tokio::test]
+    async fn run_lookup_accepts_unique_prefix_and_rejects_ambiguous_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db")).await.unwrap();
+        for id in ["aaaabbbb-1111-2222-3333-444444444444", "aaaabbbb-2222-2222-3333-444444444444"] {
+            history.record_run(&crate::dag::RunRecord {
+                id: id.into(), ref_name: "flow".into(), snapshot_id: None,
+                manifest_hash: "definition".into(), trigger: None,
+                started_at: "2026-11-06T00:00:00Z".into(), finished_at: "2026-11-06T00:00:01Z".into(),
+                ok: true, cancelled: false, error: None, message: None,
+                engine_version: "test".into(), source_revision: "test".into(), run_report_json: None,
+            }).await.unwrap();
+        }
+        let engine = DataEngine::builder().build().with_history(history);
+        assert!(engine.get_run("aaaabbbb").await.unwrap_err().to_string().contains("ambiguous"));
+        assert_eq!(engine.get_run("aaaabbbb-111").await.unwrap().unwrap().id, "aaaabbbb-1111-2222-3333-444444444444");
+        assert!(engine.get_run("unknown").await.unwrap().is_none());
+        assert!(engine.get_run("aaaabbbb-2222-2222-3333-444444444444").await.unwrap().is_some());
+    }
+
 }

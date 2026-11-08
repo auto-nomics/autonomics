@@ -172,6 +172,8 @@ pub struct NodeReporter {
     worker_software: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
     worker_stop: std::sync::Arc<std::sync::Mutex<Option<serde_json::Value>>>,
     logs: std::sync::Arc<std::sync::Mutex<Vec<ReportedLog>>>,
+    cleanup_tasks:
+        std::sync::Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<Result<(), String>>>>>,
 }
 
 /// One log observation retained for task execution evidence.
@@ -195,6 +197,7 @@ impl NodeReporter {
             worker_software: std::sync::Arc::new(std::sync::Mutex::new(None)),
             worker_stop: std::sync::Arc::new(std::sync::Mutex::new(None)),
             logs: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            cleanup_tasks: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -207,6 +210,29 @@ impl NodeReporter {
         // `_rx` drops here; `try_send` then sees no receiver and the emission
         // is silently dropped — exactly the "goes nowhere" semantics we want.
         Self::new("noop", tx)
+    }
+
+    pub fn register_cleanup(&self, task: tokio::task::JoinHandle<Result<(), String>>) {
+        self.cleanup_tasks.lock().unwrap().push(task);
+    }
+
+    pub async fn wait_cleanup(&self) -> Result<(), String> {
+        let tasks = std::mem::take(&mut *self.cleanup_tasks.lock().unwrap());
+        let mut errors = Vec::new();
+        for task in tasks {
+            match task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(error),
+                Err(error) => errors.push(format!(
+                    "remote_stop_unconfirmed: cleanup task failed: {error}"
+                )),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 
     #[inline]
@@ -414,6 +440,18 @@ impl NodeReporter {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn cleanup_waits_and_preserves_unconfirmed_stop() {
+        let reporter = super::NodeReporter::noop();
+        let clone = reporter.clone();
+        clone.register_cleanup(tokio::spawn(async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            Err("remote_stop_unconfirmed: test job".to_string())
+        }));
+        let error = reporter.wait_cleanup().await.unwrap_err();
+        assert!(error.contains("remote_stop_unconfirmed"));
+        assert!(reporter.wait_cleanup().await.is_ok());
+    }
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
 

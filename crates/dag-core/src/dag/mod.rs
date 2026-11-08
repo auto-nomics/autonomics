@@ -46,12 +46,11 @@ pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};
 pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
 pub use logical::{
-    LogicalEdge, LogicalExecutionStrategy, LogicalGraph, LogicalGraphBuilder, LogicalNode,
+    LogicalEdge, LogicalExecutionStrategy, LogicalGraph, LogicalNode,
     LogicalNodeDefinition,
 };
 pub use physical::{
-    DynamicFanoutNode, GatherNode, PhysicalEdge, PhysicalGraph, PhysicalInstallReport,
-    PhysicalJobRef, PhysicalNode,
+    DynamicFanoutNode, GatherNode, PhysicalJobRef,
 };
 pub use runtime::{
     InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeRunDetails, RunReport,

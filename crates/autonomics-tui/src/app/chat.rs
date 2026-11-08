@@ -46,46 +46,52 @@ impl App {
 
         let ts = self.state.active_tab_state_mut();
 
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            let half = i32::from(ts.chat_viewport_height).max(2) / 2;
+            match key.code {
+                KeyCode::Char('d') => { ts.scroll_by(half); return; }
+                KeyCode::Char('u') => { ts.scroll_by(-half); return; }
+                KeyCode::Char('f') => { ts.scroll_by(half * 2); return; }
+                KeyCode::Char('b') => { ts.scroll_by(-half * 2); return; }
+                _ => {}
+            }
+        }
+
         match key.code {
             // Down / j: scroll down (show later content)
             KeyCode::Down | KeyCode::Char('j') => {
-                ts.scroll_offset = ts.scroll_offset.saturating_add(1);
-                ts.auto_scroll = false;
+                ts.scroll_by(1);
             }
             // Up / k: scroll up (show earlier content)
             KeyCode::Up | KeyCode::Char('k') => {
-                ts.scroll_offset = ts.scroll_offset.saturating_sub(1);
-                ts.auto_scroll = false;
+                ts.scroll_by(-1);
             }
             // End: jump to bottom, re-enable auto-scroll
-            KeyCode::End => {
-                ts.auto_scroll = true;
+            KeyCode::End | KeyCode::Char('G') => {
+                ts.auto_scroll = false;
+                ts.scroll_target = Some(ts.content_line_count.saturating_sub(ts.chat_viewport_height as usize));
             }
             // Home: jump to top
-            KeyCode::Home => {
-                ts.scroll_offset = 0;
+            KeyCode::Home | KeyCode::Char('g') => {
+                ts.scroll_target = Some(0);
                 ts.auto_scroll = false;
             }
             // Left / h and Right / l: move by the rendered chat viewport.
             KeyCode::Left | KeyCode::Char('h') => {
                 let page = usize::from(ts.chat_viewport_height).max(1);
-                ts.scroll_offset = ts.scroll_offset.saturating_sub(page);
-                ts.auto_scroll = false;
+                ts.scroll_by(-(page as i32));
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 let page = usize::from(ts.chat_viewport_height).max(1);
-                ts.scroll_offset = ts.scroll_offset.saturating_add(page);
-                ts.auto_scroll = false;
+                ts.scroll_by(page as i32);
             }
             // PageDown: half-page down
             KeyCode::PageDown => {
-                ts.scroll_offset = ts.scroll_offset.saturating_add(HALF_PAGE);
-                ts.auto_scroll = false;
+                ts.scroll_by(HALF_PAGE as i32);
             }
             // PageUp: half-page up
             KeyCode::PageUp => {
-                ts.scroll_offset = ts.scroll_offset.saturating_sub(HALF_PAGE);
-                ts.auto_scroll = false;
+                ts.scroll_by(-(HALF_PAGE as i32));
             }
             // Enter: enter the composer in input mode.
             KeyCode::Enter => {
@@ -209,23 +215,28 @@ impl App {
             }
         }
 
-        // Dispatch deliver_message outside the `ts` borrow.
+        // Dispatch deliver_message outside the `ts` borrow. Dormant
+        // identities need no special casing here: the host's virtual-actor
+        // layer activates them transparently and delivers in order — the
+        // frontend must not understand instance lifecycle at all.
         if let Some(text) = send_text {
             let name = self.state.sessions.get(active_idx).map(|s| s.name.clone());
             if let Some(name) = name {
-                if self.state.is_agent_live(&name) {
-                    let client = self.client.clone();
-                    self.spawn_client_task("deliver_message", move || async move {
-                        if let Err(e) = client.deliver_message(&name, text).await {
-                            tracing::error!(agent = %name, error = %e, "message delivery failed");
-                        }
-                    });
-                } else {
-                    // The leaf's identity was passivated (virtual-actor
-                    // idle TTL). Re-activate it from storage and deliver
-                    // the moment registration lands.
-                    self.reactivate_agent(&name, text);
-                }
+                let client = self.client.clone();
+                let tx = self.app_event_tx.clone();
+                self.spawn_client_task("deliver_message", move || async move {
+                    if let Err(e) = client.deliver_message(&name, text).await {
+                        tracing::error!(agent = %name, error = %e, "message delivery failed");
+                        // Activation failures (unknown identity, no model,
+                        // spawn error) surface as a toast — the optimistic
+                        // pending entry in the transcript stays until the
+                        // user retries or switches leaves.
+                        tx.send(crate::app_event::AppEvent::ShowError {
+                            title: "Message not delivered".into(),
+                            detail: Some(format!("[{name}] {e}")),
+                        });
+                    }
+                });
             }
         }
     }

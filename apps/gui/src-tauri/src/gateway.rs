@@ -677,3 +677,104 @@ mod search_transport_tests {
         server.await.unwrap();
     }
 }
+
+// ── VFS browser binary bridge ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfsDownloadRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VfsUploadRequest {
+    /// Destination virtual path (dir + file name).
+    pub path: String,
+    /// Local host file picked through the dialog plugin.
+    pub local_path: String,
+}
+
+/// Stream a VFS file down as base64 (desktop `downloadVfsFile`).
+#[tauri::command]
+pub async fn vfs_download_raw(
+    state: State<'_, GatewayState>,
+    request: VfsDownloadRequest,
+) -> Result<BibBinaryView, String> {
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let url = endpoint(&base, "api/v1/vfs/file");
+    let response = state
+        .http
+        .get(url)
+        .query(&[("path", request.path.as_str())])
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_owned();
+    if !status.is_success() {
+        let payload = response.json::<Value>().await.unwrap_or(Value::Null);
+        let fallback = status.to_string();
+        return Err(payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(fallback.as_str())
+            .to_string());
+    }
+    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
+    Ok(BibBinaryView {
+        data_base64: BASE64.encode(bytes),
+        content_type,
+    })
+}
+
+/// Upload a locally picked file into the VFS (desktop `uploadToDir`).
+#[tauri::command]
+pub async fn vfs_upload(
+    state: State<'_, GatewayState>,
+    request: VfsUploadRequest,
+) -> Result<Value, String> {
+    let metadata = std::fs::metadata(&request.local_path).map_err(|error| error.to_string())?;
+    if !metadata.is_file() {
+        return Err("selected upload is not a file".into());
+    }
+    if metadata.len() > MAX_BIB_UPLOAD_BYTES {
+        return Err(format!(
+            "selected file exceeds the {} MiB upload limit",
+            MAX_BIB_UPLOAD_BYTES / (1024 * 1024)
+        ));
+    }
+    let bytes = tokio::fs::read(&request.local_path)
+        .await
+        .map_err(|error| error.to_string())?;
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let url = endpoint(&base, "api/v1/vfs/file");
+    let response = state
+        .http
+        .put(url)
+        .query(&[("path", request.path.as_str())])
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    let status = response.status();
+    let payload = response.json::<Value>().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        let fallback = status.to_string();
+        return Err(payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(fallback.as_str())
+            .to_string());
+    }
+    Ok(payload)
+}

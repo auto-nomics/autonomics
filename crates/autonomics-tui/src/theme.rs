@@ -98,6 +98,8 @@ pub struct Theme {
 /// A named preset entry.
 pub struct Preset {
     pub name: &'static str,
+    /// Human-readable name shown in theme switching feedback.
+    pub label: &'static str,
     pub theme: Theme,
 }
 
@@ -111,16 +113,19 @@ pub fn presets() -> &'static [Preset] {
         let mut all = vec![
             Preset {
                 name: "dark",
+                label: "Default Dark",
                 theme: dark(),
             },
             Preset {
                 name: "claude-code",
+                label: "Claude Code",
                 theme: claude_code(),
             },
         ];
         for (name, palette) in PORTED.iter() {
             all.push(Preset {
                 name,
+                label: name,
                 theme: palette.theme(),
             });
         }
@@ -574,10 +579,12 @@ fn bump_generation() {
 /// Snapshot of the active theme. Widgets call this at render time and
 /// read token fields off the copy.
 pub fn current() -> Theme {
-    slot()
+    let mut theme = slot()
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .theme
+        .theme;
+    theme.md = MdTokens::from_theme(&theme);
+    theme
 }
 
 /// Name of the active preset.
@@ -586,6 +593,15 @@ pub fn active_name() -> &'static str {
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .name
+}
+
+/// Human-readable label of the active preset for status messages and menus.
+pub fn active_label() -> &'static str {
+    presets()
+        .iter()
+        .find(|preset| preset.name == active_name())
+        .map(|preset| preset.label)
+        .unwrap_or(active_name())
 }
 
 /// Activate the preset with this name. Returns `false` (unchanged) when

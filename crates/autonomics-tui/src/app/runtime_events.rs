@@ -96,14 +96,20 @@ impl App {
     /// Route one agent event to the matching session tab — the same
     /// routing the fat-client loop performed on `host.recv_any()`.
     fn route_agent_event(&mut self, agent_name: String, event: AgentEvent) {
-        let target_idx = if !agent_name.is_empty() {
-            self.state
-                .sessions
-                .iter()
-                .position(|s| s.name == agent_name)
-                .unwrap_or(self.state.active_agent_idx)
-        } else {
-            self.state.active_agent_idx
+        let Some(target_idx) = route_target(
+            &self.state.sessions,
+            &agent_name,
+            self.state.active_agent_idx,
+        ) else {
+            // The named identity has no open leaf (tool-spawned child, a
+            // closed tab, or a yet-unregistered agent). Its events belong
+            // to no view — never bleed them into the active agent's
+            // window (message/status cross-talk).
+            tracing::debug!(
+                agent = %agent_name,
+                "dropping agent event for identity without an open leaf"
+            );
+            return;
         };
 
         let is_context_list = matches!(event, AgentEvent::ContextList { .. });
@@ -171,26 +177,11 @@ impl App {
                 self.fetch_stored_agents(&query);
             }
             crate::app_event::AppEvent::AgentDeleted(agent_id) => {
-                self.state
-                    .stored_records
-                    .retain(|record| record.id != agent_id);
-                // If this identity's leaf is currently open, close it too —
-                // all stored data has been erased so there's nothing to
-                // resume.
-                self.close_agent_leaf_by_id(agent_id);
-                self.refresh_agents_popup();
+                self.apply_identity_delete(agent_id);
                 tracing::info!(%agent_id, "identity removed after deletion");
             }
             crate::app_event::AppEvent::AgentRenamed { agent_id, new_path } => {
-                if let Some(record) = self
-                    .state
-                    .stored_records
-                    .iter_mut()
-                    .find(|record| record.id == agent_id)
-                {
-                    record.name = new_path.as_str().to_string();
-                }
-                self.refresh_agents_popup();
+                self.apply_identity_rename(agent_id, new_path.clone());
                 tracing::info!(%agent_id, new_path = %new_path, "identity renamed in storage");
             }
             crate::app_event::AppEvent::HistoryLoaded {
@@ -259,9 +250,6 @@ impl App {
                     // Clear the focus flag so a stale request doesn't
                     // mis-attach to a later, unrelated registration.
                     self.state.pending_focus_agent_name = None;
-                    // A queued re-activation message can never deliver
-                    // now — surface it instead of leaving it dangling.
-                    self.state.pending_outbound = None;
                     tracing::error!(profile = %profile_name, error = %e, "failed to spawn agent");
                     self.state.toasts.error("Agent creation failed", Some(e));
                 }
@@ -371,6 +359,15 @@ impl App {
                     self.state.dag_view_error = Some(error);
                 }
             },
+            crate::app_event::AppEvent::FlowViewLoaded(result) => match result {
+                Ok(view) => {
+                    self.state.flow_view = Some(view);
+                    self.state.flow_view_error = None;
+                }
+                Err(error) => {
+                    self.state.flow_view_error = Some(error);
+                }
+            },
             crate::app_event::AppEvent::HpcConfigLoaded(result) => match result {
                 Ok(reply) => self.apply_hpc_config_reply(reply),
                 Err(error) => self.apply_hpc_config_failed(error),
@@ -382,6 +379,18 @@ impl App {
                 Ok(reply) => self.apply_hpc_save_reply(reply),
                 Err(error) => self.apply_hpc_save_failed(error),
             },
+            crate::app_event::AppEvent::VfsListingLoaded(result) => {
+                self.apply_vfs_listing(result);
+            }
+            crate::app_event::AppEvent::VfsTextLoaded(result) => {
+                self.apply_vfs_text(result);
+            }
+            crate::app_event::AppEvent::VfsMountsLoaded(result) => {
+                self.apply_vfs_mounts(result);
+            }
+            crate::app_event::AppEvent::VfsMutationDone(result) => {
+                self.apply_vfs_mutation(result);
+            }
             crate::app_event::AppEvent::BibliographySnapshotLoaded { token, result } => {
                 self.apply_bibliography_snapshot(token, result);
             }
@@ -522,21 +531,6 @@ impl App {
                     self.open_leaf_for(&path, agent_id);
                 }
             }
-            crate::app_event::AppEvent::ReactivateAgent { record, text } => {
-                let Ok(path) = agentik_types::AgentPath::try_from(record.name.as_str()) else {
-                    self.state.toasts.error(
-                        "Message not delivered",
-                        Some(format!("invalid stored path: {}", record.name)),
-                    );
-                    return;
-                };
-                // Tolerant parse covers both the current per-agent config
-                // shape and legacy full-profile rows.
-                let config = agentik_core::AgentProfileConfig::from_json(&record.config_json);
-                self.state.pending_outbound = Some((path.as_str().to_string(), text));
-                tracing::info!(agent = %path, "re-activating passivated identity for delivery");
-                self.spawn_agent_at_path(config, path);
-            }
             crate::app_event::AppEvent::ShowError { title, detail } => {
                 self.state.toasts.error(title, detail);
             }
@@ -558,51 +552,35 @@ impl App {
     /// dormant until a message re-activates it.
     pub(super) fn apply_host_event(&mut self, event: gateway::proto::HostEventView) {
         match event {
-            gateway::proto::HostEventView::AgentRegistered { path, info } => {
+            gateway::proto::HostEventView::AgentRegistered { path, info, cause } => {
                 let name = path.clone();
                 let agent_id =
                     registered_agent_id(&gateway::proto::HostEventView::AgentRegistered {
                         path: path.clone(),
                         info: info.clone(),
+                        cause,
                     })
                     .unwrap_or_else(uuid::Uuid::new_v4);
                 self.state.upsert_live_agent(&name, agent_id, info.status);
 
-                // Deliver a message queued while this identity was
-                // passivated — registration is the earliest moment the
-                // daemon can accept a delivery.
-                if self
-                    .state
-                    .pending_outbound
-                    .as_ref()
-                    .is_some_and(|(pending, _)| pending == &name)
-                {
-                    let (_, text) = self.state.pending_outbound.take().expect("checked above");
-                    let client = self.client.clone();
-                    let agent = name.clone();
-                    self.spawn_client_task("deliver_pending_message", move || async move {
-                        if let Err(e) = client.deliver_message(&agent, text).await {
-                            tracing::error!(agent = %agent, error = %e, "pending message delivery failed");
-                        }
-                    });
-                }
-
-                // Did the user explicitly ask to land on this leaf?
-                // Matches by short name (`info.name`) since the spawn
-                // was requested with the picker-visible short name.
-                let steal_focus = self
-                    .state
-                    .pending_focus_agent_name
-                    .as_deref()
-                    .is_some_and(|wanted| wanted == info.name);
+                // The cause replaces registry-state guessing: only a
+                // user-initiated spawn/resume may steal focus (and only
+                // when this TUI asked for it); a wake-up hydrates an open
+                // leaf; a tool child stays registry-only.
+                let steal_focus = cause == gateway::proto::ActivationCauseView::UserInitiated
+                    && self
+                        .state
+                        .pending_focus_agent_name
+                        .as_deref()
+                        .is_some_and(|wanted| wanted == info.name);
                 if steal_focus {
                     self.state.pending_focus_agent_name = None;
                 }
 
                 if let Some(session) = self.state.sessions.iter_mut().find(|s| s.name == name) {
                     // An open leaf already covers this identity (e.g. a
-                    // dormant view re-activated): refresh its identity
-                    // binding and hydrate the context.
+                    // dormant view re-activated by a wake-up): refresh its
+                    // identity binding and hydrate the context.
                     session.agent_id = agent_id;
                     self.hydrate_leaf(&name);
                     if steal_focus {
@@ -618,25 +596,48 @@ impl App {
                 } else if steal_focus {
                     // User-initiated spawn/resume: open a leaf and focus it.
                     let idx = self.open_leaf_for(&name, agent_id);
+                    self.state.active_agent_idx = idx;
+                    self.dirty = true;
                     tracing::info!(agent = %name, leaf_idx = idx, "opened leaf for user spawn");
-                } else if self.state.sessions.is_empty() && !self.state.opened_leaf {
+                } else if cause != gateway::proto::ActivationCauseView::ToolChild
+                    && self.state.sessions.is_empty()
+                    && !self.state.opened_leaf
+                {
                     // Initial view: the very first live agent seen at
                     // startup becomes the starting leaf so the workspace
                     // is never blank; everything after this is silent.
                     self.open_leaf_for(&name, agent_id);
                 } else {
-                    // Tool-spawned child or unrelated registration:
+                    // Tool-spawned child or wake-up without an open leaf:
                     // registry-only, completely silent.
-                    tracing::info!(agent = %name, "daemon agent registered (registry-only)");
+                    tracing::info!(agent = %name, ?cause, "daemon agent registered (registry-only)");
                 }
             }
-            gateway::proto::HostEventView::AgentUnregistered { path } => {
-                // Passivation or shutdown of the live instance. The leaf
-                // stays: it is a view over the identity, which survives
-                // in storage and re-activates on the next message.
+            gateway::proto::HostEventView::AgentUnregistered { path, cause } => {
+                // The live instance went away. The leaf stays: it is a view
+                // over the identity, which survives in storage and
+                // re-activates on the next message (idle passivation,
+                // explicit shutdown) — except `evicted`, where the
+                // identity event that follows owns the view teardown.
                 self.state.remove_live_agent(&path);
                 self.agent_model_cache.remove(&path);
-                tracing::info!(agent = %path, "daemon agent passivated — leaf kept, view dormant");
+                tracing::info!(agent = %path, ?cause, "daemon agent left the registry — leaf kept");
+            }
+            gateway::proto::HostEventView::IdentityRenamed {
+                agent_id,
+                old_path: _,
+                new_path,
+            } => {
+                // Cross-client rename: every connected frontend receives
+                // this, not just the one that issued the PATCH.
+                if let Ok(path) = agentik_types::AgentPath::try_from(new_path.as_str()) {
+                    self.apply_identity_rename(agent_id, path);
+                } else {
+                    tracing::warn!(%agent_id, path = %new_path, "identity renamed to an invalid path");
+                }
+            }
+            gateway::proto::HostEventView::IdentityDeleted { agent_id, path: _ } => {
+                self.apply_identity_delete(agent_id);
             }
             // Cross-agent runtime status update. Refreshes the
             // live-registry mirror (the unified picker reads it); the
@@ -670,6 +671,51 @@ impl App {
         }
         // Any registry movement (registration, passivation, status) is
         // visible in an open unified popup — rebuild its rows in place.
+        self.refresh_agents_popup();
+    }
+
+    /// Fold an identity rename into every TUI view: the stored record,
+    /// any open leaf (rebound by identity id, not path), and the model
+    /// render cache. Shared by the local PATCH reply (`AgentRenamed`)
+    /// and the daemon-broadcast `IdentityRenamed` host event, which is
+    /// how OTHER connected frontends' renames reach this one.
+    fn apply_identity_rename(&mut self, agent_id: uuid::Uuid, new_path: agentik_types::AgentPath) {
+        if let Some(record) = self
+            .state
+            .stored_records
+            .iter_mut()
+            .find(|record| record.id == agent_id)
+        {
+            record.name = new_path.as_str().to_string();
+        }
+        // Rebind any open leaf to the renamed path: a leaf is a view
+        // over the identity (agent_id), not over a path snapshot.
+        // Without this the leaf keeps routing events for its old
+        // name forever — post-rename frames arrive under the new
+        // path and would be dropped.
+        if let Some(old_name) =
+            rebind_leaf_name(&mut self.state.sessions, agent_id, new_path.as_str())
+        {
+            if let Some(display) = self.agent_model_cache.remove(&old_name) {
+                self.agent_model_cache
+                    .insert(new_path.as_str().to_string(), display);
+            }
+            self.dirty = true;
+            tracing::info!(%agent_id, from = %old_name, "open leaf rebound to renamed path");
+        }
+        self.refresh_agents_popup();
+    }
+
+    /// Fold an identity deletion into every TUI view: drop the stored
+    /// record and close any open leaf — all stored data has been erased
+    /// so there is nothing left to view or resume. Shared by the local
+    /// DELETE reply (`AgentDeleted`) and the daemon-broadcast
+    /// `IdentityDeleted` host event.
+    fn apply_identity_delete(&mut self, agent_id: uuid::Uuid) {
+        self.state
+            .stored_records
+            .retain(|record| record.id != agent_id);
+        self.close_agent_leaf_by_id(agent_id);
         self.refresh_agents_popup();
     }
 
@@ -925,5 +971,101 @@ impl App {
     {
         let task = make();
         agentik_core::supervise::spawn_safe_on_drop(&self.runtime_handle, name, task);
+    }
+}
+
+/// Pick the session an agent-scoped event applies to.
+///
+/// `None` means the event belongs to no view and must be dropped — the
+/// caller must never fall back to the active tab, or another agent's
+/// messages and status bleed into the foreground window.
+fn route_target(
+    sessions: &[super::AgentSession],
+    agent_name: &str,
+    active_idx: usize,
+) -> Option<usize> {
+    if agent_name.is_empty() {
+        // Legacy anonymous frames attach to the active agent.
+        return Some(active_idx);
+    }
+    sessions.iter().position(|s| s.name == agent_name)
+}
+
+/// Rebind the identity's open leaf to its renamed path. Returns the old
+/// name when a leaf moved, `None` when the identity has no open leaf (or
+/// already carries the new name — a no-op rename must not churn state).
+fn rebind_leaf_name(
+    sessions: &mut [super::AgentSession],
+    agent_id: uuid::Uuid,
+    new_name: &str,
+) -> Option<String> {
+    let session = sessions.iter_mut().find(|s| s.agent_id == agent_id)?;
+    if session.name == new_name {
+        return None;
+    }
+    Some(std::mem::replace(&mut session.name, new_name.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(name: &str) -> crate::state::AgentSession {
+        crate::state::AgentSession {
+            name: name.to_string(),
+            agent_id: uuid::Uuid::new_v4(),
+            context: None,
+            pending_tab_state: Default::default(),
+        }
+    }
+
+    #[test]
+    fn named_event_routes_to_its_own_leaf() {
+        let sessions = [session("/root/alpha"), session("/root/beta")];
+        assert_eq!(route_target(&sessions, "/root/beta", 0), Some(1));
+    }
+
+    #[test]
+    fn unknown_agent_event_is_dropped_not_rerouted() {
+        // Regression: an identity without an open leaf (tool-spawned
+        // child, closed tab) used to fall through to the active tab,
+        // rendering its messages and status into the foreground agent.
+        let sessions = [session("/root/alpha")];
+        assert_eq!(route_target(&sessions, "/root/ghost", 0), None);
+    }
+
+    #[test]
+    fn empty_name_attaches_to_active_agent() {
+        let sessions = [session("/root/alpha")];
+        assert_eq!(route_target(&sessions, "", 0), Some(0));
+    }
+
+    #[test]
+    fn rename_rebinds_leaf_by_identity() {
+        // Regression: an open leaf kept its old path after the identity was
+        // renamed, so all post-rename events were routed to no view (or,
+        // before that, bled into the active tab).
+        let id = uuid::Uuid::new_v4();
+        let mut sessions = [session("/root/alpha")];
+        sessions[0].agent_id = id;
+
+        assert_eq!(
+            rebind_leaf_name(&mut sessions, id, "/root/beta").as_deref(),
+            Some("/root/alpha")
+        );
+        assert_eq!(sessions[0].name, "/root/beta");
+
+        // A foreign identity's leaf is untouched.
+        assert_eq!(
+            rebind_leaf_name(&mut sessions, uuid::Uuid::new_v4(), "/root/gamma"),
+            None
+        );
+        assert_eq!(sessions[0].name, "/root/beta");
+
+        // No-op rename (already current) doesn't churn state.
+        assert_eq!(
+            rebind_leaf_name(&mut sessions, id, "/root/beta"),
+            None
+        );
     }
 }

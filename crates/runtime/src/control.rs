@@ -171,7 +171,48 @@ impl HostControl {
         self.fire(HostCommand::Shutdown {
             name: name.into(),
             caller_path: None,
+            evict: false,
             reply_tx: None,
+        });
+    }
+
+    /// Evict a live instance because its identity was deleted or renamed
+    /// in storage. Same shutdown path as [`Self::shutdown_agent`], but the
+    /// `AgentUnregistered` event carries cause `Evicted` (and an identity
+    /// event follows) so frontends can distinguish storage-driven
+    /// eviction from an explicit shutdown.
+    pub fn evict_agent(&self, name: &str) {
+        self.fire(HostCommand::Shutdown {
+            name: name.into(),
+            caller_path: None,
+            evict: true,
+            reply_tx: None,
+        });
+    }
+
+    /// Notify the host pump that an identity was renamed in storage. The
+    /// pump emits `HostEvent::IdentityRenamed` to every connected
+    /// frontend — not just the one that issued the rename.
+    pub fn notify_identity_renamed(
+        &self,
+        agent_id: uuid::Uuid,
+        old_path: &str,
+        new_path: &str,
+    ) {
+        self.fire(HostCommand::NotifyIdentityRenamed {
+            agent_id,
+            old_path: old_path.into(),
+            new_path: new_path.into(),
+        });
+    }
+
+    /// Notify the host pump that an identity was deleted from storage.
+    /// The pump emits `HostEvent::IdentityDeleted` to every connected
+    /// frontend.
+    pub fn notify_identity_deleted(&self, agent_id: uuid::Uuid, path: &str) {
+        self.fire(HostCommand::NotifyIdentityDeleted {
+            agent_id,
+            path: path.into(),
         });
     }
 
@@ -190,6 +231,7 @@ impl HostControl {
             self.ask(|tx| HostCommand::Shutdown {
                 name: name.into(),
                 caller_path: Some(caller_path.into()),
+                evict: false,
                 reply_tx: Some(tx),
             }),
         )
@@ -311,6 +353,7 @@ impl HostControl {
             caller_path: caller_path.clone(),
             config: Box::new(agentik_core::AgentProfileConfig::new(kind)),
             model_override: None,
+            operator: false,
             reply_tx: tx,
         })
         .await
@@ -331,6 +374,7 @@ impl HostControl {
             caller_path: caller_path.clone(),
             config: Box::new(config),
             model_override,
+            operator: true,
             reply_tx: tx,
         })
         .await
@@ -406,12 +450,15 @@ pub enum HostCommand {
     /// Spawn and register an agent. Reply: Ok(path_string) or Err(msg).
     /// `caller_path` is the parent agent's path; the child's path is
     /// derived as `caller_path.join(name)`. `config` carries the agent
-    /// kind plus per-agent model/runtime preferences.
+    /// kind plus per-agent model/runtime preferences. `operator` marks
+    /// frontend/operator-initiated spawns (focus may steal) versus
+    /// agent-tool child spawns (registry-only).
     Spawn {
         name: String,
         caller_path: agentik_types::AgentPath,
         config: Box<agentik_core::AgentProfileConfig>,
         model_override: Option<Model>,
+        operator: bool,
         reply_tx: oneshot::Sender<Result<String, String>>,
     },
 
@@ -419,12 +466,27 @@ pub enum HostCommand {
     /// `caller_path` is `None` for operator callers (unrestricted) and
     /// `Some(agent path)` for agent callers, in which case the host only
     /// allows the agent's direct children. `reply_tx` is `Some` for
-    /// agent-facing calls so denials are surfaced.
+    /// agent-facing calls so denials are surfaced. `evict` marks
+    /// storage-driven evictions (identity deleted/renamed) so the
+    /// `AgentUnregistered` event carries cause `Evicted`.
     Shutdown {
         name: String,
         caller_path: Option<String>,
+        evict: bool,
         reply_tx: Option<oneshot::Sender<std::result::Result<(), String>>>,
     },
+
+    /// Fire-and-forget: an identity was renamed in storage. The pump
+    /// emits `HostEvent::IdentityRenamed` to every connected frontend.
+    NotifyIdentityRenamed {
+        agent_id: Uuid,
+        old_path: String,
+        new_path: String,
+    },
+
+    /// Fire-and-forget: an identity was deleted from storage. The pump
+    /// emits `HostEvent::IdentityDeleted` to every connected frontend.
+    NotifyIdentityDeleted { agent_id: Uuid, path: String },
 
     /// Deliver a user message to a named agent (TUI → agent).
     /// Not inter-agent communication — use Delegate for that.

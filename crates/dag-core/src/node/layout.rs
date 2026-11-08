@@ -142,6 +142,12 @@ impl NodePorts {
         self
     }
 
+    /// Mark an already declared output as optional.
+    pub fn with_optional_output(mut self, index: PortId) -> Self {
+        self.output_ports.set_optional(index);
+        self
+    }
+
     /// Access the declared input ports.
     pub fn input_ports(&self) -> &Ports {
         &self.input_ports

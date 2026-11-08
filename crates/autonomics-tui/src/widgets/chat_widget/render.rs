@@ -527,14 +527,21 @@ pub(crate) fn render_line_with_settings(
             } else {
                 ("x", theme.error)
             };
-            let n = content.chars().count();
             vec![Line::from(Span::styled(
-                format!(" {icon} [result — {n} chars, collapsed]"),
+                format!(
+                    " {icon} Result · {} · collapsed",
+                    tool_output_summary(content)
+                ),
                 Style::default().fg(color),
             ))]
         }
         _ => render_line_owned(msg, area),
     }
+}
+
+fn tool_output_summary(content: &str) -> String {
+    let lines = content.lines().count().max(1);
+    format!("{lines} line{} · {} chars", if lines == 1 { "" } else { "s" }, content.chars().count())
 }
 
 #[cfg(test)]

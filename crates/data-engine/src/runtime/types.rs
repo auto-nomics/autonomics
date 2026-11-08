@@ -1,12 +1,11 @@
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::dag::DagTuiSnapshot;
 use crate::dag::graph::PortOutputs;
-use crate::dag::node_event::NodeEvent;
 use crate::dag::runtime::RuntimeStatus;
-use crate::dag::{DagTuiSnapshot, InputHashing, LogicalGraph, RunReport};
 use crate::dag_shell::DagShellOutcome;
-use crate::data_engine::{ClearDagOutcome, LogicalInstallReport};
+use crate::data_engine::ClearDagOutcome;
 use crate::error::Result as EngineResult;
 
 /// Envelope that routes a [`DataEngineCmd`] to an agent's actor.
@@ -19,21 +18,30 @@ pub struct EngineMsg {
     pub cmd: DataEngineCmd,
 }
 
-/// Per-call scheduler controls for `run_dag`.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RunDagOptions {
-    /// `Some(true)` enables fingerprint-based reuse of successful nodes.
-    /// `None` preserves the engine's current scheduler configuration.
-    pub resume: Option<bool>,
-    /// Override input identity depth for this and subsequent runs on this
-    /// engine. `None` preserves the current setting.
-    pub input_hashing: Option<InputHashing>,
-    /// Fixed barrier size for in-flight assay waves. `None` preserves the
-    /// scheduler's unbarriered behavior.
-    pub wave_size: Option<usize>,
-}
-
 pub enum DataEngineCmd {
+    SetFlow {
+        /// Replace the session's authored flow wholesale. Validated first;
+        /// an invalid graph leaves the previous flow untouched.
+        flow: dag_engine::FlowGraph,
+        reply: oneshot::Sender<EngineResult<()>>,
+    },
+    GetFlow {
+        reply: oneshot::Sender<EngineResult<dag_engine::FlowGraph>>,
+    },
+    GetFlowView {
+        reply: oneshot::Sender<EngineResult<crate::flow::FlowView>>,
+    },
+    RunFlow {
+        /// Authored stage-model graph. `Some` replaces the session's flow
+        /// before running (set-and-run in one step); `None` runs the flow
+        /// already stored for this session.
+        flow: Option<dag_engine::FlowGraph>,
+        options: crate::flow::FlowOptions,
+        reply: oneshot::Sender<EngineResult<dag_engine::FlowRunReport>>,
+        /// Fires when the caller drops the reply receiver; aborts the flow
+        /// run instead of leaving instances executing unowned.
+        cancel_token: CancellationToken,
+    },
     RunDagShell {
         script: String,
         dry_run: bool,
@@ -45,10 +53,6 @@ pub enum DataEngineCmd {
         kind: String,
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
-    },
-    AddLogicalGraph {
-        graph: LogicalGraph,
-        reply: oneshot::Sender<EngineResult<LogicalInstallReport>>,
     },
     AddEdge {
         from: String,
@@ -63,25 +67,6 @@ pub enum DataEngineCmd {
         to: String,
         to_port: u8,
         reply: oneshot::Sender<EngineResult<()>>,
-    },
-    RunDag {
-        /// Optional sink for streaming lightweight per-node events (status /
-        /// progress / log / finished) out of the actor as the run progresses.
-        /// `None` for the non-streaming path.
-        event_tx: Option<mpsc::Sender<NodeEvent>>,
-        /// Commit message for the history snapshot. If `None`, a default is used.
-        commit_message: Option<String>,
-        /// Who initiated the run (e.g. `"agent:/root/researcher"`), recorded
-        /// in the run's audit trail. `None` leaves the run unattributed.
-        trigger: Option<String>,
-        options: RunDagOptions,
-        reply: oneshot::Sender<EngineResult<RunReport>>,
-        /// Cancellation token shared with the caller. When the caller drops
-        /// the reply receiver (e.g. the agent task is cancelled), this token
-        /// fires and the spawned DAG run task aborts early — releasing the
-        /// engine mutex and resetting the `running` flag instead of leaving
-        /// the actor stuck.
-        cancel_token: CancellationToken,
     },
     GetOutput {
         id: String,

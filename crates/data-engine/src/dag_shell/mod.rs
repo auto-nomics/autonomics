@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::dag::{DAG, LogicalGraph};
+use crate::dag::DAG;
 use crate::node_registry::registry::NodeRegistry;
 
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
@@ -42,6 +42,61 @@ pub const MAX_RESULT_BYTES: usize = 16 * 1024;
 /// left-nested expressions (e.g. `1+1+1+...`), which are not bracket-nested.
 const EVAL_THREAD_STACK: usize = 64 * 1024 * 1024;
 
+pub(crate) fn run_channel_function(
+    function: &serde_json::Value,
+    input: Option<&dag_core::value::NodeValue>,
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<dag_core::value::NodeValue, String> {
+    run_channel_function_with_inputs(function, input, None, snapshot, registry)
+}
+
+pub(crate) fn run_channel_function_with_inputs(
+    function: &serde_json::Value,
+    input: Option<&dag_core::value::NodeValue>,
+    second_input: Option<&dag_core::value::NodeValue>,
+    snapshot: &DagShellSnapshot,
+    registry: &Arc<NodeRegistry>,
+) -> Result<dag_core::value::NodeValue, String> {
+    let value = function
+        .get("__dag_shell_function__")
+        .and_then(|v| v.as_object())
+        .ok_or("invalid channel function")?;
+    let source = value
+        .get("source")
+        .and_then(|v| v.as_str())
+        .ok_or("missing channel function source")?
+        .to_owned();
+    let captures = value
+        .get("captures")
+        .and_then(|v| v.as_object())
+        .ok_or("missing channel function captures")?
+        .clone();
+    let functions = value.get("functions").cloned();
+    let input = input.cloned();
+    let second_input = second_input.cloned();
+    let snapshot = snapshot.clone();
+    let registry = Arc::clone(registry);
+    std::thread::Builder::new()
+        .name("dag-shell-channel".into())
+        .stack_size(EVAL_THREAD_STACK)
+        .spawn(move || {
+            interp::run_pure_node_function(
+                &source,
+                &captures,
+                functions.as_ref(),
+                input.as_ref(),
+                second_input.as_ref(),
+                &snapshot,
+                &registry,
+            )
+        })
+        .map_err(|e| format!("cannot start channel function: {e}"))?
+        .join()
+        .map_err(|_| "channel function thread panicked".to_string())?
+        .map_err(|e| format!("channel function: {}", e.message))
+}
+
 #[derive(Debug, Clone)]
 pub enum GraphEditOp {
     AddNode {
@@ -63,14 +118,17 @@ pub enum GraphEditOp {
         to: String,
         to_port: u8,
     },
-    RemoveEdge {
+    AddCollectEdge {
         from: String,
         from_port: u8,
         to: String,
         to_port: u8,
     },
-    AddLogicalGraph {
-        graph: LogicalGraph,
+    RemoveEdge {
+        from: String,
+        from_port: u8,
+        to: String,
+        to_port: u8,
     },
 }
 
@@ -81,8 +139,8 @@ impl GraphEditOp {
             Self::UpdateNode { .. } => "update_node",
             Self::RemoveNode { .. } => "remove_node",
             Self::AddEdge { .. } => "add_edge",
+            Self::AddCollectEdge { .. } => "collect_edge",
             Self::RemoveEdge { .. } => "remove_edge",
-            Self::AddLogicalGraph { .. } => "add_logical_graph",
         }
     }
 }
@@ -172,6 +230,40 @@ impl DagShellSnapshot {
                 .collect(),
             dot: dag.to_dot(),
             logical_graph_count: dag.logical_graphs().len(),
+        }
+    }
+
+    pub(crate) fn from_flow(flow: &dag_engine::FlowGraph) -> Self {
+        let mut nodes = BTreeMap::new();
+        for p in flow.processes() {
+            nodes.insert(
+                p.id.clone(),
+                ShellNode {
+                    kind: p.kind.clone(),
+                    spec: Some(p.spec.clone()),
+                    ports: serde_json::Value::Null,
+                },
+            );
+        }
+        for source in flow.sources() {
+            nodes.insert(
+                source.id.clone(),
+                ShellNode {
+                    kind: "channel".into(),
+                    spec: serde_json::to_value(&source.spec).ok(),
+                    ports: serde_json::Value::Null,
+                },
+            );
+        }
+        Self {
+            nodes,
+            edges: flow
+                .wires()
+                .iter()
+                .filter_map(|w| serde_json::to_value(w).ok())
+                .collect(),
+            dot: String::new(),
+            logical_graph_count: 0,
         }
     }
 
@@ -310,11 +402,11 @@ pub fn operation_traces(operations: &[GraphEditOp]) -> Vec<OperationTrace> {
                     }
                 }
                 GraphEditOp::AddEdge { from, to, .. }
+                | GraphEditOp::AddCollectEdge { from, to, .. }
                 | GraphEditOp::RemoveEdge { from, to, .. } => {
                     trace.from = Some(from.clone());
                     trace.to = Some(to.clone());
                 }
-                GraphEditOp::AddLogicalGraph { .. } => {}
             }
             trace
         })

@@ -22,6 +22,7 @@
 //! - `gc` — retention sweep for the persistent dag-tasks receipt tree
 
 mod apptainer;
+mod channel_value;
 mod contract;
 mod gc;
 pub mod heartbeat;
@@ -42,6 +43,7 @@ mod workspace;
 pub use apptainer::{
     ApptainerContainer, ApptainerMode, ApptainerNetwork, ApptainerSettings, SifImage,
 };
+pub use channel_value::ChannelTransportValue;
 pub use contract::{
     TaskAttemptReceipt, TaskDispatch, TaskExecution, TaskInputBinding, TaskInputSource,
     TaskOutputBinding, TaskResources, TaskSpec, TaskSubmission, task_timeout,

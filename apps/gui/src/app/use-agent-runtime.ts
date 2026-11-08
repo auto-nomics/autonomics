@@ -20,6 +20,7 @@ import type {
   StateSnapshot,
   StoredAgent,
 } from "@/types";
+import { formatTokenUsage } from "@/lib/token-format";
 import type { DisplaySettings } from "@/features/agent";
 
 type MessageMap = Record<string, ChatItem[]>;
@@ -411,6 +412,8 @@ export function useAgentRuntime() {
         appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
+        // Only user-authored prompts belong in the Ctrl+R history;
+        // MessageInjected items are non-user (delegate/background/harness).
         setPromptHistories((current) => {
           const history = current[agent] ?? [];
           return history.includes(event.UserMessageAcknowledged) ? current : { ...current, [agent]: [...history, event.UserMessageAcknowledged].slice(-200) };
@@ -450,7 +453,11 @@ export function useAgentRuntime() {
         setStreaming((current) => {
           const item = current[agent];
           if (!item) return current;
-          item.usage = `输入 ${event.UsageUpdate.input_tokens ?? 0} · 输出 ${event.UsageUpdate.output_tokens ?? 0}`;
+          item.usage = formatTokenUsage({
+            input: event.UsageUpdate.input_tokens ?? 0,
+            output: event.UsageUpdate.output_tokens ?? 0,
+            cache: event.UsageUpdate.cache_read_input_tokens ?? 0,
+          });
         setUsage((currentUsage) => ({
           ...currentUsage,
           [agent]: {
@@ -487,11 +494,23 @@ export function useAgentRuntime() {
           : agent));
       } else if (event.kind === "agent_unregistered") {
         // The live instance went away — under virtual-actor mode this is
-        // usually idle-TTL passivation, not death. Drop it from the live
-        // registry only: open tabs survive as dormant views and the
-        // identity re-activates from storage on the next message.
+        // usually idle-TTL passivation (event.cause "idle_passivation"),
+        // not death. Drop it from the live registry only: open tabs
+        // survive as dormant views and the identity re-activates from
+        // storage on the next message.
         setAgents((current) => current.filter((agent) => agent.path !== event.path));
         setStatuses((current) => ({ ...current, [event.path]: "idle" }));
+      } else if (event.kind === "identity_renamed") {
+        // Cross-client rename: the storage record moved old_path →
+        // new_path. Keep the picker list current; a live instance was
+        // evicted (its unregistered frame precedes this) and re-activates
+        // under the new path on demand.
+        setStoredAgents((current) => current.map((record) =>
+          record.id === event.agent_id ? { ...record, name: event.new_path } : record));
+      } else if (event.kind === "identity_deleted") {
+        // Cross-client delete: drop the record from the picker list. The
+        // deleting client's own UI handles tab teardown.
+        setStoredAgents((current) => current.filter((record) => record.id !== event.agent_id));
       } else if (event.kind === "agent_status_changed") {
         setAgents((current) => current.map((agent) => agent.path === event.path ? { ...agent, status: event.status } : agent));
         // The host projection collapses Retrying into Running; the retry

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -22,7 +22,10 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { ProjectEditor } from "@/features/projects/project-editor";
-import { ConfigView, DagView } from "@/features/system";
+import { PluginManager } from "@/features/projects/plugin-manager";
+import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
+import { VfsFileEditorBody } from "@/features/vfs";
+import { ConfigView, DagView, FlowView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
 import { registerEditorKind, type EditorContext } from "./editor-registry";
@@ -85,6 +88,15 @@ function DagEditorBody({ editor }: EditorContext) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <DagView key={agentPath} activeAgent={agentPath} />
+    </div>
+  );
+}
+
+function FlowEditorBody({ editor }: EditorContext) {
+  const agentPath = String(editor.params.agentPath ?? "");
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <FlowView key={agentPath} activeAgent={agentPath} />
     </div>
   );
 }
@@ -277,10 +289,43 @@ export function registerWorkbenchEditorKinds(): void {
   registerEditorKind({
     kind: "plugin-projects",
     title: () => "插件项目",
+    name: () => "Plugin projects",
     icon: () => FolderCode,
     body: ProjectEditor,
     mount: "keep-alive",
     confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
+  });
+  registerEditorKind({
+    kind: "plugin-manager",
+    title: () => "插件管理",
+    name: () => "Plugin manager",
+    icon: () => FolderCode,
+    body: PluginManager,
+    mount: "keep-alive",
+  });
+  registerEditorKind({
+    kind: "plugin-dev",
+    title: (editor) => `开发 · ${String(editor.params.name ?? "")}`,
+    name: (editor) => `Plugin dev (${String(editor.params.name ?? "")})`,
+    icon: () => FlaskConical,
+    // keep-alive is load-bearing: the terminal session and unsaved file
+    // edits survive tab switches.
+    body: PluginDevEditorBody,
+    mount: "keep-alive",
+  });
+  registerEditorKind({
+    kind: "vfs-file",
+    title: (editor) => {
+      const path = String(editor.params.path ?? "");
+      return path.split("/").filter(Boolean).pop() || path || "文件";
+    },
+    name: (editor) => String(editor.params.path ?? ""),
+    icon: () => FileText,
+    body: VfsFileEditorBody,
+    // keep-alive: loaded contents and unsaved drafts survive tab
+    // switches; the dirty veto guards closing with unsaved edits.
+    mount: "keep-alive",
+    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("该文件有未保存的修改，关闭将丢弃修改。继续？"),
   });
   registerEditorKind({
     kind: "config",
@@ -320,6 +365,15 @@ export function registerWorkbenchEditorKinds(): void {
     name: (editor) => `Agent DAG (${String(editor.params.agentPath ?? "")})`,
     icon: () => GitFork,
     body: DagEditorBody,
+    mount: "keep-alive",
+  });
+
+  registerEditorKind({
+    kind: "flow",
+    title: (editor) => `Flow · ${leafName(String(editor.params.agentPath ?? ""))}`,
+    name: (editor) => `Agent Flow (${String(editor.params.agentPath ?? "")})`,
+    icon: () => Network,
+    body: FlowEditorBody,
     mount: "keep-alive",
   });
 }

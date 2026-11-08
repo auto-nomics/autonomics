@@ -14,6 +14,7 @@ import type { LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { AgentSidebar } from "./agent-sidebar";
 import { WikiSidebarView } from "@/features/wiki/wiki-sidebar-view";
+import { VfsSidebar } from "@/features/vfs";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
@@ -39,6 +40,7 @@ const CONTAINER_TITLES: Record<ContainerId, string> = {
   wiki: "知识库",
   agents: "Agent",
   projects: "插件项目",
+  vfs: "文件",
 };
 
 function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
@@ -77,6 +79,9 @@ function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId;
         <WikiSidebarView onOpenGraph={() => openEditor({ kind: "wiki-graph" })} />
       </div>
     );
+  }
+  if (container === "vfs") {
+    return <VfsSidebar />;
   }
   return <AgentSidebar onSpawn={onSpawn} />;
 }
@@ -214,7 +219,7 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
   const state = useWorkbenchState();
   return (
     <>
-      {container !== "wiki" && container !== "agents" && container !== "projects" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CONTAINER_TITLES[container]}
         </span>

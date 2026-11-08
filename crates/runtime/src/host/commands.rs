@@ -55,23 +55,29 @@ impl RuntimeHost {
         &mut self,
         handle: super::AgentHandle,
         info: crate::control::AgentInfo,
+        cause: super::events::ActivationCause,
     ) {
         let path = handle.path.clone();
         let event_info = self.register_agent(handle, info);
         self.emit_host_event(super::HostEvent::AgentRegistered {
             path: path.clone(),
             info: event_info,
+            cause,
         });
         self.flush_activation_buffer(path.as_str());
-        tracing::info!(agent = %path, "background spawn completed and registered");
+        tracing::info!(agent = %path, ?cause, "background spawn completed and registered");
     }
 
     /// Handle a background spawn/activation outcome: register successes
     /// (flushing their buffered deliveries), fail the waiters on errors.
     pub(super) fn process_spawn_notice(&mut self, notice: SpawnNotice) {
         match notice {
-            SpawnNotice::Activated { handle, info } => {
-                self.register_background_spawn(handle, info);
+            SpawnNotice::Activated {
+                handle,
+                info,
+                cause,
+            } => {
+                self.register_background_spawn(handle, info, cause);
             }
             SpawnNotice::Failed { path, reason } => {
                 self.fail_activation(&path, reason);
@@ -143,7 +149,11 @@ impl RuntimeHost {
         self.infra.runtime_handle.spawn(async move {
             let outcome = activate_identity(&infra, model_slot, resolver, &task_path).await;
             let notice = match outcome {
-                Ok((handle, info)) => SpawnNotice::Activated { handle, info },
+                Ok((handle, info)) => SpawnNotice::Activated {
+                    handle,
+                    info,
+                    cause: super::events::ActivationCause::WakeUp,
+                },
                 Err(reason) => SpawnNotice::Failed { path, reason },
             };
             let _ = reg_tx.send(notice);
@@ -158,8 +168,14 @@ impl RuntimeHost {
                 caller_path,
                 config,
                 model_override,
+                operator,
                 reply_tx,
             } => {
+                let cause = if operator {
+                    super::events::ActivationCause::UserInitiated
+                } else {
+                    super::events::ActivationCause::ToolChild
+                };
                 // Derive child path from caller's path + the LLM-provided segment.
                 let child_path = match caller_path.join(&name) {
                     Ok(p) => p,
@@ -181,6 +197,7 @@ impl RuntimeHost {
                     self.emit_host_event(super::events::HostEvent::AgentRegistered {
                         path: child_path.clone(),
                         info,
+                        cause,
                     });
                     tracing::info!(agent = %child_path, "spawn hit a live instance — resumed in place");
                     return;
@@ -214,7 +231,11 @@ impl RuntimeHost {
                         Ok(Ok(handle)) => {
                             let registered_path = handle.path.as_str().to_string();
                             let _ = reply_tx.send(Ok(registered_path));
-                            let _ = reg_tx.send(SpawnNotice::Activated { handle, info });
+                            let _ = reg_tx.send(SpawnNotice::Activated {
+                                handle,
+                                info,
+                                cause,
+                            });
                         }
                         Ok(Err(e)) => {
                             let _ = reply_tx.send(Err(e.to_string()));
@@ -239,8 +260,14 @@ impl RuntimeHost {
             HostCommand::Shutdown {
                 name,
                 caller_path,
+                evict,
                 reply_tx,
             } => {
+                let cause = if evict {
+                    super::events::RemovalCause::Evicted
+                } else {
+                    super::events::RemovalCause::Explicit
+                };
                 let reply = |r: std::result::Result<(), String>| {
                     if let Some(tx) = reply_tx {
                         let _ = tx.send(r);
@@ -250,7 +277,7 @@ impl RuntimeHost {
                     // Operator path — unrestricted (gateway/TUI semantics).
                     (resolved, None) => {
                         let resolved = resolved.unwrap_or(name);
-                        self.shutdown_agent(&resolved);
+                        self.shutdown_agent_with(&resolved, cause);
                         reply(Ok(()));
                     }
                     // Agent path with an unresolvable target: same message
@@ -263,12 +290,33 @@ impl RuntimeHost {
                         match self.validate_child_control(caller, &resolved, "shut down") {
                             Err(error) => reply(Err(error)),
                             Ok(()) => {
-                                self.shutdown_agent(&resolved);
+                                self.shutdown_agent_with(
+                                    &resolved,
+                                    super::events::RemovalCause::Explicit,
+                                );
                                 reply(Ok(()));
                             }
                         }
                     }
                 }
+            }
+            HostCommand::NotifyIdentityRenamed {
+                agent_id,
+                old_path,
+                new_path,
+            } => {
+                // Storage-level fact reported by a gateway handler: fan it
+                // out to every connected frontend through the host event
+                // stream (single pump, total order with the eviction's
+                // AgentUnregistered that precedes it).
+                self.emit_host_event(super::HostEvent::IdentityRenamed {
+                    agent_id,
+                    old_path,
+                    new_path,
+                });
+            }
+            HostCommand::NotifyIdentityDeleted { agent_id, path } => {
+                self.emit_host_event(super::HostEvent::IdentityDeleted { agent_id, path });
             }
             HostCommand::DeliverMessage {
                 name,
@@ -1218,6 +1266,7 @@ mod interrupt_agent_tests {
         let shutdown = HostCommand::Shutdown {
             name: "worker".into(),
             caller_path: None,
+            evict: false,
             reply_tx: None,
         };
 
@@ -1725,6 +1774,7 @@ mod communication_policy_tests {
         host.process_command(crate::control::HostCommand::Shutdown {
             name: "/root/b".into(),
             caller_path: Some("/root/a".into()),
+            evict: false,
             reply_tx: Some(tx),
         });
         let denied = rx.await.unwrap();
@@ -1751,6 +1801,7 @@ mod communication_policy_tests {
         host.process_command(crate::control::HostCommand::Shutdown {
             name: "/root/a/child".into(),
             caller_path: Some("/root/a".into()),
+            evict: false,
             reply_tx: Some(tx),
         });
         rx.await.unwrap().unwrap();
@@ -1760,6 +1811,7 @@ mod communication_policy_tests {
         host.process_command(crate::control::HostCommand::Shutdown {
             name: "/root/b".into(),
             caller_path: None,
+            evict: false,
             reply_tx: None,
         });
         assert!(!host.agents.contains_key("/root/b"));

@@ -198,6 +198,7 @@ pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "result.json".into(),
+            optional: false,
         }],
     };
     let dispatch = TaskDispatch {
@@ -206,7 +207,6 @@ pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
             logical_node: None,
             kind: "process".into(),
             spec: serde_json::to_value(process)?,
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![TaskInputBinding {

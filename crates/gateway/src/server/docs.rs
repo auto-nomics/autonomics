@@ -5,7 +5,7 @@ use utoipa::{Modify, OpenApi};
 
 use super::{
     agents, context, events, hydration, lifecycle, model_config, plugin_environments, plugins,
-    settings, skills, storage,
+    settings, skills, storage, vfs,
 };
 use crate::proto::*;
 
@@ -33,6 +33,7 @@ use crate::proto::*;
         agents::get_agent_config,
         agents::set_agent_config,
         agents::get_agent_dag,
+        agents::get_agent_flow,
         context::request_context_list,
         storage::list_storage_agents,
         storage::rename_storage_agent,
@@ -53,6 +54,16 @@ use crate::proto::*;
         plugins::list_plugins,
         plugins::list_projects,
         plugins::create_project,
+        plugins::list_project_nodes,
+        plugins::dev_session_status,
+        plugins::dev_session_action,
+        plugins::validate_project,
+        plugins::activate_project,
+        plugins::latest_report,
+        plugins::test_run_node,
+        plugins::uninstall_plugin,
+        plugins::rollback_plugin,
+        plugins::fork_plugin,
         plugin_environments::list_environments,
         plugin_environments::search_docker_hub,
         plugin_environments::inspect_docker_hub_tag,
@@ -60,6 +71,17 @@ use crate::proto::*;
         plugin_environments::delete_environment,
         skills::list_skill_library,
         skills::get_skill_library_detail,
+        vfs::list,
+        vfs::stat,
+        vfs::mounts,
+        vfs::file,
+        vfs::text,
+        vfs::mkdir,
+        vfs::remove,
+        vfs::move_path,
+        vfs::copy,
+        vfs::upload,
+        vfs::save_text,
     ),
     components(schemas(
         GatewayStatus,
@@ -99,6 +121,11 @@ use crate::proto::*;
         DockerHubRepositoryView,
         DockerHubTagView,
         ApprovePluginEnvironmentRequest,
+        plugins::DevSessionAction,
+        plugins::ForkPluginRequest,
+        vfs::MkdirRequest,
+        vfs::TransferRequest,
+        vfs::SaveTextRequest,
     )),
     tags(
         (name = "gateway", description = "Daemon lifecycle and health"),
@@ -109,6 +136,7 @@ use crate::proto::*;
         (name = "model-config", description = "Model providers, active model, and embedding"),
         (name = "settings", description = "Display settings"),
         (name = "plugins", description = "Manifest plugin family management"),
+        (name = "vfs", description = "Virtual filesystem browse and file management"),
     ),
     modifiers(&BearerSecurityAddon)
 )]

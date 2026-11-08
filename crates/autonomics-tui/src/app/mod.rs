@@ -31,6 +31,7 @@ mod bibliography;
 mod chat;
 mod commands;
 mod dag_view;
+mod flow_view;
 mod embedding_config;
 mod event_loop;
 mod history;
@@ -44,6 +45,7 @@ mod render;
 mod runtime_events;
 mod skill_library;
 mod terminal;
+mod vfs_browser;
 mod workspace;
 
 pub struct App {
@@ -79,6 +81,7 @@ pub struct App {
     /// `Some(group keys)` while waiting, with an empty slice at the root.
     /// See [`leader`](self::leader).
     leader_pending: Option<Vec<char>>,
+    split_leaf: Option<(String, String, bool)>,
     dirty: bool,
 }
 
@@ -187,6 +190,7 @@ impl App {
             should_quit: false,
             cancel_requested_at: None,
             leader_pending: None,
+            split_leaf: None,
             dirty: true,
         };
 

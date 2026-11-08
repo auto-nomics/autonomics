@@ -365,6 +365,13 @@ impl App {
                     frame.set_cursor_position(ratatui::layout::Position { x, y });
                 }
             }
+            Overlay::VfsBrowser => {
+                crate::widgets::vfs_browser::render_vfs_browser(
+                    frame.area(),
+                    frame.buffer_mut(),
+                    &mut self.state.vfs_browser,
+                );
+            }
             Overlay::HpcPanel => {
                 use ratatui::widgets::StatefulWidgetRef as _;
                 let popup_width = frame.area().width * 8 / 10;
@@ -425,6 +432,9 @@ impl App {
             }
             Overlay::DagView => {
                 self.render_dag_view(frame.area(), frame.buffer_mut());
+            }
+            Overlay::FlowView => {
+                self.render_flow_view(frame.area(), frame.buffer_mut());
             }
             Overlay::Bibliography => {
                 self.render_bibliography(frame.area(), frame.buffer_mut());
@@ -508,11 +518,24 @@ impl App {
             reasoning_effort: reasoning_effort.as_deref(),
             display: &display,
         };
-        workspace.render(
-            workspace_area,
-            frame.buffer_mut(),
-            self.state.active_tab_state_mut(),
-        );
+        let split = self.split_leaf.clone().and_then(|(first, second, vertical)| {
+            let a = self.state.sessions.iter().position(|s| s.name == first)?;
+            let b = self.state.sessions.iter().position(|s| s.name == second)?;
+            (a != b && (self.state.active_agent_idx == a || self.state.active_agent_idx == b)).then_some((a, b, vertical))
+        });
+        if let Some((a, b, vertical)) = split {
+            let layout = if vertical { Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]) } else { Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]) };
+            let [first, second] = layout.areas(workspace_area);
+            for (index, area) in [(a, first), (b, second)] {
+                let session = &mut self.state.sessions[index];
+                let info = self.agent_model_cache.get(&session.name).cloned().or_else(|| self.state.active_model_display.clone());
+                let pane = AgentWorkspace { agent_path: Some(&session.name), active_model: info.as_ref().map(|i| i.spec.as_str()), context_window: info.as_ref().map(|i| i.context_length), reasoning_effort: info.as_ref().and_then(|i| i.reasoning_effort.as_deref()), display: &display };
+                let state = match session.context.as_mut() { Some(context) => &mut context.tab_state, None => &mut session.pending_tab_state };
+                pane.render(area, frame.buffer_mut(), state);
+            }
+        } else {
+            workspace.render(workspace_area, frame.buffer_mut(), self.state.active_tab_state_mut());
+        }
 
         // Position cursor only when there's an active agent leaf.
         if !self.state.sessions.is_empty() {

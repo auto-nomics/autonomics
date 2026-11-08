@@ -29,9 +29,21 @@ pub enum HostEventView {
     AgentRegistered {
         path: String,
         info: AgentInfo,
+        /// Who asked for the instance: `user_initiated` (frontend spawn /
+        /// resume — may steal focus), `tool_child` (agent-tool spawn —
+        /// registry-only), or `wake_up` (host materialized a dormant
+        /// identity for a buffered delivery).
+        #[serde(default)]
+        cause: ActivationCauseView,
     },
     AgentUnregistered {
         path: String,
+        /// Why the instance left the registry. The identity survives
+        /// storage in every case; `idle_passivation` is normal
+        /// virtual-actor recycling, `evicted` follows an identity
+        /// delete/rename.
+        #[serde(default)]
+        cause: RemovalCauseView,
     },
     AgentStatusChanged {
         path: String,
@@ -46,17 +58,79 @@ pub enum HostEventView {
         spec: String,
         context_length: u64,
     },
+    /// An identity was renamed in storage. Rebind views from `old_path`
+    /// to `new_path`. Preceded by an `agent_unregistered` with cause
+    /// `evicted` when a live instance existed.
+    IdentityRenamed {
+        agent_id: uuid::Uuid,
+        old_path: String,
+        new_path: String,
+    },
+    /// An identity was deleted from storage. Views over it have nothing
+    /// left to show.
+    IdentityDeleted {
+        agent_id: uuid::Uuid,
+        path: String,
+    },
+}
+
+/// Wire mirror of [`runtime::host::ActivationCause`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivationCauseView {
+    #[default]
+    UserInitiated,
+    ToolChild,
+    WakeUp,
+}
+
+/// Wire mirror of [`runtime::host::RemovalCause`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemovalCauseView {
+    IdlePassivation,
+    #[default]
+    Explicit,
+    Evicted,
+    DaemonShutdown,
+}
+
+impl From<runtime::host::ActivationCause> for ActivationCauseView {
+    fn from(cause: runtime::host::ActivationCause) -> Self {
+        match cause {
+            runtime::host::ActivationCause::UserInitiated => Self::UserInitiated,
+            runtime::host::ActivationCause::ToolChild => Self::ToolChild,
+            runtime::host::ActivationCause::WakeUp => Self::WakeUp,
+        }
+    }
+}
+
+impl From<runtime::host::RemovalCause> for RemovalCauseView {
+    fn from(cause: runtime::host::RemovalCause) -> Self {
+        match cause {
+            runtime::host::RemovalCause::IdlePassivation => Self::IdlePassivation,
+            runtime::host::RemovalCause::Explicit => Self::Explicit,
+            runtime::host::RemovalCause::Evicted => Self::Evicted,
+            runtime::host::RemovalCause::DaemonShutdown => Self::DaemonShutdown,
+        }
+    }
 }
 
 impl From<runtime::HostEvent> for HostEventView {
     fn from(event: runtime::HostEvent) -> Self {
         match event {
-            runtime::HostEvent::AgentRegistered { path, info } => HostEventView::AgentRegistered {
-                path: path.as_str().to_string(),
-                info,
-            },
-            runtime::HostEvent::AgentUnregistered { path } => {
-                HostEventView::AgentUnregistered { path }
+            runtime::HostEvent::AgentRegistered { path, info, cause } => {
+                HostEventView::AgentRegistered {
+                    path: path.as_str().to_string(),
+                    info,
+                    cause: cause.into(),
+                }
+            }
+            runtime::HostEvent::AgentUnregistered { path, cause } => {
+                HostEventView::AgentUnregistered {
+                    path,
+                    cause: cause.into(),
+                }
             }
             runtime::HostEvent::AgentStatusChanged {
                 path,
@@ -76,6 +150,18 @@ impl From<runtime::HostEvent> for HostEventView {
                 spec,
                 context_length,
             },
+            runtime::HostEvent::IdentityRenamed {
+                agent_id,
+                old_path,
+                new_path,
+            } => HostEventView::IdentityRenamed {
+                agent_id,
+                old_path,
+                new_path,
+            },
+            runtime::HostEvent::IdentityDeleted { agent_id, path } => {
+                HostEventView::IdentityDeleted { agent_id, path }
+            }
         }
     }
 }
@@ -667,4 +753,19 @@ pub struct CreatePluginProjectRequest {
     pub name: String,
     pub environment_id: String,
     pub purpose: String,
+}
+
+/// `/vfs/mounts` reply: the declarative mount table.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VfsMountsReply {
+    pub mounts: Vec<VfsMountEntry>,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct VfsMountEntry {
+    pub path: String,
+    pub backend: String,
+    pub source: String,
+    pub read_only: bool,
 }

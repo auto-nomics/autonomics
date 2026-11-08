@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import type { DisplaySettings } from "./agent";
 import { statusLabel } from "./agent";
+import { TokenUsageBadge } from "./token-usage";
 
 function planStepIcon(status: unknown) {
   const value = String(status ?? "");
@@ -38,6 +39,7 @@ export type AgentInspectorProps = {
   inspectorOpen: boolean;
   onToggleDisplay: (key: keyof DisplaySettings) => void;
   onOpenDag: () => void;
+  onOpenFlow: () => void;
   onOpenCopy: () => void;
   onOpenHistory: () => void;
   onRefreshHistory: () => void;
@@ -66,23 +68,20 @@ export function AgentInspector(props: AgentInspectorProps) {
             {usage && (
               <div className="flex justify-between gap-2">
                 <span className="shrink-0">Tokens</span>
-                <span className="truncate">{usage.input} in / {usage.output} out</span>
+                <TokenUsageBadge usage={usage} className="shrink-0" />
               </div>
             )}
-            {usage?.cache ? (
-              <div className="flex justify-between gap-2">
-                <span className="shrink-0">Cache</span>
-                <span className="truncate">{usage.cache}</span>
-              </div>
-            ) : null}
           </div>
         </Card>
       </section>
 
       <section>
         <div className="mb-1.5 flex items-center justify-between">
-          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">DAG</h2>
-          <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenDag}>Open</Button>
+          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">DAG / Flow</h2>
+          <div className="flex gap-1">
+            <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenDag}>Nodes</Button>
+            <Button size="xs" variant="ghost" disabled={!activeAgent} onClick={props.onOpenFlow}>Flow</Button>
+          </div>
         </div>
         {inspectorOpen && activeAgent ? <DagMinimap key={activeAgent} activeAgent={activeAgent} /> : <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>}
       </section>

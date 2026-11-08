@@ -1263,6 +1263,15 @@ impl AgentStorage for TursoAgentStorage {
         self.archive_transcript(session_id, &existing_messages)
             .await?;
         self.archive_transcript(session_id, &state.messages).await?;
+        // The immutable transcript is the source of truth for chronology.
+        // Carry those times into the replacement WAL rather than resetting
+        // every surviving message to the compaction time.
+        let transcript_timestamps: std::collections::HashMap<String, i64> = self
+            .get_timestamped_transcript_messages(session_id)
+            .await?
+            .into_iter()
+            .map(|entry| (entry.message.id, entry.created_at))
+            .collect();
 
         // 1. Delete all existing messages for this session.
         self.conn
@@ -1272,10 +1281,16 @@ impl AgentStorage for TursoAgentStorage {
             )
             .await?;
 
-        // 2. Re-insert the post-compaction messages with fresh timestamps.
+        // 2. Re-insert the post-compaction messages with their original
+        // persistence timestamps. Only legacy rows missing from the durable
+        // transcript receive the replacement time.
         let now = chrono::Utc::now().timestamp_millis();
         for (seq, message) in state.messages.iter().enumerate() {
             let message_json = serde_json::to_string(message)?;
+            let created_at = transcript_timestamps
+                .get(&message.id)
+                .copied()
+                .unwrap_or(now);
             self.conn
                 .execute(
                     "INSERT INTO messages (session_id, seq, message_json, ts)
@@ -1284,7 +1299,7 @@ impl AgentStorage for TursoAgentStorage {
                         Value::Text(sid.clone()),
                         Value::Integer(seq as i64),
                         Value::Text(message_json),
-                        Value::Integer(now),
+                        Value::Integer(created_at),
                     ]),
                 )
                 .await?;
@@ -1779,6 +1794,31 @@ impl AgentStorage for TursoAgentStorage {
         while let Some(row) = rows.next().await? {
             let json = text_col(&row, 0)?;
             messages.push(serde_json::from_str(&json)?);
+        }
+        Ok(messages)
+    }
+
+    async fn get_timestamped_transcript_messages(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Vec<crate::storage::TimestampedMessage>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT message_json, ts
+                 FROM transcript_messages
+                 WHERE session_id = ?1
+                 ORDER BY id ASC",
+                params_from_iter([Value::Text(session_id.to_string())]),
+            )
+            .await?;
+
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().await? {
+            messages.push(crate::storage::TimestampedMessage {
+                message: serde_json::from_str(&text_col(&row, 0)?)?,
+                created_at: int_col(&row, 1)?,
+            });
         }
         Ok(messages)
     }

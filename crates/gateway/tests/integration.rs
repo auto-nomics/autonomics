@@ -69,7 +69,7 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     .await;
     let GatewayFrame::Sequenced {
         seq: registered_seq,
-        inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { info, .. }),
+        inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { info, cause, .. }),
     } = registered
     else {
         unreachable!()
@@ -78,6 +78,8 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     // field to render the agent's model without extra round-trips.
     assert_eq!(info.model.as_deref(), Some("mock-model"));
     assert_eq!(info.context_length, Some(8192));
+    // A gateway spawn is operator-initiated: focus may steal.
+    assert_eq!(cause, gateway::proto::ActivationCauseView::UserInitiated);
 
     // Deliver a user message; the scripted mock model completes the turn.
     client.deliver_message(&path, "What is 1+1?").await.unwrap();
@@ -233,6 +235,102 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rename_storage_agent_evicts_the_live_instance() {
+    let gateway_daemon = start_mock_gateway("ok").await;
+    let client = gateway_daemon.client();
+    let state = client.state().await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    EventPump::spawn(client.clone(), state.last_seq, tx);
+
+    let path = client
+        .spawn_agent("worker", "/root", "researcher", None, None)
+        .await
+        .unwrap();
+    wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::AgentRegistered { .. }),
+                ..
+            }
+        )
+    })
+    .await;
+
+    let record = client
+        .list_storage_agents()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.name == path)
+        .expect("spawned identity persisted");
+
+    // Rename the identity: storage flips to the new path and the live
+    // instance running under the old path is evicted (unregistered) —
+    // otherwise it would keep emitting under a path no record claims and
+    // a later re-activation could double-activate the identity.
+    let new_path = "/root/renamed".to_string();
+    client
+        .rename_agent_record(record.id, &new_path)
+        .await
+        .unwrap();
+
+    // Eviction of the old-path instance carries cause `evicted`…
+    let unregistered = wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::AgentUnregistered {
+                    path: p,
+                    cause: gateway::proto::RemovalCauseView::Evicted,
+                }),
+                ..
+            } if *p == path
+        )
+    })
+    .await;
+    assert!(matches!(unregistered, GatewayFrame::Sequenced { .. }));
+    // …followed by the identity event every connected frontend uses to
+    // rebind its views (not just the client that issued the PATCH).
+    let renamed = wait_for_frame(&mut rx, |f| {
+        matches!(
+            f,
+            GatewayFrame::Sequenced {
+                inner: gateway::client::FrameInner::Host(HostEventView::IdentityRenamed {
+                    agent_id,
+                    new_path: np,
+                    ..
+                }),
+                ..
+            } if *agent_id == record.id && *np == new_path
+        )
+    })
+    .await;
+    assert!(matches!(renamed, GatewayFrame::Sequenced { .. }));
+
+    let gone = tokio::time::timeout(TEST_TIMEOUT, async {
+        loop {
+            let snapshot = client.state().await.unwrap();
+            if !snapshot.agents.iter().any(|a| a.path == path) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(gone.is_ok(), "/state no longer lists the old path");
+
+    let records = client.list_storage_agents().await.unwrap();
+    assert!(
+        records.iter().any(|record| record.name == new_path),
+        "storage lists the renamed path"
+    );
+
+    client.shutdown_gateway().await.unwrap();
+    gateway_daemon.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bearer_token_gates_the_api() {
     let gateway_daemon = start_mock_gateway("x").await;
 
@@ -350,7 +448,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 35);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 55);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/gateway/shutdown",
@@ -364,6 +462,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/agents/{name}/model",
         "/api/v1/agents/{name}/config",
         "/api/v1/agents/{name}/dag",
+        "/api/v1/agents/{name}/flow",
         "/api/v1/agents/{name}/context",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/history",
         "/api/v1/agents/{agent_id}/sessions/{session_id}/plan",
@@ -379,6 +478,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/model-config/providers/{name}/catalog",
         "/api/v1/settings",
         "/api/v1/plugins",
+        "/api/v1/plugin-projects",
         "/api/v1/plugins/environments",
         "/api/v1/plugins/environments/dockerhub",
         "/api/v1/plugins/environments/dockerhub/tag",
@@ -387,6 +487,24 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/events",
         "/api/v1/skills/library",
         "/api/v1/skills/library/{name}",
+        "/api/v1/vfs/list",
+        "/api/v1/vfs/stat",
+        "/api/v1/vfs/mounts",
+        "/api/v1/vfs/file",
+        "/api/v1/vfs/text",
+        "/api/v1/vfs/mkdir",
+        "/api/v1/vfs/entry",
+        "/api/v1/vfs/move",
+        "/api/v1/vfs/copy",
+        "/api/v1/plugin-projects/{name}/nodes",
+        "/api/v1/plugin-projects/{name}/dev-session",
+        "/api/v1/plugin-projects/{name}/validate",
+        "/api/v1/plugin-projects/{name}/activate",
+        "/api/v1/plugin-projects/{name}/report",
+        "/api/v1/plugin-projects/{name}/nodes/{kind}/test-run",
+        "/api/v1/plugins/{name}/uninstall",
+        "/api/v1/plugins/{name}/rollback",
+        "/api/v1/plugins/{name}/fork",
     ];
     for path in expected_paths {
         assert!(
@@ -604,6 +722,612 @@ async fn hpc_config_rejects_unknown_fields() {
         .update_hpc_config(&serde_json::json!({"nonsense_field": 1}))
         .await;
     assert!(err.is_err(), "unknown profile fields must be rejected");
+
+    gateway_daemon.stop().await;
+}
+
+// ── VFS browser endpoints ─────────────────────────────────────────────
+
+/// Read-side VFS endpoints over the wire: list, stat, mounts, text and
+/// the streaming file endpoint (full + Range + 416 + UTF-8 refusal).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+
+    // Seed fixtures straight through the daemon's file storage.
+    gateway_daemon
+        .infra
+        .file_storage
+        .write_bytes("/vfs-e2e/hello.txt", b"hello vfs browser".to_vec())
+        .await
+        .unwrap();
+    gateway_daemon
+        .infra
+        .file_storage
+        .write_bytes("/vfs-e2e/blob.bin", vec![0xff, 0xfe, 0x00, 0x80])
+        .await
+        .unwrap();
+
+    // list / contains the fixture directory.
+    let list: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/list"))
+        .query(&[("path", "/")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<&str> = list["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"/vfs-e2e"),
+        "expected /vfs-e2e in root listing, got {names:?}"
+    );
+
+    // Nested listing works and reports leaf names.
+    let nested: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/list"))
+        .query(&[("path", "/vfs-e2e")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let paths: Vec<&str> = nested["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["path"].as_str().unwrap())
+        .collect();
+    assert!(paths.contains(&"/vfs-e2e/hello.txt"), "{paths:?}");
+    let hello = nested["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["path"] == "/vfs-e2e/hello.txt")
+        .unwrap();
+    assert_eq!(hello["name"], "hello.txt");
+    assert_eq!(hello["is_dir"], false);
+
+    // stat reports size and the covering mount's read-only flag.
+    let stat: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/stat"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(stat["size"], 17);
+    assert_eq!(stat["read_only"], false);
+    assert!(stat["mount"].is_object(), "root mount should cover it");
+
+    // mounts is non-empty and carries the declarative fields.
+    let mounts: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/mounts"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(mounts["count"].as_u64().unwrap() >= 1);
+    assert!(mounts["mounts"][0]["path"].is_string());
+
+    // text returns UTF-8 contents.
+    let text: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(text["contents"], "hello vfs browser");
+    assert_eq!(text["truncated"], false);
+
+    // text truncates at max_bytes.
+    let truncated: serde_json::Value = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/hello.txt"), ("max_bytes", "5")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(truncated["contents"], "hello");
+    assert_eq!(truncated["truncated"], true);
+    assert_eq!(truncated["size"], 17);
+
+    // text refuses binary content with 400.
+    let binary = http
+        .get(format!("{base}/api/v1/vfs/text"))
+        .query(&[("path", "/vfs-e2e/blob.bin")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(binary.status(), 400);
+
+    // file streams the full body with a length header.
+    let full = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(full.status(), 200);
+    assert_eq!(
+        full.headers().get(reqwest::header::CONTENT_LENGTH).unwrap(),
+        "17"
+    );
+    assert_eq!(full.bytes().await.unwrap(), b"hello vfs browser".as_slice());
+
+    // Range slice → 206 with the right bytes and Content-Range.
+    let ranged = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=6-8")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ranged.status(), 206);
+    assert_eq!(
+        ranged
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .unwrap(),
+        "bytes 6-8/17"
+    );
+    assert_eq!(ranged.bytes().await.unwrap(), b"vfs".as_slice());
+
+    // Suffix range form.
+    let suffix = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=-7")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(suffix.status(), 206);
+    assert_eq!(suffix.bytes().await.unwrap(), b"browser".as_slice());
+
+    // Unsatisfiable range → 416.
+    let unsatisfiable = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .header(reqwest::header::RANGE, "bytes=100-200")
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unsatisfiable.status(), 416);
+
+    // Download disposition carries the file name.
+    let download = http
+        .get(format!("{base}/api/v1/vfs/file"))
+        .query(&[("path", "/vfs-e2e/hello.txt"), ("download", "true")])
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        download
+            .headers()
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .unwrap(),
+        "attachment; filename=\"hello.txt\""
+    );
+
+    // Missing paths are 404 on the per-file endpoints. (`list` keeps
+    // the vbash `ls` semantics: an empty page, not an error, because
+    // some backends cannot distinguish a missing prefix from an empty
+    // directory.)
+    for endpoint in ["stat", "text", "file"] {
+        let missing = http
+            .get(format!("{base}/api/v1/vfs/{endpoint}"))
+            .query(&[("path", "/vfs-e2e/missing.txt")])
+            .bearer_auth(token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), 404, "endpoint {endpoint}");
+    }
+
+    gateway_daemon.stop().await;
+}
+
+/// Write-side VFS endpoints over the wire: mkdir → upload → conflict
+/// save → download byte-parity → move → delete, plus the read-only
+/// 403 (via the /plugins/active identity mount when present).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn vfs_write_endpoints_manage_files_and_refuse_read_only_mounts() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+    let auth = |request: reqwest::RequestBuilder| request.bearer_auth(token);
+
+    // mkdir creates the working directory.
+    let made = auth(http.post(format!("{base}/api/v1/vfs/mkdir")))
+        .json(&serde_json::json!({ "path": "/vfs-w2e/docs" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made.status(), 200);
+
+    // Binary upload streams raw bytes.
+    let uploaded = auth(http.put(format!("{base}/api/v1/vfs/file")))
+        .query(&[("path", "/vfs-w2e/docs/blob.bin")])
+        .body([0u8, 1, 2, 255, 254, 128, 7].to_vec())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(uploaded.status(), 200);
+    assert_eq!(
+        uploaded.json::<serde_json::Value>().await.unwrap()["size"],
+        7
+    );
+
+    // Text save creates a file; a second save with a stale original 409s.
+    let saved = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v1",
+            "original": null,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), 200);
+
+    let conflicted = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v2-stale",
+            "original": "not-what-is-stored",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(conflicted.status(), 409);
+
+    let rewritten = auth(http.put(format!("{base}/api/v1/vfs/text")))
+        .json(&serde_json::json!({
+            "path": "/vfs-w2e/docs/notes.md",
+            "contents": "v2",
+            "original": "v1",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rewritten.status(), 200);
+
+    // Download parity for both the uploaded binary and the saved text.
+    let blob = auth(http.get(format!("{base}/api/v1/vfs/file")))
+        .query(&[("path", "/vfs-w2e/docs/blob.bin")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(blob.status(), 200);
+    assert_eq!(
+        blob.bytes().await.unwrap().to_vec(),
+        vec![0u8, 1, 2, 255, 254, 128, 7]
+    );
+    let text = auth(http.get(format!("{base}/api/v1/vfs/text")))
+        .query(&[("path", "/vfs-w2e/docs/notes.md")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        text.json::<serde_json::Value>().await.unwrap()["contents"],
+        "v2"
+    );
+
+    // move then delete round out the lifecycle.
+    let moved = auth(http.post(format!("{base}/api/v1/vfs/move")))
+        .json(&serde_json::json!({ "src": "/vfs-w2e/docs/blob.bin", "dst": "/vfs-w2e/docs/blob-moved.bin" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), 200);
+
+    // Non-empty directory refuses without recursive.
+    let refused = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/vfs-w2e/docs")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 409);
+
+    let removed = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/vfs-w2e/docs"), ("recursive", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(removed.status(), 200);
+    let gone = auth(http.get(format!("{base}/api/v1/vfs/stat")))
+        .query(&[("path", "/vfs-w2e/docs")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+
+    // The virtual root is untouchable.
+    let root = auth(http.delete(format!("{base}/api/v1/vfs/entry")))
+        .query(&[("path", "/"), ("recursive", "true")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(root.status(), 400);
+
+    // Read-only mounts reject every mutation. The harness manifest
+    // always carries a read-only mount (e.g. /plugins/active); if the
+    // layout ever changes, fall back to any read_only entry from
+    // /vfs/mounts.
+    let mounts: serde_json::Value = auth(http.get(format!("{base}/api/v1/vfs/mounts")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let read_only_path = mounts["mounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["read_only"] == true)
+        .map(|m| m["path"].as_str().unwrap().to_string());
+    if let Some(mount_path) = read_only_path {
+        let denied = auth(http.post(format!("{base}/api/v1/vfs/mkdir")))
+            .json(&serde_json::json!({ "path": format!("{mount_path}/nope") }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            denied.status(),
+            403,
+            "write into read-only mount {mount_path}"
+        );
+        let denied_text = auth(http.put(format!("{base}/api/v1/vfs/text")))
+            .json(&serde_json::json!({ "path": format!("{mount_path}/nope.txt"), "contents": "x" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied_text.status(), 403);
+        // Smuggling out of a read-only mount via move is refused too.
+        let smuggle = auth(http.post(format!("{base}/api/v1/vfs/move")))
+            .json(&serde_json::json!({ "src": mount_path, "dst": "/vfs-w2e/smuggled" }))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            smuggle.status() == 403 || smuggle.status() == 404 || smuggle.status() == 400,
+            "move out of read-only mount answered {}",
+            smuggle.status()
+        );
+    }
+
+    gateway_daemon.stop().await;
+}
+
+/// Plugin dev endpoints over the wire against a real RuntimeHost rsi:
+/// scaffolded creation, validation NeedsFix, report 404→200, dev-session
+/// status degrading to `unknown` without podman, unknown project 404.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugin_dev_endpoints_scaffold_validate_and_report() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+    let http = reqwest::Client::new();
+    let token = &gateway_daemon.token;
+    let auth = |request: reqwest::RequestBuilder| request.bearer_auth(token);
+
+    // Approve an environment directly through the daemon's registry (the
+    // HTTP approval path resolves tags against Docker Hub, which the
+    // integration suite must not depend on).
+    gateway_daemon
+        .infra
+        .rsi
+        .environment_registry()
+        .approve(
+            "sh-dev",
+            plugin_rsi::Environment {
+                reference: "docker.io/library/debian@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                interpreters: vec!["sh".into()],
+            },
+        )
+        .unwrap();
+
+    // Create → scaffolded project with one demo node.
+    let created = auth(http.post(format!("{base}/api/v1/plugin-projects")))
+        .json(&serde_json::json!({
+            "name": "wire-plugin",
+            "environment_id": "sh-dev",
+            "purpose": "wire scaffold test",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(created.status(), 200);
+    let view: serde_json::Value = created.json().await.unwrap();
+    assert!(view["image"].as_str().unwrap().contains("@sha256:"));
+
+    let files = auth(http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/files")))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let names = serde_json::to_string(&files).unwrap();
+    assert!(names.contains("demo.sh"), "scaffold script: {names}");
+    assert!(names.contains("README.md"), "scaffold readme: {names}");
+
+    // No report yet → 404; after a validation run → 200 with gates.
+    let missing = auth(http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/report")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // Validation of the untouched scaffold passes the six gates.
+    let validated = auth(http.post(format!(
+        "{base}/api/v1/plugin-projects/wire-plugin/validate"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(validated.status(), 200);
+    let outcome: serde_json::Value = validated.json().await.unwrap();
+    assert_eq!(
+        outcome["outcome"], "passed",
+        "scaffold must validate: {outcome}"
+    );
+
+    let report = auth(http.get(format!("{base}/api/v1/plugin-projects/wire-plugin/report")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(report.status(), 200);
+    let report: serde_json::Value = report.json().await.unwrap();
+    assert!(report["gates"].as_array().unwrap().len() >= 6);
+
+    // Activation needs a clean git tree; the scaffold is committed, so it
+    // succeeds end to end and the node is registered.
+    let activated = auth(http.post(format!(
+        "{base}/api/v1/plugin-projects/wire-plugin/activate"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(activated.status(), 200);
+    let activation: serde_json::Value = activated.json().await.unwrap();
+    assert_eq!(
+        activation["activated"], true,
+        "scaffold must activate: {activation}"
+    );
+
+    let plugins = auth(http.get(format!("{base}/api/v1/plugins")))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let wire = plugins["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["name"] == "wire-plugin")
+        .expect("activated plugin in /plugins");
+    assert!(wire["registered"].as_bool().unwrap(), "hot reload: {wire}");
+    assert!(wire["kinds"].to_string().contains("wire_plugin"));
+
+    // Dev-session status without a usable podman degrades to `unknown`
+    // (still 200, detail explains why) instead of erroring.
+    let session = auth(http.get(format!(
+        "{base}/api/v1/plugin-projects/wire-plugin/dev-session"
+    )))
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(session.status(), 200);
+    let session: serde_json::Value = session.json().await.unwrap();
+    assert!(
+        session["state"] == "absent"
+            || session["state"] == "unknown"
+            || session["state"] == "running",
+        "dev-session probe must degrade, got: {session}"
+    );
+
+    // Unknown projects are 404 across the new surface.
+    for path in [
+        "dev-session",
+        "validate",
+        "activate",
+        "report",
+        "nodes/x/test-run",
+    ] {
+        // Valid bodies per endpoint so the 404 comes from the project
+        // lookup, not from body validation.
+        let body = match path {
+            "dev-session" => r#"{"action":"start"}"#,
+            "nodes/x/test-run" => r#"{"inputs":{},"params":{}}"#,
+            _ => "{}",
+        };
+        let request = if path == "report" {
+            auth(http.get(format!(
+                "{base}/api/v1/plugin-projects/missing-plugin/{path}"
+            )))
+        } else {
+            auth(http.post(format!(
+                "{base}/api/v1/plugin-projects/missing-plugin/{path}"
+            )))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
+        };
+        let missing = request.send().await.unwrap();
+        assert_eq!(missing.status(), 404, "path {path}");
+    }
+
+    gateway_daemon.stop().await;
+}
+
+/// The dev terminal WebSocket is guarded like every other /api/v1
+/// route: an unauthenticated handshake is refused before the upgrade.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugin_terminal_websocket_requires_authentication() {
+    let gateway_daemon = start_mock_gateway("x").await;
+    let base = format!("http://{}", gateway_daemon.addr);
+
+    // A plain GET without credentials answers 401 — no upgrade.
+    let unauthenticated = reqwest::Client::new()
+        .get(format!("{base}/api/v1/plugin-projects/any/terminal"))
+        .header(reqwest::header::CONNECTION, "Upgrade")
+        .header(reqwest::header::UPGRADE, "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), 401);
+
+    // Unknown projects are refused with 404 even with credentials (the
+    // handshake is checked before the exec session would start).
+    let missing = reqwest::Client::new()
+        .get(format!(
+            "{base}/api/v1/plugin-projects/missing-plugin/terminal"
+        ))
+        .header(reqwest::header::CONNECTION, "Upgrade")
+        .header(reqwest::header::UPGRADE, "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .bearer_auth(&gateway_daemon.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
 
     gateway_daemon.stop().await;
 }

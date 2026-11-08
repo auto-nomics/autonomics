@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import "./app.css";
 import { App } from "@/app/app-view";
+import { ContextMenuPolicy } from "@/app/context-menu-policy";
 import { Toaster } from "@/components/ui/sonner";
 import { initTheme } from "@/lib/theme";
 
@@ -11,6 +12,7 @@ if (!container) throw new Error("#app missing");
 initTheme();
 ReactDOM.createRoot(container).render(
   <>
+    <ContextMenuPolicy />
     <App />
     <Toaster position="bottom-center" />
   </>,

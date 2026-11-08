@@ -65,6 +65,9 @@ pub fn opentargets_registrations(client: Arc<OpenTargetsClient>) -> Vec<ToolRegi
         R::from(study::StudyTool {
             client: client.clone(),
         }),
-        R::from(variant::VariantTool { client }),
+        R::from(variant::VariantTool {
+            client: client.clone(),
+        }),
+        R::from(variant::VariantAssociationsTool { client }),
     ]
 }

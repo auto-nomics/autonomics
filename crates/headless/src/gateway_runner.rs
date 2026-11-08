@@ -211,7 +211,8 @@ pub async fn run_via_gateway_with_client<P: OutputProcessor>(
                         continue;
                     };
                     last_seq = last_seq.max(seq);
-                    if let ParsedFrame::Host(HostEventView::AgentRegistered { path, info }) = parsed
+                    if let ParsedFrame::Host(HostEventView::AgentRegistered { path, info, .. }) =
+                        parsed
                         && path == agent_path
                     {
                         return info.agent_id.unwrap_or_default();

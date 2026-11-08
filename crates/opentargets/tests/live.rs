@@ -117,3 +117,43 @@ async fn study_lookup() {
         assert!(!s.trait_from_source.is_empty());
     }
 }
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_lookup() {
+    let v = client().variant("2_655222_G_A").await.unwrap().unwrap();
+    assert_eq!(v.id, "2_655222_G_A");
+    assert_eq!(v.chromosome, "2");
+    assert!(v.rs_ids.iter().any(|r| r == "rs13029479"));
+    // Object-typed fields must come back parsed, not absent.
+    assert!(v.most_severe_consequence.is_some());
+    assert!(!v.allele_frequencies.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_associations_bmi_locus() {
+    let a = client()
+        .variant_associations("2_655222_G_A")
+        .await
+        .unwrap()
+        .expect("variant must resolve");
+    assert_eq!(a.variant_id, "2_655222_G_A");
+    assert!(a.count > 0);
+    assert_eq!(a.rows.len() as i64, a.count);
+    assert!(a.rows.iter().any(|r| r.study_id.starts_with("GCST")));
+    assert!(a.rows.iter().any(|r| r.p_value() > 0.0 && r.p_value() < 1e-8));
+    // BMI/weight associations are known at this locus.
+    let traits: Vec<&str> = a.rows.iter().map(|r| r.study.trait_from_source.as_str()).collect();
+    assert!(
+        traits.iter().any(|t| t.to_lowercase().contains("body mass index") || t.to_lowercase().contains("weight")),
+        "expected BMI/weight trait in {traits:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "hits the live Open Targets API"]
+async fn variant_associations_unknown_id_is_none() {
+    let a = client().variant_associations("22_0_IG_NO_RE").await.unwrap();
+    assert!(a.is_none());
+}

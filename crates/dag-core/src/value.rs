@@ -12,6 +12,8 @@ pub enum NodeValue {
     File(FileRef),
     FileSet(Vec<FileRef>),
     Channel(ChannelValue),
+    /// One channel delivery containing nested typed data and artifacts.
+    Structured(crate::dag::execution::ChannelTransportValue),
 }
 
 impl NodeValue {
@@ -21,6 +23,7 @@ impl NodeValue {
             Self::File(_) => PortType::File,
             Self::FileSet(_) => PortType::FileSet,
             Self::Channel(_) => PortType::Channel,
+            Self::Structured(_) => PortType::Channel,
         }
     }
 
@@ -59,6 +62,18 @@ impl NodeValue {
             Self::Channel(channel) => Ok(channel),
             other => Err(DagError::Schedule(format!(
                 "expected a Channel value, got {}",
+                other.data_type()
+            ))),
+        }
+    }
+
+    pub fn as_structured_channel(
+        &self,
+    ) -> Result<&crate::dag::execution::ChannelTransportValue, DagError> {
+        match self {
+            Self::Structured(value) => Ok(value),
+            other => Err(DagError::Schedule(format!(
+                "expected a structured Channel value, got {}",
                 other.data_type()
             ))),
         }

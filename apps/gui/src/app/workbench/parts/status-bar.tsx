@@ -5,6 +5,7 @@
 
 import { cn } from "@/lib/utils";
 import { AgentStatusIcon, leafName, statusLabel } from "@/features/agent";
+import { TokenUsageBadge } from "@/features/agent/token-usage";
 import type { AgentRuntime } from "../runtime-context";
 
 export function StatusBar({ runtime }: { runtime: AgentRuntime }) {
@@ -31,9 +32,7 @@ export function StatusBar({ runtime }: { runtime: AgentRuntime }) {
       <span className="hidden min-w-0 items-center gap-1 truncate text-muted-foreground sm:flex" title="活动模型">
         {activeInfo?.model ?? "no model"}
       </span>
-      <span className="ml-auto shrink-0 text-muted-foreground" title="当前会话 token 用量">
-        {usage ? `${usage.input} in / ${usage.output} out${usage.cache ? ` / ${usage.cache} cache` : ""}` : ""}
-      </span>
+      {usage ? <TokenUsageBadge usage={usage} className="ml-auto shrink-0 text-[10px]" /> : null}
     </footer>
   );
 }

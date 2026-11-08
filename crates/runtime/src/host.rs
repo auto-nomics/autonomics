@@ -53,7 +53,7 @@ mod status;
 mod vfs_setup;
 
 pub use agent_handle::AgentHandle;
-pub use events::{HostEvent, NextEvent, TaggedEvent};
+pub use events::{ActivationCause, HostEvent, NextEvent, RemovalCause, TaggedEvent};
 pub use shared_infra::SharedInfra;
 pub use vfs_setup::bibliography_file_storage;
 
