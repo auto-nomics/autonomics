@@ -5,7 +5,7 @@
  * behavior); clicking it again reveals it.
  */
 
-import { BookOpen, Bot, Camera, Compass, FolderCode, FolderTree, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
+import { BookOpen, Bot, Camera, Compass, FolderCode, FolderTree, Presentation, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -73,6 +73,7 @@ export function ActivityBar(props: {
   const activeWorkspace = activeEditor?.kind === "bibliography" ? (activeEditor.params.workspace ?? "library") : null;
   const bibActive = !collapsed && state.sidebar.container === "bibliography" && (activeWorkspace === "library" || activeWorkspace === null);
   const wikiActive = !collapsed && state.sidebar.container === "wiki";
+  const decksActive = !collapsed && state.sidebar.container === "decks";
   const agentsActive = !collapsed && state.sidebar.container === "agents";
   const vfsActive = !collapsed && state.sidebar.container === "vfs";
   const pendingNotices = state.panel.unreadNotices > 0 && (!state.panel.visible || state.panel.tab !== "notices");
@@ -101,6 +102,13 @@ export function ActivityBar(props: {
           onClick={() => containerClick("wiki")}
         />
         <RailButton label="插件管理" title="插件管理" icon={FolderCode} onClick={() => openEditor({ kind: "plugin-manager" })} />
+        <RailButton
+          label="Decks"
+          title="幻灯片(新建/浏览 deck,点开即编辑器标签)"
+          icon={Presentation}
+          active={decksActive}
+          onClick={() => containerClick("decks")}
+        />
         <RailButton label="插件项目" title="插件项目" icon={FolderCode} active={!collapsed && state.sidebar.container === "projects"} onClick={() => containerClick("projects")} />
         <RailButton
           label="VFS 文件"

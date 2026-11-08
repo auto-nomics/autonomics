@@ -100,6 +100,26 @@ function get<T>(path: string): Promise<T> {
   return gatewayRequest("GET", path) as Promise<T>;
 }
 
+export type DeckTemplate = "meeting" | "defense" | "figures" | "blank";
+
+export interface CreateDeckInput {
+  title: string;
+  template: DeckTemplate;
+}
+
+export interface CreateDeckPayload {
+  deck: DeckMeta;
+  slides: SlideSpec[];
+  assets: AssetMeta[];
+}
+
+/** Create a deck (template starter markdown) and return its full payload. */
+export async function createDeck(input: CreateDeckInput): Promise<CreateDeckPayload> {
+  const body: Record<string, unknown> = { title: input.title };
+  if (input.template !== "blank") body.template = input.template;
+  return (await gatewayRequest("POST", "/deck/decks", body)) as CreateDeckPayload;
+}
+
 export async function fetchDeck(id: string): Promise<DeckPayload> {
   return await get<DeckPayload>(`/deck/decks/${encodeURIComponent(id)}`);
 }

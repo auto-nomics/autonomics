@@ -15,6 +15,7 @@ import type { BibliographyWorkspace } from "@/features/bibliography";
 import { AgentSidebar } from "./agent-sidebar";
 import { WikiSidebarView } from "@/features/wiki/wiki-sidebar-view";
 import { VfsSidebar } from "@/features/vfs";
+import { DeckSidebarView } from "@/features/deck/deck-sidebar-view";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
@@ -41,6 +42,7 @@ const CONTAINER_TITLES: Record<ContainerId, string> = {
   agents: "Agent",
   projects: "插件项目",
   vfs: "文件",
+  decks: "幻灯片",
 };
 
 function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
@@ -82,6 +84,13 @@ function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId;
   }
   if (container === "vfs") {
     return <VfsSidebar />;
+  }
+  if (container === "decks") {
+    return (
+      <div role="group" aria-label="幻灯片工作区" className="flex min-h-0 flex-1 flex-col">
+        <DeckSidebarView />
+      </div>
+    );
   }
   return <AgentSidebar onSpawn={onSpawn} />;
 }

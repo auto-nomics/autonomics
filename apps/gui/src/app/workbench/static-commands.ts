@@ -41,6 +41,9 @@ registerCommands("shell", [
     setContainer("wiki");
     setContainerView("wiki", "browse");
   } },
+  { id: "workbench.open-decks", title: "Open slides", category: "go", keywords: "deck slides ppt presentation 幻灯片 演示", run: () => {
+    setContainer("decks");
+  } },
   { id: "workbench.open-wiki-graph", title: "Open knowledge graph", category: "go", keywords: "wiki graph 知识图谱 关系", run: () => openEditor({ kind: "wiki-graph" }) },
   { id: "workbench.open-agents", title: "Show agent overview", category: "go", keywords: "agents overview chat", run: () => {
     setContainer("agents");

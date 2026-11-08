@@ -108,6 +108,18 @@ const deckPayload = {
   ],
 };
 
+let deckList = [
+  { id: 'deck-mock', title: 'Mock Deck', slideCount: 4, version: 1, createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z' },
+];
+let livePayload = null;
+function buildLivePayload(title) {
+  return {
+    deck: { ...deckPayload.deck, id: 'deck-live', title, revision: 'liverev1', slideCount: 6 },
+    slides: [{ ...deckPayload.slides[0], index: 0, title, content: `# ${title}\n\n从侧栏新建` }],
+    assets: [],
+  };
+}
+
 const snapshot = {
   last_seq: 0,
   agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }],
@@ -128,6 +140,24 @@ const mock = http.createServer((req, res) => {
     return;
   }
   if (path === '/api/v1/deck/decks/deck-mock') return json(deckPayload);
+  if (path === '/api/v1/deck/decks/deck-live') return json(livePayload);
+  if (path === '/api/v1/deck/decks' && req.method === 'GET') {
+    return json({ decks: deckList });
+  }
+  if (path === '/api/v1/deck/decks' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      const parsed = JSON.parse(body || '{}');
+      const title = parsed.title || '新 deck';
+      const now = new Date().toISOString();
+      deckList.unshift({ id: 'deck-live', title, slideCount: 6, version: 1, createdAt: now, updatedAt: now });
+      livePayload = buildLivePayload(title);
+      res.writeHead(201, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(livePayload));
+    });
+    return;
+  }
   if (path === '/api/v1/deck/decks/deck-mock/assets/asset-1/raw') {
     // 1x1 PNG
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
@@ -235,6 +265,26 @@ try {
   await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]')
     .locator('text=已实时更新')
     .waitFor({ state: 'visible', timeout: 9000 });
+
+  // 7. sidebar: decks container lists decks; 新建 dialog creates and
+  //    opens the new deck tab
+  await page.locator('button[title="幻灯片(新建/浏览 deck,点开即编辑器标签)"]').click();
+  await page.locator('[data-deck-sidebar]').waitFor({ state: 'visible' });
+  await page.waitForTimeout(300);
+  const railText = await page.locator('[data-deck-sidebar]').innerText();
+  assert.ok(railText.includes('Mock Deck'), `sidebar lists deck: ${railText}`);
+
+  await page.locator('[data-deck-sidebar]').getByText('新建', { exact: true }).click();
+  await page.getByPlaceholder('deck 标题(如:组会 · 单细胞图谱)').fill('侧栏新 deck');
+  await page.getByRole('radio', { name: /空白/ }).click();
+  await page.getByRole('button', { name: '创建' }).click();
+
+  // new tab opens with the created deck rendered
+  await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').locator('text=侧栏新 deck').waitFor({ state: 'visible', timeout: 9000 });
+  // sidebar refreshed with the new entry
+  await page.waitForTimeout(300);
+  const railAfter = await page.locator('[data-deck-sidebar]').innerText();
+  assert.ok(railAfter.includes('侧栏新 deck'), `sidebar refreshed: ${railAfter}`);
 
   // no page errors
   assert.deepEqual(errors.filter(e => !e.includes('ResizeObserver')), [], 'no page errors');

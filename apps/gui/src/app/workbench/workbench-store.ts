@@ -13,7 +13,7 @@
 import { useSyncExternalStore } from "react";
 import { layoutGroups, removeLayoutGroup, resizeLayout, splitLayout, validLayout, type DropDirection, type EditorLayout } from "./editor-layout";
 
-export type ContainerId = "bibliography" | "wiki" | "agents" | "projects" | "vfs";
+export type ContainerId = "bibliography" | "wiki" | "agents" | "projects" | "vfs" | "decks";
 export type GroupId = string;
 export type EditorId = string;
 export type PanelTab = "events" | "notices" | "terminal";
@@ -93,7 +93,7 @@ function defaultState(): WorkbenchState {
   return {
     revision: 0,
     sidebar: { collapsed: readLegacySidebarCollapsed(), container: "bibliography", width: 220 },
-    containerViews: { bibliography: "library", wiki: "browse", agents: "list", projects: "files", vfs: "tree" },
+    containerViews: { bibliography: "library", wiki: "browse", agents: "list", projects: "files", vfs: "tree", decks: "browse" },
     panel: { visible: false, heightPercent: PANEL_HEIGHT_DEFAULT, tab: "events", unreadNotices: 0 },
     groups: { active: "main", main: { editors: [], activeId: null }, secondary: null, extra: {} },
     editorLayout: { group: "main" },
