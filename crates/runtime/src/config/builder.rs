@@ -59,6 +59,9 @@ pub struct RuntimeConfigBuilder {
     pub(crate) plugin_rsi: Option<PluginRsiConfig>,
     pub(crate) slurm: Option<super::slurm::SlurmConfig>,
     pub(crate) downloader: Option<resource_downloader::DownloaderConfig>,
+    pub(crate) ssh_multiplex: Option<bool>,
+    pub(crate) ssh_control_persist: Option<String>,
+    pub(crate) ssh_credential_vault: Option<std::path::PathBuf>,
 }
 
 impl RuntimeConfigBuilder {
@@ -292,6 +295,25 @@ impl RuntimeConfigBuilder {
     /// Configure the Slurm (HPC) integration.
     pub fn slurm(mut self, config: super::slurm::SlurmConfig) -> Self {
         self.slurm = Some(config);
+        self
+    }
+
+    /// Reuse authenticated SSH master connections across every SSH
+    /// channel. See [`RuntimeConfig::ssh_multiplex`].
+    pub fn ssh_multiplex(mut self, enabled: bool) -> Self {
+        self.ssh_multiplex = Some(enabled);
+        self
+    }
+
+    /// Idle-master lifetime for SSH multiplexing.
+    pub fn ssh_control_persist(mut self, duration: impl Into<String>) -> Self {
+        self.ssh_control_persist = Some(duration.into());
+        self
+    }
+
+    /// Sealed SSH credential vault for password/OTP clusters.
+    pub fn ssh_credential_vault(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.ssh_credential_vault = Some(path.into());
         self
     }
 

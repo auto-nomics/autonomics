@@ -192,21 +192,19 @@ impl HpcClient {
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",
-            "ControlMaster=no",
-            "-o",
-            "ControlPath=none",
-            "-o",
-            "ControlPersist=no",
-            "-o",
             "ConnectTimeout=15",
             "-o",
             "ServerAliveInterval=15",
             "-o",
             "ServerAliveCountMax=2",
-            "--",
-            host,
-            &remote_command,
         ]);
+        for option in vfs::ssh_channel::options() {
+            command.args(["-o", &option]);
+        }
+        command.args(["--", host, &remote_command]);
+        // Vault-backed password/OTP answering, when a vault agent is
+        // configured; a no-op otherwise.
+        vfs::ssh_channel::attach_credentials(&mut command, host);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

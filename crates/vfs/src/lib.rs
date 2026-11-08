@@ -4,8 +4,11 @@ mod ssh;
 mod ssh_endpoint;
 
 pub mod browse;
+pub mod cli;
+pub mod credential;
 pub mod mount;
 pub mod permission;
+pub mod ssh_channel;
 pub mod storage;
 pub mod uri;
 pub mod vbash;

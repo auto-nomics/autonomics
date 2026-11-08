@@ -222,6 +222,44 @@ impl SharedInfra {
         let resolved_config = crate::compute::startup_config(config).map_err(Error::Other)?;
         let config = &resolved_config;
 
+        // Process-wide SSH channel multiplexing: paid once at startup, used
+        // by every transport (execution, file access, scheduler tools).
+        if config.ssh_multiplex && !vfs::ssh_channel::is_configured() {
+            vfs::ssh_channel::configure(
+                &config.state_dir.join("ssh-control"),
+                &config.ssh_control_persist,
+            )
+            .map_err(|error| Error::Other(format!("ssh multiplexing setup: {error}")))?;
+        }
+
+        // Sealed SSH credential vault for password/OTP-only clusters: unlock
+        // once and serve askpass answers over a same-user unix socket. The
+        // passphrase is deliberately never persisted; missing or wrong
+        // passphrases fail startup loudly.
+        if let Some(vault_path) = &config.ssh_credential_vault {
+            let passphrase = std::env::var("AUTONOMICS_SSH_PASSPHRASE").map_err(|_| {
+                Error::Other(
+                    "ssh_credential_vault is configured but AUTONOMICS_SSH_PASSPHRASE is unset;                      the vault stays sealed and credentials cannot be injected"
+                        .into(),
+                )
+            })?;
+            let sealed = std::fs::read(vault_path)
+                .map_err(|error| Error::Other(format!("ssh vault read: {error}")))?;
+            let vault = vfs::credential::CredentialVault::open(&sealed, &passphrase)
+                .map_err(|error| Error::Other(format!("ssh vault unlock: {error}")))?;
+            let control = config.state_dir.join("ssh-control");
+            std::fs::create_dir_all(&control)
+                .map_err(|error| Error::Other(format!("ssh control dir: {error}")))?;
+            let socket = control.join("vault.sock");
+            let serving = socket.clone();
+            tokio::spawn(async move {
+                if let Err(error) = vfs::credential::serve_vault(vault, serving).await {
+                    tracing::warn!(%error, "ssh credential vault agent stopped");
+                }
+            });
+            vfs::ssh_channel::configure_vault_agent(&socket);
+        }
+
         // The skill manager is the process-wide singleton: every
         // mutation path (agent tools, gateway handlers) shares one
         // notification invariant.

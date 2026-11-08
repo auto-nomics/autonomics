@@ -10,17 +10,12 @@ fn python_remote_helper_regressions() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     // The Python suites import source files. Ensure those are the same helper
     // bytes embedded in the actual tested tool, rather than a newer checkout.
-    for (source, embedded) in [
-        ("src/remote_jobs.py", crate::jobs::REMOTE_JOBS_HELPER),
-    ] {
+    for (source, embedded) in [("src/remote_jobs.py", crate::jobs::REMOTE_JOBS_HELPER)] {
         assert_eq!(fs::read(root.join(source)).unwrap(), embedded.as_bytes());
     }
     let python = std::env::var_os("AUTONOMICS_HPC_TEST_PYTHON").unwrap_or_else(|| "python3".into());
     let mut results = Vec::new();
-    for suite in [
-        "jobs_remote_test.py",
-        "quota_remote_test.py",
-    ] {
+    for suite in ["jobs_remote_test.py", "quota_remote_test.py"] {
         let output = Command::new(&python)
             .arg("-B")
             .arg(root.join("tests").join(suite))

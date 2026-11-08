@@ -13,6 +13,11 @@ apply-patch = { path = "../apply-patch" }
 datafusion = { workspace = true }
 async-trait = { workspace = true }
 opendal.workspace = true
+aes-gcm.workspace = true
+argon2.workspace = true
+totp-rs.workspace = true
+rpassword.workspace = true
+zeroize.workspace = true
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true

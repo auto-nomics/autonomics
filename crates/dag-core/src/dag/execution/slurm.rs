@@ -233,11 +233,9 @@ impl SshTarget {
             "BatchMode=yes".into(),
             "LogLevel=ERROR".into(),
             "StrictHostKeyChecking=yes".into(),
-            "ControlMaster=no".into(),
-            "ControlPath=none".into(),
-            "ControlPersist=no".into(),
             connect,
         ];
+        options.extend(vfs::ssh_channel::options());
         if let Some((interval, count)) = &self.keepalive {
             options.push(format!("ServerAliveInterval={}", interval.as_secs().max(1)));
             options.push(format!("ServerAliveCountMax={count}"));
@@ -246,6 +244,9 @@ impl SshTarget {
             command.args(["-o", option.as_str()]);
         }
         command.arg(&self.host);
+        // Vault-backed password/OTP answering, when a vault agent is
+        // configured; a no-op otherwise.
+        vfs::ssh_channel::attach_credentials(&mut command, &self.host);
         Ok(command)
     }
 

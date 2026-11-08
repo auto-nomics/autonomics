@@ -186,6 +186,32 @@ pub struct RuntimeConfig {
     /// Slurm (HPC) integration settings. Defaults to disabled.
     #[serde(default)]
     pub slurm: super::slurm::SlurmConfig,
+    /// Reuse authenticated SSH master connections across every SSH channel
+    /// (execution, file access, scheduler tools). Each invocation stays an
+    /// independent exec session; only the TCP/KEX/auth handshake is
+    /// shared, keyed per destination endpoint. Defaults to off (stateless
+    /// one-shot connections).
+    #[serde(default)]
+    pub ssh_multiplex: bool,
+    /// OpenSSH duration bounding how long an idle multiplexing master
+    /// survives (for example `10m` or `yes`). Only meaningful with
+    /// [`Self::ssh_multiplex`].
+    #[serde(default = "default_ssh_control_persist")]
+    pub ssh_control_persist: String,
+    /// Path to the sealed SSH credential vault (passwords and TOTP
+    /// secrets for password/OTP-only clusters). The daemon unlocks it at
+    /// startup with the `AUTONOMICS_SSH_PASSPHRASE` environment variable
+    /// and serves answers to SSH prompts through the askpass helper.
+    #[serde(default)]
+    pub ssh_credential_vault: Option<std::path::PathBuf>,
+}
+
+fn default_ssh_control_persist() -> String {
+    "10m".into()
+}
+
+fn default_ssh_credential_vault() -> Option<std::path::PathBuf> {
+    std::env::var_os("AUTONOMICS_SSH_VAULT").map(std::path::PathBuf::from)
 }
 
 impl Default for RuntimeConfig {
@@ -416,6 +442,13 @@ impl RuntimeConfig {
             plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
             downloader: base.and_then(|b| b.downloader.clone()).unwrap_or_default(),
             slurm: base.and_then(|b| b.slurm.clone()).unwrap_or_default(),
+            ssh_multiplex: resolve_flag(base, |b| b.ssh_multiplex, false),
+            ssh_control_persist: base
+                .and_then(|b| b.ssh_control_persist.clone())
+                .unwrap_or_else(default_ssh_control_persist),
+            ssh_credential_vault: base
+                .and_then(|b| b.ssh_credential_vault.clone())
+                .or_else(|| default_ssh_credential_vault()),
         }
     }
 }

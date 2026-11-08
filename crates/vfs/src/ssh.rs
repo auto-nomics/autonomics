@@ -160,21 +160,22 @@ impl SshAccess {
             "-T",
             "-oBatchMode=yes",
             "-oStrictHostKeyChecking=yes",
-            "-oControlMaster=no",
-            "-oControlPath=none",
-            "-oControlPersist=no",
             "-oConnectTimeout=15",
             "-oServerAliveInterval=15",
             "-oServerAliveCountMax=2",
-            "--",
-            &self.alias,
-            &command,
         ]);
+        for option in crate::ssh_channel::options() {
+            executable.arg(format!("-o{option}"));
+        }
+        executable.args(["--", &self.alias, &command]);
         #[cfg(test)]
         if self.local_test_transport {
             executable = tokio::process::Command::new(&self.python);
             executable.args(["-I", "-c", script]);
         }
+        // Vault-backed password/OTP answering, when a vault agent is
+        // configured; a no-op otherwise.
+        crate::ssh_channel::attach_credentials(&mut executable, &self.alias);
         executable
     }
 
