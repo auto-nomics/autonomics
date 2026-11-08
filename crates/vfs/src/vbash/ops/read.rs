@@ -26,7 +26,7 @@ pub async fn op_read(
     // DAG FileRefs name this same mounted namespace with a vfs:// URI.
     // Strip only that scheme before the usual principal and mount checks.
     let raw_path = require_path(
-        Some(raw_path.strip_prefix("vfs://").unwrap_or(raw_path)),
+        Some(crate::uri::virtual_path(raw_path).unwrap_or(raw_path)),
         "read",
     )?;
     let vpath = OpendalFileStorage::normalize_path(raw_path);

@@ -425,7 +425,7 @@ async fn file_sha256_observed(
     if let Some(reporter) = reporter {
         reporter.phase(phase, "verifying input content");
     }
-    if let Some(vpath) = path.strip_prefix("vfs://") {
+    if let Some(vpath) = vfs::uri::virtual_path(path) {
         let storage = storage?;
         return storage
             .sha256_with_progress(

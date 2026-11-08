@@ -41,8 +41,7 @@ async fn resolved_host_hash_must_not_be_shadowed_by_virtual_mount() {
         assert_eq!(size, b"host physical bytes".len() as u64);
         assert_eq!(digest, expected, "resolved host namespace: {spelling}");
     }
-    let (_, digest) = super::file_sha256(&format!("vfs://{}", path.display()), Some(&storage))
-        .await
+    let (_, digest) = super::file_sha256(&vfs::uri::uri(path.display()), Some(&storage))        .await
         .unwrap();
     assert_eq!(digest, hex_lower(&Sha256::digest(b"virtual shadow bytes")));
 }

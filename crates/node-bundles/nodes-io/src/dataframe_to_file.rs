@@ -170,7 +170,7 @@ impl DataFrameToFileNode {
         node_ctx: &dag_core::registry::NodeCtx,
         path: &str,
     ) -> Result<(), DataFrameToFileError> {
-        let Some(virtual_path) = path.strip_prefix("vfs://") else {
+        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
             return Err(DataFrameToFileError::InvalidInput {
                 message: format!("expected a vfs:// partitioned output path, got `{path}`"),
             });
@@ -224,8 +224,7 @@ impl DataFrameToFileNode {
         else {
             return;
         };
-        let virtual_path = path
-            .strip_prefix("vfs://")
+        let virtual_path = vfs::uri::virtual_path(path)
             .unwrap_or(path)
             .trim_matches('/');
         let Ok(object_path) = datafusion::object_store::path::Path::parse(virtual_path) else {
@@ -241,7 +240,7 @@ impl DataFrameToFileNode {
     /// Check a DataFusion path without relying on host-path semantics. A
     /// `vfs://` object is resolved through the mounted OpenDAL backend.
     async fn object_exists(&self, node_ctx: &dag_core::registry::NodeCtx, path: &str) -> bool {
-        let Some(virtual_path) = path.strip_prefix("vfs://") else {
+        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
             return std::path::Path::new(path).exists();
         };
         let Some(storage) = node_ctx.opendal.as_ref() else {
@@ -259,7 +258,7 @@ impl DataFrameToFileNode {
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<(), DataFrameToFileError> {
-        if let Some(virtual_path) = path.strip_prefix("vfs://") {
+        if let Some(virtual_path) = vfs::uri::virtual_path(path) {
             let storage = node_ctx
                 .opendal
                 .as_ref()
@@ -677,7 +676,7 @@ impl DagNode for DataFrameToFileNode {
         // missing-file window to concurrent readers.
         let to_write = if partitioned {
             if self.mode == SinkMode::Overwrite {
-                if path.starts_with("vfs://") {
+                if vfs::uri::is_uri(&path) {
                     Self::clear_vfs_output(node_ctx, &path).await?;
                 } else if path.starts_with('/') || path.starts_with("file://") {
                     Self::clear_local_output(&path)?;

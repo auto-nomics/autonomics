@@ -2712,7 +2712,7 @@ impl TaskArtifactStore for SshArtifactStore {
             ));
         }
         let mut reference = self.measure_data_file(&artifact.path, &artifact).await?;
-        reference.path = format!("vfs://{prefix}/{}", relative.to_string_lossy());
+        reference.path = vfs::uri::uri(format!("{prefix}/{}", relative.to_string_lossy()));
         Ok(Some(reference))
     }
 

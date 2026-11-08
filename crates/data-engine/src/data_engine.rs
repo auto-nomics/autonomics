@@ -1624,7 +1624,7 @@ impl DataEngine {
             let fresh = match entry.file.fingerprint.as_ref() {
                 // No recorded fingerprint — existence is all we can verify.
                 None => {
-                    entry.file.path.starts_with("vfs://")
+                    vfs::uri::is_uri(&entry.file.path)
                         || std::path::Path::new(&entry.file.path).exists()
                 }
                 // Immutable remote content never goes stale.
@@ -1657,7 +1657,7 @@ impl DataEngine {
     /// Fails closed on payloads larger than [`Self::MAX_READ_FILE_BYTES`] so
     /// the tool layer never materializes a runaway artifact by accident.
     pub async fn read_file(&self, path: &str) -> crate::error::Result<Vec<u8>> {
-        if let Some(virtual_path) = path.strip_prefix("vfs://") {
+        if let Some(virtual_path) = vfs::uri::virtual_path(path) {
             let storage = self.engine_ctx.opendal.as_ref().ok_or_else(|| {
                 crate::error::Error::Custom(format!(
                     "VFS path `{path}` requires a mounted runtime VFS"

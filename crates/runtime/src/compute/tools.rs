@@ -221,16 +221,21 @@ impl ToolFunction for StatusTool {
     }
 }
 
-pub(crate) fn registrations(
+pub(crate) fn registrations(registry: Arc<ComputeRegistry>) -> Vec<ToolRegistration> {
+    vec![
+        StatusTool(registry.clone()).into(),
+        ImageEvidenceTool(registry).into(),
+    ]
+}
+
+/// Target-routed `hpc_*` tool registrations. Mounted for the hpc-ops
+/// agent kind only; every other kind sees no interactive cluster tools.
+pub(crate) fn hpc_registrations(
     registry: Arc<ComputeRegistry>,
     agent_path: &str,
     storage: Arc<dyn AgentStorage>,
     files: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
-    let mut tools: Vec<ToolRegistration> = vec![
-        StatusTool(registry.clone()).into(),
-        ImageEvidenceTool(registry.clone()).into(),
-    ];
     // Definitions need no live connection or state-directory creation.
     let catalog = registry.catalog();
     let candidate = catalog.targets.iter().find_map(|t| {
@@ -242,6 +247,7 @@ pub(crate) fn registrations(
     let client = candidate.unwrap_or_else(|| Arc::new(hpc_tools::HpcClient::definition_only()));
     let mut templates = hpc_tools::registrations(client.clone());
     templates.extend(hpc_tools::transfer::registrations(client, files.clone()));
+    let mut tools = Vec::with_capacity(templates.len());
     for mut template in templates {
         template.definition.input_schema.properties.insert("target_id".into(), json!({"type":"string","description":"Operator compute target owning this account or existing job. Required when multiple remote targets exist. submit must match the global target."}));
         template.definition.input_schema.properties.insert("target_revision".into(), json!({"type":"integer","minimum":1,"description":"Original immutable target revision for existing jobs. Obtain from compute_status or monitor records."}));

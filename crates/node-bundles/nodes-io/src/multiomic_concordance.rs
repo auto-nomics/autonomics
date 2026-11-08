@@ -723,8 +723,10 @@ fn joined_outputs(
         "run_report.json",
     ];
     for (idx, name) in files.iter().enumerate() {
-        let path = format!("vfs://{prefix}/{name}");
-        let fingerprint = fingerprints.get(path.trim_start_matches("vfs://")).cloned();
+        let path = vfs::uri::uri(format!("{prefix}/{name}"));
+        let fingerprint = fingerprints
+            .get(vfs::uri::virtual_path(&path).unwrap_or(&path))
+            .cloned();
         outputs.insert_file(
             idx as u8,
             FileRef {

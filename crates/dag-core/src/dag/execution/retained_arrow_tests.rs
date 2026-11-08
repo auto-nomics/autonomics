@@ -340,7 +340,7 @@ async fn zero_batch_ipc_keeps_its_schema_for_local_and_retained_outputs() {
         };
         assert_eq!(frame.schema().fields().len(), 2);
         assert_eq!(frame.schema().field(0).name(), "id");
-        if artifact.path.starts_with("vfs://") {
+        if vfs::uri::is_uri(&artifact.path) {
             assert_eq!(
                 serde_json::to_value(pure_retained_arrow_origin(&frame)).unwrap(),
                 serde_json::to_value(&origin).unwrap()

@@ -121,7 +121,7 @@ async fn joins_three_modalities_and_publishes_ranked_reports() {
 
     async fn read(ctx: &NodeCtx, file: &dag_core::value::FileRef) -> Vec<u8> {
         let storage = ctx.opendal.as_ref().unwrap();
-        let path = file.path.strip_prefix("vfs://").unwrap();
+        let path = vfs::uri::virtual_path(&file.path).unwrap();
         storage
             .resolve(path)
             .read(&storage.resolve_path(path))

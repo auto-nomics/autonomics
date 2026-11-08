@@ -829,7 +829,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         .bind_agent_context(uuid::Uuid::nil(), uuid::Uuid::nil())
         .await
         .unwrap();
-    let tools = super::tools::registrations(
+    let tools = super::tools::hpc_registrations(
         f.registry.clone(),
         "/root/test",
         agents,
@@ -934,7 +934,7 @@ else:
         .unwrap();
     let target = f.registry.target("a", Some(1)).unwrap();
     let storage = Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
-    let tools = super::tools::registrations(
+    let tools = super::tools::hpc_registrations(
         f.registry.clone(),
         "/root/test",
         storage,

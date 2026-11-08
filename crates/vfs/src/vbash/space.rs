@@ -61,7 +61,7 @@ pub async fn op_df(
         .ok_or_else(|| ToolError::ValidationFailed {
             message: "missing or empty 'path' for df".into(),
         })?;
-    let raw = raw.strip_prefix("vfs://").unwrap_or(raw);
+    let raw = crate::uri::virtual_path(raw).unwrap_or(raw);
     if raw.chars().any(char::is_control)
         || Path::new(raw)
             .components()

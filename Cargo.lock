@@ -8905,6 +8905,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "vfs",
 ]
 
 [[package]]
@@ -11694,6 +11695,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "vfs",
 ]
 
 [[package]]
@@ -15653,6 +15655,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing-subscriber",
+ "vfs",
 ]
 
 [[package]]

@@ -1199,7 +1199,7 @@ async fn pull_file(
     // Explicit VFS URIs keep that namespace. Recognized local FileRefs keep
     // theirs even under a root mount; legacy unrecognized bare mounted paths
     // retain their previous VFS resolution. No permission-error fallback.
-    let (virtual_path, target_rel) = if let Some(vpath) = entry.path.strip_prefix("vfs://") {
+    let (virtual_path, target_rel) = if let Some(vpath) = vfs::uri::virtual_path(&entry.path) {
         let normalized = vfs::OpendalFileStorage::normalize_path(vpath);
         (
             Some(normalized.clone()),
@@ -1417,7 +1417,7 @@ pub fn resolve_export_target(
     out: &str,
     storage: Option<&vfs::OpendalFileStorage>,
 ) -> Result<ExportTarget, String> {
-    if let Some(vpath) = out.strip_prefix("vfs://") {
+    if let Some(vpath) = vfs::uri::virtual_path(out) {
         return Ok(ExportTarget::Vfs(vfs::OpendalFileStorage::normalize_path(
             vpath,
         )));
@@ -1459,11 +1459,11 @@ pub async fn upload_export_to_vfs(
             .write_bytes(&vpath, bytes)
             .await
             .map_err(|e| format!("upload {vpath}: {e}"))?;
-        file.exported_path = format!("vfs://{vpath}");
+        file.exported_path = vfs::uri::uri(vpath);
     }
     summary.out = match out_file_index {
         Some(index) => summary.files[index].exported_path.clone(),
-        None => format!("vfs://{prefix}"),
+        None => vfs::uri::uri(prefix),
     };
     Ok(())
 }

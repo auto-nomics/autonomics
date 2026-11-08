@@ -1519,7 +1519,7 @@ pub(crate) async fn sync_fulltext_attachment(
         item_id
     };
 
-    let is_vfs = fulltext.file_path.starts_with("vfs://");
+    let is_vfs = vfs::uri::is_uri(&fulltext.file_path);
     let original_filename = if is_vfs {
         Some(filename_from_vfs_uri(&fulltext.file_path))
     } else {

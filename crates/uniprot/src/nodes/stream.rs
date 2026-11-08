@@ -179,7 +179,7 @@ async fn write_output(
     let size = bytes.len() as u64;
     let sha256 = sha256_hex(&bytes);
 
-    if let Some(vpath) = path.strip_prefix("vfs://") {
+    if let Some(vpath) = vfs::uri::virtual_path(&path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "path `{path}` requires engine file storage, but none is registered"

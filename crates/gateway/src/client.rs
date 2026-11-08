@@ -261,7 +261,7 @@ impl GatewayClient {
     }
 
     /// Spawn an agent from an agent-kind name (`researcher`/`developer`/
-    /// `browser`/`curator`). Returns the registered path.
+    /// `browser`/`curator`/`hpc-ops`). Returns the registered path.
     pub async fn spawn_agent(
         &self,
         name: &str,

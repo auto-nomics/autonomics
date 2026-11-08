@@ -113,6 +113,9 @@ impl PromptCapabilities for agentik_core::AgentKind {
     fn enable_wiki_write(&self) -> bool {
         (*self).enable_wiki_write()
     }
+    fn enable_hpc(&self) -> bool {
+        (*self).enable_hpc()
+    }
 }
 
 /// Process-level shared infrastructure created once and reused by all agents.
@@ -516,15 +519,23 @@ impl SharedInfra {
                 registry.clone(),
                 self.engine_manager.clone(),
             ));
-            tools.extend(crate::compute::tools::registrations(
-                registry.clone(),
-                agent_path.as_str(),
-                self.storage.clone(),
-                file_storage.clone(),
-            ));
+            tools.extend(crate::compute::tools::registrations(registry.clone()));
+            if kind.enable_hpc() {
+                tools.extend(crate::compute::tools::hpc_registrations(
+                    registry.clone(),
+                    agent_path.as_str(),
+                    self.storage.clone(),
+                    file_storage.clone(),
+                ));
+            }
         }
-        if let Some(hpc) = &self.hpc {
-            tools.extend(hpc_tools::registrations(hpc.clone()));
+        // hpc_* 交互式集群工具只挂给 hpc-ops kind——集群账务、调度作业
+        // 与数据传输走一条可审计路径;DAG 执行经 coordinator 的
+        // executor 到达远程 target,不依赖任何 agent 工具。
+        if kind.enable_hpc() {
+            if let Some(hpc) = &self.hpc {
+                tools.extend(hpc_tools::registrations(hpc.clone()));
+            }
         }
 
         // Browser-kind agents get a private BrowserSession allocated on

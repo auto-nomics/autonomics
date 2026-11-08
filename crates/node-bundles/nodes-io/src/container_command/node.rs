@@ -480,7 +480,7 @@ async fn stage_input_file(
     let destination = staged_path(staging_dir, "input", index, &file.path);
 
     let host_source: Option<PathBuf> =
-        if let Some(virtual_source) = file.path.strip_prefix("vfs://") {
+        if let Some(virtual_source) = vfs::uri::virtual_path(&file.path) {
             ctx.opendal
                 .as_ref()
                 .and_then(|storage| storage.local_host_path(virtual_source))
@@ -1614,7 +1614,7 @@ async fn publish_output(
     }
 
     Ok(FileRef::remote(
-        format!("vfs://{virtual_path}"),
+        vfs::uri::uri(virtual_path),
         spec.format.clone(),
         metadata.len(),
         Some(digest),

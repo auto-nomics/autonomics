@@ -558,7 +558,7 @@ fn validate_local_path(path: &str, partitioned: bool) -> std::result::Result<(),
 /// when an OpenDAL-backed store is registered under that URL. Mounted virtual
 /// paths therefore must be addressed through the dedicated `vfs://` store.
 pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
-    if path.starts_with("vfs://") {
+    if vfs::uri::is_uri(path) {
         return path.to_string();
     }
 
@@ -575,7 +575,7 @@ pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) ->
     };
 
     if storage.is_mounted(&candidate) {
-        format!("vfs://{candidate}")
+        vfs::uri::uri(candidate)
     } else {
         path.to_string()
     }
@@ -622,7 +622,7 @@ impl DagNode for FileToDataFrameNode {
         // Pre-validate local paths so we never silently hand back a
         // zero-row DataFrame for a typo'd glob or missing file. vfs://
         // paths go through OpenDAL and don't have local fs access.
-        if !path.starts_with("vfs://") {
+        if !vfs::uri::is_uri(&path) {
             validate_local_path(&path, !self.partition_by.is_empty())
                 .map_err(FileToDataFrameError::InvalidInput)?;
         }
@@ -801,7 +801,7 @@ async fn read_file_with_options(
 /// Read the full contents of an input path: `vfs://` addresses go through
 /// the engine's OpenDAL storage, anything else is a local filesystem read.
 async fn read_input_bytes(node_ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, FileToDataFrameError> {
-    if let Some(vpath) = path.strip_prefix("vfs://") {
+    if let Some(vpath) = vfs::uri::virtual_path(path) {
         let storage = node_ctx.opendal.as_ref().ok_or_else(|| {
             FileToDataFrameError::InvalidInput(format!(
                 "path `{path}` requires engine file storage, but none is registered"

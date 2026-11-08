@@ -75,7 +75,7 @@ async fn read_chunk(
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, DagError> {
-    if let Some(path) = file.path.strip_prefix("vfs://") {
+    if let Some(path) = vfs::uri::virtual_path(&file.path) {
         let storage = ctx
             .opendal
             .as_ref()
@@ -189,7 +189,7 @@ async fn publish_file(ctx: &NodeCtx, file: &FileRef, target: &str) -> Result<Fil
         .await
         .map_err(|e| failure(e.to_string()))?;
     let mut published = file.clone();
-    published.path = format!("vfs://{target}");
+    published.path = vfs::uri::uri(target);
     published.fingerprint.as_mut().unwrap().immutable_remote = false;
     Ok(published)
 }
@@ -207,7 +207,7 @@ pub(super) async fn publish(
             .spec
             .pointer(pointer)
             .and_then(serde_json::Value::as_str)
-            .and_then(|s| s.strip_prefix("vfs://"))
+            .and_then(|s| vfs::uri::virtual_path(s))
             .ok_or_else(|| failure("coordinator publication destination must be VFS"))?;
         let files = outputs
             .get(port)

@@ -1143,7 +1143,7 @@ mod tests {
         );
         assert!(fingerprint.immutable_remote);
         let storage = env.ctx.opendal.as_ref().unwrap();
-        let virtual_path = published.strip_prefix("vfs://").unwrap();
+        let virtual_path = vfs::uri::virtual_path(&published).unwrap();
         let length = storage.content_length(virtual_path).await.unwrap();
         let stored = storage.read_range(virtual_path, 0..length).await.unwrap();
         assert_eq!(stored.to_vec(), b"hello-container");

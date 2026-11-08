@@ -455,7 +455,7 @@ pub(super) fn lower_worker_task(
             let Some(storage) = execution.engine_ctx.opendal.as_ref() else {
                 continue;
             };
-            let path = if let Some(path) = path.strip_prefix("vfs://") {
+            let path = if let Some(path) = vfs::uri::virtual_path(path) {
                 path.to_owned()
             } else if !path.contains("://") && storage.is_mounted(path) {
                 path.to_owned()
@@ -482,7 +482,7 @@ pub(super) fn lower_worker_task(
             }
             envelope.output_directories.insert(pointer.into(), port);
             *envelope.task.spec.pointer_mut(pointer).unwrap() =
-                serde_json::json!(format!("vfs://{path}"));
+                serde_json::json!(vfs::uri::uri(path));
         }
     }
     for pointer in execution
@@ -524,7 +524,7 @@ pub(super) fn lower_worker_task(
         {
             return Err(failure("duplicate spec file transport binding"));
         }
-        let source = if path.starts_with("vfs://") {
+        let source = if vfs::uri::is_uri(path) {
             path.to_owned()
         } else if !path.starts_with("file://")
             && execution
@@ -533,7 +533,7 @@ pub(super) fn lower_worker_task(
                 .as_ref()
                 .is_some_and(|storage| storage.is_mounted(path))
         {
-            format!("vfs://{path}")
+            vfs::uri::uri(path)
         } else {
             path.to_owned()
         };
@@ -929,7 +929,7 @@ pub(super) async fn execute_typed_worker_core(
             .filter(|value| {
                 value
                     .as_str()
-                    .is_some_and(|path| path.starts_with("vfs://"))
+                    .is_some_and(|path| vfs::uri::is_uri(path))
             })
             .ok_or_else(|| failure("directory publication requires an original VFS target"))?;
         *value = serde_json::json!(format!(
@@ -1215,7 +1215,7 @@ async fn copy_worker_file(
     destination: &Path,
     ctx: &crate::registry::NodeCtx,
 ) -> Result<(), DagError> {
-    if let Some(path) = file.path.strip_prefix("vfs://") {
+    if let Some(path) = vfs::uri::virtual_path(&file.path) {
         let storage = ctx
             .opendal
             .as_ref()

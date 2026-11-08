@@ -19,6 +19,7 @@ tokio = { workspace = true, features = ["time", "fs"] }
 
 # DAG node dependencies
 dag-core = { path = "../dag-core" }
+vfs = { path = "../vfs" }
 arrow-array.workspace = true
 arrow-schema.workspace = true
 datafusion.workspace = true

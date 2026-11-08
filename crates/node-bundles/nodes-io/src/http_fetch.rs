@@ -271,7 +271,7 @@ fn describe_request_error(url: &str, source: reqwest::Error) -> HttpFetchError {
 }
 
 async fn write_body(node_ctx: &NodeCtx, path: &str, bytes: Vec<u8>) -> Result<(), HttpFetchError> {
-    if let Some(virtual_path) = path.strip_prefix("vfs://") {
+    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
         let storage = node_ctx
             .opendal
             .as_ref()
@@ -310,7 +310,7 @@ fn file_output(path: &str) -> FileRef {
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase());
-    if path.starts_with("vfs://") {
+    if vfs::uri::is_uri(path) {
         return FileRef::new(path.to_string(), format);
     }
     FileRef::local(path, format).unwrap_or_else(|_| FileRef::new(path.to_string(), None))

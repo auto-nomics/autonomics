@@ -56,12 +56,12 @@ pub(crate) mod util {
     /// and the agent share one mounted object-store namespace. Relative
     /// paths fall through unchanged so the caller's error stays informative.
     pub fn to_vfs_uri(path: &str) -> String {
-        if let Some(stripped) = path.strip_prefix("vfs://") {
-            format!("vfs://{stripped}")
+        if let Some(stripped) = vfs::uri::virtual_path(path) {
+            vfs::uri::uri(stripped)
         } else if let Some(stripped) = path.strip_prefix("file://") {
-            format!("vfs://{stripped}")
+            vfs::uri::uri(stripped)
         } else if std::path::Path::new(path).is_absolute() {
-            format!("vfs://{path}")
+            vfs::uri::uri(path)
         } else {
             path.to_string()
         }
@@ -70,7 +70,7 @@ pub(crate) mod util {
     /// Validate a node output path: `vfs://` URI, `file://` URI, or bare
     /// absolute host path (auto-routed through the mounted VFS).
     pub fn validate_output_path(path: &str) -> Result<(), DagError> {
-        if path.starts_with("vfs://") || path.starts_with("file://") {
+        if vfs::uri::is_uri(path) || path.starts_with("file://") {
             return Ok(());
         }
         if !std::path::Path::new(path).is_absolute() {
@@ -99,7 +99,7 @@ pub(crate) mod util {
         let size = bytes.len() as u64;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-        if !path.starts_with("vfs://") && ctx.opendal.is_none() {
+        if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
             let local = path.strip_prefix("file://").unwrap_or(path);
             if let Some(parent) = std::path::Path::new(local).parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -122,7 +122,7 @@ pub(crate) mod util {
         }
 
         let vfs_uri = to_vfs_uri(path);
-        let virtual_path = vfs_uri.strip_prefix("vfs://").unwrap().to_string();
+        let virtual_path = vfs::uri::virtual_path(&vfs_uri).unwrap().to_string();
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "VFS output `{path}` requires a mounted runtime VFS"

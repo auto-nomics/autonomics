@@ -990,10 +990,10 @@ async fn test_dag_export_run_produces_evidence_crate() {
     let prov_summary = result_json(&results[0]);
     let prov_uri = prov_summary["out"].as_str().unwrap();
     assert!(
-        prov_uri.starts_with("vfs://"),
+        vfs::uri::is_uri(prov_uri),
         "prov upload is vfs-addressed"
     );
-    let vpath = prov_uri.strip_prefix("vfs://").unwrap();
+    let vpath = vfs::uri::virtual_path(prov_uri).unwrap();
     let length = file_storage.content_length(vpath).await.unwrap();
     let prov_bytes = file_storage.read_range(vpath, 0..length).await.unwrap();
     let prov: serde_json::Value = serde_json::from_slice(&prov_bytes.to_vec()).unwrap();

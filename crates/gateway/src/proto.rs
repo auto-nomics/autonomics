@@ -337,7 +337,7 @@ pub struct SpawnAgentRequest {
     /// Parent path as a string, e.g. `/root`.
     pub parent_path: String,
     /// Agent kind to instantiate: `researcher`, `developer`, `browser`,
-    /// or `curator`.
+    /// `curator`, or `hpc-ops`.
     pub profile: String,
     /// Optional per-agent runtime overrides (used by the resume flow to
     /// restore the persisted settings).

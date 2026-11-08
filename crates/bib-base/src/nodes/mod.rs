@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 /// `vfs://` URI by [`to_vfs_uri`] before any I/O is attempted; the engine
 /// has no other writable namespace.
 pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
-    if path.starts_with("vfs://") || path.starts_with("file://") {
+    if vfs::uri::is_uri(path) || path.starts_with("file://") {
         return Ok(());
     }
     if !std::path::Path::new(path).is_absolute() {
@@ -61,12 +61,12 @@ pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
 /// re-check absoluteness so an unsupported path can still be reported with
 /// the original wording.
 pub(crate) fn to_vfs_uri(path: &str) -> String {
-    if let Some(stripped) = path.strip_prefix("vfs://") {
-        format!("vfs://{stripped}")
+    if let Some(stripped) = vfs::uri::virtual_path(path) {
+        vfs::uri::uri(stripped)
     } else if let Some(stripped) = path.strip_prefix("file://") {
-        format!("vfs://{stripped}")
+        vfs::uri::uri(stripped)
     } else if std::path::Path::new(path).is_absolute() {
-        format!("vfs://{path}")
+        vfs::uri::uri(path)
     } else {
         path.to_string()
     }
@@ -82,13 +82,15 @@ pub(crate) fn to_vfs_uri(path: &str) -> String {
 ///    share one object-store namespace — and falls back to a host-FS read
 ///    when the engine runs without a VFS (embedded / test engines).
 pub(crate) async fn read_file_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
-    if !path.starts_with("vfs://") && ctx.opendal.is_none() {
+    if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
         let local = path.strip_prefix("file://").unwrap_or(path);
         return tokio::fs::read(local)
             .await
             .map_err(|error| DagError::Schedule(format!("cannot read file `{path}`: {error}")));
     }
-    let virtual_path = to_vfs_uri(path).strip_prefix("vfs://").unwrap().to_string();
+    let virtual_path = vfs::uri::virtual_path(&to_vfs_uri(path))
+        .unwrap()
+        .to_string();
     let storage = ctx.opendal.as_ref().ok_or_else(|| {
         DagError::Schedule(format!("VFS input `{path}` requires a mounted runtime VFS"))
     })?;
@@ -121,7 +123,7 @@ pub(crate) async fn write_artifact(
     let size = bytes.len() as u64;
     let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-    if !path.starts_with("vfs://") && ctx.opendal.is_none() {
+    if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
         // Legacy embedded-engine path: no mounted VFS, write the host FS.
         let local = path.strip_prefix("file://").unwrap_or(path);
         if let Some(parent) = std::path::Path::new(local).parent() {
@@ -152,7 +154,7 @@ pub(crate) async fn write_artifact(
     }
 
     let vfs_uri = to_vfs_uri(path);
-    let virtual_path = vfs_uri.strip_prefix("vfs://").unwrap().to_string();
+    let virtual_path = vfs::uri::virtual_path(&vfs_uri).unwrap().to_string();
     let storage = ctx.opendal.as_ref().ok_or_else(|| {
         DagError::Schedule(format!(
             "VFS output `{path}` requires a mounted runtime VFS"
@@ -248,7 +250,7 @@ mod tests {
             .unwrap();
         assert_eq!(file.format.as_deref(), Some("evidence"));
         // The FileRef's path is the canonical vfs:// URI the agent and engine share.
-        assert!(file.path.starts_with("vfs://"));
+        assert!(vfs::uri::is_uri(&file.path));
         let fingerprint = file.fingerprint.expect("fingerprint attached");
         assert_eq!(fingerprint.size, 7);
         assert!(

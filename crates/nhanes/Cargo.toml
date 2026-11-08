@@ -9,6 +9,7 @@ description = "NHANES (CDC) file listing and validated XPT download SDK with DAG
 [dependencies]
 async-trait.workspace = true
 dag-core = { path = "../dag-core" }
+vfs = { path = "../vfs" }
 reqwest = { version = "0.13", features = ["json"] }
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }

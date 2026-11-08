@@ -267,7 +267,7 @@ impl DagNode for LiteratureFulltextNode {
                 .await
             {
                 Ok(Some(fulltext)) => {
-                    let fulltext = if fulltext.file_path.starts_with("vfs://") {
+                    let fulltext = if vfs::uri::is_uri(&fulltext.file_path) {
                         fulltext
                     } else if let Some(storage) = shared.file_storage.as_ref() {
                         // Synthetic pointer: materialize once, then it is a

@@ -184,7 +184,7 @@ impl RemoteTaskExecutor {
                 "remote file-set outputs must be loaded as a group by port".into(),
             )),
             "dataframe" => {
-                if artifact.path.starts_with("vfs://") {
+                if vfs::uri::is_uri(&artifact.path) {
                     return Ok(NodeValue::DataFrame(
                         super::retained_arrow::load_retained_arrow(artifact, engine_ctx).await?,
                     ));

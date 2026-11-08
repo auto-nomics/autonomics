@@ -565,7 +565,7 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
         return Err(DagError::Schedule("glob pattern cannot be empty".into()));
     }
 
-    if let Some(virtual_pattern) = trimmed.strip_prefix("vfs://") {
+    if let Some(virtual_pattern) = vfs::uri::virtual_path(trimmed) {
         let Some(storage) = ctx.opendal.as_ref() else {
             return Err(DagError::Schedule(
                 "vfs:// DICOM globs require registered object storage".into(),
@@ -607,7 +607,7 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
             }
             let mtime_ns = meta.last_modified.timestamp_nanos_opt().unwrap_or_default();
             files.push(FileRef {
-                path: format!("vfs://{path}"),
+                path: vfs::uri::uri(path),
                 format: Some("dicom".into()),
                 fingerprint: Some(FileFingerprint {
                     size: meta.size,
@@ -1948,8 +1948,7 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
         return Err("path is empty".into());
     }
     if let Some(storage) = ctx.opendal.as_ref() {
-        let virtual_path = path
-            .strip_prefix("vfs://")
+        let virtual_path = vfs::uri::virtual_path(path)
             .map(str::to_string)
             .or_else(|| path.strip_prefix("file://").map(str::to_string))
             .or_else(|| path.starts_with('/').then(|| path.to_string()));

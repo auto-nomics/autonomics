@@ -542,7 +542,7 @@ fn staged_path(root: &Path, source: &str) -> PathBuf {
 }
 
 async fn stage_archive(ctx: &NodeCtx, source: &str, staged: &Path) -> Result<(), DagError> {
-    if source.starts_with("vfs://") {
+    if vfs::uri::is_uri(source) {
         crate::file_decompress::stage_vfs_input(ctx, source, staged).await
     } else if Path::new(source).is_file() {
         tokio::fs::copy(source, staged)
@@ -869,8 +869,8 @@ impl ArchiveExtractNode {
 
 fn virtual_join(prefix: &str, member: &str) -> String {
     let prefix = prefix.trim_end_matches('/');
-    if prefix == "vfs://" {
-        format!("vfs:///{member}")
+    if prefix == vfs::uri::SCHEME_PREFIX {
+        vfs::uri::uri(format!("/{member}"))
     } else {
         format!("{prefix}/{member}")
     }
@@ -881,7 +881,7 @@ async fn delete_vfs_outputs(ctx: &NodeCtx, paths: &[String]) {
         return;
     };
     for path in paths {
-        let Some(virtual_path) = path.strip_prefix("vfs://") else {
+        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
             continue;
         };
         let operator = storage.resolve(virtual_path);
@@ -952,7 +952,7 @@ impl DagNode for ArchiveExtractNode {
         let mut outputs = Vec::new();
         let mut published = Vec::new();
         let mut result: Result<(), DagError> = Ok(());
-        if destination_prefix.starts_with("vfs://") {
+        if vfs::uri::is_uri(&destination_prefix) {
             for extracted in files {
                 let path = virtual_join(&destination_prefix, &extracted.path);
                 // Already-published VFS members must be removed before returning.

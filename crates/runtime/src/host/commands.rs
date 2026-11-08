@@ -1833,7 +1833,7 @@ mod communication_policy_tests {
         assert!(!names.is_empty(), "expected some candidates");
         for name in &names {
             assert!(
-                matches!(*name, "child" | "researcher" | "developer"),
+                matches!(*name, "child" | "researcher" | "developer" | "hpc-ops"),
                 "unexpected candidate '{name}' in {names:?}"
             );
         }

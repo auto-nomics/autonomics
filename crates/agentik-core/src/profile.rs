@@ -1,9 +1,9 @@
 //! Hardcoded agent kinds and the per-agent persisted configuration.
 //!
-//! Agents come in exactly four kinds — [`AgentKind::Researcher`],
-//! [`AgentKind::Developer`], [`AgentKind::Browser`], and
-//! [`AgentKind::Curator`] — whose identity, prompts, and tool
-//! capabilities are fixed in code.
+//! Agents come in exactly five kinds — [`AgentKind::Researcher`],
+//! [`AgentKind::Developer`], [`AgentKind::Browser`],
+//! [`AgentKind::Curator`], and [`AgentKind::HpcOps`] — whose identity,
+//! prompts, and tool capabilities are fixed in code.
 //! Per-agent state that outlives a spawn (model preference, runtime
 //! overrides) lives in [`AgentProfileConfig`], persisted in the
 //! `agents.config_json` column.
@@ -43,25 +43,35 @@ pub enum AgentKind {
     /// `literature_search` / `literature_import`) so it can feed sourced
     /// literature into the knowledge base.
     Curator,
+    /// HPC operations specialist. The only kind that holds the `hpc_*`
+    /// tool group (`hpc_cluster`, `hpc_jobs`, `hpc_files`,
+    /// `hpc_transfer`) — interactive cluster accounting, scheduler job
+    /// management, and data transfers flow through one auditable role.
+    /// DAG execution reaches remote compute targets through the
+    /// coordinator's executor and needs none of these tools.
+    #[serde(rename = "hpc-ops")]
+    HpcOps,
 }
 
 impl AgentKind {
     /// Every kind, in picker/display order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Researcher,
         Self::Developer,
         Self::Browser,
         Self::Curator,
+        Self::HpcOps,
     ];
 
-    /// Wire/stable name: `"researcher"`, `"developer"`, `"browser"`, or
-    /// `"curator"`.
+    /// Wire/stable name: `"researcher"`, `"developer"`, `"browser"`,
+    /// `"curator"`, or `"hpc-ops"`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Researcher => "researcher",
             Self::Developer => "developer",
             Self::Browser => "browser",
             Self::Curator => "curator",
+            Self::HpcOps => "hpc-ops",
         }
     }
 
@@ -72,6 +82,7 @@ impl AgentKind {
             "developer" => Some(Self::Developer),
             "browser" => Some(Self::Browser),
             "curator" => Some(Self::Curator),
+            "hpc-ops" => Some(Self::HpcOps),
             _ => None,
         }
     }
@@ -81,6 +92,7 @@ impl AgentKind {
     /// `developer` and its descendants are [`AgentKind::Developer`];
     /// `browser` and its descendants are [`AgentKind::Browser`];
     /// `curator` and its descendants are [`AgentKind::Curator`];
+    /// `hpc-ops` and its descendants are [`AgentKind::HpcOps`];
     /// everything else — `researcher`, `researcher/<specialist>`, the
     /// legacy `default`, and unknown paths — is
     /// [`AgentKind::Researcher`]. This mirrors the role enforcement the
@@ -92,6 +104,8 @@ impl AgentKind {
             Self::Browser
         } else if path == "curator" || path.starts_with("curator/") {
             Self::Curator
+        } else if path == "hpc-ops" || path.starts_with("hpc-ops/") {
+            Self::HpcOps
         } else {
             Self::Researcher
         }
@@ -105,6 +119,7 @@ impl AgentKind {
             Self::Curator => {
                 "Knowledge-base curator maintaining the shared wiki and literature library."
             }
+            Self::HpcOps => "HPC operations specialist managing cluster jobs and data transfers.",
         }
     }
 
@@ -121,6 +136,9 @@ impl AgentKind {
             }
             Self::Curator => {
                 "You are a knowledge-base curator. You create, structure, and maintain the shared wiki through the `wiki_*` tool group: entries, aliases, tags, `[[wiki links]]`, attachments, and version history. You also manage the shared literature library through the bibliography tools: search it with `literature_search` and `bib_search_library`, and import and organize sources with `literature_import`, collections, and `bib_export`. You are the only role that writes to the knowledge base; keep entries concise, well-titled, cross-linked, and deduplicated."
+            }
+            Self::HpcOps => {
+                "You are the HPC operations specialist. You manage the organization's remote compute targets through the `hpc_*` tool group: inspect clusters with `hpc_cluster` (partitions, accounts, quotas, queue state), run and shepherd scheduler jobs with `hpc_jobs` (submit, status, logs, recover, cancel), and handle remote files and transfers with `hpc_files` and `hpc_transfer`. Target selection is operator-controlled: new computation must use the globally selected compute target, and existing jobs are addressed by their original `target_id` and `target_revision`. An uncertain submission is recovered with `hpc_jobs recover` — never resubmitted. You do not perform open-ended research analysis yourself; task agents own that, and their DAG execution reaches the cluster through the coordinator without your involvement."
             }
         }
     }
@@ -205,6 +223,16 @@ impl AgentKind {
         matches!(self, Self::Curator)
     }
 
+    /// Expose the `hpc_*` tool group (`hpc_cluster`, `hpc_jobs`,
+    /// `hpc_files`, `hpc_transfer`). Whitelisted to the hpc-ops kind —
+    /// interactive cluster accounting, scheduler job management, and
+    /// data transfers flow through one auditable role, while DAG
+    /// execution reaches remote targets through the coordinator's
+    /// executor and needs no agent tool.
+    pub const fn enable_hpc(self) -> bool {
+        matches!(self, Self::HpcOps)
+    }
+
     /// Enable the `browser_*` tool group backed by a per-agent
     /// [`browser_use::BrowserSession`].
     pub const fn enable_browser(self) -> bool {
@@ -228,7 +256,9 @@ impl FromStr for AgentKind {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_name(s).ok_or_else(|| {
-            format!("unknown agent kind `{s}`; expected researcher, developer, browser, or curator")
+            format!(
+                "unknown agent kind `{s}`; expected researcher, developer, browser, curator, or hpc-ops"
+            )
         })
     }
 }
@@ -412,12 +442,21 @@ mod tests {
                 "{path}"
             );
         }
+        let hpc_ops = ["hpc-ops", "hpc-ops/login"];
+        for path in hpc_ops {
+            assert_eq!(
+                AgentKind::from_legacy_profile_path(path),
+                AgentKind::HpcOps,
+                "{path}"
+            );
+        }
         let researcher = [
             "researcher",
             "researcher/genomics",
             "developer-x",
             "browser-x",
             "curator-x",
+            "hpc-ops-x",
             "default",
             "literature",
             "",
@@ -471,13 +510,14 @@ mod tests {
         );
         assert_eq!(AgentKind::from_name("browser"), Some(AgentKind::Browser));
         assert_eq!(AgentKind::from_name("curator"), Some(AgentKind::Curator));
-        for rejected in ["Researcher", "researcher/genomics", "", "default"] {
+        assert_eq!(AgentKind::from_name("hpc-ops"), Some(AgentKind::HpcOps));
+        for rejected in ["Researcher", "researcher/genomics", "", "default", "hpcops", "hpc_ops"] {
             assert_eq!(AgentKind::from_name(rejected), None, "{rejected}");
         }
         let err = "wizard".parse::<AgentKind>().unwrap_err();
         assert_eq!(
             err,
-            "unknown agent kind `wizard`; expected researcher, developer, browser, or curator"
+            "unknown agent kind `wizard`; expected researcher, developer, browser, curator, or hpc-ops"
         );
     }
 
@@ -538,6 +578,21 @@ mod tests {
         assert!(curator.enable_dag_history());
         assert!(!curator.enable_plugin_rsi());
         assert!(!curator.enable_browser());
+
+        let hpc_ops = AgentKind::HpcOps;
+        assert!(!hpc_ops.enable_bibliography());
+        assert!(!hpc_ops.enable_writing());
+        assert!(!hpc_ops.enable_opengwas());
+        assert!(!hpc_ops.enable_opentargets());
+        assert!(!hpc_ops.enable_gwascatalog());
+        assert!(!hpc_ops.enable_chembl());
+        assert!(!hpc_ops.enable_rcsb());
+        assert!(!hpc_ops.enable_string());
+        assert!(!hpc_ops.enable_kegg());
+        assert!(hpc_ops.enable_dag_history());
+        assert!(!hpc_ops.enable_plugin_rsi());
+        assert!(!hpc_ops.enable_browser());
+        assert!(hpc_ops.enable_hpc());
     }
 
     #[test]
@@ -549,11 +604,28 @@ mod tests {
                 kind.name()
             );
         }
-        for kind in [AgentKind::Developer, AgentKind::Browser] {
+        for kind in [AgentKind::Developer, AgentKind::Browser, AgentKind::HpcOps] {
             assert!(
                 !kind.enable_bibliography(),
                 "{} must not hold the bibliography group",
                 kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn hpc_tools_go_to_hpc_ops_only() {
+        for kind in AgentKind::ALL {
+            assert_eq!(
+                kind.enable_hpc(),
+                kind == AgentKind::HpcOps,
+                "{} must {} the hpc tool group",
+                kind.name(),
+                if kind == AgentKind::HpcOps {
+                    "hold"
+                } else {
+                    "lack"
+                }
             );
         }
     }
@@ -582,7 +654,7 @@ mod tests {
 
     #[test]
     fn all_lists_every_kind_with_matching_names() {
-        assert_eq!(AgentKind::ALL.len(), 4);
+        assert_eq!(AgentKind::ALL.len(), 5);
         for kind in AgentKind::ALL {
             assert_eq!(AgentKind::from_name(kind.name()), Some(kind));
             assert_eq!(kind.to_string(), kind.name());

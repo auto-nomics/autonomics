@@ -450,6 +450,14 @@ const PROMPT_GENERAL: &str = "\n\
 - Report quantitative results with appropriate precision and confidence intervals when available.\n\
 - If a tool call fails, diagnose the error and retry with corrected parameters before asking the user.";
 
+const PROMPT_HPC: &str = "\n\
+### HPC operations\n\
+- Inspect the cluster with `hpc_cluster` (identity, partitions, resources, accounts, quota, queue) before submitting work.\n\
+- Submit scheduler jobs with `hpc_jobs` under a stable `submission_key`. An uncertain submission is recovered with `recover` — never resubmitted; use `inspect` to read the frozen submission.\n\
+- Address existing jobs with their original `target_id`/`target_revision`; new computation must match the globally selected compute target.\n\
+- Move data with `hpc_files` and `hpc_transfer`; prefer referencing inputs already on the cluster filesystem over re-uploading them.\n\
+- `cancel` stays STOP_PENDING until both the queue and accounting confirm the job is gone — wait for that confirmation before declaring success.";
+
 /// Trait so [`build_system_prompt`] can accept either an
 /// [`agentik_core::AgentKind`] or a [`RuntimeConfig`] — both carry the same
 /// boolean tool-capability flags.
@@ -480,6 +488,11 @@ pub trait PromptCapabilities {
     // Wiki write tools are keyed on the agent *kind* (curator only),
     // never on the global runtime config.
     fn enable_wiki_write(&self) -> bool {
+        false
+    }
+    // HPC tools are keyed on the agent *kind* (hpc-ops only), never on
+    // the global runtime config.
+    fn enable_hpc(&self) -> bool {
         false
     }
 }
@@ -535,6 +548,9 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     }
     if caps.enable_wiki_write() {
         s.push_str(PROMPT_WIKI_WRITE);
+    }
+    if caps.enable_hpc() {
+        s.push_str(PROMPT_HPC);
     }
 
     // DAG engine, SQL conventions, and general sections are always included —
@@ -607,6 +623,9 @@ pub fn default_system_prompt() -> String {
             true
         }
         fn enable_wiki_write(&self) -> bool {
+            true
+        }
+        fn enable_hpc(&self) -> bool {
             true
         }
     }

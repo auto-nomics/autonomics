@@ -85,7 +85,7 @@ fn normalize_and_source(ctx: &NodeCtx, path: &str) -> String {
 }
 
 async fn read_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
-    if let Some(virtual_path) = path.strip_prefix("vfs://") {
+    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!("VFS input `{path}` requires a mounted runtime VFS"))
         })?;
@@ -105,7 +105,7 @@ async fn read_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
 }
 
 async fn write_bytes(ctx: &NodeCtx, path: &str, bytes: Vec<u8>) -> Result<(), DagError> {
-    if let Some(virtual_path) = path.strip_prefix("vfs://") {
+    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "VFS output `{path}` requires a mounted runtime VFS"

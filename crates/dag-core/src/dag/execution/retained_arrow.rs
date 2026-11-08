@@ -188,7 +188,7 @@ pub fn pure_retained_arrow_origin(frame: &DataFrame) -> Option<FileRef> {
     }
     let provider = source_as_provider(&scan.source).ok()?;
     let retained = provider.as_any().downcast_ref::<RetainedArrowProvider>()?;
-    if !retained.origin.path.starts_with("vfs://")
+    if !vfs::uri::is_uri(&retained.origin.path)
         || scan.projected_schema.as_arrow() != retained.inner.schema().as_ref()
     {
         return None;

@@ -7,6 +7,7 @@ pub mod browse;
 pub mod mount;
 pub mod permission;
 pub mod storage;
+pub mod uri;
 pub mod vbash;
 
 pub use mount::{

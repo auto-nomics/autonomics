@@ -492,7 +492,7 @@ fn normalize_virtual_prefix(source: &str) -> Result<String, String> {
     if source.contains('\0') {
         return Err("panel source cannot contain NUL bytes".into());
     }
-    let value = source.strip_prefix("vfs://").unwrap_or(source);
+    let value = vfs::uri::virtual_path(source).unwrap_or(source);
     let normalized = vfs::OpendalFileStorage::normalize_path(value);
     let trimmed = normalized.trim_end_matches('/');
     if trimmed == "/" || trimmed.is_empty() {

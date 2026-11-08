@@ -341,7 +341,7 @@ impl OpendalFileStorage {
     /// zero-copy staging. Returns `None` for remote backends (the caller
     /// should transfer the bytes instead) and for unparseable paths.
     pub fn local_host_path(&self, path: &str) -> Option<std::path::PathBuf> {
-        let stripped = path.strip_prefix("vfs://").unwrap_or(path);
+        let stripped = crate::uri::virtual_path(path).unwrap_or(path);
         let v = Self::normalize_path(stripped);
         let p = Path::parse(&v).ok()?;
         if let Some(mounts) = &self.mounts
@@ -402,7 +402,7 @@ impl OpendalFileStorage {
     /// A same-host worker must independently open the path without following
     /// symlinks and enforce its own admitted input roots.
     pub fn ssh_location(&self, path: &str) -> Result<Option<crate::SshLocation>, opendal::Error> {
-        let stripped = path.strip_prefix("vfs://").unwrap_or(path);
+        let stripped = crate::uri::virtual_path(path).unwrap_or(path);
         let normalized = Self::normalize_path(stripped);
         self.check_readable(&normalized)?;
         let parsed = Path::parse(&normalized).map_err(|_| {

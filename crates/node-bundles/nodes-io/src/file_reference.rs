@@ -138,13 +138,11 @@ async fn resolve_file(
         return Err(DagError::Schedule("file path cannot be empty".into()));
     }
 
-    if path.starts_with("vfs://") {
+    if vfs::uri::is_uri(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!("file `{path}` requires a registered runtime VFS"))
         })?;
-        let virtual_path = path
-            .strip_prefix("vfs://")
-            .expect("path starts with vfs://");
+        let virtual_path = vfs::uri::virtual_path(path).expect("path starts with vfs://");
         return vfs_file(storage, path, virtual_path, format).await;
     }
 
