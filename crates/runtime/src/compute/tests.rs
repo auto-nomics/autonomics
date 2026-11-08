@@ -67,6 +67,7 @@ fn fixture() -> Fixture {
 fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
     registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: registry.catalog().revision,
             id: id.into(),
             name: id.into(),
@@ -108,6 +109,7 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
     for revision in 1..=2 {
         f.registry
             .save_target(SaveTarget {
+                data_domains: Vec::new(),
                 expected_revision: f.registry.catalog().revision,
                 id: "evidence".into(),
                 name: "evidence".into(),
@@ -178,6 +180,7 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
     let save = |settings: SlurmConfig| {
         f.registry
             .save_target(SaveTarget {
+                data_domains: Vec::new(),
                 expected_revision: f.registry.catalog().revision,
                 id: "mapping".into(),
                 name: "mapping".into(),
@@ -269,6 +272,7 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
     let settings = remote_settings(&f.config.state_dir, "environment-host");
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "remote".into(),
             name: "remote".into(),
@@ -524,6 +528,7 @@ async fn target_profiles_are_frozen_and_tampering_is_rejected_on_restart() {
     let source = settings.typed_worker_config.clone().unwrap();
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: 1,
             id: "remote".into(),
             name: "remote".into(),
@@ -680,6 +685,7 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
         assert!(
             f.registry
                 .save_target(SaveTarget {
+                data_domains: Vec::new(),
                     expected_revision: 1,
                     id: id.into(),
                     name: "invalid".into(),
@@ -713,6 +719,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         let settings = remote_settings(&f.config.state_dir, host);
         f.registry
             .save_target(SaveTarget {
+                data_domains: Vec::new(),
                 expected_revision: f.registry.catalog().revision,
                 id: id.into(),
                 name: id.into(),
@@ -766,6 +773,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
     let old = f.registry.target("a", Some(1)).unwrap();
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "a".into(),
             name: "disabled a".into(),
@@ -889,6 +897,7 @@ async fn connection_identity_is_retained_when_alias_configuration_changes() {
     let program = settings.ssh_command.clone();
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: 1,
             id: "a".into(),
             name: "a".into(),
@@ -925,6 +934,7 @@ else:
     fs::write(&settings.ssh_command, script).unwrap();
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: 1,
             id: "a".into(),
             name: "a".into(),
@@ -945,6 +955,7 @@ else:
     select(&f.registry, "local");
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "a".into(),
             name: "a".into(),
@@ -1145,6 +1156,7 @@ async fn restart_uses_enrolled_profiles_instead_of_mutable_legacy_paths() {
     let source = settings.typed_worker_config.clone().unwrap();
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: 1,
             id: "remote".into(),
             name: "remote".into(),
@@ -1210,6 +1222,7 @@ async fn background_image_builds_cannot_bypass_remote_compute_policy() {
     let settings = remote_settings(&f.config.state_dir, "image-host");
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "remote".into(),
             name: "remote".into(),
@@ -1352,6 +1365,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let catalog = f
         .registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "old-worker".into(),
             name: "Old worker".into(),
@@ -1417,6 +1431,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let replacement = remote_settings(&f.config.state_dir, "matching-worker");
     reopened
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: reopened.catalog().revision,
             id: "old-worker".into(),
             name: "Matching replacement".into(),
@@ -1497,6 +1512,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     settings.apptainer_manifest = Some(inventory);
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "readiness".into(),
             name: "readiness".into(),
@@ -1589,6 +1605,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     let settings = remote_settings(&f.config.state_dir, "network");
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "network".into(),
             name: "network".into(),
@@ -1630,6 +1647,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     );
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "network".into(),
             name: "network".into(),
@@ -1670,6 +1688,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     settings.apptainer_manifest = None;
     f.registry
         .save_target(SaveTarget {
+                data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "ht-direct".into(),
             name: "Direct SSH host".into(),
@@ -1749,4 +1768,150 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     let status = f.registry.status().unwrap();
     assert_eq!(status.runs.len(), 1);
     let _ = target;
+}
+
+// ── data-domain declarations (placement phase 1) ────────────────────────
+
+fn domain(alias: &str) -> DataDomain {
+    DataDomain {
+        id: "hpc-b".into(),
+        ssh_aliases: vec![alias.into()],
+        remote_root: "/lustre/share".into(),
+        vfs_prefix: "/data/hpc-b".into(),
+        retained_vfs_prefix: None,
+        retained_remote_root: None,
+    }
+}
+
+#[test]
+fn data_domain_admission_mirrors_transport_rules() {
+    assert!(domain("data-a").validate().is_ok());
+
+    let mut leading_dash = domain("data-a");
+    leading_dash.ssh_aliases = vec!["-bad".into()];
+    assert!(leading_dash.validate().is_err());
+
+    let mut no_alias = domain("data-a");
+    no_alias.ssh_aliases = Vec::new();
+    assert!(no_alias.validate().is_err());
+
+    let mut relative_root = domain("data-a");
+    relative_root.remote_root = "lustre/share".into();
+    assert!(relative_root.validate().is_err());
+
+    // Retained namespace must be paired, distinct, and below the root.
+    let mut unpaired = domain("data-a");
+    unpaired.retained_vfs_prefix = Some("/data/hpc-b-kept".into());
+    assert!(unpaired.validate().is_err());
+
+    let mut outside = domain("data-a");
+    outside.retained_vfs_prefix = Some("/data/hpc-b-kept".into());
+    outside.retained_remote_root = Some("/elsewhere".into());
+    assert!(outside.validate().is_err());
+
+    let mut kept = domain("data-a");
+    kept.retained_vfs_prefix = Some("/data/hpc-b-kept".into());
+    kept.retained_remote_root = Some("/lustre/share/kept".into());
+    assert!(kept.validate().is_ok());
+}
+
+#[test]
+fn data_domain_converts_to_transport_home_losslessly() {
+    let mut d = domain("data-a");
+    d.retained_vfs_prefix = Some("/data/hpc-b-kept".into());
+    d.retained_remote_root = Some("/lustre/share/kept".into());
+    let home = d.data_home();
+    assert_eq!(home.ssh_aliases, vec!["data-a".to_string()]);
+    assert_eq!(home.remote_root, "/lustre/share");
+    assert_eq!(home.vfs_prefix, "/data/hpc-b");
+    assert_eq!(home.retained_vfs_prefix.as_deref(), Some("/data/hpc-b-kept"));
+    assert_eq!(home.retained_remote_root.as_deref(), Some("/lustre/share/kept"));
+}
+
+#[tokio::test]
+async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
+    // A domain declaration needs its VFS projection to exist as an SSH
+    // mount resolving to the same alias and root, so build the fixture
+    // with one extra backend+mount over the usual local root.
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = RuntimeConfig::default();
+    config.state_dir = dir.path().to_path_buf();
+    config.data_dir = dir.path().join("data");
+    fs::create_dir(&config.data_dir).unwrap();
+    config.slurm.enabled = false;
+    config.slurm.tools_enabled = false;
+    config.slurm.typed_worker_config = None;
+    config.slurm.apptainer_manifest = None;
+    let mut manifest = vfs::VfsManifest::local_root(config.data_dir.to_string_lossy());
+    manifest.backend.push(vfs::BackendDefinition {
+        id: "dom-backend".into(),
+        config: vfs::BackendConfig::Ssh {
+            alias: "domain-a".into(),
+            root: "/lustre/share".into(),
+            python: "python3".into(),
+            endpoint: None,
+        },
+    });
+    manifest.mount.push(vfs::MountDefinition {
+        path: "/data/hpc-b".into(),
+        backend: "dom-backend".into(),
+        source: "/".into(),
+        read_only: true,
+        permissions: Default::default(),
+    });
+    let vfs_store = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
+        &config.data_dir,
+        vfs_store.clone(),
+    ));
+    let containers = ContainerExecutionInfra::from_config(
+        container_runtime::PodmanConfig::for_state_dir(dir.path()),
+    );
+    let registry = ComputeRegistry::open(
+        &config,
+        storage,
+        vfs_store,
+        &containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+
+    let mut settings = remote_settings(&config.state_dir, "domain-a");
+    // The transport requires task work to live inside the retained
+    // output root; the domain root must therefore contain the scratch.
+    settings.scratch_remote_dir = "/lustre/share/scratch".into();
+    let saved = registry
+        .save_target(SaveTarget {
+            expected_revision: 1,
+            id: "dom".into(),
+            name: "dom".into(),
+            enabled: true,
+            backend: ComputeBackend::Ssh { settings },
+            data_domains: vec![domain("domain-a")],
+        })
+        .unwrap();
+    let target = saved
+        .targets
+        .iter()
+        .find(|t| t.id == "dom")
+        .unwrap();
+    // The domain alias is frozen with the same endpoint identity
+    // treatment as the target's own login alias.
+    let endpoint = &target.endpoints["domain-a"];
+    assert_eq!(endpoint.hostname, "toy.example");
+    assert_eq!(target.data_domains.len(), 1);
+    assert_eq!(target.data_domains[0].remote_root, "/lustre/share");
+
+    // A second domain is rejected: the transport admits exactly one.
+    let err = registry
+        .save_target(SaveTarget {
+            expected_revision: saved.revision,
+            id: "dom2".into(),
+            name: "dom2".into(),
+            enabled: true,
+            backend: ComputeBackend::Local,
+            data_domains: vec![domain("a"), domain("b")],
+        })
+        .unwrap_err();
+    assert!(err.contains("at most one data domain"), "{err}");
 }

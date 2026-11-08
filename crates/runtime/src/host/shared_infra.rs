@@ -910,8 +910,11 @@ async fn build_engine_manager(
     } else if config.slurm.enabled {
         let settings = slurm_settings(config)?;
         let executor = if let Some(path) = &config.slurm.typed_worker_config {
+            // No enrolled target here, so no catalog data domain: the
+            // worker profile's data_home field remains authoritative.
             let (executor, max_remote_tasks, _) = super::hpc_placement::executor(
                 path,
+                None,
                 settings,
                 &config.state_dir.join("slurm-tasks"),
                 file_storage,

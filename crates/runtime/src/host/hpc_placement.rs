@@ -230,6 +230,7 @@ pub(super) fn disable_local_container_execution(
 
 pub(crate) fn executor(
     path: &Path,
+    data_home: Option<SshDataHome>,
     settings: SlurmSettings,
     workspace: &Path,
     storage: &vfs::OpendalFileStorage,
@@ -241,7 +242,11 @@ pub(crate) fn executor(
         settings.scratch_dir.clone(),
         settings.local_artifact_root.clone(),
     );
-    if let Some(data_home) = profile.data_home {
+    // The catalog's data-domain declaration is authoritative when
+    // present; the worker-profile field remains the legacy fallback for
+    // pre-existing frozen enrollments.
+    let data_home = data_home.or(profile.data_home);
+    if let Some(data_home) = data_home {
         data_home
             .validate_vfs(storage)
             .map_err(|error| Error::Other(error.to_string()))?;

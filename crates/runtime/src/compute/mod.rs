@@ -53,10 +53,108 @@ pub struct ComputeTarget {
     pub name: String,
     pub enabled: bool,
     pub backend: ComputeBackend,
+    /// Filesystem domains this target references in place. Phase 1 of
+    /// the placement model: the domain declaration moves from the
+    /// typed-worker profile's free-form `data_home` field into the
+    /// immutable target record, where the catalog pins endpoint
+    /// identity alongside the other target aliases. Empty for local
+    /// targets and pre-existing enrollments (the profile field remains
+    /// the legacy fallback).
+    #[serde(default)]
+    pub data_domains: Vec<DataDomain>,
     #[serde(default)]
     pub capsule_sha256: BTreeMap<String, String>,
     #[serde(default)]
     pub endpoints: BTreeMap<String, vfs::SshEndpoint>,
+}
+
+/// A filesystem domain a remote compute target references in place.
+///
+/// Aliases are operator assertions that these SSH endpoints share the
+/// filesystem the target's compute nodes see; the executor re-verifies
+/// every in-place reference against the live endpoint before trusting
+/// it. `vfs_prefix` is the coordinator-side projection mount under
+/// which published references surface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataDomain {
+    pub id: String,
+    pub ssh_aliases: Vec<String>,
+    pub remote_root: String,
+    pub vfs_prefix: String,
+    /// Optional dedicated output namespace. Both fields must be supplied;
+    /// inputs remain confined to `remote_root` and its admitted aliases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_vfs_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_remote_root: Option<String>,
+}
+
+impl DataDomain {
+    /// Admission rules mirroring the transport-side `SshDataHome`
+    /// validation so an invalid domain fails the catalog save, not the
+    /// first scheduled task.
+    pub fn validate(&self) -> Result<(), String> {
+        identifier(&self.id)?;
+        if self.ssh_aliases.is_empty()
+            || self.ssh_aliases.iter().any(|alias| {
+                alias.is_empty()
+                    || alias.starts_with('-')
+                    || !alias
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"_.@:-".contains(&c))
+            })
+        {
+            return Err("data domain requires at least one valid ssh alias".into());
+        }
+        domain_absolute(&self.remote_root, "remote_root")?;
+        domain_absolute(&self.vfs_prefix, "vfs_prefix")?;
+        match (&self.retained_vfs_prefix, &self.retained_remote_root) {
+            (None, None) => {}
+            (Some(prefix), Some(root))
+                if is_domain_absolute(prefix)
+                    && is_domain_absolute(root)
+                    && prefix != &self.vfs_prefix
+                    && root != &self.remote_root
+                    && Path::new(root).starts_with(&self.remote_root) => {}
+            _ => {
+                return Err(
+                    "retained output prefix/root must be a paired, distinct namespace below the data domain root"
+                        .into(),
+                )
+            }
+        }
+        Ok(())
+    }
+
+    /// The transport-side placement record for this domain.
+    pub fn data_home(&self) -> dag_core::SshDataHome {
+        dag_core::SshDataHome {
+            ssh_aliases: self.ssh_aliases.clone(),
+            remote_root: self.remote_root.clone(),
+            vfs_prefix: self.vfs_prefix.clone(),
+            retained_vfs_prefix: self.retained_vfs_prefix.clone(),
+            retained_remote_root: self.retained_remote_root.clone(),
+        }
+    }
+}
+
+fn is_domain_absolute(path: &str) -> bool {
+    path.starts_with('/')
+        && path != "/"
+        && !path.ends_with('/')
+        && !path
+            .split('/')
+            .skip(1)
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        && !path.chars().any(char::is_control)
+}
+
+fn domain_absolute(path: &str, field: &str) -> Result<(), String> {
+    if !is_domain_absolute(path) {
+        return Err(format!("data domain {field} must be a clean absolute path"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +344,10 @@ pub struct SaveTarget {
     pub name: String,
     pub enabled: bool,
     pub backend: ComputeBackend,
+    /// Declared placement domains. The transport currently admits at
+    /// most one; the vec keeps the catalog schema forward-compatible.
+    #[serde(default)]
+    pub data_domains: Vec<DataDomain>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -520,6 +622,7 @@ impl ComputeRegistry {
                 name: "Local".into(),
                 enabled: true,
                 backend: ComputeBackend::Local,
+                data_domains: Vec::new(),
                 capsule_sha256: BTreeMap::new(),
                 endpoints: BTreeMap::new(),
             }];
@@ -532,6 +635,7 @@ impl ComputeRegistry {
                     backend: ComputeBackend::Slurm {
                         settings: config.slurm.clone(),
                     },
+                    data_domains: Vec::new(),
                     capsule_sha256: BTreeMap::new(),
                     endpoints: BTreeMap::new(),
                 });
@@ -809,12 +913,19 @@ impl ComputeRegistry {
             .unwrap_or(0)
             .checked_add(1)
             .ok_or("target revision overflow")?;
+        if request.data_domains.len() > 1 {
+            return Err("at most one data domain per target is supported".into());
+        }
+        for domain in &request.data_domains {
+            domain.validate()?;
+        }
         let mut target = ComputeTarget {
             id: request.id,
             revision,
             name: request.name,
             enabled: request.enabled,
             backend: request.backend,
+            data_domains: request.data_domains,
             capsule_sha256: BTreeMap::new(),
             endpoints: BTreeMap::new(),
         };
@@ -898,9 +1009,17 @@ impl ComputeRegistry {
         private_dir(&dir)?;
         // Legacy installation starts offline and keeps historical bindings unchanged.
         // New operator revisions resolve and freeze their non-secret endpoints.
+        // Data-domain aliases are pinned with the same treatment: in-place
+        // references re-verify identity against these frozen endpoints.
+        let domain_aliases: Vec<&String> = target
+            .data_domains
+            .iter()
+            .flat_map(|domain| domain.ssh_aliases.iter())
+            .collect();
         for alias in std::iter::once(&settings.ssh_host)
             .chain(settings.data_ssh_host.iter())
             .chain(settings.pi_ssh_host.iter())
+            .chain(domain_aliases.iter().copied())
             .filter(|_| !(target.id == "legacy-slurm" && target.revision == 1))
         {
             target.endpoints.insert(
@@ -1040,6 +1159,7 @@ impl ComputeRegistry {
                     if let Some(path) = &settings.typed_worker_config {
                         let (executor, _, revision) = crate::host::hpc_placement::executor(
                             path,
+                            target.data_domains.first().map(DataDomain::data_home),
                             slurm.clone(),
                             &workspace,
                             &self.storage,
@@ -1155,17 +1275,24 @@ impl ComputeRegistry {
                         )
                     })?;
                 let ssh_probe = ssh.clone();
+                let mut store = dag_core::SshArtifactStore::new(
+                    ssh.clone(),
+                    settings.scratch_remote_dir.clone(),
+                    artifact_root,
+                );
+                if let Some(domain) = target.data_domains.first() {
+                    let home = domain.data_home();
+                    home.validate_vfs(&self.storage)
+                        .map_err(|e| e.to_string())?;
+                    store = store.with_data_home(home).map_err(|e| e.to_string())?;
+                }
                 let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
                     Arc::new(dag_core::SshTaskTransport::new(dag_core::SshSettings {
                         ssh: ssh.clone(),
                         scratch_dir: settings.scratch_remote_dir.clone(),
                         default_time,
                     })),
-                    Arc::new(dag_core::SshArtifactStore::new(
-                        ssh,
-                        settings.scratch_remote_dir.clone(),
-                        artifact_root,
-                    )),
+                    Arc::new(store),
                     workspace.clone(),
                 ));
                 let executor: Arc<dyn TaskExecutor> =
