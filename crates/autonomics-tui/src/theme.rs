@@ -179,24 +179,24 @@ pub fn claude_code() -> Theme {
         active_marker: Color::Rgb(235, 159, 127), // #eb9f7f shimmer terracotta
         on_accent: Color::Rgb(26, 26, 26),        // #1a1a1a on terracotta
         selected_fg: Color::Rgb(255, 255, 255),
-        overlay_bg: Color::Rgb(55, 55, 55),       // #373737 Surface
+        overlay_bg: Color::Rgb(55, 55, 55), // #373737 Surface
         overlay_text: Color::Rgb(255, 255, 255),
 
-        band_bg: Color::Rgb(26, 26, 26),          // #1a1a1a Background
-        strip_bg: Color::Rgb(38, 38, 38),         // derived between bg & surface
-        strip_active: Color::Rgb(55, 55, 55),     // #373737 Surface
-        selected_bg: Color::Rgb(68, 68, 68),      // derived neutral selection
+        band_bg: Color::Rgb(26, 26, 26),      // #1a1a1a Background
+        strip_bg: Color::Rgb(38, 38, 38),     // derived between bg & surface
+        strip_active: Color::Rgb(55, 55, 55), // #373737 Surface
+        selected_bg: Color::Rgb(68, 68, 68),  // derived neutral selection
 
-        accent: Color::Rgb(215, 119, 87),         // #d77757 Primary terracotta
-        accent_alt: Color::Rgb(253, 93, 177),     // #fd5db1 hot pink (tool borders)
-        success: Color::Rgb(78, 186, 101),        // #4eba65
-        warning: Color::Rgb(255, 193, 7),         // #ffc107
-        error: Color::Rgb(255, 107, 128),         // #ff6b80
-        info: Color::Rgb(177, 185, 249),          // #b1b9f9 lavender (permission)
+        accent: Color::Rgb(215, 119, 87), // #d77757 Primary terracotta
+        accent_alt: Color::Rgb(253, 93, 177), // #fd5db1 hot pink (tool borders)
+        success: Color::Rgb(78, 186, 101), // #4eba65
+        warning: Color::Rgb(255, 193, 7), // #ffc107
+        error: Color::Rgb(255, 107, 128), // #ff6b80
+        info: Color::Rgb(177, 185, 249),  // #b1b9f9 lavender (permission)
 
-        selection_bg: Color::Rgb(68, 68, 68),     // derived neutral
+        selection_bg: Color::Rgb(68, 68, 68), // derived neutral
         selection_fg: Color::Rgb(255, 255, 255),
-        scroll_track: Color::Rgb(47, 47, 47),     // derived neutral
+        scroll_track: Color::Rgb(47, 47, 47), // derived neutral
         scroll_thumb: Color::Rgb(68, 68, 68),
 
         md: MdTokens::claude_code(),
@@ -307,191 +307,235 @@ impl Palette {
 /// Themes ported from cola-runner/awesome-tui-design. Each palette's hex
 /// values come verbatim from that theme's DESIGN.md "Semantic Roles"
 /// table; `gemini-cli` is registered under the shorter name `gemini`.
-static PORTED: std::sync::LazyLock<Vec<(&'static str, Palette)>> =
-    std::sync::LazyLock::new(|| {
-        vec![
-            ("codex", Palette {
-                bg: Color::Rgb(0, 0, 0),               // #000000
-                fg: Color::Rgb(224, 224, 224),         // #e0e0e0
-                primary: Color::Rgb(224, 224, 224),    // #e0e0e0 (monochrome)
-                secondary: Color::Rgb(128, 128, 128),  // #808080
-                accent: Color::Rgb(34, 197, 94),       // #22c55e
-                success: Color::Rgb(34, 197, 94),      // #22c55e
-                warning: Color::Rgb(234, 179, 8),      // #eab308
-                error: Color::Rgb(239, 68, 68),        // #ef4444
-                muted: Color::Rgb(85, 85, 85),         // #555555
-                surface: Color::Rgb(26, 26, 26),       // #1a1a1a
-            }),
-            ("gemini", Palette {
-                bg: Color::Rgb(26, 26, 46),            // #1a1a2e
-                fg: Color::Rgb(224, 224, 224),         // #e0e0e0
-                primary: Color::Rgb(135, 175, 255),    // #87afff
-                secondary: Color::Rgb(215, 175, 255),  // #d7afff
-                accent: Color::Rgb(135, 215, 215),     // #87d7d7
-                success: Color::Rgb(215, 255, 215),    // #d7ffd7
-                warning: Color::Rgb(255, 255, 175),    // #ffffaf
-                error: Color::Rgb(255, 135, 175),      // #ff87af
-                muted: Color::Rgb(128, 128, 128),      // #808080
-                surface: Color::Rgb(42, 42, 62),       // #2a2a3e
-            }),
-            ("lazygit", Palette {
-                bg: Color::Rgb(0, 0, 0),               // #000000
-                fg: Color::Rgb(212, 212, 212),         // #d4d4d4
-                primary: Color::Rgb(34, 197, 94),      // #22c55e
-                secondary: Color::Rgb(59, 130, 246),   // #3b82f6
-                accent: Color::Rgb(6, 182, 212),       // #06b6d4
-                success: Color::Rgb(34, 197, 94),      // #22c55e
-                warning: Color::Rgb(234, 179, 8),      // #eab308
-                error: Color::Rgb(239, 68, 68),        // #ef4444
-                muted: Color::Rgb(107, 114, 128),      // #6b7280
-                surface: Color::Rgb(30, 58, 95),       // #1e3a5f
-            }),
-            ("k9s", Palette {
-                bg: Color::Rgb(0, 0, 0),               // #000000
-                fg: Color::Rgb(95, 158, 160),          // #5f9ea0
-                primary: Color::Rgb(0, 255, 255),      // #00ffff
-                secondary: Color::Rgb(30, 144, 255),   // #1e90ff
-                accent: Color::Rgb(255, 0, 255),       // #ff00ff
-                success: Color::Rgb(173, 255, 47),     // #adff2f
-                warning: Color::Rgb(255, 140, 0),      // #ff8c00
-                error: Color::Rgb(255, 69, 0),         // #ff4500
-                muted: Color::Rgb(128, 128, 128),      // #808080
-                surface: Color::Rgb(26, 26, 46),       // #1a1a2e
-            }),
-            ("btop", Palette {
-                bg: Color::Rgb(0, 0, 0),               // #000000
-                fg: Color::Rgb(204, 204, 204),         // #cccccc
-                primary: Color::Rgb(238, 238, 238),    // #eeeeee
-                secondary: Color::Rgb(119, 202, 155),  // #77ca9b
-                accent: Color::Rgb(220, 76, 76),       // #dc4c4c
-                success: Color::Rgb(119, 202, 155),    // #77ca9b
-                warning: Color::Rgb(203, 192, 108),    // #cbc06c
-                error: Color::Rgb(220, 76, 76),        // #dc4c4c
-                muted: Color::Rgb(85, 85, 85),         // #555555
-                surface: Color::Rgb(17, 17, 17),       // #111111
-            }),
-            ("dracula", Palette {
-                bg: Color::Rgb(40, 42, 54),            // #282a36
-                fg: Color::Rgb(248, 248, 242),         // #f8f8f2
-                primary: Color::Rgb(189, 147, 249),    // #bd93f9
-                secondary: Color::Rgb(98, 114, 164),   // #6272a4
-                accent: Color::Rgb(255, 121, 198),     // #ff79c6
-                success: Color::Rgb(80, 250, 123),     // #50fa7b
-                warning: Color::Rgb(241, 250, 140),    // #f1fa8c
-                error: Color::Rgb(255, 85, 85),        // #ff5555
-                muted: Color::Rgb(98, 114, 164),       // #6272a4
-                surface: Color::Rgb(68, 71, 90),       // #44475a
-            }),
-            ("catppuccin", Palette {
-                bg: Color::Rgb(30, 30, 46),            // #1e1e2e
-                fg: Color::Rgb(205, 214, 244),         // #cdd6f4
-                primary: Color::Rgb(203, 166, 247),    // #cba6f7
-                secondary: Color::Rgb(137, 180, 250),  // #89b4fa
-                accent: Color::Rgb(245, 194, 231),     // #f5c2e7
-                success: Color::Rgb(166, 227, 161),    // #a6e3a1
-                warning: Color::Rgb(249, 226, 175),    // #f9e2af
-                error: Color::Rgb(243, 139, 168),      // #f38ba8
-                muted: Color::Rgb(88, 91, 112),        // #585b70
-                surface: Color::Rgb(49, 50, 68),       // #313244
-            }),
-            ("nord", Palette {
-                bg: Color::Rgb(46, 52, 64),            // #2e3440
-                fg: Color::Rgb(236, 239, 244),         // #eceff4
-                primary: Color::Rgb(136, 192, 208),    // #88c0d0
-                secondary: Color::Rgb(129, 161, 193),  // #81a1c1
-                accent: Color::Rgb(94, 129, 172),      // #5e81ac
-                success: Color::Rgb(163, 190, 140),    // #a3be8c
-                warning: Color::Rgb(235, 203, 139),    // #ebcb8b
-                error: Color::Rgb(191, 97, 106),       // #bf616a
-                muted: Color::Rgb(76, 86, 106),        // #4c566a
-                surface: Color::Rgb(59, 66, 82),       // #3b4252
-            }),
-            ("gruvbox", Palette {
-                bg: Color::Rgb(40, 40, 40),            // #282828
-                fg: Color::Rgb(235, 219, 178),         // #ebdbb2
-                primary: Color::Rgb(254, 128, 25),     // #fe8019
-                secondary: Color::Rgb(211, 134, 155),  // #d3869b
-                accent: Color::Rgb(250, 189, 47),      // #fabd2f
-                success: Color::Rgb(184, 187, 38),     // #b8bb26
-                warning: Color::Rgb(250, 189, 47),     // #fabd2f
-                error: Color::Rgb(251, 73, 52),        // #fb4934
-                muted: Color::Rgb(102, 92, 84),        // #665c54
-                surface: Color::Rgb(60, 56, 54),       // #3c3836
-            }),
-            ("tokyo-night", Palette {
-                bg: Color::Rgb(36, 40, 59),            // #24283b
-                fg: Color::Rgb(192, 202, 245),         // #c0caf5
-                primary: Color::Rgb(122, 162, 247),    // #7aa2f7
-                secondary: Color::Rgb(187, 154, 247),  // #bb9af7
-                accent: Color::Rgb(125, 207, 255),     // #7dcfff
-                success: Color::Rgb(158, 206, 106),    // #9ece6a
-                warning: Color::Rgb(224, 175, 104),    // #e0af68
-                error: Color::Rgb(247, 118, 142),      // #f7768e
-                muted: Color::Rgb(86, 95, 137),        // #565f89
-                surface: Color::Rgb(26, 27, 38),       // #1a1b26
-            }),
-            ("rose-pine", Palette {
-                bg: Color::Rgb(25, 23, 36),            // #191724
-                fg: Color::Rgb(224, 222, 244),         // #e0def4
-                primary: Color::Rgb(235, 188, 186),    // #ebbcba
-                secondary: Color::Rgb(196, 167, 231),  // #c4a7e7
-                accent: Color::Rgb(246, 193, 119),     // #f6c177
-                success: Color::Rgb(49, 116, 143),     // #31748f
-                warning: Color::Rgb(246, 193, 119),    // #f6c177
-                error: Color::Rgb(235, 111, 146),      // #eb6f92
-                muted: Color::Rgb(110, 106, 134),      // #6e6a86
-                surface: Color::Rgb(31, 29, 46),       // #1f1d2e
-            }),
-            ("minimal", Palette {
-                bg: Color::Rgb(10, 10, 10),            // #0a0a0a
-                fg: Color::Rgb(237, 237, 237),         // #ededed
-                primary: Color::Rgb(255, 255, 255),    // #ffffff
-                secondary: Color::Rgb(136, 136, 136),  // #888888
-                accent: Color::Rgb(0, 112, 243),       // #0070f3
-                success: Color::Rgb(0, 200, 83),       // #00c853
-                warning: Color::Rgb(245, 166, 35),     // #f5a623
-                error: Color::Rgb(238, 0, 0),          // #ee0000
-                muted: Color::Rgb(85, 85, 85),         // #555555
-                surface: Color::Rgb(26, 26, 26),       // #1a1a1a
-            }),
-            ("cyberpunk", Palette {
-                bg: Color::Rgb(13, 13, 26),            // #0d0d1a
-                fg: Color::Rgb(224, 224, 255),         // #e0e0ff
-                primary: Color::Rgb(0, 255, 255),      // #00ffff
-                secondary: Color::Rgb(255, 0, 255),    // #ff00ff
-                accent: Color::Rgb(255, 255, 0),       // #ffff00
-                success: Color::Rgb(0, 255, 136),      // #00ff88
-                warning: Color::Rgb(255, 170, 0),      // #ffaa00
-                error: Color::Rgb(255, 0, 68),         // #ff0044
-                muted: Color::Rgb(74, 74, 106),        // #4a4a6a
-                surface: Color::Rgb(26, 26, 46),       // #1a1a2e
-            }),
-            ("ocean", Palette {
-                bg: Color::Rgb(11, 25, 41),            // #0b1929
-                fg: Color::Rgb(200, 214, 229),         // #c8d6e5
-                primary: Color::Rgb(72, 219, 251),     // #48dbfb
-                secondary: Color::Rgb(10, 189, 227),   // #0abde3
-                accent: Color::Rgb(85, 239, 196),      // #55efc4
-                success: Color::Rgb(0, 210, 211),      // #00d2d3
-                warning: Color::Rgb(254, 202, 87),     // #feca57
-                error: Color::Rgb(255, 107, 107),      // #ff6b6b
-                muted: Color::Rgb(87, 101, 116),       // #576574
-                surface: Color::Rgb(21, 45, 69),       // #152d45
-            }),
-            ("retro", Palette {
-                bg: Color::Rgb(26, 18, 0),             // #1a1200
-                fg: Color::Rgb(255, 176, 0),           // #ffb000
-                primary: Color::Rgb(255, 204, 0),      // #ffcc00
-                secondary: Color::Rgb(204, 136, 0),    // #cc8800
-                accent: Color::Rgb(255, 102, 0),       // #ff6600
-                success: Color::Rgb(51, 255, 0),       // #33ff00
-                warning: Color::Rgb(255, 204, 0),      // #ffcc00
-                error: Color::Rgb(255, 0, 51),         // #ff0033
-                muted: Color::Rgb(102, 85, 0),         // #665500
-                surface: Color::Rgb(42, 32, 0),        // #2a2000
-            }),
-        ]
-    });
+static PORTED: std::sync::LazyLock<Vec<(&'static str, Palette)>> = std::sync::LazyLock::new(|| {
+    vec![
+        (
+            "codex",
+            Palette {
+                bg: Color::Rgb(0, 0, 0),              // #000000
+                fg: Color::Rgb(224, 224, 224),        // #e0e0e0
+                primary: Color::Rgb(224, 224, 224),   // #e0e0e0 (monochrome)
+                secondary: Color::Rgb(128, 128, 128), // #808080
+                accent: Color::Rgb(34, 197, 94),      // #22c55e
+                success: Color::Rgb(34, 197, 94),     // #22c55e
+                warning: Color::Rgb(234, 179, 8),     // #eab308
+                error: Color::Rgb(239, 68, 68),       // #ef4444
+                muted: Color::Rgb(85, 85, 85),        // #555555
+                surface: Color::Rgb(26, 26, 26),      // #1a1a1a
+            },
+        ),
+        (
+            "gemini",
+            Palette {
+                bg: Color::Rgb(26, 26, 46),           // #1a1a2e
+                fg: Color::Rgb(224, 224, 224),        // #e0e0e0
+                primary: Color::Rgb(135, 175, 255),   // #87afff
+                secondary: Color::Rgb(215, 175, 255), // #d7afff
+                accent: Color::Rgb(135, 215, 215),    // #87d7d7
+                success: Color::Rgb(215, 255, 215),   // #d7ffd7
+                warning: Color::Rgb(255, 255, 175),   // #ffffaf
+                error: Color::Rgb(255, 135, 175),     // #ff87af
+                muted: Color::Rgb(128, 128, 128),     // #808080
+                surface: Color::Rgb(42, 42, 62),      // #2a2a3e
+            },
+        ),
+        (
+            "lazygit",
+            Palette {
+                bg: Color::Rgb(0, 0, 0),             // #000000
+                fg: Color::Rgb(212, 212, 212),       // #d4d4d4
+                primary: Color::Rgb(34, 197, 94),    // #22c55e
+                secondary: Color::Rgb(59, 130, 246), // #3b82f6
+                accent: Color::Rgb(6, 182, 212),     // #06b6d4
+                success: Color::Rgb(34, 197, 94),    // #22c55e
+                warning: Color::Rgb(234, 179, 8),    // #eab308
+                error: Color::Rgb(239, 68, 68),      // #ef4444
+                muted: Color::Rgb(107, 114, 128),    // #6b7280
+                surface: Color::Rgb(30, 58, 95),     // #1e3a5f
+            },
+        ),
+        (
+            "k9s",
+            Palette {
+                bg: Color::Rgb(0, 0, 0),             // #000000
+                fg: Color::Rgb(95, 158, 160),        // #5f9ea0
+                primary: Color::Rgb(0, 255, 255),    // #00ffff
+                secondary: Color::Rgb(30, 144, 255), // #1e90ff
+                accent: Color::Rgb(255, 0, 255),     // #ff00ff
+                success: Color::Rgb(173, 255, 47),   // #adff2f
+                warning: Color::Rgb(255, 140, 0),    // #ff8c00
+                error: Color::Rgb(255, 69, 0),       // #ff4500
+                muted: Color::Rgb(128, 128, 128),    // #808080
+                surface: Color::Rgb(26, 26, 46),     // #1a1a2e
+            },
+        ),
+        (
+            "btop",
+            Palette {
+                bg: Color::Rgb(0, 0, 0),              // #000000
+                fg: Color::Rgb(204, 204, 204),        // #cccccc
+                primary: Color::Rgb(238, 238, 238),   // #eeeeee
+                secondary: Color::Rgb(119, 202, 155), // #77ca9b
+                accent: Color::Rgb(220, 76, 76),      // #dc4c4c
+                success: Color::Rgb(119, 202, 155),   // #77ca9b
+                warning: Color::Rgb(203, 192, 108),   // #cbc06c
+                error: Color::Rgb(220, 76, 76),       // #dc4c4c
+                muted: Color::Rgb(85, 85, 85),        // #555555
+                surface: Color::Rgb(17, 17, 17),      // #111111
+            },
+        ),
+        (
+            "dracula",
+            Palette {
+                bg: Color::Rgb(40, 42, 54),          // #282a36
+                fg: Color::Rgb(248, 248, 242),       // #f8f8f2
+                primary: Color::Rgb(189, 147, 249),  // #bd93f9
+                secondary: Color::Rgb(98, 114, 164), // #6272a4
+                accent: Color::Rgb(255, 121, 198),   // #ff79c6
+                success: Color::Rgb(80, 250, 123),   // #50fa7b
+                warning: Color::Rgb(241, 250, 140),  // #f1fa8c
+                error: Color::Rgb(255, 85, 85),      // #ff5555
+                muted: Color::Rgb(98, 114, 164),     // #6272a4
+                surface: Color::Rgb(68, 71, 90),     // #44475a
+            },
+        ),
+        (
+            "catppuccin",
+            Palette {
+                bg: Color::Rgb(30, 30, 46),           // #1e1e2e
+                fg: Color::Rgb(205, 214, 244),        // #cdd6f4
+                primary: Color::Rgb(203, 166, 247),   // #cba6f7
+                secondary: Color::Rgb(137, 180, 250), // #89b4fa
+                accent: Color::Rgb(245, 194, 231),    // #f5c2e7
+                success: Color::Rgb(166, 227, 161),   // #a6e3a1
+                warning: Color::Rgb(249, 226, 175),   // #f9e2af
+                error: Color::Rgb(243, 139, 168),     // #f38ba8
+                muted: Color::Rgb(88, 91, 112),       // #585b70
+                surface: Color::Rgb(49, 50, 68),      // #313244
+            },
+        ),
+        (
+            "nord",
+            Palette {
+                bg: Color::Rgb(46, 52, 64),           // #2e3440
+                fg: Color::Rgb(236, 239, 244),        // #eceff4
+                primary: Color::Rgb(136, 192, 208),   // #88c0d0
+                secondary: Color::Rgb(129, 161, 193), // #81a1c1
+                accent: Color::Rgb(94, 129, 172),     // #5e81ac
+                success: Color::Rgb(163, 190, 140),   // #a3be8c
+                warning: Color::Rgb(235, 203, 139),   // #ebcb8b
+                error: Color::Rgb(191, 97, 106),      // #bf616a
+                muted: Color::Rgb(76, 86, 106),       // #4c566a
+                surface: Color::Rgb(59, 66, 82),      // #3b4252
+            },
+        ),
+        (
+            "gruvbox",
+            Palette {
+                bg: Color::Rgb(40, 40, 40),           // #282828
+                fg: Color::Rgb(235, 219, 178),        // #ebdbb2
+                primary: Color::Rgb(254, 128, 25),    // #fe8019
+                secondary: Color::Rgb(211, 134, 155), // #d3869b
+                accent: Color::Rgb(250, 189, 47),     // #fabd2f
+                success: Color::Rgb(184, 187, 38),    // #b8bb26
+                warning: Color::Rgb(250, 189, 47),    // #fabd2f
+                error: Color::Rgb(251, 73, 52),       // #fb4934
+                muted: Color::Rgb(102, 92, 84),       // #665c54
+                surface: Color::Rgb(60, 56, 54),      // #3c3836
+            },
+        ),
+        (
+            "tokyo-night",
+            Palette {
+                bg: Color::Rgb(36, 40, 59),           // #24283b
+                fg: Color::Rgb(192, 202, 245),        // #c0caf5
+                primary: Color::Rgb(122, 162, 247),   // #7aa2f7
+                secondary: Color::Rgb(187, 154, 247), // #bb9af7
+                accent: Color::Rgb(125, 207, 255),    // #7dcfff
+                success: Color::Rgb(158, 206, 106),   // #9ece6a
+                warning: Color::Rgb(224, 175, 104),   // #e0af68
+                error: Color::Rgb(247, 118, 142),     // #f7768e
+                muted: Color::Rgb(86, 95, 137),       // #565f89
+                surface: Color::Rgb(26, 27, 38),      // #1a1b26
+            },
+        ),
+        (
+            "rose-pine",
+            Palette {
+                bg: Color::Rgb(25, 23, 36),           // #191724
+                fg: Color::Rgb(224, 222, 244),        // #e0def4
+                primary: Color::Rgb(235, 188, 186),   // #ebbcba
+                secondary: Color::Rgb(196, 167, 231), // #c4a7e7
+                accent: Color::Rgb(246, 193, 119),    // #f6c177
+                success: Color::Rgb(49, 116, 143),    // #31748f
+                warning: Color::Rgb(246, 193, 119),   // #f6c177
+                error: Color::Rgb(235, 111, 146),     // #eb6f92
+                muted: Color::Rgb(110, 106, 134),     // #6e6a86
+                surface: Color::Rgb(31, 29, 46),      // #1f1d2e
+            },
+        ),
+        (
+            "minimal",
+            Palette {
+                bg: Color::Rgb(10, 10, 10),           // #0a0a0a
+                fg: Color::Rgb(237, 237, 237),        // #ededed
+                primary: Color::Rgb(255, 255, 255),   // #ffffff
+                secondary: Color::Rgb(136, 136, 136), // #888888
+                accent: Color::Rgb(0, 112, 243),      // #0070f3
+                success: Color::Rgb(0, 200, 83),      // #00c853
+                warning: Color::Rgb(245, 166, 35),    // #f5a623
+                error: Color::Rgb(238, 0, 0),         // #ee0000
+                muted: Color::Rgb(85, 85, 85),        // #555555
+                surface: Color::Rgb(26, 26, 26),      // #1a1a1a
+            },
+        ),
+        (
+            "cyberpunk",
+            Palette {
+                bg: Color::Rgb(13, 13, 26),         // #0d0d1a
+                fg: Color::Rgb(224, 224, 255),      // #e0e0ff
+                primary: Color::Rgb(0, 255, 255),   // #00ffff
+                secondary: Color::Rgb(255, 0, 255), // #ff00ff
+                accent: Color::Rgb(255, 255, 0),    // #ffff00
+                success: Color::Rgb(0, 255, 136),   // #00ff88
+                warning: Color::Rgb(255, 170, 0),   // #ffaa00
+                error: Color::Rgb(255, 0, 68),      // #ff0044
+                muted: Color::Rgb(74, 74, 106),     // #4a4a6a
+                surface: Color::Rgb(26, 26, 46),    // #1a1a2e
+            },
+        ),
+        (
+            "ocean",
+            Palette {
+                bg: Color::Rgb(11, 25, 41),          // #0b1929
+                fg: Color::Rgb(200, 214, 229),       // #c8d6e5
+                primary: Color::Rgb(72, 219, 251),   // #48dbfb
+                secondary: Color::Rgb(10, 189, 227), // #0abde3
+                accent: Color::Rgb(85, 239, 196),    // #55efc4
+                success: Color::Rgb(0, 210, 211),    // #00d2d3
+                warning: Color::Rgb(254, 202, 87),   // #feca57
+                error: Color::Rgb(255, 107, 107),    // #ff6b6b
+                muted: Color::Rgb(87, 101, 116),     // #576574
+                surface: Color::Rgb(21, 45, 69),     // #152d45
+            },
+        ),
+        (
+            "retro",
+            Palette {
+                bg: Color::Rgb(26, 18, 0),          // #1a1200
+                fg: Color::Rgb(255, 176, 0),        // #ffb000
+                primary: Color::Rgb(255, 204, 0),   // #ffcc00
+                secondary: Color::Rgb(204, 136, 0), // #cc8800
+                accent: Color::Rgb(255, 102, 0),    // #ff6600
+                success: Color::Rgb(51, 255, 0),    // #33ff00
+                warning: Color::Rgb(255, 204, 0),   // #ffcc00
+                error: Color::Rgb(255, 0, 51),      // #ff0033
+                muted: Color::Rgb(102, 85, 0),      // #665500
+                surface: Color::Rgb(42, 32, 0),     // #2a2000
+            },
+        ),
+    ]
+});
 
 // ── Global slot ────────────────────────────────────────────────────────
 
@@ -502,10 +546,12 @@ struct Active {
 
 fn slot() -> &'static RwLock<Active> {
     static SLOT: OnceLock<RwLock<Active>> = OnceLock::new();
-    SLOT.get_or_init(|| RwLock::new(Active {
-        name: presets()[0].name,
-        theme: presets()[0].theme,
-    }))
+    SLOT.get_or_init(|| {
+        RwLock::new(Active {
+            name: presets()[0].name,
+            theme: presets()[0].theme,
+        })
+    })
 }
 
 /// Monotonic counter of preset switches in this process.
@@ -663,7 +709,10 @@ mod tests {
                 "{name} accent must differ from the dark preset"
             );
             assert_eq!(t.accent, palette.primary, "{name}: accent maps to primary");
-            assert_eq!(t.info, palette.accent, "{name}: info maps to highlight accent");
+            assert_eq!(
+                t.info, palette.accent,
+                "{name}: info maps to highlight accent"
+            );
             assert_eq!(
                 t.md.surface.raised, palette.surface,
                 "{name}: md code surface maps to surface"

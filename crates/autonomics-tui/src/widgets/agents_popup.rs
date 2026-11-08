@@ -363,7 +363,10 @@ impl AgentsPopupState {
             .iter()
             .map(|kind| AgentsPopupItem::new(PopupRow::NewAgent(*kind)))
             .collect();
-        items.extend(rows.into_iter().map(|row| AgentsPopupItem::new(PopupRow::Agent(row))));
+        items.extend(
+            rows.into_iter()
+                .map(|row| AgentsPopupItem::new(PopupRow::Agent(row))),
+        );
         self.all = items;
         self.apply_tab();
     }
@@ -396,18 +399,22 @@ impl AgentsPopupState {
 
     /// The identity row the cursor sits on, if any.
     pub fn selected_agent(&self) -> Option<AgentRow> {
-        self.picker.selected_item().and_then(|item| match &item.row {
-            PopupRow::Agent(agent) => Some(agent.clone()),
-            PopupRow::NewAgent(_) => None,
-        })
+        self.picker
+            .selected_item()
+            .and_then(|item| match &item.row {
+                PopupRow::Agent(agent) => Some(agent.clone()),
+                PopupRow::NewAgent(_) => None,
+            })
     }
 
     /// The new-agent kind under the cursor, if any.
     pub fn selected_kind(&self) -> Option<agentik_core::profile::AgentKind> {
-        self.picker.selected_item().and_then(|item| match &item.row {
-            PopupRow::NewAgent(kind) => Some(*kind),
-            PopupRow::Agent(_) => None,
-        })
+        self.picker
+            .selected_item()
+            .and_then(|item| match &item.row {
+                PopupRow::NewAgent(kind) => Some(*kind),
+                PopupRow::Agent(_) => None,
+            })
     }
 
     /// Live agents passing the current tab + query filter (bulk targets).
@@ -699,10 +706,7 @@ impl AgentsPopupState {
             }
             KeyCode::Enter => {
                 if let Some((agent_id, new_path)) = self.check_rename() {
-                    return AgentsPopupKeyOutcome::Rename {
-                        agent_id,
-                        new_path,
-                    };
+                    return AgentsPopupKeyOutcome::Rename { agent_id, new_path };
                 }
             }
             KeyCode::Char(c) => self.rename_input.push(c),
@@ -797,10 +801,7 @@ fn render_input_line(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState)
             } else {
                 Line::from(vec![
                     Span::styled(" New name: ", Style::default().fg(theme.accent)),
-                    Span::styled(
-                        state.rename_input.clone(),
-                        Style::default().fg(theme.text),
-                    ),
+                    Span::styled(state.rename_input.clone(), Style::default().fg(theme.text)),
                     Span::styled(
                         "▏ Enter 确认 · Esc 取消",
                         Style::default().fg(theme.text_faint),
@@ -837,7 +838,9 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupStat
     let theme = crate::theme::current();
     let searching = state.input_mode == InputMode::Search;
     let prompt_style = if searching || !state.textarea.is_empty() {
-        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.text_faint)
     };
@@ -997,9 +1000,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
         }
         let is_selected = index == selected;
         let line = match &state.picker.items[*item_index].row {
-            PopupRow::NewAgent(kind) => {
-                new_agent_line(kind, is_selected, name_w)
-            }
+            PopupRow::NewAgent(kind) => new_agent_line(kind, is_selected, name_w),
             PopupRow::Agent(agent) => {
                 agent_row_line(agent, is_selected, state.column, name_w, model_w, effort_w)
             }
@@ -1050,9 +1051,7 @@ fn new_agent_line(
 ) -> Line<'static> {
     let theme = crate::theme::current();
     let style = if selected {
-        Style::default()
-            .fg(theme.text)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.accent)
     };
@@ -1075,21 +1074,15 @@ fn agent_row_line(
 ) -> Line<'static> {
     let theme = crate::theme::current();
     let cell_style = if selected {
-        Style::default()
-            .fg(theme.text)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.text_faint)
     };
     let (icon, icon_style, name_style) = if selected {
         (
             status_icon(&agent.status),
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         )
     } else if !agent.live {
         (
@@ -1204,7 +1197,9 @@ fn render_footer(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
     for (key, label) in pairs {
         spans.push(Span::styled(
             key,
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(label, Style::default().fg(theme.text_faint)));
     }
@@ -1346,7 +1341,10 @@ mod tests {
         for c in "Bad Name!".chars() {
             key(&mut state, KeyCode::Char(c));
         }
-        assert!(matches!(key(&mut state, KeyCode::Enter), AgentsPopupKeyOutcome::Consumed));
+        assert!(matches!(
+            key(&mut state, KeyCode::Enter),
+            AgentsPopupKeyOutcome::Consumed
+        ));
         // Clear (Backspace per char) and type a valid name.
         for _ in 0.."Bad Name!".chars().count() {
             key(&mut state, KeyCode::Backspace);
@@ -1375,7 +1373,10 @@ mod tests {
         for c in "no".chars() {
             key(&mut state, KeyCode::Char(c));
         }
-        assert!(matches!(key(&mut state, KeyCode::Enter), AgentsPopupKeyOutcome::Consumed));
+        assert!(matches!(
+            key(&mut state, KeyCode::Enter),
+            AgentsPopupKeyOutcome::Consumed
+        ));
         for c in "yes".chars() {
             key(&mut state, KeyCode::Char(c));
         }
@@ -1386,7 +1387,10 @@ mod tests {
         for c in "yes".chars() {
             key(&mut state, KeyCode::Char(c));
         }
-        assert_eq!(key(&mut state, KeyCode::Enter), AgentsPopupKeyOutcome::Delete(id));
+        assert_eq!(
+            key(&mut state, KeyCode::Enter),
+            AgentsPopupKeyOutcome::Delete(id)
+        );
     }
 
     #[test]
@@ -1425,8 +1429,14 @@ mod tests {
         while state.selected_kind().is_some() {
             key(&mut state, KeyCode::Down);
         }
-        assert!(matches!(key(&mut state, KeyCode::Char('m')), AgentsPopupKeyOutcome::Consumed));
-        assert!(matches!(key(&mut state, KeyCode::Char('e')), AgentsPopupKeyOutcome::Consumed));
+        assert!(matches!(
+            key(&mut state, KeyCode::Char('m')),
+            AgentsPopupKeyOutcome::Consumed
+        ));
+        assert!(matches!(
+            key(&mut state, KeyCode::Char('e')),
+            AgentsPopupKeyOutcome::Consumed
+        ));
     }
 
     #[test]

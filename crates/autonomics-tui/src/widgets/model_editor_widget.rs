@@ -410,10 +410,7 @@ impl StatefulWidget for ModelEditorWidget {
 
         Paragraph::new(Line::from(vec![
             Span::styled(label("Provider"), label_style),
-            Span::styled(
-                state.provider_name.clone(),
-                Style::default().fg(theme.text),
-            ),
+            Span::styled(state.provider_name.clone(), Style::default().fg(theme.text)),
         ]))
         .render(rows[0], buf);
 

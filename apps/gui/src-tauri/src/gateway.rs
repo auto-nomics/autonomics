@@ -194,7 +194,11 @@ async fn api_request(
         // gateway's 120-second startup budget instead of timing out at 30s.
         if method.eq_ignore_ascii_case("POST")
             && normalized_path.starts_with("plugin-projects/")
-            && normalized_path.split('?').next().unwrap_or("").ends_with("/container")
+            && normalized_path
+                .split('?')
+                .next()
+                .unwrap_or("")
+                .ends_with("/container")
         {
             // Image build, startup, and up to five container lifecycle stages.
             request = request.timeout(Duration::from_secs(1500));

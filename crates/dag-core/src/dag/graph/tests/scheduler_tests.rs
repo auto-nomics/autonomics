@@ -63,24 +63,45 @@ impl crate::dag::DagNode for WaveTrackingNode {
 async fn idle_cache_release_preserves_failure_and_worker_evidence() -> Result<()> {
     let workspace_root = tempfile::tempdir().unwrap();
     let mut dag = DAG::default();
-    dag.set_task_executor(Arc::new(LocalTaskExecutor::with_workspace_root(workspace_root.path())));
+    dag.set_task_executor(Arc::new(LocalTaskExecutor::with_workspace_root(
+        workspace_root.path(),
+    )));
     dag.add_node_with_spec(
-        "sleep".into(), Box::new(SleepingNode::new(std::time::Duration::from_secs(5))),
-        "sleeping_test_node".into(), serde_json::json!({"seconds":5}),
+        "sleep".into(),
+        Box::new(SleepingNode::new(std::time::Duration::from_secs(5))),
+        "sleeping_test_node".into(),
+        serde_json::json!({"seconds":5}),
     )?;
-    dag.set_task_resources("sleep", TaskResources {
-        cpus: Some(1), memory_bytes: Some(1024), max_duration_ms: Some(10),
-    })?;
-    let report = dag.run(&SchedulerConfig::default(), &test_ctx(), None).await?;
+    dag.set_task_resources(
+        "sleep",
+        TaskResources {
+            cpus: Some(1),
+            memory_bytes: Some(1024),
+            max_duration_ms: Some(10),
+        },
+    )?;
+    let report = dag
+        .run(&SchedulerConfig::default(), &test_ctx(), None)
+        .await?;
     assert!(!report.ok);
     let failed = report.nodes.iter().find(|n| n.id == "sleep").unwrap();
-    assert!(failed.error.as_ref().unwrap().message.contains("exceeded max_duration_ms"));
+    assert!(
+        failed
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("exceeded max_duration_ms")
+    );
     assert!(dag.node_run_details.contains_key("sleep"));
     let details = serde_json::to_value(dag.node_run_details.get("sleep")).unwrap();
     dag.release_output_cache();
     dag.release_output_cache();
     assert_eq!(dag.status("sleep"), Some(RuntimeStatus::Failed));
-    assert_eq!(serde_json::to_value(dag.node_run_details.get("sleep")).unwrap(), details);
+    assert_eq!(
+        serde_json::to_value(dag.node_run_details.get("sleep")).unwrap(),
+        details
+    );
     Ok(())
 }
 

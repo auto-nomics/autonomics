@@ -167,9 +167,7 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
             Span::styled(" Agent  ", Style::default().fg(theme.text_faint)),
             Span::styled(
                 state.agent_path.clone(),
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::raw(""),
@@ -245,11 +243,7 @@ fn setting_line(
         Span::raw(" "),
         Span::styled(
             name.to_string(),
-            Style::default().fg(if selected {
-                theme.text
-            } else {
-                theme.text_dim
-            }),
+            Style::default().fg(if selected { theme.text } else { theme.text_dim }),
         ),
         Span::raw("  "),
         Span::styled(
@@ -289,11 +283,7 @@ fn effort_line(
         Span::raw(" "),
         Span::styled(
             "Reasoning effort".to_string(),
-            Style::default().fg(if selected {
-                theme.text
-            } else {
-                theme.text_dim
-            }),
+            Style::default().fg(if selected { theme.text } else { theme.text_dim }),
         ),
         Span::raw("  "),
         Span::styled(

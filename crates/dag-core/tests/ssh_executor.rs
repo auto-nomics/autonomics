@@ -214,12 +214,8 @@ fn transport_of(fixture: &Fixture, scratch: &Path) -> SshTaskTransport {
 fn prepare_simple(cluster: &Path, task_id: &str) -> (TaskDispatch, Vec<FileRef>) {
     let staged = cluster.join(format!("{task_id}-staged-input"));
     std::fs::write(&staged, "content").unwrap();
-    let submission = process_submission(
-        task_id,
-        &staged,
-        &echo_process(),
-        TaskResources::default(),
-    );
+    let submission =
+        process_submission(task_id, &staged, &echo_process(), TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     (
         dispatch,
@@ -254,7 +250,10 @@ async fn a_remote_task_runs_and_returns_its_output_with_a_real_fingerprint() {
     assert_eq!(receipt.executor, "ssh");
     assert_eq!(receipt.status, "success");
     assert_eq!(receipt.exit_code, 0);
-    assert_eq!(receipt.workspace, task_dir(cluster.path(), "ssh-success").to_string_lossy());
+    assert_eq!(
+        receipt.workspace,
+        task_dir(cluster.path(), "ssh-success").to_string_lossy()
+    );
 
     let outputs = &receipt.output_artifacts_by_port[&0];
     assert_eq!(outputs.len(), 1);
@@ -276,12 +275,7 @@ async fn a_failing_remote_task_reports_its_own_exit_code() {
     std::fs::write(&staged, "content").unwrap();
     let mut process = echo_process();
     process.script = Some("cat {{input.f}} > out-0.json\nexit 7\n".into());
-    let submission = process_submission(
-        "ssh-failure",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission = process_submission("ssh-failure", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
     let lease = transport.submit(dispatch, artifacts).await.unwrap();
@@ -306,16 +300,14 @@ async fn a_replayed_launch_never_starts_a_second_task() {
         "echo run >> {}\ncat {{{{input.f}}}} > out-0.json\n",
         counter.to_string_lossy()
     ));
-    let submission = process_submission(
-        "ssh-replay",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission = process_submission("ssh-replay", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
 
-    let first = transport.submit(dispatch.clone(), artifacts.clone()).await.unwrap();
+    let first = transport
+        .submit(dispatch.clone(), artifacts.clone())
+        .await
+        .unwrap();
     // The exclusive lock makes the second launch a no-op: without it the
     // payload would run twice and the task would race itself.
     let second = transport.submit(dispatch, artifacts).await.unwrap();
@@ -323,7 +315,11 @@ async fn a_replayed_launch_never_starts_a_second_task() {
     assert_eq!(receipt.status, "success");
 
     let runs = std::fs::read_to_string(&counter).unwrap();
-    assert_eq!(runs.lines().count(), 1, "payload ran more than once: {runs:?}");
+    assert_eq!(
+        runs.lines().count(),
+        1,
+        "payload ran more than once: {runs:?}"
+    );
     // The first lease observes the same single attempt.
     let _ = first;
 }
@@ -352,7 +348,12 @@ async fn a_launch_that_loses_its_reply_is_safe_to_replay() {
 
     // The remote command runs, then the connection dies before its reply.
     std::fs::write(fixture.path().join("ssh_fail_255_after_run_once"), b"").unwrap();
-    assert!(transport.submit(dispatch.clone(), artifacts.clone()).await.is_err());
+    assert!(
+        transport
+            .submit(dispatch.clone(), artifacts.clone())
+            .await
+            .is_err()
+    );
 
     // The replay finds the attempt already launched and must not start a
     // second one.
@@ -360,7 +361,11 @@ async fn a_launch_that_loses_its_reply_is_safe_to_replay() {
     let receipt = transport.wait(&lease).await.unwrap();
     assert_eq!(receipt.status, "success");
     let runs = std::fs::read_to_string(&counter).unwrap();
-    assert_eq!(runs.lines().count(), 1, "payload ran more than once: {runs:?}");
+    assert_eq!(
+        runs.lines().count(),
+        1,
+        "payload ran more than once: {runs:?}"
+    );
 }
 
 #[tokio::test]
@@ -372,12 +377,7 @@ async fn a_cancelled_task_is_stopped_and_recorded_as_cancelled() {
     std::fs::write(&staged, "content").unwrap();
     let mut process = echo_process();
     process.script = Some("sleep 300\n".into());
-    let submission = process_submission(
-        "ssh-cancel",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission = process_submission("ssh-cancel", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
     let lease = transport.submit(dispatch, artifacts).await.unwrap();
@@ -388,7 +388,10 @@ async fn a_cancelled_task_is_stopped_and_recorded_as_cancelled() {
     while !pid_path.exists() && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(pid_path.exists(), "the supervisor recorded no process identity");
+    assert!(
+        pid_path.exists(),
+        "the supervisor recorded no process identity"
+    );
     let recorded = std::fs::read_to_string(&pid_path).unwrap();
     let pid: i64 = recorded.split_whitespace().next().unwrap().parse().unwrap();
 
@@ -400,10 +403,8 @@ async fn a_cancelled_task_is_stopped_and_recorded_as_cancelled() {
         .status()
         .unwrap();
     assert!(!alive.success(), "the remote process survived the cancel");
-    let exit_code = std::fs::read_to_string(
-        task_dir(cluster.path(), "ssh-cancel").join("exit.code"),
-    )
-    .unwrap();
+    let exit_code =
+        std::fs::read_to_string(task_dir(cluster.path(), "ssh-cancel").join("exit.code")).unwrap();
     assert_eq!(exit_code.trim(), "130");
 }
 
@@ -429,17 +430,16 @@ async fn a_declared_output_port_that_matches_nothing_is_an_error() {
     std::fs::write(&staged, "content").unwrap();
     let mut process = echo_process();
     process.script = Some("true\n".into());
-    let submission = process_submission(
-        "ssh-no-output",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission =
+        process_submission("ssh-no-output", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
     let lease = transport.submit(dispatch, artifacts).await.unwrap();
     let error = transport.wait(&lease).await.unwrap_err().to_string();
-    assert!(error.contains("matched no files"), "unexpected error: {error}");
+    assert!(
+        error.contains("matched no files"),
+        "unexpected error: {error}"
+    );
 }
 
 #[tokio::test]
@@ -455,16 +455,19 @@ async fn a_container_task_is_refused_before_any_remote_contact() {
         mode: ApptainerMode::Exec,
         network: ApptainerNetwork::Host,
     });
-    let submission = process_submission(
-        "ssh-container",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission =
+        process_submission("ssh-container", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
-    let error = transport.submit(dispatch, artifacts).await.unwrap_err().to_string();
-    assert!(error.contains("direct SSH backend"), "unexpected error: {error}");
+    let error = transport
+        .submit(dispatch, artifacts)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("direct SSH backend"),
+        "unexpected error: {error}"
+    );
     assert!(fixture.calls_log().is_empty());
 }
 
@@ -478,9 +481,13 @@ async fn the_receipt_pins_the_exact_submitted_manifest() {
     let lease = transport.submit(dispatch, artifacts).await.unwrap();
     let receipt = transport.wait(&lease).await.unwrap();
 
-    let submitted = std::fs::read(task_dir(cluster.path(), "ssh-manifest").join("task.json")).unwrap();
+    let submitted =
+        std::fs::read(task_dir(cluster.path(), "ssh-manifest").join("task.json")).unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&submitted).unwrap();
-    assert_eq!(parsed["spec"]["spec"]["custody_literal"], "snowman \u{2603}");
+    assert_eq!(
+        parsed["spec"]["spec"]["custody_literal"],
+        "snowman \u{2603}"
+    );
     assert!(submitted.ends_with(b"}\n"));
     let expected = FileFingerprint {
         size: submitted.len() as u64,
@@ -502,12 +509,7 @@ async fn a_task_logs_carry_measured_fingerprints() {
     process.script = Some(
         "printf 'to stdout\\n'\nprintf 'to stderr\\n' >&2\ncat {{input.f}} > out-0.json\n".into(),
     );
-    let submission = process_submission(
-        "ssh-logs",
-        &staged,
-        &process,
-        TaskResources::default(),
-    );
+    let submission = process_submission("ssh-logs", &staged, &process, TaskResources::default());
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
     let artifacts = vec![FileRef::local(&staged, Some("text".into())).unwrap()];
     let lease = transport.submit(dispatch, artifacts).await.unwrap();

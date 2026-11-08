@@ -82,7 +82,10 @@ fn decode_output_images(images: Vec<OutputImage>) -> Vec<ExtractedImage> {
             );
             continue;
         }
-        if decoded.iter().any(|existing: &ExtractedImage| existing.name == name) {
+        if decoded
+            .iter()
+            .any(|existing: &ExtractedImage| existing.name == name)
+        {
             continue;
         }
         decoded.push(ExtractedImage { name, data });
@@ -581,7 +584,7 @@ mod tests {
             output_image("../escape.png", &png), // traversal: skipped
             OutputImage {
                 name: "z-bad.png".into(),
-                data: "not base64!!".into(),     // invalid: skipped
+                data: "not base64!!".into(), // invalid: skipped
             },
         ]);
         assert_eq!(images.len(), 1);
@@ -619,6 +622,9 @@ mod tests {
             scan_structure_image_refs(&structure),
             ["z-one.png".to_owned(), "z-two.png".to_owned()]
         );
-        assert_eq!(scan_structure_image_refs(&serde_json::json!({})), Vec::<String>::new());
+        assert_eq!(
+            scan_structure_image_refs(&serde_json::json!({})),
+            Vec::<String>::new()
+        );
     }
 }

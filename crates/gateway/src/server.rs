@@ -2,8 +2,8 @@
 //! storage access, model-config API, and the SSE event stream.
 
 mod agents;
-mod compute;
 mod auth;
+mod compute;
 mod context;
 pub(crate) mod devcontainer;
 mod devcontainer_config;

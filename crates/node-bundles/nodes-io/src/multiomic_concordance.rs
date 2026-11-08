@@ -359,9 +359,13 @@ fn build_table(
                 columns.pvalue_col
             ))
         })?;
-        let genes = crate::arrow_strings::utf8_strings(batch.column(gene_idx)).ok_or_else(
-            || ConcordanceError::Runtime(format!("{label} column `{}` is not Utf8", columns.gene_col)),
-        )?;
+        let genes =
+            crate::arrow_strings::utf8_strings(batch.column(gene_idx)).ok_or_else(|| {
+                ConcordanceError::Runtime(format!(
+                    "{label} column `{}` is not Utf8",
+                    columns.gene_col
+                ))
+            })?;
         let effects = batch
             .column(effect_idx)
             .as_any()

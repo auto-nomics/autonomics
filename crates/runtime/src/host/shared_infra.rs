@@ -229,14 +229,16 @@ impl SharedInfra {
             open_vfs_and_storage(config, &rsi, &environments).await?;
         let base_containers = open_container_execution(config)?;
         let hpc_monitor = crate::hpc_monitor::MonitorHub::empty();
-        let compute = Some(crate::compute::ComputeRegistry::open(
-            config,
-            file_storage.clone(),
-            vfs.clone(),
-            &base_containers,
-            hpc_monitor.clone(),
-        )
-        .map_err(Error::Other)?);
+        let compute = Some(
+            crate::compute::ComputeRegistry::open(
+                config,
+                file_storage.clone(),
+                vfs.clone(),
+                &base_containers,
+                hpc_monitor.clone(),
+            )
+            .map_err(Error::Other)?,
+        );
         let container_execution = if let Some(registry) = &compute {
             let mut containers = (*base_containers).clone();
             containers.runtime = Arc::new(crate::compute::ContainerRouter {
@@ -428,7 +430,8 @@ impl SharedInfra {
         let mut agent = builder.build().await?;
         let agent_id = agent.id();
         let internal_tx = agent.internal_event_tx();
-        self.hpc_notifications.register(agent_id, internal_tx.clone());
+        self.hpc_notifications
+            .register(agent_id, internal_tx.clone());
         let model_handle = agent.model_handle().clone();
 
         // Wrap `agent.run()` in catch_unwind so a panic inside the agent

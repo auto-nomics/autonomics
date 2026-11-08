@@ -144,7 +144,9 @@ mod tests {
         let definition = HpcFilesInput::definition();
         let minimal = serde_json::json!({"action":"mkdir", "path":"/toy"});
         definition.validate_input(&minimal).unwrap();
-        let expanded = serde_json::to_value(serde_json::from_value::<HpcFilesInput>(minimal).unwrap()).unwrap();
+        let expanded =
+            serde_json::to_value(serde_json::from_value::<HpcFilesInput>(minimal).unwrap())
+                .unwrap();
         definition.validate_input(&expanded).unwrap();
         validate_request(&expanded).unwrap();
         for field in ["destination", "cursor", "expected_sha256", "upload_id"] {

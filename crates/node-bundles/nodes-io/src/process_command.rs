@@ -72,9 +72,7 @@ fn port_layout(spec: &ProcessCommandSpec) -> Result<NodePorts, String> {
     // so a name that cannot exist in a POSIX environment would only fail at
     // task spawn; refuse it while the spec is still being validated.
     for name in spec.env.keys() {
-        if name.is_empty()
-            || name.contains('=')
-            || name.chars().any(|character| character == '\0')
+        if name.is_empty() || name.contains('=') || name.chars().any(|character| character == '\0')
         {
             return Err(format!(
                 "process env name `{name}` is not a valid environment variable name"
@@ -193,9 +191,8 @@ impl NodeFactory for ProcessCommandNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: ProcessCommandSpec = serde_json::from_value(spec)?;
-        let node = ProcessCommandNode::new(&spec).map_err(|error| {
-            dag_core::registry::error::Error::Unknown(error)
-        })?;
+        let node = ProcessCommandNode::new(&spec)
+            .map_err(|error| dag_core::registry::error::Error::Unknown(error))?;
         Ok(Box::new(node))
     }
 

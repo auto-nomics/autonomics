@@ -234,14 +234,14 @@ impl PanelCache {
         // authoritative copy — mount it directly instead of fetching a
         // second copy from object storage.
         if marker_is_valid(&marker, &panel.digest).await {
-            if let Some((manifest, manifest_bytes)) =
-                self.load_local_manifest(&destination).await?
+            if let Some((manifest, manifest_bytes)) = self.load_local_manifest(&destination).await?
             {
                 // Strict mode admits a panel only through its signed byte
                 // identity; the local copy must carry the same signature
                 // the object-storage manifest would have been checked
                 // against.
-                if manifest.digest == panel.digest && self.admits_local_manifest(&prefix, &manifest_bytes)
+                if manifest.digest == panel.digest
+                    && self.admits_local_manifest(&prefix, &manifest_bytes)
                 {
                     self.verify_cache_files(&destination, &manifest).await?;
                     // Record the hit so the LRU sweeper removes
@@ -622,7 +622,9 @@ mod tests {
             .path()
             .join("wjixiang")
             .join(format!("catalog-ldsc@{digest}"));
-        tokio::fs::create_dir_all(entry.join("LDREF")).await.unwrap();
+        tokio::fs::create_dir_all(entry.join("LDREF"))
+            .await
+            .unwrap();
         tokio::fs::write(entry.join("LDREF/chr22.bed"), content)
             .await
             .unwrap();

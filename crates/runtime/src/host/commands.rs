@@ -388,7 +388,8 @@ impl RuntimeHost {
                     target_path.map(|target| self.resolve_agent(&target).unwrap_or(target));
                 let live_records: Vec<_> = self
                     .ledger
-                    .snapshots().filter(|&record| {
+                    .snapshots()
+                    .filter(|&record| {
                         caller_path.as_deref().is_none_or(|value| {
                             record
                                 .caller_path
@@ -400,7 +401,8 @@ impl RuntimeHost {
                             && status
                                 .as_deref()
                                 .is_none_or(|value| record.status.as_str() == value)
-                    }).cloned()
+                    })
+                    .cloned()
                     .collect();
                 let storage = self.infra.storage.clone();
                 agentik_core::supervise::spawn_safe_on(

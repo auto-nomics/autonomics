@@ -235,10 +235,17 @@ impl DAG {
         // isolated `SessionContext` via `NodeCtx::session()` — the graph never
         // stores or shares a `SessionContext`.
         let engine_ctx = Arc::new(engine_ctx.clone());
-        let run_executor = self.task_executor.executor.bind_run().await?
+        let run_executor = self
+            .task_executor
+            .executor
+            .bind_run()
+            .await?
             .unwrap_or_else(|| Arc::clone(&self.task_executor.executor));
-        let mut requirements: Vec<_> = self.nodes.iter()
-            .map(|(id, node)| (id.as_str(), node.as_ref())).collect();
+        let mut requirements: Vec<_> = self
+            .nodes
+            .iter()
+            .map(|(id, node)| (id.as_str(), node.as_ref()))
+            .collect();
         requirements.sort_by_key(|(id, _)| *id);
         run_executor.preflight(&requirements)?;
 

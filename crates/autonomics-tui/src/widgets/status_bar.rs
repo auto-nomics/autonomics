@@ -82,7 +82,10 @@ impl Widget for StatusBar<'_> {
 
         // Agent path — the leaf's identity, since there is no tab strip.
         if let Some(path) = self.agent_path {
-            spans.push(Span::styled(path, base(Style::default().fg(theme.text_dim))));
+            spans.push(Span::styled(
+                path,
+                base(Style::default().fg(theme.text_dim)),
+            ));
             spans.push(Span::styled("  ", bg));
         }
 

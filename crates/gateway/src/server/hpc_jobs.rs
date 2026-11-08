@@ -1,7 +1,11 @@
 //! Operator visibility and adoption of existing job intents. No submission API.
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
-use axum::{Json, extract::{Path, State}, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -102,28 +106,54 @@ pub(crate) struct StopMonitor {
 }
 
 pub(crate) async fn stop_monitor(
-    State(state): State<GatewayState>, Path(id): Path<String>, Json(input): Json<StopMonitor>,
+    State(state): State<GatewayState>,
+    Path(id): Path<String>,
+    Json(input): Json<StopMonitor>,
 ) -> GatewayResult<Json<Value>> {
     if input.reason.trim().is_empty() || input.reason.len() > 2048 {
-        return Err(GatewayError::Message("bounded operator review reason required".into()));
+        return Err(GatewayError::Message(
+            "bounded operator review reason required".into(),
+        ));
     }
-    let hub = state.infra.hpc_monitor.as_ref().ok_or_else(||
-        GatewayError::Status(StatusCode::CONFLICT, "HPC monitoring is disabled".into()))?;
-    let prior = hub.views(None).map_err(GatewayError::Message)?.into_iter()
-        .find(|view| view.id == id && view.target_id.as_deref() == Some(input.target_id.as_str())
-            && view.target_revision == Some(input.target_revision)
-            && view.agent_id == input.agent_id.to_string() && view.agent_path == input.agent_path
-            && view.session_id == input.session_id.to_string() && view.submission_key == input.submission_key)
-        .ok_or_else(|| GatewayError::Status(StatusCode::CONFLICT,
-            "monitor must match its exact target and original conversation".into()))?;
-    let target = hub.target_hub(&format!("{}-r{}", input.target_id, input.target_revision))
+    let hub = state.infra.hpc_monitor.as_ref().ok_or_else(|| {
+        GatewayError::Status(StatusCode::CONFLICT, "HPC monitoring is disabled".into())
+    })?;
+    let prior = hub
+        .views(None)
+        .map_err(GatewayError::Message)?
+        .into_iter()
+        .find(|view| {
+            view.id == id
+                && view.target_id.as_deref() == Some(input.target_id.as_str())
+                && view.target_revision == Some(input.target_revision)
+                && view.agent_id == input.agent_id.to_string()
+                && view.agent_path == input.agent_path
+                && view.session_id == input.session_id.to_string()
+                && view.submission_key == input.submission_key
+        })
+        .ok_or_else(|| {
+            GatewayError::Status(
+                StatusCode::CONFLICT,
+                "monitor must match its exact target and original conversation".into(),
+            )
+        })?;
+    let target = hub
+        .target_hub(&format!("{}-r{}", input.target_id, input.target_revision))
         .map_err(GatewayError::Message)?;
-    let owner = runtime::hpc_monitor::Owner { agent_id: input.agent_id.to_string(),
-        agent_path: input.agent_path, session_id: input.session_id.to_string() };
-    let mut view = target.stop(&id, &owner).map_err(GatewayError::Message)?.view();
+    let owner = runtime::hpc_monitor::Owner {
+        agent_id: input.agent_id.to_string(),
+        agent_path: input.agent_path,
+        session_id: input.session_id.to_string(),
+    };
+    let mut view = target
+        .stop(&id, &owner)
+        .map_err(GatewayError::Message)?
+        .view();
     view.target_id = Some(input.target_id);
     view.target_revision = Some(input.target_revision);
-    Ok(Json(json!({"monitor": view, "prior_monitor": prior, "operator_review": input.reason,
+    Ok(Json(
+        json!({"monitor": view, "prior_monitor": prior, "operator_review": input.reason,
         "remote_job_cancelled": false, "new_job_submitted": false,
-        "original_submission_outcome_resolved": false, "scientific_admission_granted": false})))
+        "original_submission_outcome_resolved": false, "scientific_admission_granted": false}),
+    ))
 }

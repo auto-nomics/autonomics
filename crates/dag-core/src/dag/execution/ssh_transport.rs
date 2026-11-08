@@ -41,9 +41,8 @@ use sha2::{Digest, Sha256};
 use super::contract::{TaskAttemptReceipt, TaskDispatch, task_timeout};
 use super::process::{ProcessTaskSpec, parse_process_task, process_task_environment};
 use super::slurm::{
-    SshTarget, attempt_key, ensure_ssh_success, hex_encode, match_uploaded_inputs,
-    remote_task_dir, render_collect_script, resolve_remote_prefix, sh_single_quote,
-    ssh_stdout_text,
+    SshTarget, attempt_key, ensure_ssh_success, hex_encode, match_uploaded_inputs, remote_task_dir,
+    render_collect_script, resolve_remote_prefix, sh_single_quote, ssh_stdout_text,
 };
 use super::traits::{TaskLease, TaskTransport};
 use crate::dag::DagError;
@@ -255,14 +254,11 @@ impl SshTaskTransport {
                 }
                 _ => None,
             };
-            by_port
-                .entry(port)
-                .or_default()
-                .push(FileRef {
-                    path: format!("{}/output-{port}-{index}", attempt.task_dir),
-                    format,
-                    fingerprint,
-                });
+            by_port.entry(port).or_default().push(FileRef {
+                path: format!("{}/output-{port}-{index}", attempt.task_dir),
+                format,
+                fingerprint,
+            });
         }
         for output in &attempt.process.outputs {
             if !by_port.contains_key(&output.port) {
@@ -409,7 +405,10 @@ impl SshTaskTransport {
                     .ok_or_else(|| {
                         DagError::Schedule("ssh attempt recorded no process id".into())
                     })?;
-                let pgid: i64 = fields.next().and_then(|value| value.parse().ok()).unwrap_or(pid);
+                let pgid: i64 = fields
+                    .next()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(pid);
                 return Ok((pid, pgid));
             }
             if Instant::now() >= deadline {
@@ -496,8 +495,9 @@ impl TaskTransport for SshTaskTransport {
         dispatch.spec.spec["_autonomics_input_artifacts"] =
             serde_json::to_value(&input_artifacts_by_name)
                 .map_err(|error| DagError::Schedule(error.to_string()))?;
-        let manifest = serde_json::to_string_pretty(&dispatch)
-            .map_err(|error| DagError::Schedule(format!("cannot serialize ssh task manifest: {error}")))?;
+        let manifest = serde_json::to_string_pretty(&dispatch).map_err(|error| {
+            DagError::Schedule(format!("cannot serialize ssh task manifest: {error}"))
+        })?;
         // A quoted heredoc preserves every manifest byte and appends exactly
         // one LF before its delimiter. Bind the receipt to those submitted
         // bytes, never to a hash learned by reopening the remote path.
@@ -578,13 +578,7 @@ impl TaskTransport for SshTaskTransport {
             return Err(DagError::Schedule("ssh lease task identity changed".into()));
         }
 
-        reporter.worker(
-            "executing",
-            "ssh",
-            &lease.lease_id,
-            "running",
-            "remote",
-        );
+        reporter.worker("executing", "ssh", &lease.lease_id, "running", "remote");
         let exit_code = self.await_exit_code(&attempt, reporter).await?;
         let (status_name, exit_code) = map_exit_code(exit_code);
         reporter.worker(
@@ -676,7 +670,8 @@ fn render_launch_script(
 ) -> String {
     let supervisor = render_supervisor(process, task_dir, environment, inputs_by_name);
     let manifest_delimiter = super::slurm::heredoc_delimiter("AUTONOMICS_MANIFEST_EOF", manifest);
-    let supervisor_delimiter = super::slurm::heredoc_delimiter("AUTONOMICS_LAUNCH_EOF", &supervisor);
+    let supervisor_delimiter =
+        super::slurm::heredoc_delimiter("AUTONOMICS_LAUNCH_EOF", &supervisor);
     let mut script = String::from("set -eu\numask 077\nexport LC_ALL=C\n");
     script.push_str(&format!("task_dir={}\n", sh_single_quote(task_dir)));
     script.push_str("mkdir -p -- \"$task_dir\"\ncd -- \"$task_dir\"\n");
@@ -764,7 +759,9 @@ fn parse_exit_code(raw: &str) -> Result<i32, DagError> {
         ));
     }
     text.parse::<i32>().map_err(|error| {
-        DagError::Schedule(format!("ssh attempt recorded an unreadable exit code: {error}"))
+        DagError::Schedule(format!(
+            "ssh attempt recorded an unreadable exit code: {error}"
+        ))
     })
 }
 

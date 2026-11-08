@@ -56,11 +56,7 @@ fn ssh_text(host: &str, remote: &str) -> String {
     String::from_utf8(output.stdout).expect("ssh stdout utf-8")
 }
 
-fn process_submission(
-    task_id: &str,
-    input: &FileRef,
-    process: &ProcessTaskSpec,
-) -> TaskSubmission {
+fn process_submission(task_id: &str, input: &FileRef, process: &ProcessTaskSpec) -> TaskSubmission {
     let staged = input.path.clone();
     TaskSubmission {
         spec: TaskSpec {
@@ -128,10 +124,7 @@ async fn real_host_runs_process_task_end_to_end() {
         scratch.clone(),
         local_artifacts.path(),
     );
-    let uploaded = store
-        .upload(input, task_id, "input-0-0")
-        .await
-        .unwrap();
+    let uploaded = store.upload(input, task_id, "input-0-0").await.unwrap();
     let submission = process_submission(task_id, &uploaded, &ProcessTaskSpec {
         container: None,
         script: Some(
@@ -163,7 +156,10 @@ async fn real_host_runs_process_task_end_to_end() {
     assert_eq!(body, "bioinfo10\nremote ssh smoke input");
     let stdout = receipt.stdout_log.as_ref().expect("stdout log");
     assert!(stdout.fingerprint.as_ref().unwrap().size > 0);
-    println!("task {task_id} completed on {}", body.lines().next().unwrap());
+    println!(
+        "task {task_id} completed on {}",
+        body.lines().next().unwrap()
+    );
 }
 
 #[tokio::test]
@@ -178,23 +174,24 @@ async fn real_host_reports_failure_without_outputs() {
     let input_path = local_artifacts.path().join("input.txt");
     std::fs::write(&input_path, "x").unwrap();
     let input = FileRef::local(&input_path, Some("text".into())).unwrap();
-    let submission = process_submission(task_id, &input, &ProcessTaskSpec {
-        container: None,
-        script: Some("echo deliberate-failure >&2\nexit 9\n".into()),
-        command: Vec::new(),
-        env: Default::default(),
-        outputs: vec![ProcessTaskOutput {
-            port: 0,
-            pattern: "out-*.txt".into(),
-        }],
-    });
+    let submission = process_submission(
+        task_id,
+        &input,
+        &ProcessTaskSpec {
+            container: None,
+            script: Some("echo deliberate-failure >&2\nexit 9\n".into()),
+            command: Vec::new(),
+            env: Default::default(),
+            outputs: vec![ProcessTaskOutput {
+                port: 0,
+                pattern: "out-*.txt".into(),
+            }],
+        },
+    );
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
 
     let transport = SshTaskTransport::new(settings(&host, scratch.clone(), local_artifacts.path()));
-    let lease = transport
-        .submit(dispatch, vec![input])
-        .await
-        .unwrap();
+    let lease = transport.submit(dispatch, vec![input]).await.unwrap();
     let receipt = transport.wait(&lease).await.unwrap();
 
     assert_eq!(receipt.status, "failed");
@@ -220,23 +217,24 @@ async fn real_host_cancel_stops_a_running_task() {
     let input_path = local_artifacts.path().join("input.txt");
     std::fs::write(&input_path, "x").unwrap();
     let input = FileRef::local(&input_path, Some("text".into())).unwrap();
-    let submission = process_submission(task_id, &input, &ProcessTaskSpec {
-        container: None,
-        script: Some("sleep 600\n".into()),
-        command: Vec::new(),
-        env: Default::default(),
-        outputs: vec![ProcessTaskOutput {
-            port: 0,
-            pattern: "out-*.txt".into(),
-        }],
-    });
+    let submission = process_submission(
+        task_id,
+        &input,
+        &ProcessTaskSpec {
+            container: None,
+            script: Some("sleep 600\n".into()),
+            command: Vec::new(),
+            env: Default::default(),
+            outputs: vec![ProcessTaskOutput {
+                port: 0,
+                pattern: "out-*.txt".into(),
+            }],
+        },
+    );
     let dispatch: TaskDispatch = submission.into_remote_dispatch().unwrap();
 
     let transport = SshTaskTransport::new(settings(&host, scratch.clone(), local_artifacts.path()));
-    let lease = transport
-        .submit(dispatch, vec![input])
-        .await
-        .unwrap();
+    let lease = transport.submit(dispatch, vec![input]).await.unwrap();
 
     // Wait until the supervisor published its identity, then cancel. The
     // task id is already a sanitized directory name, so the attempt
@@ -264,10 +262,7 @@ async fn real_host_cancel_stops_a_running_task() {
     }
     transport.cancel(&lease).await.unwrap();
 
-    let recorded = ssh_text(
-        &host,
-        &format!("cat {scratch}/{task_id}/exit.code"),
-    );
+    let recorded = ssh_text(&host, &format!("cat {scratch}/{task_id}/exit.code"));
     assert_eq!(recorded.trim(), "130");
     // No supervisor from this attempt may survive the cancel. The bracketed
     // first character keeps the probe from matching its own command line.

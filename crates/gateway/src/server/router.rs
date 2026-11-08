@@ -114,21 +114,77 @@ pub fn api_router(state: GatewayState) -> Router {
             get(plugins::list_projects).post(plugins::create_project),
         )
         .route("/plugin-projects/{name}/files", get(plugins::project_files))
-        .route("/plugin-projects/{name}/snapshot", get(plugins::project_snapshot))
-        .route("/plugin-projects/{name}/container", get(super::devcontainer::status).post(super::devcontainer::open).delete(super::devcontainer::close))
-        .route("/plugin-projects/{name}/vscode-session", post(super::devcontainer::vscode_url))
-        .route("/plugin-projects/{name}/vscode-control", post(super::devcontainer::vscode_control))
-        .route("/plugin-projects/{name}/terminal", get(super::devcontainer::terminal_output).post(super::devcontainer::terminal_open).delete(super::devcontainer::terminal_close))
-        .route("/plugin-projects/{name}/terminal/input", post(super::devcontainer::terminal_input))
-        .route("/plugin-projects/{name}/terminal/size", put(super::devcontainer::terminal_resize))
-        .route("/plugin-projects/{name}/language/{language}", post(super::devcontainer::language_open))
-        .route("/plugin-projects/{name}/language/{language}/{client}", get(super::devcontainer::language_output).post(super::devcontainer::language_input).delete(super::devcontainer::language_close))
-        .route("/plugin-projects/{name}/debug/{language}", post(super::devcontainer::debug_open))
-        .route("/plugin-projects/{name}/debug/{language}/{client}", get(super::devcontainer::debug_output).post(super::devcontainer::debug_input).delete(super::devcontainer::debug_close))
-        .route("/plugin-projects/{name}/file", get(plugins::read_project_file).put(plugins::save_project_file).post(plugins::create_project_file).delete(plugins::delete_project_file))
-        .route("/plugin-projects/{name}/file/rename", post(plugins::rename_project_file))
-        .route("/plugin-projects/{name}/directory", post(plugins::create_project_directory).delete(plugins::delete_project_directory))
-        .route("/plugin-projects/{name}/directory/rename", post(plugins::rename_project_directory))
+        .route(
+            "/plugin-projects/{name}/snapshot",
+            get(plugins::project_snapshot),
+        )
+        .route(
+            "/plugin-projects/{name}/container",
+            get(super::devcontainer::status)
+                .post(super::devcontainer::open)
+                .delete(super::devcontainer::close),
+        )
+        .route(
+            "/plugin-projects/{name}/vscode-session",
+            post(super::devcontainer::vscode_url),
+        )
+        .route(
+            "/plugin-projects/{name}/vscode-control",
+            post(super::devcontainer::vscode_control),
+        )
+        .route(
+            "/plugin-projects/{name}/terminal",
+            get(super::devcontainer::terminal_output)
+                .post(super::devcontainer::terminal_open)
+                .delete(super::devcontainer::terminal_close),
+        )
+        .route(
+            "/plugin-projects/{name}/terminal/input",
+            post(super::devcontainer::terminal_input),
+        )
+        .route(
+            "/plugin-projects/{name}/terminal/size",
+            put(super::devcontainer::terminal_resize),
+        )
+        .route(
+            "/plugin-projects/{name}/language/{language}",
+            post(super::devcontainer::language_open),
+        )
+        .route(
+            "/plugin-projects/{name}/language/{language}/{client}",
+            get(super::devcontainer::language_output)
+                .post(super::devcontainer::language_input)
+                .delete(super::devcontainer::language_close),
+        )
+        .route(
+            "/plugin-projects/{name}/debug/{language}",
+            post(super::devcontainer::debug_open),
+        )
+        .route(
+            "/plugin-projects/{name}/debug/{language}/{client}",
+            get(super::devcontainer::debug_output)
+                .post(super::devcontainer::debug_input)
+                .delete(super::devcontainer::debug_close),
+        )
+        .route(
+            "/plugin-projects/{name}/file",
+            get(plugins::read_project_file)
+                .put(plugins::save_project_file)
+                .post(plugins::create_project_file)
+                .delete(plugins::delete_project_file),
+        )
+        .route(
+            "/plugin-projects/{name}/file/rename",
+            post(plugins::rename_project_file),
+        )
+        .route(
+            "/plugin-projects/{name}/directory",
+            post(plugins::create_project_directory).delete(plugins::delete_project_directory),
+        )
+        .route(
+            "/plugin-projects/{name}/directory/rename",
+            post(plugins::rename_project_directory),
+        )
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
         .route(

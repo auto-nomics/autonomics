@@ -48,12 +48,18 @@ impl agentik_core::context::ContextProvider for ComputeContext {
             .iter()
             .map(|s| s.mount_path())
             .collect();
-        let deployment = self.registry
-            .target(&catalog.policy.target_id, Some(catalog.policy.target_revision))
-            .ok()?.deployment();
+        let deployment = self
+            .registry
+            .target(
+                &catalog.policy.target_id,
+                Some(catalog.policy.target_revision),
+            )
+            .ok()?
+            .deployment();
         let status = serde_json::to_string(&json!({
             "policy":catalog.policy,"data_sources":sources,"deployment":deployment
-        })).ok()?;
+        }))
+        .ok()?;
         Some(format!(
             "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target/revision. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and enroll a new target revision. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use compute_status to inspect mounts and bindings. Never repeat uncertain work on another server."
         ))
@@ -153,17 +159,30 @@ pub struct ReadinessInput {
     pub images: Vec<String>,
     pub expected_identities: std::collections::BTreeMap<String, Value>,
 }
-struct ReadinessTool(Arc<ComputeRegistry>, Arc<data_engine::runtime::DataEngineManager>);
-pub(crate) fn readiness_registration(registry: Arc<ComputeRegistry>, engine: Arc<data_engine::runtime::DataEngineManager>) -> ToolRegistration {
+struct ReadinessTool(
+    Arc<ComputeRegistry>,
+    Arc<data_engine::runtime::DataEngineManager>,
+);
+pub(crate) fn readiness_registration(
+    registry: Arc<ComputeRegistry>,
+    engine: Arc<data_engine::runtime::DataEngineManager>,
+) -> ToolRegistration {
     ReadinessTool(registry, engine).into()
 }
 #[async_trait]
 impl ToolFunction for ReadinessTool {
     type Input = ReadinessInput;
     async fn run(&self, input: ReadinessInput) -> Result<ToolResult, ToolError> {
-        let request = super::ReadinessRequest { nodes:input.nodes, images:input.images,
-            expected_identities:input.expected_identities };
-        Ok(ToolResult::success_json(self.0.readiness(&request, &self.1.list_nodes()).map_err(error)?))
+        let request = super::ReadinessRequest {
+            nodes: input.nodes,
+            images: input.images,
+            expected_identities: input.expected_identities,
+        };
+        Ok(ToolResult::success_json(
+            self.0
+                .readiness(&request, &self.1.list_nodes())
+                .map_err(error)?,
+        ))
     }
 }
 
@@ -182,8 +201,13 @@ struct ImageEvidenceTool(Arc<ComputeRegistry>);
 impl ToolFunction for ImageEvidenceTool {
     type Input = ImageEvidenceInput;
     async fn run(&self, input: ImageEvidenceInput) -> Result<ToolResult, ToolError> {
-        let evidence = self.0.image_evidence(&input.target_id, input.target_revision, &input.reference).map_err(error)?;
-        Ok(ToolResult::success_json(serde_json::to_value(evidence).map_err(|e| error(e.to_string()))?))
+        let evidence = self
+            .0
+            .image_evidence(&input.target_id, input.target_revision, &input.reference)
+            .map_err(error)?;
+        Ok(ToolResult::success_json(
+            serde_json::to_value(evidence).map_err(|e| error(e.to_string()))?,
+        ))
     }
 }
 #[async_trait]
@@ -203,7 +227,10 @@ pub(crate) fn registrations(
     storage: Arc<dyn AgentStorage>,
     files: Arc<vfs::OpendalFileStorage>,
 ) -> Vec<ToolRegistration> {
-    let mut tools: Vec<ToolRegistration> = vec![StatusTool(registry.clone()).into(), ImageEvidenceTool(registry.clone()).into()];
+    let mut tools: Vec<ToolRegistration> = vec![
+        StatusTool(registry.clone()).into(),
+        ImageEvidenceTool(registry.clone()).into(),
+    ];
     // Definitions need no live connection or state-directory creation.
     let catalog = registry.catalog();
     let candidate = catalog.targets.iter().find_map(|t| {
@@ -397,12 +424,7 @@ impl RoutedTool {
         // management speak to a scheduler, while file and transfer
         // operations are plain ssh and work on any remote target.
         let scheduler_tool = matches!(name, "hpc_jobs" | "hpc_cluster");
-        if scheduler_tool
-            && !matches!(
-                target.target.backend,
-                super::ComputeBackend::Slurm { .. }
-            )
-        {
+        if scheduler_tool && !matches!(target.target.backend, super::ComputeBackend::Slurm { .. }) {
             return Err(error(
                 "this target has no scheduler; hpc_jobs and hpc_cluster require a scheduler-backed target. Run work with a `process` node, and use hpc_files or hpc_transfer for remote data",
             ));

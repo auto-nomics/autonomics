@@ -89,7 +89,10 @@ async fn malformed_new_submit_can_be_corrected_under_the_same_key() {
     let path = local_record_path(&f.tool.client, "repairable").unwrap();
     let mut request = f.request();
     request["array"] = json!("0;invalid");
-    assert_eq!(f.invoke(request.clone()).await.unwrap().is_error, Some(true));
+    assert_eq!(
+        f.invoke(request.clone()).await.unwrap().is_error,
+        Some(true)
+    );
     assert!(!path.exists());
     assert!(!f.home.join(".autonomics-hpc-jobs").exists());
     assert!(f.calls("scheduler.jsonl").is_empty());

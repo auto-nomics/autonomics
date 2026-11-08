@@ -6,12 +6,12 @@
 //! cargo test -p data-engine --test opentargets_node_live -- --ignored
 //! ```
 
-use std::sync::Arc;
 use data_engine::node_registry::{NodeCtx, NodeFactory};
 use datafusion::prelude::SessionContext;
 use nodes_io::source_opentargets::{
     OpentargetsAssociationsNodeFactory, OpentargetsSearchNodeFactory,
 };
+use std::sync::Arc;
 
 fn node_ctx() -> NodeCtx {
     NodeCtx::new(SessionContext::new().runtime_env(), None)
@@ -171,7 +171,8 @@ async fn genetic_node_variant_mode() {
     let ctx = datafusion::prelude::SessionContext::new();
     let ids = arrow_array::RecordBatch::try_from_iter(vec![(
         "variant_id",
-        Arc::new(arrow_array::StringArray::from(vec!["17_66232877_G_C"])) as Arc<dyn arrow_array::Array>,
+        Arc::new(arrow_array::StringArray::from(vec!["17_66232877_G_C"]))
+            as Arc<dyn arrow_array::Array>,
     )])
     .unwrap();
     let input_df = ctx.read_batch(ids).unwrap();
@@ -230,7 +231,8 @@ async fn genetic_node_accepts_sql_concat_utf8_view_ids() {
         ),
         (
             "pos",
-            Arc::new(arrow_array::Int64Array::from(vec![66232877i64])) as Arc<dyn arrow_array::Array>,
+            Arc::new(arrow_array::Int64Array::from(vec![66232877i64]))
+                as Arc<dyn arrow_array::Array>,
         ),
         (
             "ref",
@@ -291,7 +293,8 @@ async fn genetic_node_study_mode() {
     let ctx = datafusion::prelude::SessionContext::new();
     let ids = arrow_array::RecordBatch::try_from_iter(vec![(
         "study_id",
-        Arc::new(arrow_array::StringArray::from(vec!["GCST90018961"])) as Arc<dyn arrow_array::Array>,
+        Arc::new(arrow_array::StringArray::from(vec!["GCST90018961"]))
+            as Arc<dyn arrow_array::Array>,
     )])
     .unwrap();
     let input_df = ctx.read_batch(ids).unwrap();
@@ -311,5 +314,8 @@ async fn genetic_node_study_mode() {
     let df = outputs.dataframe(0).expect("missing output port 0").clone();
     let batches = df.collect().await.unwrap();
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert!(total > 0, "expected high-confidence L2G rows for GCST90018961");
+    assert!(
+        total > 0,
+        "expected high-confidence L2G rows for GCST90018961"
+    );
 }

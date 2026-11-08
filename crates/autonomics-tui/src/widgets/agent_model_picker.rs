@@ -299,9 +299,7 @@ pub fn render_agent_model_picker(
             Span::styled(" Apply to ", Style::default().fg(theme.text_faint)),
             Span::styled(
                 target_label,
-                Style::default()
-                    .fg(theme.text)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             ),
         ])),
         v_regions[0],
@@ -327,17 +325,23 @@ pub fn render_agent_model_picker(
     let footer = Line::from(vec![
         Span::styled(
             " Enter",
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" select  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" cancel", Style::default().fg(theme.text_faint)),
     ]);
@@ -349,7 +353,9 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPicke
     let prompt_style = if state.textarea.is_empty() {
         Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, ">", prompt_style);
 
@@ -406,9 +412,7 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) 
         }
         let item = &state.picker.items[*item_index];
         let row_style = if index == selected {
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.text_dim)
         };

@@ -582,7 +582,10 @@ async fn hpc_config_round_trip_marks_pending_restart() {
         .await;
     assert!(bad.is_err(), "zero poll interval must be rejected");
     let unchanged = client.hpc_config().await.unwrap();
-    assert_eq!(unchanged["config"]["ssh_host"], serde_json::json!(live_host));
+    assert_eq!(
+        unchanged["config"]["ssh_host"],
+        serde_json::json!(live_host)
+    );
     assert_eq!(
         unchanged["config"]["poll_interval_secs"],
         before["config"]["poll_interval_secs"]

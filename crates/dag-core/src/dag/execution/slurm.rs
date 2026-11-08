@@ -239,10 +239,7 @@ impl SshTarget {
             connect,
         ];
         if let Some((interval, count)) = &self.keepalive {
-            options.push(format!(
-                "ServerAliveInterval={}",
-                interval.as_secs().max(1)
-            ));
+            options.push(format!("ServerAliveInterval={}", interval.as_secs().max(1)));
             options.push(format!("ServerAliveCountMax={count}"));
         }
         for option in &options {
@@ -289,14 +286,8 @@ impl SshTarget {
         remote_command: &str,
         timeout: Duration,
     ) -> Result<Output, DagError> {
-        self.execute(
-            &[remote_command],
-            StdinSource::Null,
-            timeout,
-            true,
-            None,
-        )
-        .await
+        self.execute(&[remote_command], StdinSource::Null, timeout, true, None)
+            .await
     }
 
     /// Run `bash -s` under an explicit deadline. Read-only scripts only.
@@ -392,18 +383,24 @@ impl SshTarget {
     {
         let marker = format!("AUTONOMICS_SUBMIT_READY_{}\n", nonce_hex(16));
         let prelude = format!("printf '%s\\n' {}\n", sh_single_quote(marker.trim_end()));
-        let mut command = self.command().map_err(|error| DagError::SubmissionNotSent {
-            message: error.to_string(), local_ssh_stopped: true,
-        })?;
-        command.args(["bash", "-s"])
-            .stdin(Stdio::piped()).stdout(Stdio::piped())
-            .stderr(Stdio::piped()).kill_on_drop(true);
-        let mut child = command.spawn().map_err(|error| {
-            DagError::SubmissionNotSent {
+        let mut command = self
+            .command()
+            .map_err(|error| DagError::SubmissionNotSent {
+                message: error.to_string(),
+                local_ssh_stopped: true,
+            })?;
+        command
+            .args(["bash", "-s"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command
+            .spawn()
+            .map_err(|error| DagError::SubmissionNotSent {
                 message: format!("SSH submission channel unavailable before payload: {error}"),
                 local_ssh_stopped: true,
-            }
-        })?;
+            })?;
         let mut stdin = child.stdin.take().expect("piped stdin");
         let mut stdout = child.stdout.take().expect("piped stdout");
         let mut stderr = child.stderr.take().expect("piped stderr");
@@ -414,7 +411,9 @@ impl SshTarget {
             let mut buffer = [0u8; 4096];
             loop {
                 let n = stderr.read(&mut buffer).await?;
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 let keep = n.min(65536usize.saturating_sub(retained.len()));
                 retained.extend_from_slice(&buffer[..keep]);
             }
@@ -425,13 +424,18 @@ impl SshTarget {
             stdin.write_all(prelude.as_bytes()).await.map_err(|e| {
                 DagError::Schedule(format!("SSH authentication handshake write failed: {e}"))
             })?;
-            stdin.flush().await.map_err(|e| DagError::Schedule(e.to_string()))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
             let mut observed = vec![0u8; marker.len()];
             stdout.read_exact(&mut observed).await.map_err(|e| {
                 DagError::Schedule(format!("SSH authentication handshake absent: {e}"))
             })?;
             if observed != marker.as_bytes() {
-                return Err(DagError::Schedule("SSH authentication handshake mismatch".into()));
+                return Err(DagError::Schedule(
+                    "SSH authentication handshake mismatch".into(),
+                ));
             }
             before_send()?;
             // From this point even a partial write is uncertain. The caller's
@@ -440,21 +444,34 @@ impl SshTarget {
             stdin.write_all(script.as_bytes()).await.map_err(|e| {
                 DagError::Schedule(format!("cannot pipe SSH submission payload: {e}"))
             })?;
-            stdin.shutdown().await.map_err(|e| DagError::Schedule(e.to_string()))?;
+            stdin
+                .shutdown()
+                .await
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
             drop(stdin);
             let mut bytes = Vec::new();
-            (&mut stdout).take(65537).read_to_end(&mut bytes).await
+            (&mut stdout)
+                .take(65537)
+                .read_to_end(&mut bytes)
+                .await
                 .map_err(|e| DagError::Schedule(e.to_string()))?;
             if bytes.len() > 65536 {
-                return Err(DagError::Schedule("oversized SSH submission response".into()));
+                return Err(DagError::Schedule(
+                    "oversized SSH submission response".into(),
+                ));
             }
-            let status = child.wait().await.map_err(|e| DagError::Schedule(e.to_string()))?;
+            let status = child
+                .wait()
+                .await
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
             Ok((status, bytes))
         };
         let result = tokio::time::timeout(self.command_timeout, operation).await;
         let result = match result {
             Ok(result) => result,
-            Err(_) => Err(DagError::Schedule("SSH submission channel timed out".into())),
+            Err(_) => Err(DagError::Schedule(
+                "SSH submission channel timed out".into(),
+            )),
         };
         drop(stdout);
         let mut stop_unknown = false;
@@ -465,7 +482,8 @@ impl SshTarget {
                 Ok(Ok(_))
             );
         }
-        let diagnostics = match tokio::time::timeout(Duration::from_secs(5), &mut stderr_task).await {
+        let diagnostics = match tokio::time::timeout(Duration::from_secs(5), &mut stderr_task).await
+        {
             Ok(Ok(Ok(bytes))) => bytes,
             _ => {
                 stderr_task.abort();
@@ -473,17 +491,26 @@ impl SshTarget {
             }
         };
         match result {
-            Ok((status, stdout)) => Ok(Output { status, stdout, stderr: diagnostics }),
+            Ok((status, stdout)) => Ok(Output {
+                status,
+                stdout,
+                stderr: diagnostics,
+            }),
             Err(error) => {
                 let message = format!("{error}; {}", String::from_utf8_lossy(&diagnostics).trim());
                 if payload_admitted {
                     Err(DagError::Schedule(format!(
                         "SSH submission outcome UNKNOWN: {message}; retain original intent; do not replay{}",
-                        if stop_unknown { "; local SSH child stop UNKNOWN" } else { "" }
+                        if stop_unknown {
+                            "; local SSH child stop UNKNOWN"
+                        } else {
+                            ""
+                        }
                     )))
                 } else {
                     Err(DagError::SubmissionNotSent {
-                        message, local_ssh_stopped: !stop_unknown,
+                        message,
+                        local_ssh_stopped: !stop_unknown,
                     })
                 }
             }
@@ -1198,16 +1225,27 @@ impl SlurmTaskTransport {
         let mut admitted = None;
         // Never replay submission after a transport failure. Only read the
         // durable job record; an absent record is explicitly UNKNOWN.
-        let response = self.settings.ssh.run_submission_once(&bootstrap, || {
-            let intent = self.persist_intent(
-                &dispatch.spec.id, &job_name, &nonce, &task_dir, &manifest,
-            )?;
-            let record = self.recorder.as_ref()
-                .map(|r| r.before_submit(&intent)).transpose()?;
-            let scope = submission::SubmissionScope::new(record.clone());
-            admitted = Some((intent, record, scope));
-            Ok(())
-        }).await;
+        let response = self
+            .settings
+            .ssh
+            .run_submission_once(&bootstrap, || {
+                let intent = self.persist_intent(
+                    &dispatch.spec.id,
+                    &job_name,
+                    &nonce,
+                    &task_dir,
+                    &manifest,
+                )?;
+                let record = self
+                    .recorder
+                    .as_ref()
+                    .map(|r| r.before_submit(&intent))
+                    .transpose()?;
+                let scope = submission::SubmissionScope::new(record.clone());
+                admitted = Some((intent, record, scope));
+                Ok(())
+            })
+            .await;
         let Some((intent, record, mut submission_scope)) = admitted else {
             return Err(response.err().unwrap_or_else(|| {
                 DagError::Schedule("SSH submission payload was not admitted".into())
@@ -1219,10 +1257,11 @@ impl SlurmTaskTransport {
         };
         // A diagnostic write failure must not skip read-only reconciliation of
         // a job that may already exist. Preserve the failure in the final error.
-        let diagnostic = match intent.persist_response(&self.settings.local_artifact_root, &response) {
-            Ok(path) => format!("private submission evidence: {}", path.display()),
-            Err(error) => format!("submission evidence unavailable: {error}"),
-        };
+        let diagnostic =
+            match intent.persist_response(&self.settings.local_artifact_root, &response) {
+                Ok(path) => format!("private submission evidence: {}", path.display()),
+                Err(error) => format!("submission evidence unavailable: {error}"),
+            };
         let stdout = match response {
             Ok(output) if output.status.success() => ssh_stdout_text(output, "sbatch submission")?,
             Ok(output) if !matches!(output.status.code(), Some(255 | 92)) => {
@@ -1254,9 +1293,16 @@ fi"#,
                 });
                 match recovered {
                     Ok(id) if parse_submitted_job_id(&id, &dispatch.spec.id).is_ok() => id,
-                    _ => match self.adopt_submitted_job(&job_name, &format!("{cause}; {diagnostic}")).await? {
+                    _ => match self
+                        .adopt_submitted_job(&job_name, &format!("{cause}; {diagnostic}"))
+                        .await?
+                    {
                         Adoption::Found(id) => id,
-                        Adoption::ClearToRetry => return Err(DagError::Schedule(format!("slurm submission UNKNOWN; empty listings do not authorize replay; retain workspace and reconcile intent; {cause}; {diagnostic}"))),
+                        Adoption::ClearToRetry => {
+                            return Err(DagError::Schedule(format!(
+                                "slurm submission UNKNOWN; empty listings do not authorize replay; retain workspace and reconcile intent; {cause}; {diagnostic}"
+                            )));
+                        }
                     },
                 }
             }
@@ -3161,9 +3207,7 @@ impl TaskExecutor for ProcessRoutingTaskExecutor {
         // `process` kind. The node payload itself declares which contract it
         // implements, so route on that and normalize before dispatch — the
         // same rewrite the typed-worker lowering performs.
-        if execution.submission.spec.kind != "process"
-            && execution.node.kind() == "process"
-        {
+        if execution.submission.spec.kind != "process" && execution.node.kind() == "process" {
             execution.submission.spec.kind = "process".into();
         }
         if self.remote.is_none()

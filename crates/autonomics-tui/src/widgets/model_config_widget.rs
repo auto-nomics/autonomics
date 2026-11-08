@@ -905,9 +905,7 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     Span::styled(
                         p.name.clone(),
                         if p.configured {
-                            Style::default()
-                                .fg(theme.text)
-                                .add_modifier(Modifier::BOLD)
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(theme.text_faint)
                         },
@@ -1396,7 +1394,9 @@ fn render_delete_confirm(
     let inner = block.inner(area);
     block.render(area, buf);
 
-    let warn = Style::default().fg(theme.error).add_modifier(Modifier::BOLD);
+    let warn = Style::default()
+        .fg(theme.error)
+        .add_modifier(Modifier::BOLD);
     let dim = Style::default().fg(theme.text_faint);
     let white = Style::default().fg(theme.text);
     let label = |k: &str| Span::styled(format!(" {:<12}: ", k), Style::default().fg(theme.accent));

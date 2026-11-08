@@ -313,17 +313,28 @@ struct CaptureExecutor {
 async fn host_service_node_fails_before_remote_submission() {
     let calls = Arc::new(AtomicUsize::new(0));
     let executor = TypedRemoteTaskExecutor::new(
-        Arc::new(CaptureExecutor { calls: calls.clone(), capture: false }),
+        Arc::new(CaptureExecutor {
+            calls: calls.clone(),
+            capture: false,
+        }),
         settings(),
-    ).unwrap();
+    )
+    .unwrap();
     let mut invocation = execution();
     invocation.submission.spec.spec["host_service"] = serde_json::json!(true);
-    invocation.node = registry().build_node(
-        &invocation.submission.spec.kind, invocation.submission.spec.spec.clone(),
-    ).unwrap();
+    invocation.node = registry()
+        .build_node(
+            &invocation.submission.spec.kind,
+            invocation.submission.spec.spec.clone(),
+        )
+        .unwrap();
     let result = executor.run(invocation).await;
     assert!(matches!(result, JobResult::Failed { .. }));
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "a known missing service must not stage or submit");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a known missing service must not stage or submit"
+    );
 }
 
 #[tokio::test]
@@ -332,13 +343,19 @@ async fn worker_rejects_host_service_even_if_coordinator_admission_was_skipped()
     let mut spec = task("channel");
     spec.spec["host_service"] = serde_json::json!(true);
     let envelope = TypedWorkerEnvelope {
-        protocol: 1, worker: settings(), task: spec,
-        original_vfs_principal: None, spec_files: BTreeMap::new(),
-        output_directories: BTreeMap::new(), input_files: BTreeMap::new(),
-        bundles: vec![], plugin_identity: None,
+        protocol: 1,
+        worker: settings(),
+        task: spec,
+        original_vfs_principal: None,
+        spec_files: BTreeMap::new(),
+        output_directories: BTreeMap::new(),
+        input_files: BTreeMap::new(),
+        bundles: vec![],
+        plugin_identity: None,
     };
     let error = execute_typed_worker(&envelope, &registry(), BTreeMap::new(), temp.path())
-        .await.unwrap_err();
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("remote_service_unavailable"));
     assert!(!temp.path().join("typed-outputs").exists());
 }
@@ -347,9 +364,12 @@ async fn worker_rejects_host_service_even_if_coordinator_admission_was_skipped()
 fn host_service_admission_applies_to_shared_transport_lowering() {
     let mut invocation = execution();
     invocation.submission.spec.spec["host_service"] = serde_json::json!(true);
-    invocation.node = registry().build_node(
-        &invocation.submission.spec.kind, invocation.submission.spec.spec.clone(),
-    ).unwrap();
+    invocation.node = registry()
+        .build_node(
+            &invocation.submission.spec.kind,
+            invocation.submission.spec.spec.clone(),
+        )
+        .unwrap();
     let original = invocation.submission.spec.spec.clone();
     let error = lower_worker_task(&mut invocation, &settings(), None).unwrap_err();
     assert!(error.to_string().contains("remote_service_unavailable"));

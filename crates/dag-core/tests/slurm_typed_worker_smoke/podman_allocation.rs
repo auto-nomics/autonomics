@@ -341,20 +341,14 @@ fn validate_container_membership(
         Some("kernel_batch_membership")
             if step == "batch"
                 && environment["SLURM_STEP_ID"].is_null()
-                && environment["SLURM_STEPID"].is_null() =>
-        {
-            
-        }
+                && environment["SLURM_STEPID"].is_null() => {}
         Some("slurm_environment")
             if ["SLURM_STEP_ID", "SLURM_STEPID"]
                 .iter()
                 .any(|key| environment[*key].as_str() == Some(step))
                 && ["SLURM_STEP_ID", "SLURM_STEPID"].iter().all(|key| {
                     environment[*key].is_null() || environment[*key].as_str() == Some(step)
-                }) =>
-        {
-            
-        }
+                }) => {}
         _ => return Err("worker step is not bound to its actual environment/kernel source".into()),
     }
     let worker = membership_map(
@@ -983,7 +977,8 @@ fn synthetic_container_membership_requires_the_same_kernel_job_and_real_step_sou
         cgroup.replace("job_6789", "job_67890"),
         cgroup.replace("step_batch", "step_0"),
         cgroup.replace("/system.slice/slurmd.service", "/other.service"),
-        "6:cpu,cpuacct:/\n10:memory:/\n3:cpuset:/\n5:pids:/system.slice/slurmd.service\n".to_string(),
+        "6:cpu,cpuacct:/\n10:memory:/\n3:cpuset:/\n5:pids:/system.slice/slurmd.service\n"
+            .to_string(),
         cgroup
             .lines()
             .filter(|line| !line.starts_with("10:"))

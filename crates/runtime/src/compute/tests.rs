@@ -106,32 +106,61 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
     let reader = f.registry.storage.clone();
     let settings = remote_settings(&f.config.state_dir, "evidence");
     for revision in 1..=2 {
-        f.registry.save_target(SaveTarget {
-            expected_revision: f.registry.catalog().revision,
-            id: "evidence".into(), name: "evidence".into(), enabled: true,
-            backend: ComputeBackend::Slurm { settings: settings.clone() },
-        }).unwrap();
-        let root = f.registry.root.join("targets").join(key("evidence", revision));
+        f.registry
+            .save_target(SaveTarget {
+                expected_revision: f.registry.catalog().revision,
+                id: "evidence".into(),
+                name: "evidence".into(),
+                enabled: true,
+                backend: ComputeBackend::Slurm {
+                    settings: settings.clone(),
+                },
+            })
+            .unwrap();
+        let root = f
+            .registry
+            .root
+            .join("targets")
+            .join(key("evidence", revision));
         for directory in ["tasks", "artifacts"] {
             let file = root.join(directory).join("attempt/task.json");
             fs::create_dir_all(file.parent().unwrap()).unwrap();
             fs::write(&file, b"{\"synthetic\":true}").unwrap();
             let path = file.to_string_lossy();
             assert_eq!(reader.local_host_path(&path), Some(file.clone()));
-            assert_eq!(reader.read_range(&path, 0..18).await.unwrap().to_vec(),
-                       b"{\"synthetic\":true}");
+            assert_eq!(
+                reader.read_range(&path, 0..18).await.unwrap().to_vec(),
+                b"{\"synthetic\":true}"
+            );
             assert!(reader.check_writable(&path).is_err());
         }
         let private = root.join("private-credential.json");
         fs::write(&private, b"private synthetic credential").unwrap();
-        assert_ne!(reader.local_host_path(&private.to_string_lossy()), Some(private.clone()));
+        assert_ne!(
+            reader.local_host_path(&private.to_string_lossy()),
+            Some(private.clone())
+        );
     }
     let (vfs, storage) = mounts(&f.config);
-    let reopened = ComputeRegistry::open(&f.config, storage.clone(), vfs, &f.containers,
-        crate::hpc_monitor::MonitorHub::empty()).unwrap();
-    let historical = reopened.root.join("targets/evidence-r1/artifacts/attempt/task.json");
-    assert_eq!(storage.read_range(&historical.to_string_lossy(), 0..18).await.unwrap().to_vec(),
-               b"{\"synthetic\":true}");
+    let reopened = ComputeRegistry::open(
+        &f.config,
+        storage.clone(),
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    let historical = reopened
+        .root
+        .join("targets/evidence-r1/artifacts/attempt/task.json");
+    assert_eq!(
+        storage
+            .read_range(&historical.to_string_lossy(), 0..18)
+            .await
+            .unwrap()
+            .to_vec(),
+        b"{\"synthetic\":true}"
+    );
 }
 
 #[tokio::test]
@@ -139,21 +168,34 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
     let f = fixture();
     let reference = format!("example/toy@sha256:{}", "a".repeat(64));
     let inventory = f.config.state_dir.join("toy-images.json");
-    let settings_for = |sha: &str| serde_json::json!({"program":"/usr/bin/apptainer",
-        "images":{reference.clone():{"path":"/admitted/toy.sif","sha256":sha}}});
+    let settings_for = |sha: &str| {
+        serde_json::json!({"program":"/usr/bin/apptainer",
+        "images":{reference.clone():{"path":"/admitted/toy.sif","sha256":sha}}})
+    };
     write_new(&inventory, &settings_for(&"b".repeat(64))).unwrap();
     let mut settings = remote_settings(&f.config.state_dir, "mapping");
     settings.apptainer_manifest = Some(inventory.clone());
-    let save = |settings: SlurmConfig| f.registry.save_target(SaveTarget {
-        expected_revision: f.registry.catalog().revision, id: "mapping".into(),
-        name: "mapping".into(), enabled: true, backend: ComputeBackend::Slurm { settings },
-    }).unwrap();
+    let save = |settings: SlurmConfig| {
+        f.registry
+            .save_target(SaveTarget {
+                expected_revision: f.registry.catalog().revision,
+                id: "mapping".into(),
+                name: "mapping".into(),
+                enabled: true,
+                backend: ComputeBackend::Slurm { settings },
+            })
+            .unwrap()
+    };
     save(settings.clone());
     let first = f.registry.image_evidence("mapping", 1, &reference).unwrap();
     assert_eq!(first.resolution.sif_sha256, "b".repeat(64));
     assert!(!first.sif_bytes_verified && !first.node_execution_performed);
     assert!(first.capsule_sha256.contains_key("images.json"));
-    fs::write(&inventory, serde_json::to_vec(&settings_for(&"c".repeat(64))).unwrap()).unwrap();
+    fs::write(
+        &inventory,
+        serde_json::to_vec(&settings_for(&"c".repeat(64))).unwrap(),
+    )
+    .unwrap();
     save(settings);
     let second = f.registry.image_evidence("mapping", 2, &reference).unwrap();
     assert_eq!(second.resolution.sif_sha256, "c".repeat(64));
@@ -162,15 +204,33 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
     select(&f.registry, "mapping");
     // Even corrupting the on-disk frozen profile cannot rewrite resident evidence.
     let old = f.registry.target("mapping", Some(1)).unwrap();
-    let ComputeBackend::Slurm { settings } = &old.target.backend else { unreachable!() };
-    fs::write(settings.apptainer_manifest.as_ref().unwrap(), b"invalid replacement").unwrap();
+    let ComputeBackend::Slurm { settings } = &old.target.backend else {
+        unreachable!()
+    };
+    fs::write(
+        settings.apptainer_manifest.as_ref().unwrap(),
+        b"invalid replacement",
+    )
+    .unwrap();
     let retained = f.registry.image_evidence("mapping", 1, &reference).unwrap();
     assert_eq!(retained.resolution, first.resolution);
     assert_eq!(retained.target_sha256, first.target_sha256);
-    assert!(f.registry.image_evidence("mapping", 99, &reference).is_err());
-    assert!(f.registry.image_evidence("mapping", 2, "example/toy:latest").is_err());
+    assert!(
+        f.registry
+            .image_evidence("mapping", 99, &reference)
+            .is_err()
+    );
+    assert!(
+        f.registry
+            .image_evidence("mapping", 2, "example/toy:latest")
+            .is_err()
+    );
     assert!(f.registry.image_evidence("local", 1, &reference).is_err());
-    assert!(f.registry.image_evidence("mapping", 2, &format!("other@sha256:{}", "d".repeat(64))).is_err());
+    assert!(
+        f.registry
+            .image_evidence("mapping", 2, &format!("other@sha256:{}", "d".repeat(64)))
+            .is_err()
+    );
     assert_eq!(f.registry.status().unwrap().runs.len(), 0);
 }
 
@@ -376,22 +436,46 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
     let source_root = f.config.state_dir.join("replacement");
     fs::create_dir(&source_root).unwrap();
     for id in ["file", "directory", "link"] {
-        let error = f.registry.add_source(SaveDataSource {
-            expected_revision: 1,
-            source: DataSource {
-                id: id.into(), name: id.into(), read_only: true,
-                backend: DataBackend::Local { root: source_root.display().to_string() },
-                endpoint: None, permissions: Default::default(),
-            },
-        }).await.unwrap_err();
+        let error = f
+            .registry
+            .add_source(SaveDataSource {
+                expected_revision: 1,
+                source: DataSource {
+                    id: id.into(),
+                    name: id.into(),
+                    read_only: true,
+                    backend: DataBackend::Local {
+                        root: source_root.display().to_string(),
+                    },
+                    endpoint: None,
+                    permissions: Default::default(),
+                },
+            })
+            .await
+            .unwrap_err();
         assert!(error.contains("shadow existing VFS data"), "{error}");
         assert_eq!(f.registry.catalog().revision, 1);
         assert!(f.registry.catalog().data_sources.is_empty());
     }
-    assert_eq!(f.registry.storage.content_length("/data/file").await.unwrap(), 14);
-    assert_eq!(f.registry.storage.content_length("/data/directory/input.csv").await.unwrap(), 14);
-    let persisted: ComputeCatalog = serde_json::from_slice(
-        &read_private(&f.registry.root.join("catalog.json")).unwrap()).unwrap();
+    assert_eq!(
+        f.registry
+            .storage
+            .content_length("/data/file")
+            .await
+            .unwrap(),
+        14
+    );
+    assert_eq!(
+        f.registry
+            .storage
+            .content_length("/data/directory/input.csv")
+            .await
+            .unwrap(),
+        14
+    );
+    let persisted: ComputeCatalog =
+        serde_json::from_slice(&read_private(&f.registry.root.join("catalog.json")).unwrap())
+            .unwrap();
     assert!(persisted.data_sources.is_empty());
 }
 
@@ -405,7 +489,9 @@ async fn binding_publication_is_atomic_and_preserves_failed_evidence() {
     assert!(f.registry.status().unwrap().runs.is_empty());
     let writer = f.registry.clone();
     let task = tokio::task::spawn_blocking(move || {
-        for _ in 0..32 { writer.bind().unwrap(); }
+        for _ in 0..32 {
+            writer.bind().unwrap();
+        }
     });
     while !task.is_finished() {
         f.registry.status().unwrap();
@@ -536,8 +622,8 @@ fn install_capture(
 ) {
     let old = registry.target(id, Some(1)).unwrap();
     let target = Arc::new(BuiltTarget {
-            typed_worker_revision: None,
-            network_policy_sha256: None,
+        typed_worker_revision: None,
+        network_policy_sha256: None,
         target: old.target.clone(),
         containers: old.containers.clone(),
         executor: Arc::new(CaptureExecutor {
@@ -909,7 +995,8 @@ impl PodmanConnection for MarkerContainer {
         request: container_runtime::ContainerRunRequest,
         private: Option<container_runtime::types::PrivateEnvironment>,
         observer: container_runtime::observation::RunObserver,
-    ) -> Result<container_runtime::ContainerRunResult, container_runtime::ContainerRuntimeError> {
+    ) -> Result<container_runtime::ContainerRunResult, container_runtime::ContainerRuntimeError>
+    {
         for evidence in ["verified_software", "verified_stop"] {
             observer.emit(container_runtime::observation::RuntimeObservation {
                 phase: "checking_worker_stop".into(),
@@ -976,9 +1063,17 @@ impl TaskExecutor for ContainerProbe {
             let observer = container_runtime::observation::RunObserver::new(move |event| {
                 saved.lock().unwrap().push(event);
             });
-            let env = private.then(|| container_runtime::types::PrivateEnvironment::new(
-                vec![("OPENGWAS_JWT".into(), "synthetic".into())]).unwrap());
-            let error = router.run_observed(request.clone(), env, observer).await.unwrap_err();
+            let env = private.then(|| {
+                container_runtime::types::PrivateEnvironment::new(vec![(
+                    "OPENGWAS_JWT".into(),
+                    "synthetic".into(),
+                )])
+                .unwrap()
+            });
+            let error = router
+                .run_observed(request.clone(), env, observer)
+                .await
+                .unwrap_err();
             assert!(error.to_string().contains(&self.expected));
             let events = events.lock().unwrap();
             assert_eq!(events.len(), 2, "router lost the backend observer");
@@ -1195,17 +1290,48 @@ async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_rev
     );
     let open = || {
         let (vfs, storage) = mounts(&config);
-        ComputeRegistry::open(&config, storage, vfs, &containers,
-            crate::hpc_monitor::MonitorHub::empty())
+        ComputeRegistry::open(
+            &config,
+            storage,
+            vfs,
+            &containers,
+            crate::hpc_monitor::MonitorHub::empty(),
+        )
     };
     let registry = open().unwrap();
     let mut retained = registry.catalog();
-    assert_eq!(retained.targets.iter().find(|t| t.id == "local").unwrap().name, "Local");
-    assert_eq!(retained.targets.iter().find(|t| t.id == "legacy-slurm").unwrap().name, "SJTU");
-    let mut historical = retained.targets.iter().find(|t| t.id == "legacy-slurm").unwrap().clone();
+    assert_eq!(
+        retained
+            .targets
+            .iter()
+            .find(|t| t.id == "local")
+            .unwrap()
+            .name,
+        "Local"
+    );
+    assert_eq!(
+        retained
+            .targets
+            .iter()
+            .find(|t| t.id == "legacy-slurm")
+            .unwrap()
+            .name,
+        "SJTU"
+    );
+    let mut historical = retained
+        .targets
+        .iter()
+        .find(|t| t.id == "legacy-slurm")
+        .unwrap()
+        .clone();
     drop(registry);
     for target in &mut retained.targets {
-        target.name = if target.id == "local" { "本地" } else { "交我算（原配置）" }.into();
+        target.name = if target.id == "local" {
+            "本地"
+        } else {
+            "交我算（原配置）"
+        }
+        .into();
     }
     for (revision, name) in [(2, "交我算"), (3, "Operator's retained cluster")] {
         historical.revision = revision;
@@ -1221,9 +1347,15 @@ async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_rev
     let before = read_private(&catalog_path).unwrap();
     for _ in 0..2 {
         let reopened = open().unwrap();
-        assert_eq!(serde_json::to_value(reopened.catalog()).unwrap(), serde_json::to_value(&retained).unwrap());
-        assert_eq!(read_private(&catalog_path).unwrap(), before,
-            "opening the registry must preserve all target revisions, policy and deployment CAS bytes");
+        assert_eq!(
+            serde_json::to_value(reopened.catalog()).unwrap(),
+            serde_json::to_value(&retained).unwrap()
+        );
+        assert_eq!(
+            read_private(&catalog_path).unwrap(),
+            before,
+            "opening the registry must preserve all target revisions, policy and deployment CAS bytes"
+        );
     }
 }
 
@@ -1235,13 +1367,23 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let mut value: serde_json::Value = serde_json::from_slice(&fs::read(profile).unwrap()).unwrap();
     value["worker"]["expected_source_revision"] = serde_json::json!("previous-release");
     fs::write(profile, serde_json::to_vec(&value).unwrap()).unwrap();
-    let catalog = f.registry.save_target(SaveTarget {
-        expected_revision: f.registry.catalog().revision, id: "old-worker".into(),
-        name: "Old worker".into(), enabled: true, backend: ComputeBackend::Slurm { settings },
-    }).unwrap();
-    let error = f.registry.select(SelectTarget {
-        expected_revision: catalog.revision, target_id: "old-worker".into(),
-    }).unwrap_err();
+    let catalog = f
+        .registry
+        .save_target(SaveTarget {
+            expected_revision: f.registry.catalog().revision,
+            id: "old-worker".into(),
+            name: "Old worker".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm { settings },
+        })
+        .unwrap();
+    let error = f
+        .registry
+        .select(SelectTarget {
+            expected_revision: catalog.revision,
+            target_id: "old-worker".into(),
+        })
+        .unwrap_err();
     assert!(error.contains("previous-release") && error.contains(dag_core::source_revision()));
     assert_eq!(f.registry.catalog().revision, catalog.revision);
     assert_eq!(f.registry.catalog().policy.target_id, "local");
@@ -1256,25 +1398,52 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     retained.policy.target_revision = 1;
     f.registry.persist(&retained).unwrap();
     let (vfs, storage) = mounts(&f.config);
-    let reopened = ComputeRegistry::open(&f.config, storage, vfs, &f.containers,
-        crate::hpc_monitor::MonitorHub::empty()).unwrap();
-    assert_eq!(reopened.status().unwrap().deployment["source_compatible"], false);
+    let reopened = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened.status().unwrap().deployment["source_compatible"],
+        false
+    );
     assert!(reopened.bind().is_err());
     assert!(reopened.status().unwrap().runs.is_empty());
     // Historical target identity remains available for inspection and recovery.
-    assert_eq!(reopened.target("old-worker", Some(1)).unwrap().target.revision, 1);
+    assert_eq!(
+        reopened
+            .target("old-worker", Some(1))
+            .unwrap()
+            .target
+            .revision,
+        1
+    );
     // Register a measured matching replacement, preserving the old capsule.
-    let old = reopened.target("old-worker", Some(1)).unwrap().target.clone();
+    let old = reopened
+        .target("old-worker", Some(1))
+        .unwrap()
+        .target
+        .clone();
     let old_bytes = fs::read(match &old.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
         ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
-    }).unwrap();
+    })
+    .unwrap();
     let replacement = remote_settings(&f.config.state_dir, "matching-worker");
-    reopened.save_target(SaveTarget {
-        expected_revision: reopened.catalog().revision, id: "old-worker".into(),
-        name: "Matching replacement".into(), enabled: true,
-        backend: ComputeBackend::Slurm { settings: replacement },
-    }).unwrap();
+    reopened
+        .save_target(SaveTarget {
+            expected_revision: reopened.catalog().revision,
+            id: "old-worker".into(),
+            name: "Matching replacement".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm {
+                settings: replacement,
+            },
+        })
+        .unwrap();
     select(&reopened, "old-worker");
     let status = reopened.status().unwrap();
     assert_eq!(status.deployment["source_compatible"], true);
@@ -1283,26 +1452,51 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     assert_eq!(reopened.status().unwrap().runs.len(), 1);
     let historical = reopened.target("old-worker", Some(1)).unwrap();
     assert_eq!(historical.target.capsule_sha256, old.capsule_sha256);
-    assert_eq!(fs::read(match &historical.target.backend {
-        ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
-        ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
-    }).unwrap(), old_bytes);
+    assert_eq!(
+        fs::read(match &historical.target.backend {
+            ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
+            ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
+        })
+        .unwrap(),
+        old_bytes
+    );
     select(&reopened, "local");
-    assert_eq!(reopened.status().unwrap().deployment["source_compatible"], true);
+    assert_eq!(
+        reopened.status().unwrap().deployment["source_compatible"],
+        true
+    );
 }
 
 #[derive(Clone)]
-struct RequiredImageNode { ports: NodePorts, image: String }
+struct RequiredImageNode {
+    ports: NodePorts,
+    image: String,
+}
 #[async_trait::async_trait]
 impl DagNode for RequiredImageNode {
-    fn ports(&self) -> &NodePorts { &self.ports }
-    fn required_container_images(&self) -> Vec<&str> { vec![&self.image] }
-    async fn execute(&mut self, _: &NodeCtx, _: &[NodeInput], _: &NodeReporter) -> Result<PortOutputs, DagError> {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+    fn required_container_images(&self) -> Vec<&str> {
+        vec![&self.image]
+    }
+    async fn execute(
+        &mut self,
+        _: &NodeCtx,
+        _: &[NodeInput],
+        _: &NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
         panic!("preflight must prevent every execution")
     }
-    fn clone_box(&self) -> Box<dyn DagNode> { Box::new(self.clone()) }
-    fn kind(&self) -> &'static str { "readiness-probe" }
-    fn as_any(&self) -> &dyn Any { self }
+    fn clone_box(&self) -> Box<dyn DagNode> {
+        Box::new(self.clone())
+    }
+    fn kind(&self) -> &'static str {
+        "readiness-probe"
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 }
 
 #[tokio::test]
@@ -1311,21 +1505,43 @@ async fn readiness_blocks_missing_images_before_any_node_and_keeps_bound_target(
     let image = format!("example/present@sha256:{}", "a".repeat(64));
     let missing = format!("example/missing@sha256:{}", "b".repeat(64));
     let inventory = f.config.state_dir.join("readiness-images.json");
-    write_new(&inventory, &serde_json::json!({"program":"/usr/bin/apptainer",
-        "images":{image.clone():{"path":"/admitted/present.sif","sha256":"c".repeat(64)}}})).unwrap();
+    write_new(
+        &inventory,
+        &serde_json::json!({"program":"/usr/bin/apptainer",
+        "images":{image.clone():{"path":"/admitted/present.sif","sha256":"c".repeat(64)}}}),
+    )
+    .unwrap();
     let mut settings = remote_settings(&f.config.state_dir, "readiness");
     settings.apptainer_manifest = Some(inventory);
-    f.registry.save_target(SaveTarget { expected_revision:f.registry.catalog().revision,
-        id:"readiness".into(), name:"readiness".into(), enabled:true,
-        backend:ComputeBackend::Slurm { settings } }).unwrap();
+    f.registry
+        .save_target(SaveTarget {
+            expected_revision: f.registry.catalog().revision,
+            id: "readiness".into(),
+            name: "readiness".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm { settings },
+        })
+        .unwrap();
     select(&f.registry, "readiness");
-    let request = ReadinessRequest { images:vec![image.clone(), missing.clone()], ..Default::default() };
+    let request = ReadinessRequest {
+        images: vec![image.clone(), missing.clone()],
+        ..Default::default()
+    };
     let report = f.registry.readiness(&request, &[]).unwrap();
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["deployment"]["source_compatible"], true);
     assert_eq!(report["blockers"][0]["code"], "IMAGE_MAPPING_UNAVAILABLE");
     assert_eq!(f.registry.status().unwrap().runs.len(), 0);
-    let valid = f.registry.readiness(&ReadinessRequest { images:vec![image], ..Default::default() }, &[]).unwrap();
+    let valid = f
+        .registry
+        .readiness(
+            &ReadinessRequest {
+                images: vec![image],
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
     assert_eq!(valid["state"], "CONFIGURATION_READY");
     assert_eq!(valid["end_to_end_acceptance"], "NOT_VERIFIED");
     assert_eq!(valid["remote_sif_bytes_verified"], false);
@@ -1333,30 +1549,77 @@ async fn readiness_blocks_missing_images_before_any_node_and_keeps_bound_target(
     install_capture(&f.registry, "readiness", calls.clone(), false);
     let mut graph = DAG::default();
     graph.set_task_executor(Arc::new(ComputeExecutor(f.registry.clone())));
-    graph.add_node_with_spec("ordinary".into(), Box::new(EmptyNode(NodePorts::new())),
-        "compute-test".into(), serde_json::json!({})).unwrap();
-    let node = RequiredImageNode { ports:NodePorts::new(), image:missing };
-    graph.add_node_with_spec("missing".into(), Box::new(node.clone()),
-        "readiness-probe".into(), serde_json::json!({})).unwrap();
-    let ctx = NodeCtx::new(Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
-        Some(f.registry.storage.clone()));
-    let error = graph.run(&SchedulerConfig::default(), &ctx, None).await.unwrap_err();
+    graph
+        .add_node_with_spec(
+            "ordinary".into(),
+            Box::new(EmptyNode(NodePorts::new())),
+            "compute-test".into(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+    let node = RequiredImageNode {
+        ports: NodePorts::new(),
+        image: missing,
+    };
+    graph
+        .add_node_with_spec(
+            "missing".into(),
+            Box::new(node.clone()),
+            "readiness-probe".into(),
+            serde_json::json!({}),
+        )
+        .unwrap();
+    let ctx = NodeCtx::new(
+        Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+        Some(f.registry.storage.clone()),
+    );
+    let error = graph
+        .run(&SchedulerConfig::default(), &ctx, None)
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("WORKFLOW_BLOCKED"));
     assert!(calls.lock().unwrap().is_empty());
-    let executor = ComputeExecutor(f.registry.clone()).bind_run().await.unwrap().unwrap();
+    let executor = ComputeExecutor(f.registry.clone())
+        .bind_run()
+        .await
+        .unwrap()
+        .unwrap();
     select(&f.registry, "local");
-    assert!(executor.preflight(&[("dynamic", &node)]).unwrap_err().to_string().contains("IMAGE_MAPPING_UNAVAILABLE"));
-    assert_eq!(executor.execution_binding().unwrap()["target_id"], "readiness");
+    assert!(
+        executor
+            .preflight(&[("dynamic", &node)])
+            .unwrap_err()
+            .to_string()
+            .contains("IMAGE_MAPPING_UNAVAILABLE")
+    );
+    assert_eq!(
+        executor.execution_binding().unwrap()["target_id"],
+        "readiness"
+    );
 }
 
 #[tokio::test]
 async fn readiness_reports_unregistered_candidate_and_local_unknown_without_mutation() {
     let f = fixture();
     let before = f.registry.catalog().revision;
-    let report = f.registry.readiness(&ReadinessRequest { nodes:vec!["candidate/run".into()], ..Default::default() }, &[]).unwrap();
+    let report = f
+        .registry
+        .readiness(
+            &ReadinessRequest {
+                nodes: vec!["candidate/run".into()],
+                ..Default::default()
+            },
+            &[],
+        )
+        .unwrap();
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["blockers"][0]["code"], "NODE_NOT_REGISTERED");
-    assert_eq!(f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap()["state"], "NOT_VERIFIED");
+    assert_eq!(
+        f.registry
+            .readiness(&ReadinessRequest::default(), &[])
+            .unwrap()["state"],
+        "NOT_VERIFIED"
+    );
     assert_eq!(f.registry.catalog().revision, before);
     assert!(f.registry.status().unwrap().runs.is_empty());
 }
@@ -1365,31 +1628,56 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
 async fn readiness_requires_a_resident_network_policy_pin() {
     let f = fixture();
     let settings = remote_settings(&f.config.state_dir, "network");
-    f.registry.save_target(SaveTarget {
-        expected_revision: f.registry.catalog().revision, id: "network".into(),
-        name: "network".into(), enabled: true,
-        backend: ComputeBackend::Slurm { settings: settings.clone() },
-    }).unwrap();
+    f.registry
+        .save_target(SaveTarget {
+            expected_revision: f.registry.catalog().revision,
+            id: "network".into(),
+            name: "network".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm {
+                settings: settings.clone(),
+            },
+        })
+        .unwrap();
     select(&f.registry, "network");
     let nodes = vec![dag_core::registry::NodeInfo {
-        address: "io/http_fetch".into(), plugin: "io".into(), kind: "http_fetch".into(),
-        desc: String::new(), deprecated: false, data_bundles: vec![], resident_plugin: None,
+        address: "io/http_fetch".into(),
+        plugin: "io".into(),
+        kind: "http_fetch".into(),
+        desc: String::new(),
+        deprecated: false,
+        data_bundles: vec![],
+        resident_plugin: None,
     }];
-    let request = ReadinessRequest { nodes: vec![nodes[0].address.clone()], ..Default::default() };
+    let request = ReadinessRequest {
+        nodes: vec![nodes[0].address.clone()],
+        ..Default::default()
+    };
     let blocked = f.registry.readiness(&request, &nodes).unwrap();
     assert_eq!(blocked["state"], "BLOCKED");
-    assert_eq!(blocked["blockers"][0]["code"], "WORKER_NETWORK_POLICY_UNCONFIGURED");
+    assert_eq!(
+        blocked["blockers"][0]["code"],
+        "WORKER_NETWORK_POLICY_UNCONFIGURED"
+    );
     let path = settings.typed_worker_config.as_ref().unwrap();
     let mut profile: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     profile["worker"]["native_environment"] = serde_json::json!({"python":"/usr/bin/python3",
         "file":"/cluster/private/environment.json", "network_policy_sha256":"b".repeat(64)});
     fs::write(path, serde_json::to_vec(&profile).unwrap()).unwrap();
     // Changing an external seed never upgrades the already resident target.
-    assert_eq!(f.registry.readiness(&request, &nodes).unwrap()["state"], "BLOCKED");
-    f.registry.save_target(SaveTarget {
-        expected_revision: f.registry.catalog().revision, id: "network".into(),
-        name: "network".into(), enabled: true, backend: ComputeBackend::Slurm { settings },
-    }).unwrap();
+    assert_eq!(
+        f.registry.readiness(&request, &nodes).unwrap()["state"],
+        "BLOCKED"
+    );
+    f.registry
+        .save_target(SaveTarget {
+            expected_revision: f.registry.catalog().revision,
+            id: "network".into(),
+            name: "network".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm { settings },
+        })
+        .unwrap();
     select(&f.registry, "network");
     let ready = f.registry.readiness(&request, &nodes).unwrap();
     assert_eq!(ready["state"], "CONFIGURATION_READY");
@@ -1405,8 +1693,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
 #[tokio::test]
 #[ignore = "runs a real payload on a remote host over ssh; run only with explicit operator approval"]
 async fn real_ssh_target_runs_process_task_end_to_end() {
-    let host =
-        std::env::var("AUTONOMICS_SSH_SMOKE_HOST").unwrap_or_else(|_| "ht".into());
+    let host = std::env::var("AUTONOMICS_SSH_SMOKE_HOST").unwrap_or_else(|_| "ht".into());
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -1440,7 +1727,9 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     let input = dag_core::FileRef::local(&input_path, Some("text".into())).unwrap();
     let process = dag_core::ProcessTaskSpec {
         container: None,
-        script: Some("hostname > out-0.txt\ncat $AUTONOMICS_WORKSPACE/input-0-0 >> out-0.txt\n".into()),
+        script: Some(
+            "hostname > out-0.txt\ncat $AUTONOMICS_WORKSPACE/input-0-0 >> out-0.txt\n".into(),
+        ),
         command: Vec::new(),
         env: Default::default(),
         outputs: vec![dag_core::ProcessTaskOutput {

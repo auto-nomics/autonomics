@@ -109,8 +109,12 @@ pub(crate) fn pinned_source_revision(path: &Path) -> Result<String> {
 
 pub(crate) fn pinned_network_policy(path: &Path) -> Result<Option<String>> {
     let worker = read_profile(path)?.worker;
-    worker.validate().map_err(|error| Error::Other(error.to_string()))?;
-    Ok(worker.native_environment.and_then(|environment| environment.network_policy_sha256))
+    worker
+        .validate()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    Ok(worker
+        .native_environment
+        .and_then(|environment| environment.network_policy_sha256))
 }
 
 /// Offline deployment policy only. This validates the local operator profile;
@@ -281,7 +285,11 @@ pub(crate) fn assemble_typed(
     if remote_container_dispatch {
         placement = placement.with_remote_container_dispatch();
     }
-    Ok((Arc::new(placement), profile.max_remote_tasks, source_revision))
+    Ok((
+        Arc::new(placement),
+        profile.max_remote_tasks,
+        source_revision,
+    ))
 }
 
 #[cfg(test)]

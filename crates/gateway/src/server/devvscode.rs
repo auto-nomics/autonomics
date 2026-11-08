@@ -335,9 +335,10 @@ mod tests {
             .header("x-test", "kept")
             .body(Body::empty())
             .unwrap();
-        let response = forward_with_prefix(UnixStream::connect(&socket).await.unwrap(), request, None)
-            .await
-            .unwrap_or_else(|_| panic!("forward request"));
+        let response =
+            forward_with_prefix(UnixStream::connect(&socket).await.unwrap(), request, None)
+                .await
+                .unwrap_or_else(|_| panic!("forward request"));
         assert_eq!(response.status(), StatusCode::OK);
         assert!(!response.headers().contains_key(header::SET_COOKIE));
         let bytes = axum::body::to_bytes(response.into_body(), 16)

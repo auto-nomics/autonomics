@@ -363,7 +363,10 @@ impl NodeReporter {
     /// progress events. Only a backend that verified the actual worker calls
     /// this; configuration pins and advisory heartbeats are not evidence.
     pub fn set_worker_software(&self, evidence: serde_json::Value) {
-        let mut slot = self.worker_software.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slot = self
+            .worker_software
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if slot.is_none() {
             *slot = Some(evidence);
         }
@@ -379,14 +382,25 @@ impl NodeReporter {
     /// Drain the recorded details. Called once by the scheduler after
     /// `execute` resolves (or the dispatch is cancelled).
     pub fn take_run_details(&self) -> Option<NodeRunDetails> {
-        let mut details = self.run_details
+        let mut details = self
+            .run_details
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        if let Some(evidence) = self.worker_software.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(evidence) = self
+            .worker_software
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             details.get_or_insert_with(Default::default).worker_software = Some(evidence);
         }
-        if let Some(evidence) = self.worker_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        if let Some(evidence) = self
+            .worker_stop
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             details.get_or_insert_with(Default::default).worker_stop = Some(evidence);
         }
         details
@@ -411,8 +425,14 @@ mod tests {
         let stop = serde_json::json!({"job_id":"123","full_subtree_terminal":true});
         reporter.clone().set_worker_stop(stop.clone());
         reporter.set_worker_software(serde_json::json!({"job_id":"foreign"}));
-        reporter.set_run_details(NodeRunDetails {exit_code:Some(125), ..Default::default()});
-        reporter.set_run_details(NodeRunDetails {exit_code:Some(0), ..Default::default()});
+        reporter.set_run_details(NodeRunDetails {
+            exit_code: Some(125),
+            ..Default::default()
+        });
+        reporter.set_run_details(NodeRunDetails {
+            exit_code: Some(0),
+            ..Default::default()
+        });
         let details = reporter.take_run_details().unwrap();
         assert_eq!(details.exit_code, Some(125));
         assert_eq!(details.worker_software, Some(evidence));

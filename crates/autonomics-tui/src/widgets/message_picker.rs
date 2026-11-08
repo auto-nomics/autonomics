@@ -368,17 +368,23 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
     let footer = Line::from(vec![
         Span::styled(
             " Enter",
-            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" copy  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
-            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
-            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" cancel", Style::default().fg(theme.text_faint)),
     ]);
@@ -393,7 +399,9 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
     let prompt_style = if state.textarea.is_empty() {
         Style::default().fg(theme.text_faint)
     } else {
-        Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.accent_alt)
+            .add_modifier(Modifier::BOLD)
     };
     buf.set_string(area.x, area.y, ">", prompt_style);
 
@@ -439,7 +447,9 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
         .border_style(Style::default().fg(theme.text_faint))
         .title(Span::styled(
             format!(" Messages ({}) ", state.picker.filtered.len()),
-            Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -526,7 +536,9 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     let theme = crate::theme::current();
     let block = Block::default().borders(Borders::NONE).title(Span::styled(
         " Preview ",
-        Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme.accent_alt)
+            .add_modifier(Modifier::BOLD),
     ));
     let inner = block.inner(area);
     block.render(area, buf);
@@ -571,10 +583,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
 
     lines.push(Line::from(vec![
         Span::styled("  Index    ", Style::default().fg(theme.text_faint)),
-        Span::styled(
-            format!("#{}", item.index),
-            Style::default().fg(theme.text),
-        ),
+        Span::styled(format!("#{}", item.index), Style::default().fg(theme.text)),
     ]));
 
     lines.push(Line::from(vec![

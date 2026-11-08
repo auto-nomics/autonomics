@@ -449,7 +449,12 @@ async fn user_tables_and_transformed_retained_tables_cannot_claim_an_unchanged_o
         LocalTaskWorkspace::create(&temp.path().join("local-attempts"), &task).unwrap();
     assert!(
         workspace
-            .stage_inputs_with_remote_observed(&mut task, ctx.opendal.as_deref(), Some(&store), None)
+            .stage_inputs_with_remote_observed(
+                &mut task,
+                ctx.opendal.as_deref(),
+                Some(&store),
+                None
+            )
             .await
             .unwrap()
             .is_empty()

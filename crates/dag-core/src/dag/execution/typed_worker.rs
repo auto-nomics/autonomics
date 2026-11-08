@@ -111,10 +111,7 @@ impl TypedPodmanSettings {
                 if matches!(
                     self.resource_control,
                     TypedPodmanResourceControl::DelegatedCgroups
-                ) =>
-            {
-                
-            }
+                ) => {}
             (Some(path), Some(hash)) if path.is_absolute() && valid_sha256(hash) => (),
             _ => {
                 return Err(failure(
@@ -169,7 +166,11 @@ pub struct TypedWorkerSettings {
 impl TypedWorkerSettings {
     pub fn validate(&self) -> Result<(), DagError> {
         if let Some(environment) = &self.native_environment {
-            if environment.network_policy_sha256.as_ref().is_some_and(|pin| !valid_sha256(pin)) {
+            if environment
+                .network_policy_sha256
+                .as_ref()
+                .is_some_and(|pin| !valid_sha256(pin))
+            {
                 return Err(failure("native worker network policy requires SHA256"));
             }
             for path in [&environment.python, &environment.file] {
@@ -210,10 +211,7 @@ impl TypedWorkerSettings {
         match (&self.apptainer_catalog, &self.apptainer_executable) {
             (None, None) => (),
             (Some(catalog), Some(executable))
-                if catalog.is_absolute() && executable.is_absolute() =>
-            {
-                
-            }
+                if catalog.is_absolute() && executable.is_absolute() => {}
             _ => {
                 return Err(failure(
                     "typed Apptainer requires absolute catalog and executable paths",
@@ -319,12 +317,19 @@ pub(super) fn lower_worker_task(
         return Err(failure(format!("remote_service_unavailable: {reason}")));
     }
     settings.validate()?;
-    if matches!(execution.node.kind(), "http_fetch" | "http_head" | "file_download")
-        && execution.node.plugin_identity().is_none()
-        && settings.native_environment.as_ref()
-            .and_then(|environment| environment.network_policy_sha256.as_ref()).is_none()
+    if matches!(
+        execution.node.kind(),
+        "http_fetch" | "http_head" | "file_download"
+    ) && execution.node.plugin_identity().is_none()
+        && settings
+            .native_environment
+            .as_ref()
+            .and_then(|environment| environment.network_policy_sha256.as_ref())
+            .is_none()
     {
-        return Err(failure("worker_network_policy_unconfigured: enroll an approved policy SHA256 and private environment before remote HTTP execution"));
+        return Err(failure(
+            "worker_network_policy_unconfigured: enroll an approved policy SHA256 and private environment before remote HTTP execution",
+        ));
     }
     if let Some(binding) = binding {
         binding.validate_for_task(execution, settings)?;
@@ -550,7 +555,9 @@ pub(super) fn lower_worker_task(
     let executable = quote(&settings.executable.to_string_lossy());
     let hash = quote(&settings.executable_sha256.to_ascii_lowercase());
     let invocation = if let Some(environment) = &settings.native_environment {
-        let policy = environment.network_policy_sha256.as_ref()
+        let policy = environment
+            .network_policy_sha256
+            .as_ref()
             .map(|pin| format!("--network-policy-sha256 {} ", quote(pin)))
             .unwrap_or_default();
         format!(

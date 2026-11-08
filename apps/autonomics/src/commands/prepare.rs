@@ -8,8 +8,8 @@
 //! already satisfies the readiness check.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use color_eyre::Result;
 use container_plugin::factory::Plugin;
@@ -178,12 +178,11 @@ fn short_label(reference: &str) -> &str {
 /// image and a summary line prints every 15 seconds.
 async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]) -> Result<()> {
     let declared: BTreeSet<String> = diagnostics::enumerate_images(config, plugins).await?;
-    let infra = container_runtime::ContainerExecutionInfra::for_operator_state_dir(
-        &config.state_dir,
-    )
-    .map_err(|error| {
-        color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
-    })?;
+    let infra =
+        container_runtime::ContainerExecutionInfra::for_operator_state_dir(&config.state_dir)
+            .map_err(|error| {
+                color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
+            })?;
     let local = container_runtime::images::local_digests_with_config(&infra.config)
         .await
         .map_err(|error| color_eyre::eyre::eyre!("cannot list local images: {error}"))?;

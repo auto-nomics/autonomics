@@ -51,7 +51,10 @@ pub(crate) struct ExpectedWorkerSoftware<'a> {
     pub succeeded: bool,
 }
 
-pub(crate) fn verify(value: &Value, expected: ExpectedWorkerSoftware<'_>) -> Result<Value, &'static str> {
+pub(crate) fn verify(
+    value: &Value,
+    expected: ExpectedWorkerSoftware<'_>,
+) -> Result<Value, &'static str> {
     let evidence: WorkerSoftware = serde_json::from_value(value.clone())
         .map_err(|_| "invalid worker software evidence schema")?;
     if evidence.schema != "APPTAINER_WORKER_SOFTWARE_V1"
@@ -70,7 +73,10 @@ pub(crate) fn verify(value: &Value, expected: ExpectedWorkerSoftware<'_>) -> Res
         return Err("worker software evidence does not match the submitted attempt");
     }
     match &evidence.sif {
-        Some(sif) if sif.valid() && sif.path == expected.sif_path && sif.sha256 == expected.sif_sha256 => {}
+        Some(sif)
+            if sif.valid()
+                && sif.path == expected.sif_path
+                && sif.sha256 == expected.sif_sha256 => {}
         None if !expected.succeeded => {}
         _ => return Err("worker software evidence has no matching measured SIF"),
     }
@@ -83,8 +89,10 @@ mod tests {
     use serde_json::json;
 
     fn packet() -> Value {
-        let file = |name: &str, hash: char| json!({"path":format!("/software/{name}"),
-            "sha256":hash.to_string().repeat(64),"bytes":123});
+        let file = |name: &str, hash: char| {
+            json!({"path":format!("/software/{name}"),
+            "sha256":hash.to_string().repeat(64),"bytes":123})
+        };
         json!({"schema":"APPTAINER_WORKER_SOFTWARE_V1","worker_kind":"python-apptainer",
             "task_id":"attempt-one","job_id":"123","manifest_sha256":"a".repeat(64),
             "request_sha256":"b".repeat(64),"worker_script":file("worker.py",'c'),
@@ -93,16 +101,31 @@ mod tests {
     }
 
     fn verify_packet(value: &Value, succeeded: bool) -> Result<Value, &'static str> {
-        verify(value, ExpectedWorkerSoftware {task_id:"attempt-one", job_id:"123",
-            manifest_sha256:&"a".repeat(64),request_sha256:&"b".repeat(64),
-            worker_sha256:&"c".repeat(64),sif_path:"/software/image.sif",
-            sif_sha256:&"f".repeat(64),succeeded})
+        verify(
+            value,
+            ExpectedWorkerSoftware {
+                task_id: "attempt-one",
+                job_id: "123",
+                manifest_sha256: &"a".repeat(64),
+                request_sha256: &"b".repeat(64),
+                worker_sha256: &"c".repeat(64),
+                sif_path: "/software/image.sif",
+                sif_sha256: &"f".repeat(64),
+                succeeded,
+            },
+        )
     }
 
     #[test]
     fn accepts_exact_measurements_and_rejects_other_attempts_or_software() {
         assert_eq!(verify_packet(&packet(), true).unwrap(), packet());
-        for field in ["task_id", "job_id", "manifest_sha256", "request_sha256", "worker_kind"] {
+        for field in [
+            "task_id",
+            "job_id",
+            "manifest_sha256",
+            "request_sha256",
+            "worker_kind",
+        ] {
             let mut changed = packet();
             changed[field] = "foreign".into();
             assert!(verify_packet(&changed, true).is_err(), "{field}");

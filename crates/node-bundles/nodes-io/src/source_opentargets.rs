@@ -1095,13 +1095,14 @@ async fn genetic_string_values(df: &DataFrame, column: &str) -> Result<Vec<Strin
     let mut values = Vec::new();
     for batch in batches {
         let array = batch.column(index);
-        let strings = crate::arrow_strings::utf8_strings(array).ok_or_else(|| DagError::NodeError {
-            node_type: "opentargets_genetic".into(),
-            msg: format!(
-                "column {column:?} must be UTF-8 (found {})",
-                array.data_type()
-            ),
-        })?;
+        let strings =
+            crate::arrow_strings::utf8_strings(array).ok_or_else(|| DagError::NodeError {
+                node_type: "opentargets_genetic".into(),
+                msg: format!(
+                    "column {column:?} must be UTF-8 (found {})",
+                    array.data_type()
+                ),
+            })?;
         for value in strings.into_iter().flatten() {
             if seen.insert(value.to_string()) {
                 values.push(value.to_string());
@@ -1557,9 +1558,12 @@ mod genetic_tests {
         ];
         let frame = |layout: DataType| {
             let ctx = SessionContext::new();
-            let schema = Arc::new(Schema::new(vec![Field::new("variant_id", layout.clone(), true)]));
-            let values: Vec<Option<&str>> =
-                ids.iter().map(|id| id.as_deref()).collect();
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "variant_id",
+                layout.clone(),
+                true,
+            )]));
+            let values: Vec<Option<&str>> = ids.iter().map(|id| id.as_deref()).collect();
             let column: arrow_array::ArrayRef = match layout {
                 DataType::Utf8 => Arc::new(StringArray::from(values.clone())),
                 _ => Arc::new(StringViewArray::from(values)),
@@ -1576,7 +1580,10 @@ mod genetic_tests {
             .unwrap();
         // Null dropped, duplicate deduped in first-seen order — identical
         // request IDs regardless of the string layout.
-        assert_eq!(from_view, vec!["1_555168_A_G", "17_66232877_G_C_longer_than_12_bytes"]);
+        assert_eq!(
+            from_view,
+            vec!["1_555168_A_G", "17_66232877_G_C_longer_than_12_bytes"]
+        );
         assert_eq!(from_view, from_utf8);
     }
 }

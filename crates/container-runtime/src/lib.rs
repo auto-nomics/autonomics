@@ -33,9 +33,9 @@ pub use config::{
     workspace_gc_interval,
 };
 pub use connection::{
-    ContainerImageResolution,
-    DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS, MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection,
-    trusted_workspace_ref, unique_container_name, workspace_ref,
+    ContainerImageResolution, DEFAULT_CONTAINER_WORKDIR, DEFAULT_TIMEOUT_SECS,
+    MAX_CAPTURED_OUTPUT_BYTES, PodmanConnection, trusted_workspace_ref, unique_container_name,
+    workspace_ref,
 };
 pub use error::ContainerRuntimeError;
 pub use execution::ContainerExecutionInfra;

@@ -122,9 +122,10 @@ pub(crate) async fn get_history(
     Path((agent_id, session_id)): Path<(Uuid, Uuid)>,
 ) -> GatewayResult<Json<Vec<Message>>> {
     let storage = state.infra.storage.clone();
-    let state = agentik_core::storage::restore_session_state(storage.as_ref(), agent_id, session_id)
-        .await
-        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let state =
+        agentik_core::storage::restore_session_state(storage.as_ref(), agent_id, session_id)
+            .await
+            .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let mut transcript = storage
         .get_transcript_messages(session_id)

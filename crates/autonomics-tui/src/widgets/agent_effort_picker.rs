@@ -158,9 +158,7 @@ pub fn render_agent_effort_picker(
             Span::styled(
                 effort_stop_label(*stop),
                 if selected {
-                    Style::default()
-                        .fg(theme.text)
-                        .add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme.text_dim)
                 },

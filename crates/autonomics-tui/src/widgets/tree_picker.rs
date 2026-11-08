@@ -271,9 +271,7 @@ pub fn field_line(label: &str, value: impl Into<String>) -> Line<'static> {
         ),
         Span::styled(
             value.into(),
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         ),
     ])
 }

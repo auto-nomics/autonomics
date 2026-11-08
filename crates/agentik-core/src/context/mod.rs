@@ -194,8 +194,13 @@ pub struct Context {
     /// child cancel token for the spawned watcher. Before spawning a new
     /// watcher for the same task, the old one is cancelled to prevent
     /// duplicate message injection.
-    pub(crate) active_wait_watchers:
-        HashMap<u64, (CancellationToken, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
+    pub(crate) active_wait_watchers: HashMap<
+        u64,
+        (
+            CancellationToken,
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+        ),
+    >,
     /// Delegation id stashed when a turn closed with
     /// [`TurnExecutionStatus::Pause`]; the next `begin_turn` re-adopts it so
     /// the wake turn stays attributable to the pending delegation.

@@ -235,13 +235,18 @@ impl Widget for TabBar<'_> {
             let active = segment.idx == self.active_idx;
             let name = display_name(&session.name);
             let base = if active {
-                Style::default().bg(theme.strip_active).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(theme.strip_active)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.text_faint).bg(theme.strip_bg)
             };
             let line = Line::from(vec![
                 Span::styled(" ", base),
-                Span::styled(status_icon(&status).to_string(), base.fg(status_color(&status))),
+                Span::styled(
+                    status_icon(&status).to_string(),
+                    base.fg(status_color(&status)),
+                ),
                 Span::styled(format!(" {name} "), base),
                 Span::styled("│", strip.fg(theme.text_faint)),
             ]);
@@ -299,7 +304,10 @@ mod tests {
             click(&sessions, 200, 0, lay.segments[1].x),
             Some(TabClick::Switch(1))
         );
-        assert_eq!(click(&sessions, 200, 0, lay.segments[1].x + lay.segments[1].width), None);
+        assert_eq!(
+            click(&sessions, 200, 0, lay.segments[1].x + lay.segments[1].width),
+            None
+        );
     }
 
     #[test]
@@ -317,7 +325,10 @@ mod tests {
         assert_eq!(rw, indicator_width(1));
         assert_eq!(rx + rw, 12); // right-aligned at the strip edge
         assert_eq!(click(&sessions, 12, 0, rx), Some(TabClick::Overflow));
-        assert_eq!(click(&sessions, 12, 0, rx + rw - 1), Some(TabClick::Overflow));
+        assert_eq!(
+            click(&sessions, 12, 0, rx + rw - 1),
+            Some(TabClick::Overflow)
+        );
     }
 
     #[test]
@@ -335,7 +346,10 @@ mod tests {
         let bar = seg_w * 3 + 6;
         let lay = layout(&sessions, bar, 4);
         let visible: Vec<usize> = lay.segments.iter().map(|s| s.idx).collect();
-        assert!(visible.contains(&4), "active leaf must be visible: {visible:?}");
+        assert!(
+            visible.contains(&4),
+            "active leaf must be visible: {visible:?}"
+        );
         assert_eq!(lay.left_hidden, 2);
         assert_eq!(lay.right_hidden, 0);
         assert_eq!(lay.left_indicator.1, indicator_width(2));

@@ -94,7 +94,9 @@ pub enum DagError {
 
     /// The submission protocol withheld the entire non-idempotent payload.
     /// This applies only to this attempt, never to an older unresolved intent.
-    #[error("SSH submission payload NOT_SENT: {message}; local SSH child stopped: {local_ssh_stopped}")]
+    #[error(
+        "SSH submission payload NOT_SENT: {message}; local SSH child stopped: {local_ssh_stopped}"
+    )]
     SubmissionNotSent {
         message: String,
         local_ssh_stopped: bool,

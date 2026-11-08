@@ -54,7 +54,10 @@ impl TaskExecutor for BoundExecutor {
         serde_json::to_value(&self.binding).ok()
     }
     fn preflight(&self, nodes: &[(&str, &dyn dag_core::DagNode)]) -> Result<(), DagError> {
-        if !matches!(self.target.target.backend, super::ComputeBackend::Slurm { .. }) {
+        if !matches!(
+            self.target.target.backend,
+            super::ComputeBackend::Slurm { .. }
+        ) {
             return Ok(());
         }
         let mut blockers = Vec::new();
@@ -66,17 +69,29 @@ impl TaskExecutor for BoundExecutor {
                 }
             }
         }
-        if blockers.is_empty() { return Ok(()); }
-        Err(DagError::Schedule(serde_json::json!({"state":"WORKFLOW_BLOCKED",
+        if blockers.is_empty() {
+            return Ok(());
+        }
+        Err(DagError::Schedule(
+            serde_json::json!({"state":"WORKFLOW_BLOCKED",
             "target_id":self.binding.target_id,"target_revision":self.binding.target_revision,
-            "blockers":blockers,"new_job_submitted":false}).to_string()))
+            "blockers":blockers,"new_job_submitted":false})
+            .to_string(),
+        ))
     }
     async fn run(&self, execution: TaskExecution) -> JobResult {
         // Covers dynamic fanout and direct executor callers on the same target
         // captured at bind_run; a policy change cannot retarget this check.
-        if let Err(error) = self.preflight(&[(execution.submission.spec.id.as_str(), execution.node.as_ref())]) {
-            return JobResult::Failed { id: execution.submission.spec.id, error,
-                duration: Duration::ZERO, details: execution.reporter.take_run_details() };
+        if let Err(error) = self.preflight(&[(
+            execution.submission.spec.id.as_str(),
+            execution.node.as_ref(),
+        )]) {
+            return JobResult::Failed {
+                id: execution.submission.spec.id,
+                error,
+                duration: Duration::ZERO,
+                details: execution.reporter.take_run_details(),
+            };
         }
         // Every node future carries the same container backend as its DAG run.
         CONTAINERS

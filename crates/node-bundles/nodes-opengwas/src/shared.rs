@@ -331,10 +331,7 @@ pub(crate) fn string_column_values(
             (0..a.len())
                 .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
                 .collect()
-        } else if let Some(a) = arr
-            .as_any()
-            .downcast_ref::<arrow_array::LargeStringArray>()
-        {
+        } else if let Some(a) = arr.as_any().downcast_ref::<arrow_array::LargeStringArray>() {
             (0..a.len())
                 .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
                 .collect()

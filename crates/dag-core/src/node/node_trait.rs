@@ -42,7 +42,8 @@ pub trait DagNode: Send + Sync {
 
     /// Images required by this compiled payload, never inferred from caller metadata.
     fn required_container_images(&self) -> Vec<&str> {
-        self.plugin_identity().map(|identity| vec![identity.image_reference.as_str()])
+        self.plugin_identity()
+            .map(|identity| vec![identity.image_reference.as_str()])
             .unwrap_or_default()
     }
 

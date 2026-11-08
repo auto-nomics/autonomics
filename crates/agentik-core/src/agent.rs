@@ -437,9 +437,7 @@ impl Agent {
                 acknowledged,
             } = event
             {
-                let result = if self.recovery_notice.is_some()
-                    || self.cancel_token.is_cancelled()
-                {
+                let result = if self.recovery_notice.is_some() || self.cancel_token.is_cancelled() {
                     Err("agent context is suspended or requires recovery".to_owned())
                 } else {
                     match self.context.as_ref() {

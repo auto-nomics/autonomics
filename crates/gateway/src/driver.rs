@@ -165,7 +165,10 @@ mod tests {
                 context: Some(context(id1, "one")),
             },
         );
-        assert_eq!(cache.snapshot().get("/root/a").map(|info| info.id), Some(id1));
+        assert_eq!(
+            cache.snapshot().get("/root/a").map(|info| info.id),
+            Some(id1)
+        );
         // A newer reply replaces the entry wholesale.
         cache.observe(
             "/root/a",
@@ -176,10 +179,7 @@ mod tests {
         assert!(cache.contains_context("/root/a", id2));
         assert!(!cache.contains_context("/root/a", id1));
         // A `None` reply (no context yet) drops the entry.
-        cache.observe(
-            "/root/a",
-            &AgentEvent::ContextList { context: None },
-        );
+        cache.observe("/root/a", &AgentEvent::ContextList { context: None });
         assert!(!cache.snapshot().contains_key("/root/a"));
         cache.remove_agent("/root/a");
         assert!(!cache.snapshot().contains_key("/root/a"));

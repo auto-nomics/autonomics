@@ -278,10 +278,7 @@ impl App {
             match client.search_storage_agents(&query, 100).await {
                 Ok(records) => {
                     tracing::info!(count = records.len(), "stored agents page loaded");
-                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded {
-                        query,
-                        records,
-                    });
+                    tx.send(crate::app_event::AppEvent::AgentRecordsLoaded { query, records });
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "failed to search stored agents");

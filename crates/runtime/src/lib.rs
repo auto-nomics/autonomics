@@ -8,11 +8,11 @@
 pub mod catalog_tools;
 pub mod compute;
 pub mod config;
-pub mod hpc_monitor;
 pub mod control;
 pub mod error;
 pub mod host;
 pub mod host_tools;
+pub mod hpc_monitor;
 pub mod instance_lock;
 pub mod memory_kms;
 pub mod model_actor;
@@ -20,8 +20,8 @@ pub mod model_bootstrap;
 pub mod skill_workflow_tools;
 pub mod tools;
 
-pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use config::slurm::SlurmSiteProfile;
+pub use config::{RuntimeConfig, RuntimeConfigBuilder};
 pub use control::{HostCommand, HostControl, HostStatus};
 pub use error::{Error, Result};
 pub use host::{

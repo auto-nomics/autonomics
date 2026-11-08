@@ -148,10 +148,7 @@ pub async fn pull_with_config_progress(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     let mut child = command.spawn().map_err(|error| {
-        ContainerRuntimeError::Invalid(format!(
-            "cannot spawn `{} pull`: {error}",
-            config.program
-        ))
+        ContainerRuntimeError::Invalid(format!("cannot spawn `{} pull`: {error}", config.program))
     })?;
     let stderr = child
         .stderr
@@ -159,11 +156,9 @@ pub async fn pull_with_config_progress(
         .ok_or_else(|| ContainerRuntimeError::Invalid("pull child had no stderr pipe".into()))?;
     let mut tail: std::collections::VecDeque<String> = Default::default();
     let mut lines = tokio::io::BufReader::new(stderr).lines();
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .map_err(|error| ContainerRuntimeError::Invalid(format!("pull stderr read failed: {error}")))?
-    {
+    while let Some(line) = lines.next_line().await.map_err(|error| {
+        ContainerRuntimeError::Invalid(format!("pull stderr read failed: {error}"))
+    })? {
         let text = line.trim_end();
         if text.is_empty() {
             continue;
@@ -174,8 +169,7 @@ pub async fn pull_with_config_progress(
             tail.pop_front();
         }
     }
-    let status = match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await
-    {
+    let status = match tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait()).await {
         Ok(Ok(status)) => status,
         Ok(Err(error)) => {
             return Err(ContainerRuntimeError::Invalid(format!(

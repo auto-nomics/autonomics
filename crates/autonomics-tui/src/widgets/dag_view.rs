@@ -666,9 +666,7 @@ fn render_status_line(
         Span::raw(" "),
         Span::styled(
             node.id.clone(),
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" · {}", node.kind),

@@ -355,10 +355,12 @@ impl OpendalFileStorage {
     /// Refuse to hide an existing file, directory, symlink or object prefix
     /// when the operator enrolls a new mount. Errors are not proof of absence.
     pub async fn require_vacant_mount_path(&self, path: &str) -> Result<(), opendal::Error> {
-        let occupied = || opendal::Error::new(
-            opendal::ErrorKind::AlreadyExists,
-            format!("data source would shadow existing VFS data at {path}"),
-        );
+        let occupied = || {
+            opendal::Error::new(
+                opendal::ErrorKind::AlreadyExists,
+                format!("data source would shadow existing VFS data at {path}"),
+            )
+        };
         if let Some(host_path) = self.local_host_path(path) {
             // stat follows dangling symlinks and would incorrectly admit them.
             return match std::fs::symlink_metadata(host_path) {
@@ -367,7 +369,8 @@ impl OpendalFileStorage {
                 Err(error) => Err(opendal::Error::new(
                     opendal::ErrorKind::Unexpected,
                     "cannot establish that the data-source path is vacant",
-                ).set_source(error)),
+                )
+                .set_source(error)),
             };
         }
         let operator = self.resolve(path);
@@ -559,7 +562,10 @@ impl OpendalFileStorage {
         let size = operator.stat(&key).await?.content_length();
         let inner = operator.reader(&key).await?.into_stream(0..size).await?;
         let stream = futures::stream::unfold((guard, inner), |(guard, mut inner)| async move {
-            inner.next().await.map(|item| (item.map(|buffer| buffer.to_bytes()), (guard, inner)))
+            inner
+                .next()
+                .await
+                .map(|item| (item.map(|buffer| buffer.to_bytes()), (guard, inner)))
         });
         Ok((size, stream))
     }
@@ -1786,16 +1792,42 @@ mod tests {
 
     #[tokio::test]
     async fn mount_namespace_rejects_objects_without_directory_markers() {
-        let operator = opendal::Operator::new(opendal::services::Memory::default()).unwrap().finish();
+        let operator = opendal::Operator::new(opendal::services::Memory::default())
+            .unwrap()
+            .finish();
         let storage = OpendalFileStorage::from_operator(operator.clone());
-        storage.require_vacant_mount_path("/data/empty").await.unwrap();
-        operator.write("data/occupied/input.csv", b"original".to_vec()).await.unwrap();
-        assert_eq!(storage.require_vacant_mount_path("/data/occupied").await.unwrap_err().kind(),
-            opendal::ErrorKind::AlreadyExists);
-        operator.write("data/file", b"original".to_vec()).await.unwrap();
-        assert_eq!(storage.require_vacant_mount_path("/data/file").await.unwrap_err().kind(),
-            opendal::ErrorKind::AlreadyExists);
-        storage.require_vacant_mount_path("/data/occupied-other").await.unwrap();
+        storage
+            .require_vacant_mount_path("/data/empty")
+            .await
+            .unwrap();
+        operator
+            .write("data/occupied/input.csv", b"original".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .require_vacant_mount_path("/data/occupied")
+                .await
+                .unwrap_err()
+                .kind(),
+            opendal::ErrorKind::AlreadyExists
+        );
+        operator
+            .write("data/file", b"original".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .require_vacant_mount_path("/data/file")
+                .await
+                .unwrap_err()
+                .kind(),
+            opendal::ErrorKind::AlreadyExists
+        );
+        storage
+            .require_vacant_mount_path("/data/occupied-other")
+            .await
+            .unwrap();
     }
 
     #[test]

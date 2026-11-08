@@ -160,9 +160,7 @@ impl MdTokens {
     pub(crate) fn from_palette(p: &crate::theme::Palette) -> Self {
         let border = mix(p.muted, p.bg, 0.4);
         Self {
-            surface: MdSurface {
-                raised: p.surface,
-            },
+            surface: MdSurface { raised: p.surface },
             text: MdText {
                 primary: p.fg,
                 muted: p.muted,

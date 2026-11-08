@@ -193,7 +193,9 @@ impl<'de> Deserialize<'de> for MessageOrigin {
                     &["user", "system", "agent"],
                 )),
             },
-            Raw::Agent { agent: AgentFields { path } } => Ok(Self::Agent { path }),
+            Raw::Agent {
+                agent: AgentFields { path },
+            } => Ok(Self::Agent { path }),
         }
     }
 }
@@ -736,14 +738,8 @@ mod tests {
     #[test]
     fn origin_round_trips_and_never_reaches_wire_params() {
         let cases = [
-            (
-                MessageOrigin::User,
-                serde_json::json!("user"),
-            ),
-            (
-                MessageOrigin::System,
-                serde_json::json!("system"),
-            ),
+            (MessageOrigin::User, serde_json::json!("user")),
+            (MessageOrigin::System, serde_json::json!("system")),
             (
                 MessageOrigin::agent("/root/researcher"),
                 serde_json::json!({"agent": {"path": "/root/researcher"}}),

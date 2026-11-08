@@ -115,7 +115,9 @@ pub struct VfsBashTool {
 #[async_trait]
 impl ToolFunction for VfsBashTool {
     type Input = VfsBashInput;
-    fn finish_on_cancel(&self) -> bool { true }
+    fn finish_on_cancel(&self) -> bool {
+        true
+    }
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let storage = &self.storage;

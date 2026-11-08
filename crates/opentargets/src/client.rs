@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::associations::{AssociatedDisease, AssociatedTarget, AssociationPage, Pagination};
 use crate::error::{OpenTargetsError, Result};
-use crate::genetics::{CredibleSetPage, CREDIBLE_SET_FRAGMENT};
+use crate::genetics::{CREDIBLE_SET_FRAGMENT, CredibleSetPage};
 use crate::search::SearchResults;
 use crate::types::{Disease, Drug, Meta, Study, Target, Variant};
 

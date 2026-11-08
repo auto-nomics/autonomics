@@ -19,12 +19,10 @@ use super::util::store_error;
 pub struct MemoryNoteInput {
     #[desc = "Concise addition, deletion, or correction — the reusable lesson, \
         not the transcript. Name the component and the exact error text for \
-        failures."
-    ]
+        failures."]
     pub content: String,
     #[desc = "Short stable slug for the note (e.g. 'ldsc-input-ports'), so \
-        related lessons merge in consolidation."
-    ]
+        related lessons merge in consolidation."]
     pub slug: Option<String>,
 }
 

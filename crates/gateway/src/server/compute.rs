@@ -26,8 +26,10 @@ pub(crate) async fn readiness(
     State(state): State<GatewayState>,
     Json(request): Json<runtime::compute::ReadinessRequest>,
 ) -> GatewayResult<Json<serde_json::Value>> {
-    registry(&state)?.readiness(&request, &state.infra.engine_manager.list_nodes())
-        .map(Json).map_err(compute_error)
+    registry(&state)?
+        .readiness(&request, &state.infra.engine_manager.list_nodes())
+        .map(Json)
+        .map_err(compute_error)
 }
 
 #[derive(serde::Deserialize)]
@@ -43,10 +45,13 @@ pub(crate) struct ImageQuery {
     responses((status=200,body=Object),(status=409,description="Resident mapping unavailable"))
 )]
 pub(crate) async fn image_evidence(
-    State(state): State<GatewayState>, Query(query): Query<ImageQuery>,
+    State(state): State<GatewayState>,
+    Query(query): Query<ImageQuery>,
 ) -> GatewayResult<Json<runtime::compute::ComputeImageEvidence>> {
-    registry(&state)?.image_evidence(&query.target_id, query.target_revision, &query.reference)
-        .map(Json).map_err(|e| GatewayError::Status(StatusCode::CONFLICT, e))
+    registry(&state)?
+        .image_evidence(&query.target_id, query.target_revision, &query.reference)
+        .map(Json)
+        .map_err(|e| GatewayError::Status(StatusCode::CONFLICT, e))
 }
 #[utoipa::path(get,path="/api/v1/compute",tag="compute",responses((status=200,body=Object)))]
 pub(crate) async fn status(

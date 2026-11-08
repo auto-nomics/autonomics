@@ -1,6 +1,6 @@
 //! Operator-owned compute selection. Storage namespaces have an independent lifetime.
-mod routing;
 mod readiness;
+mod routing;
 pub use readiness::ReadinessRequest;
 #[cfg(test)]
 mod tests;
@@ -32,13 +32,17 @@ pub(crate) use routing::ImageBuilder as ComputeImageBuilder;
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ComputeBackend {
     Local,
-    Slurm { settings: SlurmConfig },
+    Slurm {
+        settings: SlurmConfig,
+    },
     /// A scheduler-free remote host: tasks run directly over ssh with no
     /// queue, no priority and no enforced resource ceiling. The settings
     /// reuses the `SlurmConfig` carrier for its ssh/scratch/artifact keys;
     /// the scheduler-only keys (partition, account, qos, gpu_*, mem_per_cpu)
     /// are ignored here and the editors do not offer them.
-    Ssh { settings: SlurmConfig },
+    Ssh {
+        settings: SlurmConfig,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -271,7 +275,9 @@ pub(crate) struct BuiltTarget {
 
 impl BuiltTarget {
     fn deployment(&self) -> serde_json::Value {
-        let source_compatible = self.typed_worker_revision.as_deref()
+        let source_compatible = self
+            .typed_worker_revision
+            .as_deref()
             .is_none_or(|revision| revision == dag_core::source_revision());
         serde_json::json!({
             "target_id": self.target.id,
@@ -292,7 +298,10 @@ impl BuiltTarget {
         {
             return Err(format!(
                 "compute target {} revision {} has typed-worker source {}; coordinator source is {}. Deploy the measured matching worker and enroll a new target revision before starting a run; preserve historical pins",
-                self.target.id, self.target.revision, revision, dag_core::source_revision(),
+                self.target.id,
+                self.target.revision,
+                revision,
+                dag_core::source_revision(),
             ));
         }
         Ok(())
@@ -440,23 +449,44 @@ fn write_binding(path: &Path, binding: &ExecutionBinding) -> Result<(), String> 
     let to = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
     // SAFETY: both paths are live NUL-terminated strings. Linux's no-replace
     // rename atomically exposes the synced file and preserves an existing ID.
-    if unsafe { libc::renameat2(libc::AT_FDCWD, from.as_ptr(), libc::AT_FDCWD,
-        to.as_ptr(), libc::RENAME_NOREPLACE) } != 0 {
+    if unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } != 0
+    {
         return Err(std::io::Error::last_os_error().to_string());
     }
-    fs::File::open(parent).and_then(|f| f.sync_all()).map_err(|e| e.to_string())
+    fs::File::open(parent)
+        .and_then(|f| f.sync_all())
+        .map_err(|e| e.to_string())
 }
 
 impl ComputeRegistry {
     /// Inspect the same in-memory runtime used by runs bound to this revision.
     /// Never reread a mutable inventory or expose private profile contents.
-    pub fn image_evidence(&self, id: &str, revision: u64, reference: &str) -> Result<ComputeImageEvidence, String> {
+    pub fn image_evidence(
+        &self,
+        id: &str,
+        revision: u64,
+        reference: &str,
+    ) -> Result<ComputeImageEvidence, String> {
         let target = self.target(id, Some(revision))?;
-        let resolution = target.containers.image_resolution(reference).map_err(|e| e.to_string())?;
+        let resolution = target
+            .containers
+            .image_resolution(reference)
+            .map_err(|e| e.to_string())?;
         Ok(ComputeImageEvidence {
             target_id: target.target.id.clone(),
             target_revision: target.target.revision,
-            target_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(&target.target).map_err(|e| e.to_string())?)),
+            target_sha256: format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&target.target).map_err(|e| e.to_string())?)
+            ),
             capsule_sha256: target.target.capsule_sha256.clone(),
             resolution,
             evidence_scope: "RESIDENT_RUNTIME_MAPPING_ONLY".into(),
@@ -620,7 +650,12 @@ impl ComputeRegistry {
         }
         runs.sort_by(|a, b| a.id.cmp(&b.id));
         let catalog = self.catalog();
-        let deployment = self.target(&catalog.policy.target_id, Some(catalog.policy.target_revision))?.deployment();
+        let deployment = self
+            .target(
+                &catalog.policy.target_id,
+                Some(catalog.policy.target_revision),
+            )?
+            .deployment();
         Ok(ComputeStatus {
             deployment,
             catalog,
@@ -637,10 +672,12 @@ impl ComputeRegistry {
         let target = self.target(id, None)?;
         let deployment = target.deployment();
         if let Err(error) = target.ensure_source_compatible() {
-            return Ok(serde_json::json!({"target_id": id, "target_revision": target.target.revision,
+            return Ok(
+                serde_json::json!({"target_id": id, "target_revision": target.target.revision,
                 "configuration_valid": false, "deployment": deployment, "error": error,
                 "connection_observation": null, "worker_and_image_execution_verified": false,
-                "new_job_submitted": false, "scientific_admission_granted": false}));
+                "new_job_submitted": false, "scientific_admission_granted": false}),
+            );
         }
         let observation = if let Some(client) = &target.hpc {
             Some(client.run_json("import os,socket,json; print(json.dumps({'hostname':socket.gethostname(),'uid':os.getuid()}))", &serde_json::json!({}),false).await?)
@@ -733,7 +770,8 @@ impl ComputeRegistry {
         {
             return Err("target is disabled".into());
         }
-        self.target(&t.id, Some(t.revision))?.ensure_source_compatible()?;
+        self.target(&t.id, Some(t.revision))?
+            .ensure_source_compatible()?;
         next.policy = ComputePolicy {
             revision: next
                 .policy
@@ -804,8 +842,10 @@ impl ComputeRegistry {
         }
         // Probe before taking the synchronous mutation lock. Recheck the
         // revision and mount conflicts under that lock before publication.
-        self.storage.require_vacant_mount_path(&request.source.mount_path())
-            .await.map_err(|e| e.to_string())?;
+        self.storage
+            .require_vacant_mount_path(&request.source.mount_path())
+            .await
+            .map_err(|e| e.to_string())?;
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
         let mut next = self.catalog();
@@ -894,7 +934,8 @@ impl ComputeRegistry {
             return Err("execution evidence requires a dedicated directory".into());
         }
         let mut manifest = vfs::VfsManifest::default();
-        manifest.ensure_read_only_local_identity_mount(root)
+        manifest
+            .ensure_read_only_local_identity_mount(root)
             .map_err(|error| error.to_string())?;
         let path = root.to_string_lossy();
         if self.storage.local_host_path(&path).as_deref() == Some(root)
@@ -903,7 +944,9 @@ impl ComputeRegistry {
             // Preserve an operator's existing, possibly stricter permission policy.
             return Ok(());
         }
-        self.vfs.add_data_mount(&manifest).map_err(|error| error.to_string())
+        self.vfs
+            .add_data_mount(&manifest)
+            .map_err(|error| error.to_string())
     }
 
     fn build(&self, target: ComputeTarget) -> Result<Arc<BuiltTarget>, String> {
@@ -912,19 +955,28 @@ impl ComputeRegistry {
             ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings
                 .typed_worker_config
                 .as_ref()
-                .map(|path| crate::host::hpc_placement::pinned_network_policy(path)
-                    .map_err(|error| error.to_string())).transpose()?.flatten(),
+                .map(|path| {
+                    crate::host::hpc_placement::pinned_network_policy(path)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?
+                .flatten(),
             ComputeBackend::Local => None,
         };
         let mut typed_worker_revision = match &target.backend {
             ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings
                 .typed_worker_config
                 .as_ref()
-                .map(|path| crate::host::hpc_placement::pinned_source_revision(path)
-                    .map_err(|error| error.to_string())).transpose()?,
+                .map(|path| {
+                    crate::host::hpc_placement::pinned_source_revision(path)
+                        .map_err(|error| error.to_string())
+                })
+                .transpose()?,
             ComputeBackend::Local => None,
         };
-        if let ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } = &target.backend {
+        if let ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } =
+            &target.backend
+        {
             if matches!(target.backend, ComputeBackend::Slurm { .. })
                 && target.id != "legacy-slurm"
                 && settings.typed_worker_config.is_none()
@@ -948,213 +1000,220 @@ impl ComputeRegistry {
                 }
             }
         }
-        let (executor, containers, hpc, ssh_probe): (Arc<dyn TaskExecutor>, Arc<dyn PodmanConnection>, _, Option<dag_core::SshTarget>) =
-            match &target.backend {
-                ComputeBackend::Local => (self.local_executor.clone(), self.local.clone(), None, None),
-                ComputeBackend::Slurm { settings } => {
-                    let mut config = self.config.clone();
-                    config.slurm = settings.clone();
-                    config.slurm.enabled = true;
-                    if !(target.id == "legacy-slurm" && target.revision == 1)
-                        && config.slurm.artifact_root.as_os_str().is_empty()
-                    {
-                        config.slurm.artifact_root = self
-                            .root
-                            .join("targets")
-                            .join(&monitor_key)
-                            .join("artifacts");
-                    }
-                    let mut slurm = crate::host::shared_infra::slurm_settings(&config)
+        let (executor, containers, hpc, ssh_probe): (
+            Arc<dyn TaskExecutor>,
+            Arc<dyn PodmanConnection>,
+            _,
+            Option<dag_core::SshTarget>,
+        ) = match &target.backend {
+            ComputeBackend::Local => (self.local_executor.clone(), self.local.clone(), None, None),
+            ComputeBackend::Slurm { settings } => {
+                let mut config = self.config.clone();
+                config.slurm = settings.clone();
+                config.slurm.enabled = true;
+                if !(target.id == "legacy-slurm" && target.revision == 1)
+                    && config.slurm.artifact_root.as_os_str().is_empty()
+                {
+                    config.slurm.artifact_root = self
+                        .root
+                        .join("targets")
+                        .join(&monitor_key)
+                        .join("artifacts");
+                }
+                let mut slurm = crate::host::shared_infra::slurm_settings(&config)
+                    .map_err(|e| e.to_string())?;
+                if let Some(endpoint) = target.endpoints.get(&settings.ssh_host) {
+                    slurm.ssh = slurm.ssh.with_endpoint(endpoint.clone());
+                }
+                slurm.ssh = slurm.ssh.with_shared_endpoints(target.endpoints.clone());
+                let workspace = if target.id == "legacy-slurm" && target.revision == 1 {
+                    config.state_dir.join("slurm-tasks")
+                } else {
+                    self.root.join("targets").join(&monitor_key).join("tasks")
+                };
+                // Receipts contain host-absolute paths. New revisions must
+                // expose their evidence to existing VFS clients as well.
+                // Never mount the enclosing worker/credential configuration.
+                self.mount_execution_evidence(&workspace)?;
+                self.mount_execution_evidence(&slurm.local_artifact_root)?;
+                let executor: Arc<dyn TaskExecutor> =
+                    if let Some(path) = &settings.typed_worker_config {
+                        let (executor, _, revision) = crate::host::hpc_placement::executor(
+                            path,
+                            slurm.clone(),
+                            &workspace,
+                            &self.storage,
+                            settings.apptainer_manifest.is_some(),
+                        )
                         .map_err(|e| e.to_string())?;
-                    if let Some(endpoint) = target.endpoints.get(&settings.ssh_host) {
-                        slurm.ssh = slurm.ssh.with_endpoint(endpoint.clone());
-                    }
-                    slurm.ssh = slurm.ssh.with_shared_endpoints(target.endpoints.clone());
-                    let workspace = if target.id == "legacy-slurm" && target.revision == 1 {
-                        config.state_dir.join("slurm-tasks")
+                        typed_worker_revision = Some(revision);
+                        executor
                     } else {
-                        self.root.join("targets").join(&monitor_key).join("tasks")
+                        slurm_backed_executor(slurm.clone(), workspace, local_task_executor())
                     };
-                    // Receipts contain host-absolute paths. New revisions must
-                    // expose their evidence to existing VFS clients as well.
-                    // Never mount the enclosing worker/credential configuration.
-                    self.mount_execution_evidence(&workspace)?;
-                    self.mount_execution_evidence(&slurm.local_artifact_root)?;
-                    let executor: Arc<dyn TaskExecutor> =
-                        if let Some(path) = &settings.typed_worker_config {
-                            let (executor, _, revision) = crate::host::hpc_placement::executor(
-                                path,
-                                slurm.clone(),
-                                &workspace,
-                                &self.storage,
-                                settings.apptainer_manifest.is_some(),
-                            )
-                            .map_err(|e| e.to_string())?;
-                            typed_worker_revision = Some(revision);
-                            executor
+                let containers: Arc<dyn PodmanConnection> = if settings.apptainer_manifest.is_some()
+                {
+                    let runtime = container_plugin::slurm_runtime::SlurmContainerRuntime::new(
+                        slurm,
+                        self.local.workspace_root().to_path_buf(),
+                        if target.id == "legacy-slurm" && target.revision == 1 {
+                            config.state_dir.join("slurm-containers")
                         } else {
-                            slurm_backed_executor(slurm.clone(), workspace, local_task_executor())
-                        };
-                    let containers: Arc<dyn PodmanConnection> =
-                        if settings.apptainer_manifest.is_some() {
-                            let runtime =
-                                container_plugin::slurm_runtime::SlurmContainerRuntime::new(
-                                    slurm,
-                                    self.local.workspace_root().to_path_buf(),
-                                    if target.id == "legacy-slurm" && target.revision == 1 {
-                                        config.state_dir.join("slurm-containers")
-                                    } else {
-                                        self.root
-                                            .join("targets")
-                                            .join(&monitor_key)
-                                            .join("containers")
-                                    },
-                                    settings.panel_cache_remote_dir.clone(),
-                                    settings.remote_python.clone(),
-                                )
-                                .and_then(|r| r.with_gpu_partition(settings.gpu_partition.clone()))
-                                .and_then(|r| r.with_gpu_cpus_per_gpu(settings.gpu_cpus_per_gpu))
-                                .and_then(|r| match &settings.gpu_qos {
-                                    Some(q) => r.with_gpu_qos(q.clone()),
-                                    None => Ok(r),
-                                })
+                            self.root
+                                .join("targets")
+                                .join(&monitor_key)
+                                .join("containers")
+                        },
+                        settings.panel_cache_remote_dir.clone(),
+                        settings.remote_python.clone(),
+                    )
+                    .and_then(|r| r.with_gpu_partition(settings.gpu_partition.clone()))
+                    .and_then(|r| r.with_gpu_cpus_per_gpu(settings.gpu_cpus_per_gpu))
+                    .and_then(|r| match &settings.gpu_qos {
+                        Some(q) => r.with_gpu_qos(q.clone()),
+                        None => Ok(r),
+                    })
+                    .map_err(|e| e.to_string())?;
+                    Arc::new(runtime)
+                } else if target.id == "legacy-slurm" && target.revision == 1 && {
+                    // Preserve the original operator placement, including
+                    // explicitly local legacy container adapters. New
+                    // Slurm targets never inherit this compatibility route.
+                    let mut legacy = config.clone();
+                    legacy.plugin_rsi.environment_dev.enabled = false;
+                    crate::host::hpc_placement::requires_local_containers(
+                        &legacy,
+                        "exploratory",
+                        false,
+                    )
+                    .map_err(|e| e.to_string())?
+                } {
+                    self.local.clone()
+                } else {
+                    Arc::new(routing::UnavailableContainers {
+                        root: self.local.workspace_root().to_path_buf(),
+                    })
+                };
+                let dir = self.root.join("targets").join(&monitor_key);
+                private_dir(&dir)?;
+                let state_dir = if target.id == "legacy-slurm" && target.revision == 1 {
+                    config.state_dir.join("hpc-account")
+                } else {
+                    dir.join("hpc-account")
+                };
+                let hpc = Arc::new(
+                    hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
+                        ssh_host: settings.ssh_host.clone(),
+                        data_ssh_host: settings.data_ssh_host.clone(),
+                        pi_ssh_host: settings.pi_ssh_host.clone(),
+                        ssh_command: settings.ssh_command.clone(),
+                        remote_python: settings.remote_python.clone(),
+                        state_dir,
+                        default_partition: settings.partition.clone(),
+                        default_account: settings.account.clone(),
+                    })?
+                    .with_endpoints(target.endpoints.clone())?,
+                );
+                self.monitors.add(
+                    &monitor_key,
+                    hpc.clone(),
+                    std::time::Duration::from_secs(settings.poll_interval_secs),
+                )?;
+                (executor, containers, Some(hpc), None)
+            }
+            ComputeBackend::Ssh { settings } => {
+                let artifact_root = if settings.artifact_root.as_os_str().is_empty() {
+                    self.root
+                        .join("targets")
+                        .join(&monitor_key)
+                        .join("artifacts")
+                } else {
+                    settings.artifact_root.clone()
+                };
+                // The blocking exit-code wait holds one connection for
+                // the task's whole horizon: it needs keepalive.
+                let mut ssh = dag_core::SshTarget::new(
+                    settings.ssh_command.clone(),
+                    settings.ssh_host.clone(),
+                )
+                .with_connect_timeout(std::time::Duration::from_secs(
+                    settings.ssh_connect_timeout_secs,
+                ))
+                .with_keepalive(std::time::Duration::from_secs(15), 2);
+                if let Some(endpoint) = target.endpoints.get(&settings.ssh_host) {
+                    ssh = ssh.with_endpoint(endpoint.clone());
+                }
+                ssh = ssh.with_shared_endpoints(target.endpoints.clone());
+                let workspace = self.root.join("targets").join(&monitor_key).join("tasks");
+                self.mount_execution_evidence(&workspace)?;
+                self.mount_execution_evidence(&artifact_root)?;
+                let default_time = crate::config::slurm::parse_walltime(&settings.default_time)
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid default_time `{}` on direct SSH target {}",
+                            settings.default_time, target.id
+                        )
+                    })?;
+                let ssh_probe = ssh.clone();
+                let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
+                    Arc::new(dag_core::SshTaskTransport::new(dag_core::SshSettings {
+                        ssh: ssh.clone(),
+                        scratch_dir: settings.scratch_remote_dir.clone(),
+                        default_time,
+                    })),
+                    Arc::new(dag_core::SshArtifactStore::new(
+                        ssh,
+                        settings.scratch_remote_dir.clone(),
+                        artifact_root,
+                    )),
+                    workspace.clone(),
+                ));
+                let executor: Arc<dyn TaskExecutor> =
+                    if let Some(path) = &settings.typed_worker_config {
+                        let (executor, _, revision) =
+                            crate::host::hpc_placement::assemble_typed(path, remote, false)
                                 .map_err(|e| e.to_string())?;
-                            Arc::new(runtime)
-                        } else if target.id == "legacy-slurm" && target.revision == 1 && {
-                            // Preserve the original operator placement, including
-                            // explicitly local legacy container adapters. New
-                            // Slurm targets never inherit this compatibility route.
-                            let mut legacy = config.clone();
-                            legacy.plugin_rsi.environment_dev.enabled = false;
-                            crate::host::hpc_placement::requires_local_containers(
-                                &legacy,
-                                "exploratory",
-                                false,
-                            )
-                            .map_err(|e| e.to_string())?
-                        } {
-                            self.local.clone()
-                        } else {
-                            Arc::new(routing::UnavailableContainers {
-                                root: self.local.workspace_root().to_path_buf(),
-                            })
-                        };
-                    let dir = self.root.join("targets").join(&monitor_key);
-                    private_dir(&dir)?;
-                    let state_dir = if target.id == "legacy-slurm" && target.revision == 1 {
-                        config.state_dir.join("hpc-account")
+                        typed_worker_revision = Some(revision);
+                        executor
                     } else {
-                        dir.join("hpc-account")
+                        Arc::new(ProcessRoutingTaskExecutor::new(
+                            local_task_executor(),
+                            Some(remote),
+                        ))
                     };
-                    let hpc = Arc::new(
-                        hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
-                            ssh_host: settings.ssh_host.clone(),
-                            data_ssh_host: settings.data_ssh_host.clone(),
-                            pi_ssh_host: settings.pi_ssh_host.clone(),
-                            ssh_command: settings.ssh_command.clone(),
-                            remote_python: settings.remote_python.clone(),
-                            state_dir,
-                            default_partition: settings.partition.clone(),
-                            default_account: settings.account.clone(),
-                        })?
-                        .with_endpoints(target.endpoints.clone())?,
-                    );
-                    self.monitors.add(
-                        &monitor_key,
-                        hpc.clone(),
-                        std::time::Duration::from_secs(settings.poll_interval_secs),
-                    )?;
-                    (executor, containers, Some(hpc), None)
-                }
-                ComputeBackend::Ssh { settings } => {
-                    let artifact_root = if settings.artifact_root.as_os_str().is_empty() {
-                        self.root
-                            .join("targets")
-                            .join(&monitor_key)
-                            .join("artifacts")
-                    } else {
-                        settings.artifact_root.clone()
-                    };
-                    // The blocking exit-code wait holds one connection for
-                    // the task's whole horizon: it needs keepalive.
-                    let mut ssh = dag_core::SshTarget::new(
-                        settings.ssh_command.clone(),
-                        settings.ssh_host.clone(),
-                    )
-                    .with_connect_timeout(std::time::Duration::from_secs(
-                        settings.ssh_connect_timeout_secs,
-                    ))
-                    .with_keepalive(std::time::Duration::from_secs(15), 2);
-                    if let Some(endpoint) = target.endpoints.get(&settings.ssh_host) {
-                        ssh = ssh.with_endpoint(endpoint.clone());
-                    }
-                    ssh = ssh.with_shared_endpoints(target.endpoints.clone());
-                    let workspace = self.root.join("targets").join(&monitor_key).join("tasks");
-                    self.mount_execution_evidence(&workspace)?;
-                    self.mount_execution_evidence(&artifact_root)?;
-                    let default_time = crate::config::slurm::parse_walltime(&settings.default_time)
-                        .ok_or_else(|| {
-                            format!(
-                                "invalid default_time `{}` on direct SSH target {}",
-                                settings.default_time, target.id
-                            )
-                        })?;
-                    let ssh_probe = ssh.clone();
-                    let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
-                        Arc::new(dag_core::SshTaskTransport::new(dag_core::SshSettings {
-                            ssh: ssh.clone(),
-                            scratch_dir: settings.scratch_remote_dir.clone(),
-                            default_time,
-                        })),
-                        Arc::new(dag_core::SshArtifactStore::new(
-                            ssh,
-                            settings.scratch_remote_dir.clone(),
-                            artifact_root,
-                        )),
-                        workspace.clone(),
-                    ));
-                    let executor: Arc<dyn TaskExecutor> =
-                        if let Some(path) = &settings.typed_worker_config {
-                            let (executor, _, revision) =
-                                crate::host::hpc_placement::assemble_typed(path, remote, false)
-                                    .map_err(|e| e.to_string())?;
-                            typed_worker_revision = Some(revision);
-                            executor
-                        } else {
-                            Arc::new(ProcessRoutingTaskExecutor::new(
-                                local_task_executor(),
-                                Some(remote),
-                            ))
-                        };
-                    // No scheduler means no job tools and no container
-                    // runtime, but the account file/transfer tools are plain
-                    // ssh and stay available: they need an ssh endpoint, not
-                    // an allocation.
-                    let account_state_dir = self.root.join("targets").join(&monitor_key).join("hpc-account");
-                    private_dir(&account_state_dir)?;
-                    let account = Arc::new(
-                        hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
-                            ssh_host: settings.ssh_host.clone(),
-                            data_ssh_host: settings.data_ssh_host.clone(),
-                            pi_ssh_host: None,
-                            ssh_command: settings.ssh_command.clone(),
-                            remote_python: settings.remote_python.clone(),
-                            state_dir: account_state_dir,
-                            default_partition: String::new(),
-                            default_account: None,
-                        })?
-                        .with_endpoints(target.endpoints.clone())?,
-                    );
-                    (
-                        executor,
-                        Arc::new(routing::UnavailableContainers {
-                            root: self.local.workspace_root().to_path_buf(),
-                        }),
-                        Some(account),
-                        Some(ssh_probe),
-                    )
-                }
-            };
+                // No scheduler means no job tools and no container
+                // runtime, but the account file/transfer tools are plain
+                // ssh and stay available: they need an ssh endpoint, not
+                // an allocation.
+                let account_state_dir = self
+                    .root
+                    .join("targets")
+                    .join(&monitor_key)
+                    .join("hpc-account");
+                private_dir(&account_state_dir)?;
+                let account = Arc::new(
+                    hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
+                        ssh_host: settings.ssh_host.clone(),
+                        data_ssh_host: settings.data_ssh_host.clone(),
+                        pi_ssh_host: None,
+                        ssh_command: settings.ssh_command.clone(),
+                        remote_python: settings.remote_python.clone(),
+                        state_dir: account_state_dir,
+                        default_partition: String::new(),
+                        default_account: None,
+                    })?
+                    .with_endpoints(target.endpoints.clone())?,
+                );
+                (
+                    executor,
+                    Arc::new(routing::UnavailableContainers {
+                        root: self.local.workspace_root().to_path_buf(),
+                    }),
+                    Some(account),
+                    Some(ssh_probe),
+                )
+            }
+        };
         Ok(Arc::new(BuiltTarget {
             typed_worker_revision,
             network_policy_sha256,
