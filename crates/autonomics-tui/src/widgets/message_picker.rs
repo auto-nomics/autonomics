@@ -295,14 +295,14 @@ pub fn collect_text_messages(messages: &[ChatLine]) -> Vec<MessageItem> {
         .collect()
 }
 
-/// Prompt gutter width for the search input: `❯ ` = 2 cols.
+/// Prompt gutter width for the search input: `> ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
 /// Render the message picker popup with a two-column layout:
 ///
 /// ```text
 /// ┌─ Copy Message ───────────────────────────────────────────────┐
-/// │ ❯ filter messages…                                            │  ← search
+/// │ > filter messages…                                            │  ← search
 /// ├──────────────────────────────────────────────────────────────┤  ← separator
 /// │  Messages         │  Preview                                  │
 /// │ ┌────────────────┐ │ ┌──────────────────────────────────────┐ │
@@ -395,7 +395,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
     } else {
         Style::default().fg(theme.accent_alt).add_modifier(Modifier::BOLD)
     };
-    buf.set_string(area.x, area.y, "❯", prompt_style);
+    buf.set_string(area.x, area.y, ">", prompt_style);
 
     let ta_area = if area.width > PROMPT_GUTTER {
         Rect {

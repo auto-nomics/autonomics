@@ -180,7 +180,7 @@ impl MdRenderer {
                     self.push_blank_line();
                 }
                 Event::TaskListMarker(checked) => {
-                    let marker = if checked { "☑ " } else { "☐ " };
+                    let marker = if checked { "[x] " } else { "[ ] " };
                     self.current_spans.push(Span::styled(
                         marker.to_string(),
                         Style::default().fg(self.tokens.list.task_marker),

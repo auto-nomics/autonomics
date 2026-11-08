@@ -722,7 +722,7 @@ fn status_marker(status: RuntimeStatus) -> (&'static str, Color) {
         RuntimeStatus::Ready => ("◐", theme.warning),
         RuntimeStatus::Running => ("◉", theme.accent),
         RuntimeStatus::Success => ("●", theme.success),
-        RuntimeStatus::Failed => ("✗", theme.error),
+        RuntimeStatus::Failed => ("x", theme.error),
         RuntimeStatus::Skipped => ("◍", theme.text_faint),
         RuntimeStatus::Cancelled => ("⊘", theme.warning),
     }

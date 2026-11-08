@@ -17,7 +17,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────┐
-//! │ ✓ Copied to clipboard             │  ← title (bold, variant-colored icon)
+//! │ + Copied to clipboard             │  ← title (bold, variant-colored icon)
 //! │   42 chars from message #3        │  ← description (dim)
 //! └──────────────────────────────────┘
 //! ```
@@ -49,8 +49,8 @@ impl ToastVariant {
     /// Leading icon character shown before the title.
     fn icon(self) -> &'static str {
         match self {
-            Self::Success => "✓",
-            Self::Error => "✗",
+            Self::Success => "+",
+            Self::Error => "x",
             Self::Info => "ℹ",
         }
     }

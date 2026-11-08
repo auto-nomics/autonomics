@@ -6,11 +6,11 @@
 //!
 //! **Tree layout**:
 //! ```text
-//! ▼ deepseek ✓                ← configured, expanded (top)
+//! ▼ deepseek +                ← configured, expanded (top)
 //!   ● deepseek-v4-pro [built-in]
 //!     deepseek-flash [custom]
-//! ▶ mimo ✓                    ← configured, collapsed
-//! ── minimax ✗                ← unconfigured (bottom, not expandable)
+//! ▶ mimo +                    ← configured, collapsed
+//! ── minimax x                ← unconfigured (bottom, not expandable)
 //! ```
 //!
 //! **Config panel**: when the user presses `Ctrl+E` on a provider row, a
@@ -893,7 +893,7 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                 } else {
                     ("▶", Style::default().fg(theme.warning))
                 };
-                let check = if p.configured { "✓" } else { "✗" };
+                let check = if p.configured { "+" } else { "x" };
                 let check_color = if p.configured {
                     theme.success
                 } else {

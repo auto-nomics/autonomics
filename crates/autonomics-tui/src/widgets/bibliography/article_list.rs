@@ -65,8 +65,8 @@ impl ArticleList<'_> {
         let marker = if selected { "▸ " } else { "  " };
         let fulltext = match self.fulltexts.get(&article.id) {
             Some(ft) => match ft.extract_status {
-                Some(bib_base::ExtractStatus::Done) => "✓",
-                Some(bib_base::ExtractStatus::Failed) => "✗",
+                Some(bib_base::ExtractStatus::Done) => "+",
+                Some(bib_base::ExtractStatus::Failed) => "x",
                 Some(bib_base::ExtractStatus::Running) => "◐",
                 _ => "·",
             },

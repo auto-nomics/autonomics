@@ -497,7 +497,7 @@ impl StatefulWidgetRef for HpcPanelWidget {
         // Status / pending-restart footer.
         if state.pending_restart {
             lines.push(Line::from(Span::styled(
-                "⚠ saved profile differs from the running daemon — restart to apply",
+                "! saved profile differs from the running daemon — restart to apply",
                 Style::default().fg(theme.warning),
             )));
         }
@@ -536,7 +536,7 @@ impl HpcPanelWidget {
                 value.to_string()
             };
             let selected = index == state.selected_field;
-            let marker = if selected { "❯ " } else { "  " };
+            let marker = if selected { "> " } else { "  " };
             let style = if selected {
                 Style::default().fg(theme.accent_alt)
             } else {
@@ -571,7 +571,7 @@ impl HpcPanelWidget {
             .unwrap_or_else(|| "(unset)".into());
         let manifest_flag =
             if state.apptainer_manifest_path.is_some() && !state.apptainer_manifest_exists {
-                "  ⚠ file missing"
+                "  ! file missing"
             } else {
                 ""
             };
@@ -602,7 +602,7 @@ impl HpcPanelWidget {
         }
         for (index, job) in state.jobs.iter().enumerate() {
             let selected = index == state.selected_job;
-            let marker = if selected { "❯ " } else { "  " };
+            let marker = if selected { "> " } else { "  " };
             let attention = job.state == "submission_uncertain" || job.last_error.is_some();
             let style = if attention {
                 Style::default().fg(theme.warning)
@@ -628,7 +628,7 @@ impl HpcPanelWidget {
             if selected {
                 if let Some(error) = &job.last_error {
                     lines.push(Line::from(Span::styled(
-                        format!("    ⚠ {error}"),
+                        format!("    ! {error}"),
                         Style::default().fg(theme.error),
                     )));
                 }

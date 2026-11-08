@@ -71,7 +71,7 @@ fn collect_visible_lines(
 /// ├──────────────────────────────────────────────────┤
 /// │ Pending input / compaction preview (conditional) │
 /// │ ╭─ running… ─────────────────────────────────╮   │
-/// │ │ ❯ draft…                                   │   │
+/// │ │ > draft…                                   │   │
 /// │ ╰────────────────────────────────────────────╯   │
 /// └──────────────────────────────────────────────────┘
 /// ```
@@ -93,7 +93,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         let running = ts.status.is_active() || ts.status == AgentStatus::Waiting;
 
         // Dynamic input height: the borderless composer grows with
-        // content (word-wrapped); only the ❯ gutter is subtracted from
+        // content (word-wrapped); only the > gutter is subtracted from
         // the wrap width.
         let text_width = area.width.saturating_sub(PROMPT_GUTTER);
         let input_text_rows = if running && ts.input.is_empty() {

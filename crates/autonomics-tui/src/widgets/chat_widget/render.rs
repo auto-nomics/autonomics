@@ -243,9 +243,9 @@ fn render_tool_call(name: &str, input: &str, width: u16) -> Vec<Line<'static>> {
 fn render_tool_result(ok: bool, content: &str, width: u16) -> Vec<Line<'static>> {
     let theme = crate::theme::current();
     let (icon, status_color) = if ok {
-        ("✓", theme.success)
+        ("+", theme.success)
     } else {
-        ("✗", theme.error)
+        ("x", theme.error)
     };
     let max_lines = if ok {
         TOOL_RESULT_MAX_LINES
@@ -354,7 +354,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             let mut lines = Vec::new();
             let mut first = true;
             for line in text.lines() {
-                let prefix = if first { "💭 " } else { "   " };
+                let prefix = if first { ">> " } else { "   " };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
                     Style::default().fg(theme.text_faint),
@@ -389,7 +389,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             let mut lines = Vec::new();
             let mut first = true;
             for line in text.lines() {
-                let prefix = if first { "✗ Error: " } else { "         " };
+                let prefix = if first { "x Error: " } else { "         " };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
                     Style::default().fg(theme.error),
@@ -429,7 +429,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::Compact(result) => vec![match result {
             CompactResult::Done(stats) => Line::from(Span::styled(
                 format!(
-                    "✦ compacted {} msgs → {} msgs · summary {} tok · freed {} · {:.1}s",
+                    "* compacted {} msgs → {} msgs · summary {} tok · freed {} · {:.1}s",
                     stats.messages_before,
                     stats.messages_after,
                     format_tokens(stats.summary_tokens),
@@ -439,11 +439,11 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                 Style::default().fg(theme.accent_alt),
             )),
             CompactResult::Failed(error) => Line::from(Span::styled(
-                format!("✗ compaction failed: {error}"),
+                format!("x compaction failed: {error}"),
                 Style::default().fg(theme.error),
             )),
             CompactResult::Skipped => Line::from(Span::styled(
-                "✦ compaction skipped — conversation too short",
+                "* compaction skipped — conversation too short",
                 Style::default().fg(theme.text_faint),
             )),
         }],
@@ -512,33 +512,20 @@ pub(crate) fn render_line_with_settings(
         ChatLine::Thinking(text) if display.collapse_thinking => {
             let n = text.lines().count();
             vec![Line::from(Span::styled(
-                format!(" 💭 [thinking — {n} lines, collapsed]"),
+                format!(" >> [thinking — {n} lines, collapsed]"),
                 Style::default()
                     .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
             ))]
         }
         ChatLine::ToolCall { name, input } if display.collapse_tool_calls => {
-            let preview: String = if input.is_empty() {
-                String::new()
-            } else {
-                let p: String = input.chars().take(40).collect();
-                if input.len() > 40 {
-                    format!("({p}…)")
-                } else {
-                    format!("({p})")
-                }
-            };
-            vec![Line::from(Span::styled(
-                format!(" 🔧 {name}{preview} [collapsed]"),
-                Style::default().fg(theme.accent_alt),
-            ))]
+            render_tool_call(name, input, area.width)
         }
         ChatLine::ToolResult { ok, content } if display.collapse_tool_results => {
             let (icon, color) = if *ok {
-                ("✓", theme.success)
+                ("+", theme.success)
             } else {
-                ("✗", theme.error)
+                ("x", theme.error)
             };
             let n = content.chars().count();
             vec![Line::from(Span::styled(
@@ -667,6 +654,23 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_tool_call_summarizes_multiline_json() {
+        let msg = ChatLine::ToolCall {
+            name: "Bash".into(),
+            input: "{\n  \"command\": \"cargo test\"\n}".into(),
+        };
+        let settings = DisplaySettings {
+            collapse_tool_calls: true,
+            ..Default::default()
+        };
+        let lines = render_line_with_settings(&msg, Rect::new(0, 0, 80, 10), &settings);
+        assert_eq!(lines.len(), 1);
+        assert!(line_text(&lines[0]).contains("command=cargo test"));
+        let narrow = render_line_with_settings(&msg, Rect::new(0, 0, 12, 10), &settings);
+        assert!(span_width(&narrow[0]) <= 12);
+    }
+
+    #[test]
     fn tool_call_is_a_compact_summary() {
         let msg = ChatLine::ToolCall {
             name: "Bash".into(),
@@ -699,7 +703,7 @@ mod tests {
         let lines = render(&msg, 80);
         let status = line_text(&lines[0]);
         assert!(
-            status.starts_with("  ✓") && status.contains("22 lines"),
+            status.starts_with("  +") && status.contains("22 lines"),
             "status line carries icon and count: {status}"
         );
         let joined = lines
@@ -721,7 +725,7 @@ mod tests {
         };
         let lines = render(&msg, 80);
         let theme = crate::theme::current();
-        assert!(line_text(&lines[0]).starts_with("  ✗"), "{lines:?}");
+        assert!(line_text(&lines[0]).starts_with("  x"), "{lines:?}");
         let body = &lines[1].spans;
         assert!(
             body.iter().skip(1).all(|s| s.style.fg == Some(theme.error)),
@@ -737,6 +741,6 @@ mod tests {
         };
         let lines = render(&msg, 80);
         assert_eq!(lines.len(), 1);
-        assert!(line_text(&lines[0]).starts_with("  ✓"));
+        assert!(line_text(&lines[0]).starts_with("  +"));
     }
 }

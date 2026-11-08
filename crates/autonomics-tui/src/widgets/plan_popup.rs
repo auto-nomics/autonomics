@@ -1,7 +1,7 @@
 //! Plan popup (`<leader>p`): the agent's current task plan as a floating
 //! list — the former sidebar plan pane, promoted to a popup so the chat
 //! pane keeps the full width. Steps render with their status glyph
-//! (✔ completed / ▶ in progress / ○ pending); navigation is j/k or
+//! (+ completed / ▶ in progress / ○ pending); navigation is j/k or
 //! arrows; Esc closes.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -155,7 +155,7 @@ fn step_style(step: &agentik_types::PlanStep) -> (&'static str, Style) {
     let theme = crate::theme::current();
     match step.status {
         agentik_types::StepStatus::Completed => (
-            "✔",
+            "+",
             Style::default()
                 .fg(theme.success)
                 .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),

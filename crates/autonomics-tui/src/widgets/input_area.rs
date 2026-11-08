@@ -189,11 +189,11 @@ pub struct InputWidgetState<'a> {
     pub input: &'a mut InputArea,
 }
 
-/// Width of the prompt gutter ("❯ " = prompt glyph + space).
+/// Width of the prompt gutter ("> " = prompt glyph + space).
 pub const PROMPT_GUTTER: u16 = 2;
 
 /// Borderless composer on the status bar's background band: the parent
-/// paints nothing — the widget fills its area with `bg`, draws the `❯`
+/// paints nothing — the widget fills its area with `bg`, draws the `>`
 /// prefix and the textarea on top of it, and shows the placeholder when
 /// the buffer is empty. Sitting directly under the StatusBar (same bg),
 /// the two read as one merged block.
@@ -229,7 +229,7 @@ impl<'a> InputWidget<'a> {
             .fg(theme.accent)
             .add_modifier(Modifier::BOLD)
             .patch(self.bg);
-        buf.set_string(area.x, area.y, "❯", prompt_style);
+        buf.set_string(area.x, area.y, ">", prompt_style);
         if area.width <= PROMPT_GUTTER {
             return;
         }

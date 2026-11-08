@@ -50,12 +50,12 @@ impl Widget for StatusBar<'_> {
             AgentStatus::Idle | AgentStatus::Aborted => ("○", theme.text_dim, "idle"),
             AgentStatus::Requesting => ("◐", theme.warning, "requesting"),
             AgentStatus::Streaming => ("●", theme.success, "streaming"),
-            AgentStatus::ToolRunning => ("⚙", theme.accent, "tool running"),
+            AgentStatus::ToolRunning => ("*", theme.accent, "tool running"),
             AgentStatus::Retrying => ("↻", theme.warning, "retrying"),
-            AgentStatus::Error => ("✗", theme.error, "error"),
+            AgentStatus::Error => ("x", theme.error, "error"),
             AgentStatus::Cancelled => ("⊘", theme.text_faint, "cancelled"),
             AgentStatus::Compacting => ("◐", theme.accent_alt, "compacting"),
-            AgentStatus::Waiting => ("☐", theme.info, "waiting"),
+            AgentStatus::Waiting => ("[ ]", theme.info, "waiting"),
         };
 
         // While compacting, replace the static label with a spinning

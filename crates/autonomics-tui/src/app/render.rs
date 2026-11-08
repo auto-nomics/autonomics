@@ -38,7 +38,7 @@ impl App {
         let block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .title(Span::styled(
-                " ⚠ Delete Agent ",
+                " ! Delete Agent ",
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),

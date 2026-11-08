@@ -132,8 +132,8 @@ pub fn render_tasks_popup(
         let selected = index == state.selected.min(tasks.len() - 1);
         let (icon, color) = match task.status {
             crate::state::ToolTaskStatus::Running => ("⏳", theme.warning),
-            crate::state::ToolTaskStatus::Done { ok: true } => ("✓", theme.success),
-            crate::state::ToolTaskStatus::Done { ok: false } => ("✗", theme.error),
+            crate::state::ToolTaskStatus::Done { ok: true } => ("+", theme.success),
+            crate::state::ToolTaskStatus::Done { ok: false } => ("x", theme.error),
         };
         let label = match &task.target_agent {
             Some(target) if task.name == "delegate_to" => format!("#{} → {}", task.seq, target),

@@ -24,7 +24,7 @@ use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
-/// Prompt gutter width for the search input: `❯ ` = 2 cols.
+/// Prompt gutter width for the search input: `> ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -351,7 +351,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPicke
     } else {
         Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
     };
-    buf.set_string(area.x, area.y, "❯", prompt_style);
+    buf.set_string(area.x, area.y, ">", prompt_style);
 
     let ta_area = if area.width > PROMPT_GUTTER {
         Rect {

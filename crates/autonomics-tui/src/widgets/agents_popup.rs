@@ -32,7 +32,7 @@ use crate::widgets::popup::{Popup, PopupControls};
 use crate::widgets::searchable_picker::{PickerItem, PickerState};
 use crate::xai_textarea::{TextArea, TextAreaState};
 
-/// Prompt gutter width for the search input: `❯ ` = 2 cols.
+/// Prompt gutter width for the search input: `> ` = 2 cols.
 const PROMPT_GUTTER: u16 = 2;
 
 /// Fixed widths of the trailing columns. The effort column fits the longest
@@ -791,7 +791,7 @@ fn render_input_line(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState)
         InputMode::Rename => {
             let line = if let Some(err) = state.rename_error.clone() {
                 Line::from(vec![
-                    Span::styled(" ✗ ", Style::default().fg(theme.error)),
+                    Span::styled(" x ", Style::default().fg(theme.error)),
                     Span::styled(err, Style::default().fg(theme.error)),
                 ])
             } else {
@@ -841,7 +841,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupStat
     } else {
         Style::default().fg(theme.text_faint)
     };
-    buf.set_string(area.x, area.y, "❯", prompt_style);
+    buf.set_string(area.x, area.y, ">", prompt_style);
     let ta_area = match area.width.checked_sub(PROMPT_GUTTER) {
         Some(width) => Rect {
             x: area.x + PROMPT_GUTTER,
@@ -875,7 +875,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupStat
         .flatten();
 }
 
-/// One-row status-tab strip: `●3 ◌2 ⚙1 …` with the selected tab expanded
+/// One-row status-tab strip: `●3 ◌2 *1 …` with the selected tab expanded
 /// to name its glyph and empty tabs folded out.
 fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
     if area.width < 4 {
