@@ -9,6 +9,7 @@ pub mod asset_tools;
 pub mod citation_tools;
 pub mod deck_tools;
 pub mod export_tools;
+pub mod preview_tools;
 pub mod slide_tools;
 
 use agentik_core::tools::ToolRegistration;
@@ -31,6 +32,7 @@ pub fn deck_all_registrations(handle: DeckHandle) -> Vec<ToolRegistration> {
     regs.extend(slide_tools::registrations(state.clone()));
     regs.extend(asset_tools::registrations(state.clone()));
     regs.extend(export_tools::registrations(state.clone()));
+    regs.extend(preview_tools::registrations(state.clone()));
     regs.extend(citation_tools::registrations(state));
     regs
 }

@@ -600,6 +600,18 @@ impl DeckStore {
         Ok(out)
     }
 
+    /// Delete one export row (preview rows are removed once rendered, so
+    /// their one-time tokens die with them).
+    pub async fn delete_export(&self, export_id: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM deck_exports WHERE id = ?1",
+                turso::params![export_id],
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Mark every queued/running export as errored (restart sweep: print
     /// tokens are hash-only, so those jobs cannot be re-driven).
     pub async fn fail_stale_exports(&self, message: &str) -> Result<()> {

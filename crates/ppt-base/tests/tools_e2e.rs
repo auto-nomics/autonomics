@@ -48,8 +48,8 @@ async fn full_deck_lifecycle_through_tools() {
     let handle = DeckHandle::spawn_in_memory().await.unwrap();
     let regs = deck_all_registrations(handle.clone());
 
-    // 5 deck + 4 slide + 1 asset + 2 export (export + status) + 1 citation
-    assert_eq!(regs.len(), 13);
+    // 5 deck + 4 slide + 1 asset + 2 export + 1 preview + 1 citation
+    assert_eq!(regs.len(), 14);
 
     // 1. deck_create (meeting template)
     let created = call_tool(

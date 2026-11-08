@@ -63,6 +63,15 @@ impl DeckShared {
         })
     }
 
+    /// Swap the export backend (tests inject stubs).
+    pub fn with_exporter(
+        mut self,
+        exporter: std::sync::Arc<dyn crate::export::DeckExporter>,
+    ) -> Self {
+        self.exporter = exporter;
+        self
+    }
+
     /// Attach the shared VFS storage (path-based asset attachment).
     #[cfg(feature = "vfs")]
     pub fn with_vfs(mut self, storage: Option<std::sync::Arc<vfs::OpendalFileStorage>>) -> Self {
@@ -217,6 +226,78 @@ impl DeckShared {
         deck.meta.created_at = row.created_at.clone();
         deck.meta.updated_at = row.updated_at;
         Ok(deck)
+    }
+
+    /// Render ONE slide to PNG for agent preview: mint an ephemeral
+    /// print-token row, run the exporter synchronously (NOT via the
+    /// queue — the caller is waiting), then delete the row so the token
+    /// dies immediately. `no` is 1-based; `clicks` selects the reveal
+    /// state (pass the slide's total for fully-revealed).
+    pub async fn preview_slide_png(
+        &self,
+        deck_id: &str,
+        no: usize,
+        clicks: u32,
+        dpi: u32,
+    ) -> Result<Vec<u8>> {
+        let deck = self.load_deck(deck_id).await?;
+        let slide = deck
+            .slide(no)
+            .ok_or_else(|| crate::Error::SlideOutOfRange {
+                deck: deck_id.to_string(),
+                no,
+                total: deck.len(),
+            })?;
+
+        let raw_token = uuid::Uuid::new_v4().simple().to_string();
+        let token_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(raw_token.as_bytes());
+            format!("{:x}", h.finalize())
+        };
+        let export_id = format!("preview-{}", uuid::Uuid::new_v4().simple());
+        let now = chrono::Utc::now().to_rfc3339();
+        let record = ExportRecord {
+            id: export_id.clone(),
+            deck_id: deck_id.to_string(),
+            format: crate::store::ExportFormat::Png,
+            status: ExportStatus::Queued,
+            params: serde_json::json!({
+                "preview": true,
+                "slide": no,
+                "clicks": clicks,
+            })
+            .to_string(),
+            print_token_hash: Some(token_hash),
+            token_expires_at: Some(
+                (chrono::Utc::now() + chrono::Duration::seconds(5 * 60)).to_rfc3339(),
+            ),
+            artifact_key: None,
+            artifact_mime: None,
+            artifact_size: None,
+            error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        self.store.create_export(&record).await?;
+
+        let job = crate::export::ExportJob {
+            deck_id: deck_id.to_string(),
+            export_id: export_id.clone(),
+            format: crate::store::ExportFormat::Png,
+            dpi,
+            pages: vec![no],
+            canvas_width: deck.meta.canvas(),
+            canvas_height: deck.meta.canvas_height(),
+            notes: Vec::new(),
+            print_token: raw_token,
+        };
+        let result = self.exporter.preview_png(&job, no as u32, clicks).await;
+        // The token row dies with the preview either way.
+        let _ = self.store.delete_export(&export_id).await;
+        let _ = slide;
+        result
     }
 
     /// Replace canonical markdown and return the re-assembled deck.

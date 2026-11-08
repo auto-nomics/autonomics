@@ -53,8 +53,10 @@ crates/ppt-base
 
 `deck_create`(meeting/defense/figures 模板)、`deck_list/get/outline/
 delete`、`slide_patch/insert/remove/move`、`asset_attach`
-(caption + provenance)、`deck_export` / `deck_export_status`、
-`deck_references`。能力门控:与 writing 同挂 `AgentKind::enable_writing()`。
+(vfs_path 优先,caption + provenance)、`deck_export` /
+`deck_export_status`、`deck_slide_preview`(单页渲染 PNG 以图像块
+回读,click 状态可选,agent 唯一"看见"成品的方式)、`deck_references`。
+能力门控:与 writing 同挂 `AgentKind::enable_writing()`。
 
 ## 配置
 

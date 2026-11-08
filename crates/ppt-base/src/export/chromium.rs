@@ -128,9 +128,81 @@ impl crate::export::DeckExporter for ChromiumExporter {
         let _ = browser.close().await;
         export_result
     }
+
+    async fn preview_png(&self, job: &ExportJob, slide_no: u32, clicks: u32) -> Result<Vec<u8>> {
+        ChromiumExporter::preview_png(self, job, slide_no, clicks).await
+    }
 }
 
 impl ChromiumExporter {
+    /// Single-slide synchronous preview: open the print page, DPI-scale,
+    /// goto (slide, clicks), wait, clip-screenshot. No queue, no artifact.
+    pub async fn preview_png(
+        &self,
+        job: &ExportJob,
+        slide_no: u32,
+        clicks: u32,
+    ) -> Result<Vec<u8>> {
+        if job.print_token.is_empty() {
+            return Err(Error::Export("preview job carries no print token".into()));
+        }
+        let mut browser = Browser::launch(self.options.clone())
+            .await
+            .map_err(|e| Error::Export(format!("browser launch failed: {e}")))?;
+        let result = self
+            .capture_one(&browser, job, slide_no, clicks)
+            .await;
+        let _ = browser.close().await;
+        result
+    }
+
+    async fn capture_one(
+        &self,
+        browser: &Browser,
+        job: &ExportJob,
+        slide_no: u32,
+        clicks: u32,
+    ) -> Result<Vec<u8>> {
+        let tab = browser
+            .new_tab_at(&self.print_url(&job.deck_id, &job.print_token, "single", Some("all")))
+            .await
+            .map_err(|e| Error::Export(format!("tab open failed: {e}")))?;
+        let scale = f64::from(job.dpi) / 96.0;
+        let metrics = SetDeviceMetricsOverrideParams::builder()
+            .width(i64::from(job.canvas_width))
+            .height(i64::from(job.canvas_height))
+            .device_scale_factor(scale)
+            .mobile(false)
+            .build()
+            .map_err(|e: String| Error::Export(format!("device metrics params: {e}")))?;
+        tab.page()
+            .execute(metrics)
+            .await
+            .map_err(|e| Error::Export(format!("device metrics: {e}")))?;
+        tab.evaluate(&format!("window.__deckGoto({slide_no}, {clicks})"))
+            .await
+            .map_err(|e| Error::Export(format!("goto slide {slide_no}: {e}")))?;
+        wait_ready(&tab).await?;
+        tab.screenshot_with(
+            ScreenshotParams::builder()
+                .format(CaptureScreenshotFormat::Png)
+                .clip(
+                    chromiumoxide::cdp::browser_protocol::page::Viewport::builder()
+                        .x(0.0)
+                        .y(0.0)
+                        .width(f64::from(job.canvas_width))
+                        .height(f64::from(job.canvas_height))
+                        .scale(1.0)
+                        .build()
+                        .map_err(|e: String| Error::Export(format!("viewport params: {e}")))?,
+                )
+                .capture_beyond_viewport(true)
+                .build(),
+        )
+        .await
+        .map_err(|e| Error::Export(format!("screenshot slide {slide_no}: {e}")))
+    }
+
     async fn run_job(
         &self,
         browser: &Browser,
