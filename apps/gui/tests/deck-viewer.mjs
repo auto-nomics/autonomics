@@ -272,6 +272,32 @@ try {
   const notes = await page.locator('.deck-notes-body').innerText().catch(() => '');
   assert.ok(notes.includes('封面备注'), `notes: ${notes}`);
 
+  // Audience fullscreen and a separately synchronized presenter window.
+  await page.getByRole('button', { name: '全屏展示' }).click();
+  await page.waitForFunction(() => !!document.fullscreenElement);
+  assert.equal(await page.locator('.deck-notes').isVisible(), false, 'notes stay private in fullscreen');
+  await page.getByRole('button', { name: '退出全屏' }).click();
+  await page.waitForFunction(() => !document.fullscreenElement);
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: '打开讲演者模式' }).click();
+  const presenter = await popupPromise;
+  await presenter.getByText('已连接观众画面').waitFor();
+  assert.match(await presenter.locator('.presenter-notes-body').innerText(), /封面备注/);
+  await presenter.getByRole('button', { name: '下一动画 / 页' }).click();
+  await page.locator('.deck-slide[data-slide-no="2"]').waitFor();
+  await presenter.getByText('下一动画', { exact: true }).waitFor();
+  await presenter.getByRole('button', { name: '下一动画 / 页' }).click();
+  await page.waitForFunction(() => document.querySelector('.deck-counter')?.textContent?.includes('click 1/3'));
+  await page.getByRole('button', { name: '上一页' }).click();
+  await presenter.waitForFunction(() => document.querySelector('.presenter-current [data-slide-no="2"]'));
+  await presenter.getByRole('button', { name: '上一动画 / 页' }).click();
+  await page.locator('.deck-slide[data-slide-no="1"]').waitFor();
+  await presenter.getByRole('button', { name: '开始', exact: true }).click();
+  await presenter.getByRole('button', { name: '暂停', exact: true }).waitFor();
+  await presenter.getByRole('button', { name: '重置', exact: true }).click();
+  assert.equal(await presenter.getByLabel('计时').innerText(), '00:00:00');
+  await presenter.close();
+
   // CSS can be edited independently and remains scoped on the print surface.
   await page.getByRole('tab', { name: 'CSS 样式' }).click();
   await page.getByRole('button', { name: '载入默认主题' }).click();

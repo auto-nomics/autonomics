@@ -7,9 +7,12 @@ import { initTheme } from "@/lib/theme";
 
 const container = document.querySelector<HTMLDivElement>("#app");
 if (!container) throw new Error("#app missing");
-// Headless deck export uses a separate bootstrap.
-if (location.pathname === "/deck/print") {
+if (new URLSearchParams(location.search).has("deckPresenter")) {
+  void import("@/features/deck/presenter/presenter-main").then(m => m.bootPresenterPage(container));
+} else if (location.pathname === "/deck/print") {
   void import("@/features/deck/print/print-main").then(m => m.bootPrintPage(container));
+} else if (location.pathname === "/deck/presenter") {
+  void import("@/features/deck/presenter/presenter-main").then(m => m.bootPresenterPage(container));
 } else {
   initTheme();
   ReactDOM.createRoot(container).render(

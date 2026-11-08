@@ -4,10 +4,12 @@
  * the slide thumbnail rail.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize, Minimize, Presentation } from "lucide-react";
 import type { DeckPayload, SlideSpec } from "../deck-api";
 import { clickTotal } from "./deck-model";
 import { SlideView } from "./slide-view";
+import { isTauri } from "@/lib/is-tauri";
+import { stepNav, type NavState, type PresentationMessage } from "./presentation-sync";
 
 export interface DeckRendererProps {
   payload: DeckPayload;
@@ -15,11 +17,6 @@ export interface DeckRendererProps {
   /** 1-based start slide (from the opener). */
   startSlide?: number;
   onSlideChange?: (slide: number) => void;
-}
-
-interface NavState {
-  slide: number; // 1-based
-  click: number;
 }
 
 export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckRendererProps): React.ReactNode {
@@ -33,6 +30,12 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
     slide: Math.min(Math.max(startSlide ?? 1, 1), Math.max(slides.length, 1)),
     click: 0,
   });
+  const rendererRef = useRef<HTMLDivElement | null>(null);
+  const channelRef = useRef<BroadcastChannel | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const nativePresenterRef = useRef<import("@tauri-apps/api/webviewWindow").WebviewWindow | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [presenterError, setPresenterError] = useState("");
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
   const [zoom, setZoom] = useState(1);
@@ -79,26 +82,75 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
 
   const go = useCallback(
     (delta: 1 | -1) => {
-      setNav(({ slide, click }) => {
-        const s = slides[slide - 1];
-        const t = s ? clickTotal(s) : 0;
-        const c = Math.min(Math.max(click, s?.clickPlan?.clicksStart ?? 0), t);
-        if (delta === 1) {
-          if (c < t) return { slide, click: c + 1 };
-          if (slide < slides.length) return { slide: slide + 1, click: 0 };
-          return { slide, click: c };
-        }
-        if (c > (s?.clickPlan?.clicksStart ?? 0)) return { slide, click: c - 1 };
-        if (slide > 1) {
-          const prev = slides[slide - 2];
-          const pt = prev ? clickTotal(prev) : 0;
-          return { slide: slide - 1, click: pt };
-        }
-        return { slide, click: c };
-      });
+      setNav(current => stepNav(current, slides, delta));
     },
     [slides],
   );
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement === rendererRef.current) {
+      void document.exitFullscreen().catch(() => setPresenterError("无法退出全屏"));
+    } else if (rendererRef.current?.requestFullscreen) {
+      setZoom(1); setPan({ x: 0, y: 0 });
+      void rendererRef.current.requestFullscreen().catch(() => setPresenterError("无法进入全屏，请检查浏览器权限"));
+    } else setPresenterError("当前环境不支持全屏展示");
+  }, []);
+
+  useEffect(() => {
+    const update = () => setFullscreen(document.fullscreenElement === rendererRef.current);
+    document.addEventListener("fullscreenchange", update);
+    return () => document.removeEventListener("fullscreenchange", update);
+  }, []);
+
+  const stateRef = useRef({ payload, nav, dark });
+  stateRef.current = { payload, nav, dark };
+  useEffect(() => {
+    channelRef.current?.postMessage({ type: "state", payload, nav, dark } satisfies PresentationMessage);
+  }, [payload, nav, dark]);
+  useEffect(() => () => {
+    channelRef.current?.postMessage({ type: "closed" } satisfies PresentationMessage);
+    channelRef.current?.close();
+  }, []);
+
+  const openPresenter = () => {
+    if (popupRef.current && !popupRef.current.closed) { popupRef.current.focus(); return; }
+    if (nativePresenterRef.current) { void nativePresenterRef.current.setFocus().catch(() => { nativePresenterRef.current = null; }); return; }
+    if (typeof BroadcastChannel === "undefined") { setPresenterError("当前环境不支持讲演者窗口同步"); return; }
+    const session = crypto.randomUUID();
+    const channel = new BroadcastChannel(`deck-presenter-${session}`);
+    channelRef.current?.close();
+    channelRef.current = channel;
+    channel.onmessage = (event: MessageEvent<PresentationMessage>) => {
+      const message = event.data;
+      if (message.type === "ready") channel.postMessage({ type: "state", ...stateRef.current } satisfies PresentationMessage);
+      else if (message.type === "step") setNav(current => stepNav(current, stateRef.current.payload.slides, message.delta));
+      else if (message.type === "goto" && Number.isInteger(message.slide) && message.slide >= 1 && message.slide <= stateRef.current.payload.slides.length) setNav({ slide: message.slide, click: 0 });
+    };
+    if (isTauri) {
+      void import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow }) => {
+        const presenter = new WebviewWindow(`deck-presenter-${session}`, {
+          url: `index.html?deckPresenter=${encodeURIComponent(session)}`,
+          title: "讲演者模式", width: 1200, height: 800,
+        });
+        nativePresenterRef.current = presenter;
+        await presenter.once("tauri://error", event => {
+          nativePresenterRef.current = null;
+          channel.close();
+          if (channelRef.current === channel) channelRef.current = null;
+          setPresenterError(`无法打开讲演者窗口：${String(event.payload)}`);
+        });
+        await presenter.onCloseRequested(() => { nativePresenterRef.current = null; });
+      }).catch(error => { channel.close(); channelRef.current = null; setPresenterError(`无法打开讲演者窗口：${String(error)}`); });
+      setPresenterError("");
+      return;
+    }
+    const url = new URL("/deck/presenter", location.href);
+    url.searchParams.set("session", session);
+    const popup = window.open(url.href, "_blank", "popup,width=1200,height=800");
+    if (!popup) { channel.close(); channelRef.current = null; setPresenterError("讲演者窗口被拦截，请允许弹出窗口后重试"); return; }
+    popupRef.current = popup;
+    setPresenterError("");
+  };
 
   // Keyboard: slidev-style arrows/space navigation while the stage has focus.
   useEffect(() => {
@@ -107,7 +159,8 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
       // Space activates focused controls (for example an outline expander)
       // and must not simultaneously advance the presentation.
       if (e.key === " " && e.target instanceof Element && e.target.closest("button, a, select, [contenteditable='true']")) return;
-      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
+      if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey && !e.altKey && !(e.target instanceof Element && e.target.closest("[contenteditable=true]"))) { e.preventDefault(); toggleFullscreen(); }
+      else if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") {
         e.preventDefault();
         go(1);
       } else if (e.key === "ArrowLeft" || e.key === "PageUp") {
@@ -117,7 +170,7 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [go]);
+  }, [go, toggleFullscreen]);
 
   // Click visibility re-applied inside SlideView; reset click on slide change.
   useEffect(() => {
@@ -139,7 +192,7 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
   }, [deck.id]);
 
   return (
-    <div className={`deck-renderer ${dark ? "deck-renderer--dark" : "deck-renderer--light"}`}>
+    <div ref={rendererRef} className={`deck-renderer ${dark ? "deck-renderer--dark" : "deck-renderer--light"}`}>
       <main className="deck-main">
         <div className="deck-stage" ref={stageRef} data-deck-stage="">
           <div
@@ -168,7 +221,10 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
           </div>
         </div>
 
+        {presenterError && <div className="deck-presentation-error" role="alert">{presenterError} <button type="button" onClick={() => setPresenterError("")}>×</button></div>}
         <div className="deck-controls">
+          <button type="button" className="deck-btn" onClick={openPresenter} aria-label="打开讲演者模式" title="打开讲演者模式"><Presentation size={16} /></button>
+          <button type="button" className="deck-btn" onClick={toggleFullscreen} aria-label={fullscreen ? "退出全屏" : "全屏展示"} title="全屏展示 (F)">{fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}</button>
           <button type="button" className="deck-btn" onClick={() => go(-1)} aria-label="上一页">
             <ChevronLeft size={16} />
           </button>

@@ -22,6 +22,7 @@ pub fn router() -> Router {
         // Headless-export print page: same SPA shell, the bundle
         // dispatches on the pathname (features/deck print entry).
         .route("/deck/print", get(gui_index))
+        .route("/deck/presenter", get(gui_index))
         .route("/assets/gui.js", get(gui_javascript))
         .route("/assets/gui.mjs", get(gui_worker))
         .route("/assets/gui.css", get(gui_stylesheet))
@@ -105,6 +106,20 @@ mod tests {
         let body = std::str::from_utf8(&body).unwrap();
         assert!(!body.contains("__AUTONOMICS_GATEWAY_TOKEN__"), "{body}");
         assert!(!body.to_lowercase().contains("token"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn presenter_shell_is_available() {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .uri("/deck/presenter")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
     }
 
     #[tokio::test]
