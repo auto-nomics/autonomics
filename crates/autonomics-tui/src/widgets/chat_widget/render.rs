@@ -127,51 +127,16 @@ fn try_pretty_json(text: &str) -> String {
     }
 }
 
-// ── Tool call / result rendering ─────────────────────────────────────
-//
-// Follows the claude-code design system ported into `theme` (source:
-// cola-runner/awesome-tui-design `designs/claude-code/DESIGN.md`): tool
-// blocks are framed in the hot-pink family (`accent_alt`) over the
-// documented tool-output surface, the tool's key argument sits in the
-// border header, block bodies are syntax-highlighted rather than bare
-// dim strings, and long output is elided with an explicit `+N more
-// lines` marker instead of flooding the transcript.
-
-/// Input lines shown inside a tool-call block before elision.
-const TOOL_INPUT_MAX_LINES: usize = 12;
-/// Excerpt lines shown for successful tool results.
-const TOOL_RESULT_MAX_LINES: usize = 8;
-/// Failure output matters more; allow a longer excerpt.
-const TOOL_ERROR_MAX_LINES: usize = 24;
-
-/// Input keys consulted, in order, for the tool-block header excerpt.
-const HEADER_KEYS: [&str; 9] = [
-    "command", "cmd", "file_path", "path", "file", "url", "query", "pattern", "q",
-];
-
-/// Best-effort key argument for the tool header — e.g. the shell command
-/// for a process call or the path for a file reader. `None` when the
-/// input is not an object carrying any known key.
-fn header_excerpt(input: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(input.trim()).ok()?;
-    let object = value.as_object()?;
-    for key in HEADER_KEYS {
-        if let Some(found) = object.get(key) {
-            let excerpt = match found {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
-            let excerpt = excerpt.trim().to_string();
-            if !excerpt.is_empty() {
-                return Some(excerpt);
-            }
-        }
-    }
-    None
-}
+// Tool activity stays visually subordinate to the conversation. Long values are
+// explicitly truncated so the transcript remains easy to scan.
+const TOOL_RESULT_MAX_LINES: usize = 4;
+const TOOL_ERROR_MAX_LINES: usize = 8;
 
 /// Cut `text` to `max` display columns, marking the cut with `…`.
 fn truncate_plain(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
     if UnicodeWidthStr::width(text) <= max {
         return text.to_string();
     }
@@ -217,131 +182,58 @@ fn truncate_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// Draw a `┌─ header ─…┐` frame around `content` rows, hugging the content
-/// up to `width` columns. Rows must already be truncated to the inner
-/// width so the right border never wraps; padding and elision carry `bg`.
-fn boxed_block(
-    header: &str,
-    content: Vec<Vec<Span<'static>>>,
-    elision: Option<String>,
-    width: u16,
-    border: Style,
-    elision_style: Style,
-    bg: Color,
-) -> Vec<Line<'static>> {
-    let avail = (width as usize).max(8);
-    let inner_cap = avail.saturating_sub(4).max(1);
-
-    let mut header_text = header.to_string();
-    if UnicodeWidthStr::width(header_text.as_str()) + 5 > avail {
-        header_text = truncate_plain(&header_text, inner_cap);
+/// Add a left-only rail with rounded ends to expanded tool activity.
+fn tool_rail(lines: Vec<Line<'static>>, width: u16, color: Color) -> Vec<Line<'static>> {
+    if width == 0 {
+        return Vec::new();
     }
-    let header_w = UnicodeWidthStr::width(header_text.as_str());
-
-    let row_width = |row: &[Span<'static>]| -> usize {
-        row.iter()
-            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-            .sum()
-    };
-    let content_w = content.iter().map(|r| row_width(r)).max().unwrap_or(0);
-    let elision_w = elision
-        .as_deref()
-        .map(|e| UnicodeWidthStr::width(e))
-        .unwrap_or(0);
-
-    let box_w = (header_w + 5)
-        .max(content_w + 4)
-        .max(elision_w + 4)
-        .min(avail);
-    let inner = box_w - 4;
-
-    let mut lines = Vec::with_capacity(content.len() + 3);
-
-    // Top border with the labeled header.
-    let fill = box_w - header_w - 5;
-    lines.push(Line::from(vec![
-        Span::styled(format!("┌─ {header_text} "), border),
-        Span::styled(format!("{}┐", "─".repeat(fill)), border),
-    ]));
-
-    for row in content {
-        let pad = inner.saturating_sub(row_width(&row));
-        let mut spans = Vec::with_capacity(row.len() + 3);
-        spans.push(Span::styled("│ ", border));
-        spans.extend(row);
-        if pad > 0 {
-            spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-        }
-        spans.push(Span::styled("│", border));
-        lines.push(Line::from(spans));
+    let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    let mut framed = vec![Line::from(Span::styled("╭", style))];
+    for line in lines {
+        let mut spans = vec![Span::styled(if width > 1 { "┃ " } else { "┃" }, style)];
+        spans.extend(truncate_spans(line.spans, width.saturating_sub(2) as usize));
+        framed.push(Line::from(spans));
     }
-
-    if let Some(e) = elision {
-        let pad = inner.saturating_sub(UnicodeWidthStr::width(e.as_str()));
-        let mut spans = Vec::with_capacity(4);
-        spans.push(Span::styled("│ ", border));
-        spans.push(Span::styled(e, elision_style));
-        if pad > 0 {
-            spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
-        }
-        spans.push(Span::styled("│", border));
-        lines.push(Line::from(spans));
-    }
-
-    lines.push(Line::from(Span::styled(
-        format!("└{}┘", "─".repeat(box_w - 2)),
-        border,
-    )));
-    lines
+    framed.push(Line::from(Span::styled("╰", style)));
+    framed
 }
 
-/// Render a tool call as a bordered block: `┌─ Name: key-arg ─┐` with the
-/// pretty-printed, JSON-highlighted input inside.
+/// Show the tool name and a compact, single-line representation of its input.
 fn render_tool_call(name: &str, input: &str, width: u16) -> Vec<Line<'static>> {
     let theme = crate::theme::current();
-    let raised = theme.md.surface.raised;
-    let border = Style::default().fg(theme.accent_alt).bg(raised);
-
-    let mut header = name.to_string();
-    if let Some(arg) = header_excerpt(input) {
-        header.push_str(": ");
-        header.push_str(&arg);
+    let clean_name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let summary = match serde_json::from_str::<serde_json::Value>(input.trim()) {
+        Ok(serde_json::Value::Object(map)) => map
+            .iter()
+            .map(|(key, value)| {
+                let value = match value {
+                    serde_json::Value::String(s) => {
+                        s.split_whitespace().collect::<Vec<_>>().join(" ")
+                    }
+                    other => other.to_string(),
+                };
+                format!("{key}={value}")
+            })
+            .collect::<Vec<_>>()
+            .join("  "),
+        Ok(value) => value.to_string(),
+        Err(_) => input.split_whitespace().collect::<Vec<_>>().join(" "),
+    };
+    let prefix = format!("• {clean_name}");
+    let remaining = (width as usize).saturating_sub(UnicodeWidthStr::width(prefix.as_str()) + 2);
+    let mut spans = vec![Span::styled(
+        truncate_plain(&prefix, width as usize),
+        Style::default()
+            .fg(theme.accent_alt)
+            .add_modifier(Modifier::BOLD),
+    )];
+    if !summary.is_empty() && remaining > 0 {
+        spans.push(Span::styled(
+            format!("  {}", truncate_plain(&summary, remaining)),
+            Style::default().fg(theme.text_faint),
+        ));
     }
-
-    let mut content: Vec<Vec<Span<'static>>> = Vec::new();
-    let mut elision = None;
-    if !input.trim().is_empty() {
-        let pretty = try_pretty_json(input);
-        let token_lines = super::md_highlight::highlight_code(
-            &pretty,
-            Some("json"),
-            super::md_theme::MdTokens::syntax_theme_name(),
-            theme.md.syntax.code_fg,
-            raised,
-        );
-        let total = token_lines.len();
-        let take = total.min(TOOL_INPUT_MAX_LINES);
-        for token_line in token_lines.into_iter().take(take) {
-            let spans: Vec<Span<'static>> = token_line
-                .into_iter()
-                .map(|(text, style)| Span::styled(text, style))
-                .collect();
-            content.push(truncate_spans(spans, width.saturating_sub(4).max(1) as usize));
-        }
-        if total > take {
-            elision = Some(format!("… +{} more lines", total - take));
-        }
-    }
-
-    boxed_block(
-        &header,
-        content,
-        elision,
-        width,
-        border,
-        Style::default().fg(theme.text_faint).bg(raised),
-        raised,
-    )
+    vec![Line::from(spans)]
 }
 
 /// Render a tool result as a compact status line followed by a bounded,
@@ -471,7 +363,11 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             }
             lines
         }
-        ChatLine::ToolCall { name, input } => render_tool_call(name, input, area.width),
+        ChatLine::ToolCall { name, input } => tool_rail(
+            render_tool_call(name, input, area.width.saturating_sub(2)),
+            area.width,
+            crate::theme::current().accent_alt,
+        ),
         ChatLine::ToolBackground { seq, name } => {
             vec![Line::from(Span::styled(
                 format!("⏳ {name} (background task #{seq})"),
@@ -480,7 +376,15 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
                     .add_modifier(Modifier::DIM),
             ))]
         }
-        ChatLine::ToolResult { ok, content } => render_tool_result(*ok, content, area.width),
+        ChatLine::ToolResult { ok, content } => tool_rail(
+            render_tool_result(*ok, content, area.width.saturating_sub(2)),
+            area.width,
+            if *ok {
+                crate::theme::current().success
+            } else {
+                crate::theme::current().error
+            },
+        ),
         ChatLine::Error(text) => {
             let mut lines = Vec::new();
             let mut first = true;
@@ -738,7 +642,11 @@ mod tests {
     }
 
     fn render(msg: &ChatLine, width: u16) -> Vec<Line<'static>> {
-        render_line_owned(msg, Rect::new(0, 0, width, 20))
+        match msg {
+            ChatLine::ToolCall { name, input } => render_tool_call(name, input, width),
+            ChatLine::ToolResult { ok, content } => render_tool_result(*ok, content, width),
+            _ => render_line_owned(msg, Rect::new(0, 0, width, 20)),
+        }
     }
 
     fn span_width(line: &Line<'_>) -> usize {
@@ -749,65 +657,36 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_renders_boxed_block_with_key_arg_header() {
-        let msg = ChatLine::ToolCall {
-            name: "Bash".to_string(),
-            input: r#"{"command": "cargo test -p autonomics-tui"}"#.to_string(),
-        };
-        let lines = render(&msg, 80);
-        // Pretty-printing expands the object to `{` / `"command": …` / `}`
-        // — header + three framed input rows + bottom.
-        assert_eq!(lines.len(), 5, "lines: {lines:?}");
-        let top = line_text(&lines[0]);
-        assert!(
-            top.starts_with("┌─ Bash: cargo test -p autonomics-tui "),
-            "header must carry tool name and key argument: {top}"
+    fn expanded_tool_rail_has_rounded_ends_and_fits_width() {
+        let lines = tool_rail(vec![Line::from("long content")], 6, Color::Red);
+        assert_eq!(
+            lines.iter().map(line_text).collect::<Vec<_>>(),
+            vec!["╭", "┃ lon…", "╰"]
         );
-        assert!(top.ends_with('┐'), "closed top border: {top}");
-        assert!(line_text(&lines[1]).starts_with("│ "), "input framed: {lines:?}");
-        assert!(line_text(&lines[4]).starts_with('└'), "closed bottom: {lines:?}");
-        // Borders take the hot-pink family token, not warning.
-        let theme = crate::theme::current();
-        assert_eq!(lines[0].spans[0].style.fg, Some(theme.accent_alt));
+        assert!(lines.iter().all(|line| span_width(line) <= 6));
     }
 
     #[test]
-    fn tool_call_without_json_input_still_frames_the_name() {
+    fn tool_call_is_a_compact_summary() {
         let msg = ChatLine::ToolCall {
-            name: "Bash".to_string(),
-            input: "plain text".to_string(),
+            name: "Bash".into(),
+            input: r#"{"command":"cargo test","timeout":30}"#.into(),
         };
         let lines = render(&msg, 80);
-        let top = line_text(&lines[0]);
-        assert!(top.starts_with("┌─ Bash "), "no excerpt for non-JSON: {top}");
-        assert!(line_text(&lines.last().unwrap()).starts_with('└'));
-        // Box hugs the plain-text input row.
-        assert!(lines.iter().all(|l| span_width(l) <= 80));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            line_text(&lines[0]),
+            "• Bash  command=cargo test  timeout=30"
+        );
     }
 
     #[test]
-    fn tool_call_input_elides_past_the_line_cap() {
-        let items: Vec<String> = (0..40).map(|i| format!("\"item-{i}\"")).collect();
-        let msg = ChatLine::ToolCall {
-            name: "Bash".to_string(),
-            input: format!("[{}]", items.join(",")),
-        };
-        let lines = render(&msg, 80);
-        let joined = lines
-            .iter()
-            .map(|l| line_text(l))
-            .collect::<Vec<_>>()
-            .join("\n");
-        // 42 pretty-printed lines -> 12 shown + explicit elision inside the box.
-        assert!(
-            joined.contains("+30 more lines"),
-            "expected explicit elision marker:\n{joined}"
-        );
-        assert!(
-            line_text(&lines.last().unwrap()).starts_with('└'),
-            "frame still closed after elision"
-        );
-        assert!(lines.iter().all(|l| span_width(l) <= 80));
+    fn tool_call_handles_multiline_and_narrow_width() {
+        let lines = render_tool_call("工具", "first\nsecond", 12);
+        assert_eq!(lines.len(), 1);
+        assert!(span_width(&lines[0]) <= 12);
+        assert!(line_text(&lines[0]).ends_with('…'));
+        assert!(span_width(&render_tool_call("工具", "x", 0)[0]) == 0);
     }
 
     #[test]
@@ -829,8 +708,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            joined.contains("+14 more lines"),
-            "8 excerpt lines shown of 22:\n{joined}"
+            joined.contains("+18 more lines"),
+            "4 excerpt lines shown of 22:\n{joined}"
         );
     }
 
