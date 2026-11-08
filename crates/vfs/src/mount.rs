@@ -241,6 +241,13 @@ pub struct MountDefinition {
     /// Reject mutations through this mount.
     #[serde(default)]
     pub read_only: bool,
+    /// Filesystem-domain name this mount partitions. When set, the
+    /// address `"<domain>://rest"` resolves to `"<path>/rest"` through
+    /// this mount — the domain is addressable by name, and the compute
+    /// catalog's data domains validate their declared id against it.
+    /// At most one mount may declare a given domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
     /// Unix-style defaults and path policies enforced by this mount.
     #[serde(default)]
     pub permissions: MountPermissions,
@@ -271,6 +278,7 @@ impl VfsManifest {
                 config: BackendConfig::local(&root),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "default".into(),
                 source: "/".into(),
@@ -438,9 +446,31 @@ impl MountedObjectStore {
 
         let mut mounts = Vec::new();
         let mut seen_mount_paths = HashMap::new();
+        let mut seen_domains = HashMap::new();
         for definition in &manifest.mount {
             if !definition.path.starts_with('/') {
                 return Err(MountError::InvalidMountPath(definition.path.clone()));
+            }
+            if let Some(domain) = &definition.domain {
+                if domain.is_empty()
+                    || domain.starts_with('-')
+                    || !domain
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+                {
+                    return Err(MountError::Config(format!(
+                        "mount '{}': invalid domain name '{domain}'",
+                        definition.path
+                    )));
+                }
+                if seen_domains
+                    .insert(domain.clone(), definition.path.clone())
+                    .is_some()
+                {
+                    return Err(MountError::Config(format!(
+                        "domain '{domain}' is declared by more than one mount"
+                    )));
+                }
             }
             let backend =
                 backends
@@ -527,6 +557,17 @@ impl MountedObjectStore {
             .iter()
             .map(|m| m.definition.path.clone())
             .collect()
+    }
+
+    /// The virtual mount prefix of the mount declaring `domain`. Addresses
+    /// spelled `<domain>://rest` resolve against this prefix.
+    pub fn domain_prefix(&self, domain: &str) -> Option<String> {
+        self.mounts
+            .read()
+            .expect("VFS mount lock poisoned")
+            .iter()
+            .find(|m| m.definition.domain.as_deref() == Some(domain))
+            .map(|m| m.definition.path.clone())
     }
 
     fn find(&self, path: &Path) -> Option<Mount> {
@@ -910,6 +951,7 @@ mod tests {
             ],
             mount: vec![
                 MountDefinition {
+                    domain: None,
                     path: "/".into(),
                     backend: "default".into(),
                     source: root.to_string_lossy().to_string(),
@@ -917,6 +959,7 @@ mod tests {
                     permissions: MountPermissions::default(),
                 },
                 MountDefinition {
+                    domain: None,
                     path: "/data/panels".into(),
                     backend: "nested".into(),
                     source: nested.join("remote-prefix").to_string_lossy().to_string(),
@@ -999,6 +1042,7 @@ mod tests {
                 config: BackendConfig::local(root.path().to_string_lossy().to_string()),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/outside".into(),
                 backend: "local".into(),
                 source: outside.path().to_string_lossy().to_string(),
@@ -1020,6 +1064,7 @@ mod tests {
             config: BackendConfig::local(root.path().to_string_lossy().to_string()),
         };
         let mount = MountDefinition {
+            domain: None,
             path: "/data".into(),
             backend: "default".into(),
             source: "/".into(),
@@ -1054,6 +1099,7 @@ mod single_file_tests {
                 config: BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/data/panel.parquet".into(),
                 backend: "local".into(),
                 source: source.to_string_lossy().to_string(),

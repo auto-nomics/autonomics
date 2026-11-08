@@ -10,6 +10,7 @@ fn shadow_storage(host: &std::path::Path, shadow: &std::path::Path) -> vfs::Open
             config: vfs::BackendConfig::local(shadow.to_string_lossy().to_string()),
         }],
         mount: vec![vfs::MountDefinition {
+            domain: None,
             path: host.to_string_lossy().to_string(),
             backend: "shadow".into(),
             source: shadow.to_string_lossy().to_string(),

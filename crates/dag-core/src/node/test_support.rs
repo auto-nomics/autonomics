@@ -36,6 +36,7 @@ pub(crate) fn mounted_vfs(files: &[(&str, &[u8])]) -> MountedVfsHarness {
         ],
         mount: vec![
             MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "runtime".into(),
                 source: "/".into(),
@@ -43,6 +44,7 @@ pub(crate) fn mounted_vfs(files: &[(&str, &[u8])]) -> MountedVfsHarness {
                 permissions: Default::default(),
             },
             MountDefinition {
+                domain: None,
                 path: "/bundles/panels".into(),
                 backend: "external".into(),
                 source: "/".into(),

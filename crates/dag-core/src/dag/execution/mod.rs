@@ -28,6 +28,7 @@ mod gc;
 pub mod heartbeat;
 mod limited;
 mod local;
+mod placement;
 pub mod private_native;
 mod process;
 mod remote;

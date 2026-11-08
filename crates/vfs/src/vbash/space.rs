@@ -363,6 +363,7 @@ mod tests {
                 config: crate::BackendConfig::local(root.to_string_lossy().into_owned()),
             }],
             mount: vec![crate::MountDefinition {
+                domain: None,
                 path: "/mounted".into(),
                 backend: "local".into(),
                 source: "/".into(),
@@ -461,6 +462,7 @@ mod tests {
             ],
             mount: vec![
                 crate::MountDefinition {
+                    domain: None,
                     path: "/mounted".into(),
                     backend: "outer".into(),
                     source: "/".into(),
@@ -468,6 +470,7 @@ mod tests {
                     permissions: Default::default(),
                 },
                 crate::MountDefinition {
+                    domain: None,
                     path: "/mounted/inner".into(),
                     backend: "inner".into(),
                     source: "/".into(),

@@ -431,6 +431,7 @@ mod tests {
                 config: crate::BackendConfig::local(root.path().to_string_lossy().into_owned()),
             }],
             mount: vec![crate::MountDefinition {
+                domain: None,
                 path: "/secure".into(),
                 backend: "secure".into(),
                 source: "/".into(),
@@ -1847,6 +1848,7 @@ mod tests {
                 config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/mounted".into(),
                 backend: "local".into(),
                 source: source_link.to_string_lossy().to_string(),
@@ -2004,6 +2006,7 @@ mod tests {
                 config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "default".into(),
                 source: source_dir.to_string_lossy().to_string(),
@@ -2038,6 +2041,7 @@ mod tests {
             }],
             mount: vec![
                 MountDefinition {
+                    domain: None,
                     path: "/".into(),
                     backend: "default".into(),
                     source: "/".into(),
@@ -2045,6 +2049,7 @@ mod tests {
                     permissions: MountPermissions::default(),
                 },
                 MountDefinition {
+                    domain: None,
                     path: "/data/ldsc".into(),
                     backend: "default".into(),
                     source: "source".into(),

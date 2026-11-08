@@ -1850,6 +1850,7 @@ mod tests {
                 config: BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "v".into(),
                 source: virtual_root.path().to_string_lossy().into_owned(),

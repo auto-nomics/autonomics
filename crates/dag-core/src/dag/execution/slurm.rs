@@ -2462,6 +2462,19 @@ impl SshDataHome {
         {
             self.validate_vfs_mapping(storage, prefix, root)?;
         }
+        // A named domain must agree with its *primary* mount partition: the
+        // `<domain>://` address layer resolves against the mount's declared
+        // domain, so a mismatch would make addresses and placements
+        // disagree about which filesystem they name. The retained output
+        // namespace is a sub-partition of the same domain and does not
+        // carry its own address.
+        if let Some(declared) = &self.domain_id
+            && storage.mount_domain(&self.vfs_prefix).as_deref() != Some(declared.as_str())
+        {
+            return Err(DagError::Schedule(
+                "data domain id must match the domain declared by its VFS mount".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -2691,6 +2704,18 @@ impl TaskArtifactStore for SshArtifactStore {
         let Some(storage) = storage else {
             return Ok(None);
         };
+        // Placement algebra decides first: a tagged placement belonging to
+        // a different domain skips physical admission and stages; a tagged
+        // same-domain placement (and every legacy untagged record) proceeds
+        // to the alias/endpoint admission below, which remains the trust
+        // step for in-place references.
+        match super::placement::placement_decision(&artifact.domain, &self.placement_domain()) {
+            super::placement::Movement::Stage => return Ok(None),
+            super::placement::Movement::Reject(reason) => {
+                return Err(DagError::Schedule(reason.to_string()));
+            }
+            super::placement::Movement::ReferenceInPlace => {}
+        }
         let Some(location) = storage
             .ssh_location(&artifact.path)
             .map_err(|error| DagError::Schedule(format!("remote input authorization: {error}")))?

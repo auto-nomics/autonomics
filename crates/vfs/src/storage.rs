@@ -333,6 +333,14 @@ impl OpendalFileStorage {
         }
     }
 
+    /// Resolve a user-supplied path — including `<domain>://` addresses —
+    /// to its normalized virtual form.
+    pub fn resolve_virtual(&self, path: &str) -> String {
+        let rewritten = self.rewrite_domain_uri(path);
+        let stripped = crate::uri::virtual_path(&rewritten).unwrap_or(&rewritten);
+        Self::normalize_path(stripped)
+    }
+
     /// If `path` (virtual, with or without a `vfs://` scheme) resolves to an
     /// object on a local-filesystem backend, return its host path.
     ///
@@ -402,7 +410,9 @@ impl OpendalFileStorage {
     /// A same-host worker must independently open the path without following
     /// symlinks and enforce its own admitted input roots.
     pub fn ssh_location(&self, path: &str) -> Result<Option<crate::SshLocation>, opendal::Error> {
-        let stripped = crate::uri::virtual_path(path).unwrap_or(path);
+        // Domain addresses (`hpc-b://…`) resolve through their mount first.
+        let rewritten = self.rewrite_domain_uri(path);
+        let stripped = crate::uri::virtual_path(&rewritten).unwrap_or(&rewritten);
         let normalized = Self::normalize_path(stripped);
         self.check_readable(&normalized)?;
         let parsed = Path::parse(&normalized).map_err(|_| {
@@ -677,6 +687,42 @@ impl OpendalFileStorage {
         let normalized = Self::normalize_path(path);
         let parsed = Path::parse(&normalized).ok()?;
         Some(mounts.handle_for(&parsed)?.read_only)
+    }
+
+    /// The domain name declared by the deepest mount covering `path`.
+    /// `None` when no mount declares one.
+    pub fn mount_domain(&self, path: &str) -> Option<String> {
+        let normalized = Self::normalize_path(path);
+        self.mount_definitions()
+            .into_iter()
+            .filter(|definition| normalized.starts_with(&Self::normalize_path(&definition.path)))
+            .max_by_key(|definition| definition.path.len())
+            .and_then(|definition| definition.domain)
+    }
+
+    /// Rewrite a `<domain>://rest` address into its `vfs://` virtual-path
+    /// form via the mount table; every other spelling passes through
+    /// unchanged. Unknown domain schemes pass through untouched so the
+    /// caller's own admission (which rejects unresolvable paths) speaks.
+    pub fn rewrite_domain_uri(&self, path: &str) -> String {
+        let Some((domain, rest)) = crate::uri::split_scheme(path) else {
+            return path.to_string();
+        };
+        if domain == crate::uri::SCHEME {
+            return path.to_string();
+        }
+        let Some(mounts) = &self.mounts else {
+            return path.to_string();
+        };
+        let Some(prefix) = mounts.domain_prefix(domain) else {
+            return path.to_string();
+        };
+        let rest = if rest.starts_with('/') {
+            rest.to_string()
+        } else {
+            format!("/{rest}")
+        };
+        crate::uri::uri(format!("{}{}", prefix.trim_end_matches('/'), rest))
     }
 
     /// Return true iff `path_a` and `path_b` resolve to the same
@@ -2129,6 +2175,7 @@ mod tests {
             ],
             mount: vec![
                 MountDefinition {
+                    domain: None,
                     path: "/".into(),
                     backend: "default".into(),
                     source: "/".into(),
@@ -2136,6 +2183,7 @@ mod tests {
                     permissions: MountPermissions::default(),
                 },
                 MountDefinition {
+                    domain: None,
                     path: "/data".into(),
                     backend: "source".into(),
                     source: "/".into(),
@@ -2294,6 +2342,7 @@ mod tests {
                 config: crate::BackendConfig::local(root.path().to_string_lossy().into_owned()),
             }],
             mount: vec![crate::MountDefinition {
+                domain: None,
                 path: "/secure".into(),
                 backend: "secure".into(),
                 source: "/".into(),
@@ -2361,6 +2410,7 @@ mod tests {
             }],
             mount: vec![
                 crate::MountDefinition {
+                    domain: None,
                     path: "/".into(),
                     backend: "shared".into(),
                     source: "/".into(),
@@ -2368,6 +2418,7 @@ mod tests {
                     permissions: crate::permission::MountPermissions::default(),
                 },
                 crate::MountDefinition {
+                    domain: None,
                     path: "/secret".into(),
                     backend: "shared".into(),
                     source: "secret".into(),
@@ -2420,6 +2471,7 @@ mod tests {
                 config: BackendConfig::local(backend_root.path().to_string_lossy().to_string()),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "default".into(),
                 source: source_dir.to_string_lossy().to_string(),
@@ -2728,5 +2780,92 @@ mod tests {
                 .any(|p| p.trim_start_matches('/') == "data/panel.parquet"),
             "expected /data/panel.parquet, got: {objects:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod domain_address_tests {
+    use super::*;
+    use crate::{BackendConfig, BackendDefinition, MountDefinition, VfsManifest};
+
+    fn domain_storage(domain: Option<&str>) -> OpendalFileStorage {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("probe.bin"), b"domain").unwrap();
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "root".into(),
+                config: BackendConfig::local(dir.path().to_string_lossy()),
+            }],
+            mount: vec![MountDefinition {
+                domain: domain.map(str::to_string),
+                path: "/data/hpc-b".into(),
+                backend: "root".into(),
+                source: "/".into(),
+                read_only: true,
+                permissions: Default::default(),
+            }],
+        };
+        let mounts = crate::MountedObjectStore::from_manifest(&manifest).unwrap();
+        OpendalFileStorage::with_mounts(dir.path(), mounts.into())
+    }
+
+    #[test]
+    fn domain_addresses_rewrite_to_their_mount_partition() {
+        let storage = domain_storage(Some("hpc-b"));
+        assert_eq!(
+            storage.rewrite_domain_uri("hpc-b://share/x.vcf"),
+            "vfs:///data/hpc-b/share/x.vcf"
+        );
+        assert_eq!(
+            storage.rewrite_domain_uri("hpc-b:///y.tsv"),
+            "vfs:///data/hpc-b/y.tsv"
+        );
+        // Non-domain spellings pass through untouched.
+        assert_eq!(
+            storage.rewrite_domain_uri("vfs://data/hpc-b/z"),
+            "vfs://data/hpc-b/z"
+        );
+        assert_eq!(storage.rewrite_domain_uri("/local/path"), "/local/path");
+        // Unknown domains pass through for the caller's own admission.
+        assert_eq!(storage.rewrite_domain_uri("nowhere://x"), "nowhere://x");
+    }
+
+    #[test]
+    fn mount_domain_reports_the_declared_partition() {
+        let storage = domain_storage(Some("hpc-b"));
+        assert_eq!(
+            storage.mount_domain("/data/hpc-b/share").as_deref(),
+            Some("hpc-b")
+        );
+        assert_eq!(storage.mount_domain("/elsewhere"), None);
+    }
+
+    #[tokio::test]
+    async fn duplicate_domain_declarations_are_rejected() {
+        let manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "root".into(),
+                config: BackendConfig::local("/tmp"),
+            }],
+            mount: vec![
+                MountDefinition {
+                    domain: Some("hpc-b".into()),
+                    path: "/one".into(),
+                    backend: "root".into(),
+                    source: "/".into(),
+                    read_only: true,
+                    permissions: Default::default(),
+                },
+                MountDefinition {
+                    domain: Some("hpc-b".into()),
+                    path: "/two".into(),
+                    backend: "root".into(),
+                    source: "/".into(),
+                    read_only: true,
+                    permissions: Default::default(),
+                },
+            ],
+        };
+        assert!(crate::MountedObjectStore::from_manifest(&manifest).is_err());
     }
 }

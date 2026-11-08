@@ -21,7 +21,7 @@ pub async fn op_write(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "write")?;
     let content = content.unwrap_or("").to_string();
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     if let Err(e) = storage.check_writable(&vpath) {
         return Ok(AgentToolResult::error(format!("write: {raw_path}: {e}")));
     }
@@ -102,7 +102,7 @@ pub async fn op_edit(
         ));
     }
 
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(
             "edit: '{raw_path}': {error}"
@@ -345,7 +345,7 @@ pub async fn op_touch(
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "touch")?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     if let Err(e) = storage.check_writable(&vpath) {
         return Ok(AgentToolResult::error(format!("touch: {raw_path}: {e}")));
     }

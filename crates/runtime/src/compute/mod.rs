@@ -181,6 +181,11 @@ pub struct DataSource {
     pub backend: DataBackend,
     #[serde(default = "yes")]
     pub read_only: bool,
+    /// Filesystem-domain name this source partitions; `<domain>://rest`
+    /// then addresses this source's mount. A compute target's DataDomain
+    /// validates its declared id against this at enrollment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
     #[serde(default)]
     pub endpoint: Option<vfs::SshEndpoint>,
     #[serde(default)]
@@ -283,6 +288,7 @@ impl DataSource {
                 config,
             }],
             mount: vec![vfs::MountDefinition {
+                domain: self.domain.clone(),
                 path: self.mount_path(),
                 backend: format!("data-{}", self.id),
                 source: "/".into(),

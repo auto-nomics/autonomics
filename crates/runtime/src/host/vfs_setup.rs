@@ -183,6 +183,7 @@ fn ensure_plugin_mounts(
         config: vfs::BackendConfig::local(development_root.to_string_lossy().into_owned()),
     });
     manifest.mount.push(vfs::MountDefinition {
+        domain: None,
         path: "/plugins/dev".into(),
         backend: DEV_BACKEND_ID.into(),
         source: "/".into(),
@@ -197,6 +198,7 @@ fn ensure_plugin_mounts(
             config: vfs::BackendConfig::local(runtime_root.to_string_lossy().into_owned()),
         });
         manifest.mount.push(vfs::MountDefinition {
+            domain: None,
             path: "/plugins/active".into(),
             backend: ACTIVE_BACKEND_ID.into(),
             source: "/".into(),
@@ -275,6 +277,7 @@ fn ensure_environment_dev_mount(
         config: vfs::BackendConfig::local(root.to_string_lossy().into_owned()),
     });
     manifest.mount.push(vfs::MountDefinition {
+        domain: None,
         path: plugin_rsi::ENVIRONMENT_DEVELOPMENT_VFS_ROOT.into(),
         backend: BACKEND_ID.into(),
         source: "/".into(),
@@ -434,6 +437,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         config: vfs::BackendConfig::local("/"),
     }];
     let mut mount = vec![MountDefinition {
+        domain: None,
         path: "/".into(),
         backend: "default".into(),
         source: config.data_dir.to_string_lossy().to_string(),
@@ -446,6 +450,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         config: vfs::BackendConfig::local(literature_root.to_string_lossy().to_string()),
     });
     mount.push(MountDefinition {
+        domain: None,
         path: "/literature".into(),
         backend: "literature".into(),
         source: "/".into(),
@@ -458,6 +463,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         config: vfs::BackendConfig::local(browser_download_root.to_string_lossy().to_string()),
     });
     mount.push(MountDefinition {
+        domain: None,
         path: BROWSER_DOWNLOAD_VFS_PATH.into(),
         backend: "browser-downloads".into(),
         source: "/".into(),
@@ -477,6 +483,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
             config: vfs::BackendConfig::oss(bucket, endpoint, ak, sk),
         });
         mount.push(MountDefinition {
+            domain: None,
             path: "/data/oss".into(),
             backend: "oss-prod".into(),
             source: "/".into(),
@@ -518,6 +525,7 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
         ),
     });
     manifest.mount.push(MountDefinition {
+        domain: None,
         path: "/literature".into(),
         backend: backend_id,
         source: "/".into(),
@@ -553,6 +561,7 @@ fn ensure_browser_download_mount(
             config: vfs::BackendConfig::local(root_text),
         });
         manifest.mount.push(MountDefinition {
+            domain: None,
             path: BROWSER_DOWNLOAD_VFS_PATH.into(),
             backend: backend_id,
             source: "/".into(),
@@ -649,6 +658,7 @@ fn ensure_workspace_mount(manifest: &mut VfsManifest, workspace_root: &std::path
             id
         });
     manifest.mount.push(MountDefinition {
+        domain: None,
         path: root.clone(),
         backend: backend_id,
         source: root,
@@ -854,6 +864,7 @@ mod literature_mount_tests {
                 config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "default".into(),
                 source: "/".into(),
@@ -1140,6 +1151,7 @@ mod executor_workspace_mount_tests {
                 config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![vfs::MountDefinition {
+                domain: None,
                 path: "/".into(),
                 backend: "default".into(),
                 source: catch_all.path().to_string_lossy().into_owned(),

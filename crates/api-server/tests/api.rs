@@ -193,6 +193,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
             ),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/literature".to_owned(),
             backend: "literature".to_owned(),
             source: "/".to_owned(),
@@ -1459,6 +1460,7 @@ async fn build_app_with_vfs() -> (axum::Router, BibShared, tempfile::TempDir) {
             ),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/literature".to_owned(),
             backend: "literature".to_owned(),
             source: "/".to_owned(),

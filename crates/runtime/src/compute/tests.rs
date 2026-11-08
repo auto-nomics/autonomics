@@ -363,6 +363,7 @@ async fn sources_survive_switches_and_restart_and_reach_existing_agent_views() {
     fs::create_dir(&root).unwrap();
     fs::write(root.join("input.txt"), b"original science input").unwrap();
     let source = DataSource {
+        domain: None,
         id: "sjtu".into(),
         name: "retained data".into(),
         backend: DataBackend::Local {
@@ -445,6 +446,7 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
             .add_source(SaveDataSource {
                 expected_revision: 1,
                 source: DataSource {
+                    domain: None,
                     id: id.into(),
                     name: id.into(),
                     read_only: true,
@@ -1927,6 +1929,7 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
         },
     });
     manifest.mount.push(vfs::MountDefinition {
+        domain: Some("hpc-b".into()),
         path: "/data/hpc-b".into(),
         backend: "dom-backend".into(),
         source: "/".into(),

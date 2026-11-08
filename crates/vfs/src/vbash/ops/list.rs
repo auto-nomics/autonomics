@@ -33,24 +33,17 @@ pub async fn op_ls(
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw = path.unwrap_or("/");
-    let listing = match crate::browse::list(
-        storage,
-        raw,
-        recursive.unwrap_or(false),
-        limit,
-        offset,
-    )
-    .await
-    {
-        Ok(listing) => listing,
-        Err(error) => {
-            let vpath = OpendalFileStorage::normalize_path(raw);
-            return Ok(AgentToolResult::error(format!(
-                "ls: '{vpath}': {}",
-                error.message()
-            )));
-        }
-    };
+    let listing =
+        match crate::browse::list(storage, raw, recursive.unwrap_or(false), limit, offset).await {
+            Ok(listing) => listing,
+            Err(error) => {
+                let vpath = storage.resolve_virtual(raw);
+                return Ok(AgentToolResult::error(format!(
+                    "ls: '{vpath}': {}",
+                    error.message()
+                )));
+            }
+        };
 
     let items: Vec<serde_json::Value> = listing
         .entries
@@ -125,7 +118,7 @@ pub async fn op_wc(
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "wc")?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!("wc: '{raw_path}': {error}")));
     }
@@ -156,7 +149,7 @@ pub async fn op_tree(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
+    let vpath = storage.resolve_virtual(path.unwrap_or("/"));
     if let Err(error) = storage.check_listable(&vpath) {
         return Ok(AgentToolResult::error(format!("tree: '{vpath}': {error}")));
     }

@@ -28,6 +28,7 @@ fn mounted_ctx() -> (NodeCtx, Arc<MountedObjectStore>) {
         ],
         mount: vec![
             MountDefinition {
+            domain: None,
                 path: "/data/magma/genes".into(),
                 backend: "magma-local".into(),
                 source: GENE_ROOT.into(),
@@ -35,6 +36,7 @@ fn mounted_ctx() -> (NodeCtx, Arc<MountedObjectStore>) {
                 permissions: Default::default(),
             },
             MountDefinition {
+            domain: None,
                 path: "/data/kegg_data".into(),
                 backend: "kegg-local".into(),
                 source: KEGG_ROOT.into(),

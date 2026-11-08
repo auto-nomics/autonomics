@@ -97,6 +97,7 @@ fn hermetic_vfs() -> HermeticVfs {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: files.path().to_string_lossy().to_string(),
@@ -174,6 +175,7 @@ async fn test_get_output_file_to_dataframe_csv_parquet_json() {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
@@ -721,6 +723,7 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
@@ -855,6 +858,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
@@ -1022,6 +1026,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),
@@ -1121,6 +1126,7 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
             config: BackendConfig::local("/"),
         }],
         mount: vec![MountDefinition {
+            domain: None,
             path: "/".into(),
             backend: "default".into(),
             source: mounted_root.path().to_string_lossy().to_string(),

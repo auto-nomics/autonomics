@@ -48,10 +48,7 @@ pub async fn op_rm(
             "deleted": true,
             "recursive": recursive.unwrap_or(false),
         }))),
-        Err(error) => Ok(AgentToolResult::error(format!(
-            "rm: {}",
-            error.message()
-        ))),
+        Err(error) => Ok(AgentToolResult::error(format!("rm: {}", error.message()))),
     }
 }
 
@@ -69,10 +66,7 @@ pub async fn op_cp(
             "dst": raw_dst,
             "copied": true,
         }))),
-        Err(error) => Ok(AgentToolResult::error(format!(
-            "cp: {}",
-            error.message()
-        ))),
+        Err(error) => Ok(AgentToolResult::error(format!("cp: {}", error.message()))),
     }
 }
 
@@ -90,9 +84,6 @@ pub async fn op_mv(
             "dst": raw_dst,
             "moved": true,
         }))),
-        Err(error) => Ok(AgentToolResult::error(format!(
-            "mv: {}",
-            error.message()
-        ))),
+        Err(error) => Ok(AgentToolResult::error(format!("mv: {}", error.message()))),
     }
 }

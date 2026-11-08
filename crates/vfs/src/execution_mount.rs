@@ -62,6 +62,7 @@ impl VfsManifest {
                 id
             };
         self.mount.push(MountDefinition {
+            domain: None,
             path: path.clone(),
             backend,
             source: path,
@@ -123,6 +124,7 @@ mod tests {
         }
         let root = temp.path().join("artifacts");
         manifest.mount.push(MountDefinition {
+            domain: None,
             path: root.to_string_lossy().into_owned(),
             backend: "default".into(),
             source: "unrelated".into(),
@@ -148,6 +150,7 @@ mod tests {
         let mut permissions = crate::permission::MountPermissions::default();
         permissions.file_mode = VfsMode::from_bits(0o600);
         manifest.mount.push(MountDefinition {
+            domain: None,
             path: root.to_string_lossy().into_owned(),
             backend: "default".into(),
             source: root.to_string_lossy().into_owned(),

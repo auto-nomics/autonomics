@@ -500,6 +500,7 @@ mod tests {
                 config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![vfs::MountDefinition {
+            domain: None,
                 path: "/data/kegg-test".into(),
                 backend: "test".into(),
                 source: root.path().to_string_lossy().to_string(),

@@ -102,6 +102,7 @@ async fn legacy_r_script_stages_a_one_row_dataframe() {
         }],
         mount: vec![
             MountDefinition {
+            domain: None,
                 path: "/".into(),
                 backend: "r-script-staging".into(),
                 source: data_dir.to_string_lossy().into_owned(),
@@ -111,6 +112,7 @@ async fn legacy_r_script_stages_a_one_row_dataframe() {
             // Identity mount for the workspace tree, mirroring the runtime
             // host: work-dir host paths resolve to the real files.
             MountDefinition {
+            domain: None,
                 path: root.path().to_string_lossy().into_owned(),
                 backend: "r-script-staging".into(),
                 source: root.path().to_string_lossy().into_owned(),

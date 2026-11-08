@@ -29,7 +29,7 @@ pub async fn op_read(
         Some(crate::uri::virtual_path(raw_path).unwrap_or(raw_path)),
         "read",
     )?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     storage
         .check_readable(&vpath)
         .map_err(|error| error.to_string())?;
@@ -67,7 +67,7 @@ pub async fn op_cat(
         });
     }
 
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(
             "cat: '{raw_path}': {error}"
@@ -143,7 +143,7 @@ pub async fn op_head(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "head")?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     let n = limit.unwrap_or(10);
     let start = offset.unwrap_or(1).saturating_sub(1);
     if let Err(error) = storage.check_readable(&vpath) {
@@ -203,7 +203,7 @@ pub async fn op_tail(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "tail")?;
-    let vpath = OpendalFileStorage::normalize_path(raw_path);
+    let vpath = storage.resolve_virtual(raw_path);
     let n = limit.unwrap_or(10);
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(

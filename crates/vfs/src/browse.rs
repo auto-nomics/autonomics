@@ -59,7 +59,13 @@ impl VfsEntry {
             .next()
             .unwrap_or_default()
             .to_string();
-        Self { path: display, name, is_dir, size, last_modified }
+        Self {
+            path: display,
+            name,
+            is_dir,
+            size,
+            last_modified,
+        }
     }
 
     /// Synthetic directory entry for a mount point; no backend metadata
@@ -229,10 +235,7 @@ fn child_mount_points(storage: &OpendalFileStorage, base: &str) -> Vec<String> {
 }
 
 /// The mount covering `vpath`, if the mount table has one.
-fn covering_handle(
-    storage: &OpendalFileStorage,
-    vpath: &str,
-) -> Option<crate::mount::MountHandle> {
+fn covering_handle(storage: &OpendalFileStorage, vpath: &str) -> Option<crate::mount::MountHandle> {
     use datafusion::object_store::path::Path as DsPath;
     let mounts = storage.mounts.as_ref()?;
     let ds = DsPath::parse(vpath).ok()?;
@@ -293,7 +296,10 @@ pub async fn list(
             }
             // Skip entries shadowed by a child mount.
             let trimmed = display.trim_end_matches('/');
-            if child_mounts.iter().any(|m| m.trim_end_matches('/') == trimmed) {
+            if child_mounts
+                .iter()
+                .any(|m| m.trim_end_matches('/') == trimmed)
+            {
                 continue;
             }
             idx += 1;
@@ -338,8 +344,7 @@ pub async fn list(
                                 if let Ok(entry) = entry {
                                     let meta = entry.metadata();
                                     let entry_path = entry.path().to_string();
-                                    let display =
-                                        storage.remap_entry_to_virtual(mp, &entry_path);
+                                    let display = storage.remap_entry_to_virtual(mp, &entry_path);
                                     let is_dir = meta.is_dir();
                                     if !entry_is_readable(storage, &display, is_dir) {
                                         continue;
@@ -478,7 +483,9 @@ pub async fn list(
             }
             // Skip default-fs directories that are shadowed by mounts.
             if metadata.is_dir()
-                && child_mounts.iter().any(|m| m.trim_end_matches('/') == trimmed)
+                && child_mounts
+                    .iter()
+                    .any(|m| m.trim_end_matches('/') == trimmed)
             {
                 continue;
             }
@@ -521,15 +528,12 @@ pub async fn stat(storage: &OpendalFileStorage, path: &str) -> Result<VfsEntry, 
     storage.check_readable(&vpath)?;
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
-    let meta = op
-        .stat(&remote)
-        .await
-        .map_err(|e| match e.kind() {
-            opendal::ErrorKind::NotFound => {
-                BrowseError::NotFound(format!("File or directory does not exist: {vpath}"))
-            }
-            _ => BrowseError::from(e),
-        })?;
+    let meta = op.stat(&remote).await.map_err(|e| match e.kind() {
+        opendal::ErrorKind::NotFound => {
+            BrowseError::NotFound(format!("File or directory does not exist: {vpath}"))
+        }
+        _ => BrowseError::from(e),
+    })?;
     Ok(VfsEntry::from_metadata(
         vpath,
         meta.is_dir(),
@@ -567,10 +571,14 @@ pub async fn read_text(
     let cap = (max_bytes as u64).min(size);
     let buffer = storage.read_range(&vpath, 0..cap).await?;
     let truncated = size > cap;
-    let contents = String::from_utf8(buffer.to_vec()).map_err(|_| {
-        BrowseError::Invalid(format!("'{vpath}' is not valid UTF-8 text"))
-    })?;
-    Ok(TextRead { path: vpath, contents, size, truncated })
+    let contents = String::from_utf8(buffer.to_vec())
+        .map_err(|_| BrowseError::Invalid(format!("'{vpath}' is not valid UTF-8 text")))?;
+    Ok(TextRead {
+        path: vpath,
+        contents,
+        size,
+        truncated,
+    })
 }
 
 /// Create a directory.
@@ -712,6 +720,7 @@ mod tests {
             }],
             mount: vec![
                 crate::MountDefinition {
+                    domain: None,
                     path: "/".into(),
                     backend: "default".into(),
                     source: "/".into(),
@@ -719,6 +728,7 @@ mod tests {
                     permissions: Default::default(),
                 },
                 crate::MountDefinition {
+                    domain: None,
                     path: "/data/ldsc".into(),
                     backend: "default".into(),
                     source: "source".into(),
@@ -728,10 +738,7 @@ mod tests {
             ],
         };
         let vfs = Arc::new(crate::MountedObjectStore::from_manifest(&manifest).unwrap());
-        let storage = OpendalFileStorage::with_mounts(
-            tempfile::tempdir().unwrap().path(),
-            vfs,
-        );
+        let storage = OpendalFileStorage::with_mounts(tempfile::tempdir().unwrap().path(), vfs);
         (storage, backend_root)
     }
 
@@ -756,7 +763,9 @@ mod tests {
         let (storage, _source) = mounted_storage(false);
         let listing = list(&storage, "/data", false, None, None).await.unwrap();
         assert_eq!(names(&listing), vec!["/data/ldsc"]);
-        let inner = list(&storage, "/data/ldsc", false, None, None).await.unwrap();
+        let inner = list(&storage, "/data/ldsc", false, None, None)
+            .await
+            .unwrap();
         assert!(
             names(&inner).contains(&"/data/ldsc/panel.parquet"),
             "got {:?}",
@@ -812,7 +821,9 @@ mod tests {
         let err = remove(&storage, "/data/ldsc/sub", false).await.unwrap_err();
         assert!(matches!(err, BrowseError::Conflict(_)), "{err:?}");
         remove(&storage, "/data/ldsc/sub", true).await.unwrap();
-        let err = remove(&storage, "/data/ldsc/missing", false).await.unwrap_err();
+        let err = remove(&storage, "/data/ldsc/missing", false)
+            .await
+            .unwrap_err();
         assert!(matches!(err, BrowseError::NotFound(_)), "{err:?}");
     }
 

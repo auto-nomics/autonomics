@@ -158,6 +158,7 @@ fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
         }],
         mount: vec![
             MountDefinition {
+            domain: None,
                 path: "/".into(),
                 backend: "workspace".into(),
                 source: root.clone(),
@@ -167,6 +168,7 @@ fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
             // Identity mount for the workspace tree, mirroring the runtime
             // host: bare work-dir host paths resolve to the real files.
             MountDefinition {
+            domain: None,
                 path: root,
                 backend: "workspace".into(),
                 source: workspace_root.to_string_lossy().into_owned(),

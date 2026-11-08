@@ -33,6 +33,18 @@ pub fn is_uri(path: &str) -> bool {
     path.starts_with(SCHEME_PREFIX)
 }
 
+/// Split any `<scheme>://rest` address into its scheme and the rest.
+/// `None` when the string carries no scheme separator. This is the
+/// admission point for domain addresses (`hpc-b://…`): the scheme names
+/// a mount-declared domain and the mount table resolves it.
+pub fn split_scheme(uri: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = uri.split_once("://")?;
+    if scheme.is_empty() || scheme.starts_with('-') {
+        return None;
+    }
+    Some((scheme, rest))
+}
+
 /// Build a `vfs://` URI from a virtual path.
 pub fn uri(virtual_path: impl std::fmt::Display) -> String {
     format!("{SCHEME_PREFIX}{virtual_path}")
@@ -47,7 +59,11 @@ mod tests {
         assert_eq!(virtual_path("vfs:///input.tsv"), Some("/input.tsv"));
         assert_eq!(virtual_path("vfs://data/x.bin"), Some("data/x.bin"));
         assert_eq!(virtual_path("/abs/local.tsv"), None);
-        assert_eq!(virtual_path("vfs:/x"), None, "partial prefix must not match");
+        assert_eq!(
+            virtual_path("vfs:/x"),
+            None,
+            "partial prefix must not match"
+        );
         assert_eq!(virtual_path("ssh://host/x"), None);
     }
 
@@ -63,5 +79,28 @@ mod tests {
         let built = uri(format!("data/{}", "x.bin"));
         assert_eq!(built, "vfs://data/x.bin");
         assert_eq!(virtual_path(&built), Some("data/x.bin"));
+    }
+}
+
+#[cfg(test)]
+mod scheme_tests {
+    use super::*;
+
+    #[test]
+    fn split_scheme_extracts_any_domain_address() {
+        assert_eq!(
+            split_scheme("hpc-b://share/x.vcf"),
+            Some(("hpc-b", "share/x.vcf"))
+        );
+        assert_eq!(
+            split_scheme("vfs:///input.tsv"),
+            Some(("vfs", "/input.tsv"))
+        );
+        assert_eq!(
+            split_scheme("local://work/a.tsv"),
+            Some(("local", "work/a.tsv"))
+        );
+        assert_eq!(split_scheme("/plain/path"), None);
+        assert_eq!(split_scheme("://x"), None, "empty scheme is not an address");
     }
 }

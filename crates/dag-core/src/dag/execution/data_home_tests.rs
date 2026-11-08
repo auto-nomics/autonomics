@@ -165,7 +165,7 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
 fn retained_vfs_mapping_checks_root_host_and_nested_overrides() {
     let root = tempfile::tempdir().unwrap();
     let mut manifest = vfs::VfsManifest::from_toml(
-        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot='/cluster/data'\n[[backend]]\nid='wrong'\ntype='ssh'\nalias='other'\nroot='/other/data'\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\n"
+        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot='/cluster/data'\n[[backend]]\nid='wrong'\ntype='ssh'\nalias='other'\nroot='/other/data'\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\ndomain='hpc-b'\n"
     ).unwrap();
     let home = SshDataHome {
         ssh_aliases: vec!["fixture".into()],
@@ -183,6 +183,8 @@ fn retained_vfs_mapping_checks_root_host_and_nested_overrides() {
     let mut nested = manifest.mount[0].clone();
     nested.path = "/cluster/outputs".into();
     nested.source = "outputs".into();
+    // A nested sub-partition does not carry its own domain address.
+    nested.domain = None;
     manifest.mount.push(nested);
     assert!(validate(&manifest).is_ok());
     manifest.mount[1].source = "different".into();
@@ -210,7 +212,7 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
     home.retained_remote_root = Some(root.join("attempts").to_string_lossy().into_owned());
     store = store.with_data_home(home).unwrap();
     let mut manifest = vfs::VfsManifest::from_toml(&format!(
-        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot={}\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\n[[mount]]\npath='/cluster-runs'\nbackend='ssh'\nsource='attempts'\nread_only=true\n",
+        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot={}\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\ndomain='hpc-b'\n[[mount]]\npath='/cluster-runs'\nbackend='ssh'\nsource='attempts'\nread_only=true\n",
         serde_json::to_string(&root.to_string_lossy()).unwrap(),
     )).unwrap();
     manifest.mount[0].permissions = vfs::permission::MountPermissions::unix(
@@ -471,4 +473,25 @@ fn writable_retained_mount_is_rejected() {
     let storage = vfs::OpendalFileStorage::with_mounts(root.path(), mounts);
     let error = home.validate_vfs(&storage).unwrap_err().to_string();
     assert!(error.contains("read_only"), "{error}");
+}
+
+#[test]
+fn named_domain_must_match_its_mount_partition() {
+    let root = tempfile::tempdir().unwrap();
+    let manifest = vfs::VfsManifest::from_toml(
+        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot='/cluster/data'\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\ndomain='other-name'\n",
+    )
+    .unwrap();
+    let home = SshDataHome {
+        ssh_aliases: vec!["fixture".into()],
+        remote_root: "/cluster/data".into(),
+        vfs_prefix: "/cluster".into(),
+        domain_id: Some("hpc-b".into()),
+        retained_vfs_prefix: None,
+        retained_remote_root: None,
+    };
+    let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = vfs::OpendalFileStorage::with_mounts(root.path(), mounts);
+    let error = home.validate_vfs(&storage).unwrap_err().to_string();
+    assert!(error.contains("domain"), "{error}");
 }

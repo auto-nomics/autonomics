@@ -302,6 +302,7 @@ mod tests {
                 config: BackendConfig::local("/"),
             }],
             mount: vec![MountDefinition {
+            domain: None,
                 path: "/".into(),
                 backend: "workspace".into(),
                 source: root.to_string_lossy().into_owned(),

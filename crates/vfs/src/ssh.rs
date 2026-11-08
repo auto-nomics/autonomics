@@ -586,10 +586,7 @@ impl oio::Write for SshWriter {
 }
 
 impl SshWriter {
-    async fn collect_status_of(
-        child: &mut Child,
-        stdout: Option<ChildStdout>,
-    ) -> Result<Value> {
+    async fn collect_status_of(child: &mut Child, stdout: Option<ChildStdout>) -> Result<Value> {
         let Some(stdout) = stdout else {
             return Err(failure(ErrorKind::Unexpected, "SSH response unavailable"));
         };
@@ -641,7 +638,9 @@ impl oio::Delete for SshDeleter {
 
     async fn close(&mut self) -> Result<()> {
         for path in self.pending.drain(..) {
-            self.access.mutate(json!({"op":"delete", "path":path})).await?;
+            self.access
+                .mutate(json!({"op":"delete", "path":path}))
+                .await?;
         }
         Ok(())
     }
@@ -727,7 +726,14 @@ mod tests {
         // Writes are admitted at the backend level; read-only enforcement
         // belongs to the mount declaration (see the write-protocol tests
         // and storage's write_to_read_only_mount_is_rejected).
-        assert_eq!(operator.write("new", b"refused".to_vec()).await.unwrap().content_length(), 7);
+        assert_eq!(
+            operator
+                .write("new", b"refused".to_vec())
+                .await
+                .unwrap()
+                .content_length(),
+            7
+        );
     }
 
     #[tokio::test]
@@ -915,20 +921,16 @@ directory_mode = "0700"
         );
         assert!(operator.stat("nested/moved.bin").await.unwrap().is_file());
         // Overwrite an existing destination atomically.
-        operator.write("nested/moved.bin", Vec::from(b"replacement")).await.unwrap();
+        operator
+            .write("nested/moved.bin", Vec::from(b"replacement"))
+            .await
+            .unwrap();
         assert_eq!(
             operator.read("nested/moved.bin").await.unwrap().to_vec(),
             b"replacement"
         );
         operator.delete("nested/moved.bin").await.unwrap();
-        assert!(
-            operator
-                .stat("nested/moved.bin")
-                .await
-                .unwrap_err()
-                .kind()
-                == ErrorKind::NotFound
-        );
+        assert!(operator.stat("nested/moved.bin").await.unwrap_err().kind() == ErrorKind::NotFound);
     }
 
     #[tokio::test]
@@ -946,7 +948,10 @@ directory_mode = "0700"
             operator.read("victim.bin").await.unwrap().to_vec(),
             b"original"
         );
-        assert_eq!(std::fs::read(root.path().join("victim.bin")).unwrap(), b"original");
+        assert_eq!(
+            std::fs::read(root.path().join("victim.bin")).unwrap(),
+            b"original"
+        );
     }
 
     #[tokio::test]

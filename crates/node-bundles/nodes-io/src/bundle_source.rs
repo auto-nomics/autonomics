@@ -209,6 +209,7 @@ mod tests {
             ],
             mount: vec![
                 MountDefinition {
+            domain: None,
                     path: "/".into(),
                     backend: "runtime".into(),
                     source: "/".into(),
@@ -216,6 +217,7 @@ mod tests {
                     permissions: Default::default(),
                 },
                 MountDefinition {
+            domain: None,
                     path: "/bundles/panels".into(),
                     backend: "external".into(),
                     source: "/".into(),
