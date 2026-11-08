@@ -100,8 +100,6 @@ fn add_edge_allows_declared_alternate_input_formats() {
     dag.add_edge("reference", "h2", 0, 0).unwrap();
 }
 
-
-
 #[test]
 fn validation_rejects_path_reference_aliased_to_an_in_dag_sink() {
     let mut dag = DAG::default();

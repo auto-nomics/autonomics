@@ -10,8 +10,6 @@ use crate::dag::runtime::{RuntimeStatus, SchedulerConfig};
 use crate::dag::{ChannelOperator, DagNode, NodePorts, TaskInputSource, TaskResources};
 use crate::value::{NodeValue, PortType};
 
-
-
 #[derive(Clone)]
 struct ResumableDynamicItemNode {
     value: String,

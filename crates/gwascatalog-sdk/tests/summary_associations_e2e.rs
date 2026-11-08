@@ -22,8 +22,7 @@ fn node_ctx() -> NodeCtx {
 
 async fn run(spec: serde_json::Value) -> TestResult<Vec<arrow_array::RecordBatch>> {
     let ctx = node_ctx();
-    let mut node = SummaryAssociationsNodeFactory
-        .build(spec, NodeCtx::clone(&ctx))?;
+    let mut node = SummaryAssociationsNodeFactory.build(spec, NodeCtx::clone(&ctx))?;
     let inputs: &[NodeInput] = &[];
     let outputs = node.execute(&ctx, inputs, &NodeReporter::noop()).await?;
     let dataframe = outputs.dataframe(0).map_err(std::io::Error::other)?;
@@ -44,7 +43,11 @@ async fn harmonised_rows_from_ftp_mirror() -> TestResult {
     .await?;
     let batch = batches.first().expect("node emitted a RecordBatch");
     assert_eq!(batch.num_columns(), 15);
-    assert!(batch.num_rows() > 0 && batch.num_rows() <= 5, "{} rows", batch.num_rows());
+    assert!(
+        batch.num_rows() > 0 && batch.num_rows() <= 5,
+        "{} rows",
+        batch.num_rows()
+    );
 
     // Trait label comes from the -meta.yaml sidecar.
     let trait_col = batch
@@ -81,7 +84,11 @@ async fn p_upper_window_filters_rows() -> TestResult {
         .downcast_ref::<Float64Array>()
         .unwrap();
     for i in 0..batch.num_rows() {
-        assert!(p.value(i) <= 0.5, "row {i} p={} leaked past the filter", p.value(i));
+        assert!(
+            p.value(i) <= 0.5,
+            "row {i} p={} leaked past the filter",
+            p.value(i)
+        );
     }
     Ok(())
 }

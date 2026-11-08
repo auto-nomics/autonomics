@@ -19,6 +19,7 @@ fn store(root: &Path) -> SshArtifactStore {
         ssh_aliases: vec!["fixture".into()],
         remote_root: root.to_string_lossy().into_owned(),
         vfs_prefix: "/cluster".into(),
+        domain_id: Some("hpc-b".into()),
         retained_vfs_prefix: None,
         retained_remote_root: None,
     })
@@ -39,6 +40,8 @@ async fn retained_files_are_measured_and_referenced_without_downloads() {
         .unwrap();
     assert_eq!(reference.path, "vfs:///cluster/answer.tsv");
     assert_eq!(reference.format.as_deref(), Some("tsv"));
+    // The retained publication carries the declared domain identity.
+    assert_eq!(reference.domain.as_str(), "hpc-b");
     let identity = reference.fingerprint.unwrap();
     assert_eq!(
         identity.content_hash,
@@ -72,6 +75,8 @@ async fn remote_inputs_use_authorized_shared_paths_and_reject_changed_content() 
         .unwrap()
         .unwrap();
     assert_eq!(remote.path, source.to_string_lossy());
+    // In-place references are stamped with the data home's domain id.
+    assert_eq!(remote.domain.as_str(), "hpc-b");
     std::fs::write(&source, b"other").unwrap();
     assert!(store.remote_input(input, Some(&storage)).await.is_err());
     assert!(!root.join("unused-downloads").exists());
@@ -166,6 +171,7 @@ fn retained_vfs_mapping_checks_root_host_and_nested_overrides() {
         ssh_aliases: vec!["fixture".into()],
         remote_root: "/cluster/data".into(),
         vfs_prefix: "/cluster".into(),
+        domain_id: None,
         retained_vfs_prefix: None,
         retained_remote_root: None,
     };

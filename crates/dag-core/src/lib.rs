@@ -39,7 +39,9 @@ pub use node::{
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};
 // pub use sink::SinkMode;
-pub use value::{ArtifactRef, ChannelValue, FileFingerprint, FileRef, NodeValue, PortType};
+pub use value::{
+    ArtifactRef, ChannelValue, DomainId, FileFingerprint, FileRef, NodeValue, PortType,
+};
 
 /// The source identity this crate was built from: the full git commit, recorded alongside run history for reproducibility evidence and
 /// folded into every node execution fingerprint — so same-version builds

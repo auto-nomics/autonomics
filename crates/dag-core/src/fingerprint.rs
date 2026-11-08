@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::dag::NodeId;
 use crate::dag::graph::{EdgeLabel, PortOutputs};
-use crate::value::{FileFingerprint, FileRef, NodeValue};
+use crate::value::{DomainId, FileFingerprint, FileRef, NodeValue};
 
 /// Domain separator for the fingerprint hash, so digests from different
 /// schemes or versions can never collide.
@@ -1216,6 +1216,7 @@ mod tests {
 
     fn file_ref(path: &std::path::Path, fingerprint: FileFingerprint) -> FileRef {
         FileRef {
+            domain: DomainId::local(),
             path: path.to_string_lossy().into_owned(),
             format: None,
             fingerprint: Some(fingerprint),
@@ -1275,6 +1276,7 @@ mod tests {
     async fn immutable_remote_with_hash_is_clean_even_when_file_is_gone() {
         let file = FileRef {
             path: "/bundles/gone.parquet".to_string(),
+            domain: crate::value::DomainId::local(),
             format: None,
             fingerprint: Some(FileFingerprint {
                 size: 1,
@@ -1297,6 +1299,7 @@ mod tests {
     #[tokio::test]
     async fn missing_fingerprint_never_invalidates() {
         let file = FileRef {
+            domain: crate::value::DomainId::local(),
             path: "/does/not/exist".to_string(),
             format: None,
             fingerprint: None,

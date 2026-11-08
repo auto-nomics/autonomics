@@ -484,6 +484,7 @@ impl DagNode for FileDecompressNode {
         }
 
         let file = FileRef {
+            domain: dag_core::DomainId::local(),
             path: destination.clone(),
             format: format_from_path(&destination),
             fingerprint: Some(fingerprint),

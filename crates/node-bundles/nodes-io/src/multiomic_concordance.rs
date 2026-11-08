@@ -730,6 +730,7 @@ fn joined_outputs(
         outputs.insert_file(
             idx as u8,
             FileRef {
+                domain: dag_core::DomainId::local(),
                 path,
                 format: Some(name.trim_end_matches(".tsv").to_string()),
                 fingerprint,

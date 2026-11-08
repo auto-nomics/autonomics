@@ -199,6 +199,7 @@ async fn vfs_file(
         .unwrap_or_default();
 
     Ok(FileRef {
+        domain: dag_core::DomainId::local(),
         path: output_path.to_string(),
         format,
         fingerprint: Some(FileFingerprint {

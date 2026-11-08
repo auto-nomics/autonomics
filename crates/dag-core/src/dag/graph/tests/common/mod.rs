@@ -665,6 +665,7 @@ impl DagNode for DetailedNode {
         outputs.insert(
             0,
             crate::value::NodeValue::File(FileRef {
+                domain: crate::value::DomainId::local(),
                 path: "/tmp/out.csv".into(),
                 format: Some("csv".into()),
                 fingerprint: None,

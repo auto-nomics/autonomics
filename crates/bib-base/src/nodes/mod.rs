@@ -142,6 +142,7 @@ pub(crate) async fn write_artifact(
             .map(|duration| duration.as_nanos() as i128)
             .unwrap_or_default();
         return Ok(FileRef {
+            domain: dag_core::DomainId::local(),
             path: path.to_string(),
             format: Some(format.to_string()),
             fingerprint: Some(FileFingerprint {
@@ -165,8 +166,8 @@ pub(crate) async fn write_artifact(
         .write(&storage.resolve_path(&virtual_path), bytes)
         .await
         .map_err(|error| DagError::Schedule(format!("cannot write VFS file `{path}`: {error}")))?;
-
     Ok(FileRef {
+        domain: dag_core::DomainId::local(),
         path: vfs_uri,
         format: Some(format.to_string()),
         fingerprint: Some(FileFingerprint {

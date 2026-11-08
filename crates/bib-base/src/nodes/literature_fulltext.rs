@@ -54,6 +54,7 @@ fn port_layout() -> NodePorts {
 /// are a permanent fingerprint with no stat or read required.
 fn file_ref(fulltext: &FullText) -> FileRef {
     FileRef {
+        domain: dag_core::DomainId::local(),
         path: fulltext.file_path.clone(),
         format: Some(fulltext.file_format.as_str().to_string()),
         fingerprint: Some(FileFingerprint {

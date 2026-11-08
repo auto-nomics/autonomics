@@ -607,6 +607,7 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
             }
             let mtime_ns = meta.last_modified.timestamp_nanos_opt().unwrap_or_default();
             files.push(FileRef {
+                domain: dag_core::DomainId::local(),
                 path: vfs::uri::uri(path),
                 format: Some("dicom".into()),
                 fingerprint: Some(FileFingerprint {
@@ -1974,6 +1975,7 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
                     .map(|duration| duration.as_nanos() as i128)
                     .unwrap_or_default();
                 return Ok(FileRef {
+                    domain: dag_core::DomainId::local(),
                     path: path.to_string(),
                     format: None,
                     fingerprint: Some(FileFingerprint {
@@ -1998,6 +2000,7 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
     }
     Ok(FileRef {
         path: path.to_string(),
+        domain: dag_core::DomainId::local(),
         format: None,
         fingerprint: Some(FileFingerprint::from_metadata(&metadata)),
     })

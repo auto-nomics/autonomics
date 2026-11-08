@@ -127,12 +127,15 @@ impl DataDomain {
         Ok(())
     }
 
-    /// The transport-side placement record for this domain.
+    /// The transport-side placement record for this domain. The catalog id
+    /// flows through so every placement the store publishes carries the
+    /// domain identity downstream consumers compare against.
     pub fn data_home(&self) -> dag_core::SshDataHome {
         dag_core::SshDataHome {
             ssh_aliases: self.ssh_aliases.clone(),
             remote_root: self.remote_root.clone(),
             vfs_prefix: self.vfs_prefix.clone(),
+            domain_id: Some(self.id.clone()),
             retained_vfs_prefix: self.retained_vfs_prefix.clone(),
             retained_remote_root: self.retained_remote_root.clone(),
         }

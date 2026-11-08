@@ -15,7 +15,7 @@ use crate::dag::DagError;
 use crate::dag::graph::PortOutputs;
 use crate::dag::node_event::{EventLevel, ReportedLog};
 use crate::dag::runtime::NodeRunDetails;
-use crate::value::{FileRef, NodeValue};
+use crate::value::{DomainId, FileRef, NodeValue};
 
 pub(super) struct LocalTaskWorkspace {
     root: PathBuf,
@@ -224,6 +224,7 @@ mod typed_channel_staging_tests {
         let mut value = ChannelTransportValue::Tuple(vec![
             ChannelTransportValue::File(FileRef::local(&first, None).unwrap()),
             ChannelTransportValue::File(FileRef {
+                domain: crate::value::DomainId::local(),
                 path: missing.to_string_lossy().into_owned(),
                 format: None,
                 fingerprint: None,

@@ -143,6 +143,46 @@ impl From<ChannelValue> for NodeValue {
     }
 }
 
+/// The filesystem domain a file placement addresses.
+///
+/// `local` (the default, and the historical meaning of every record
+/// persisted before domains existed) is the coordinator's own
+/// filesystem; any other name refers to a [`crate::value`] placement
+/// inside a catalog-declared [`dag_core`] data domain. The id is an
+/// opaque string: the compute catalog owns its vocabulary
+/// (see `runtime::compute::DataDomain`), and consumers treat an
+/// unknown id conservatively — as *not* their own domain.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DomainId(String);
+
+impl DomainId {
+    pub const LOCAL_NAME: &'static str = "local";
+
+    pub fn local() -> Self {
+        Self(Self::LOCAL_NAME.to_string())
+    }
+
+    /// Name a placement domain. The catalog validates ids at enrollment;
+    /// here only emptiness is rejected so hand-built ids fail loudly.
+    pub fn new(name: &str) -> Self {
+        Self(name.to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.0 == Self::LOCAL_NAME
+    }
+}
+
+impl Default for DomainId {
+    fn default() -> Self {
+        Self::local()
+    }
+}
+
 /// A file artifact address passed between nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRef {
@@ -152,6 +192,12 @@ pub struct FileRef {
     /// Optional normalized format label (for example `csv`, `vcf`, `parquet`).
     pub format: Option<String>,
     pub fingerprint: Option<FileFingerprint>,
+    /// The filesystem domain this placement addresses. Defaults to
+    /// `local` for every record persisted before domains existed, and
+    /// is omitted from serialization entirely when local, so the wire
+    /// format of local files is byte-identical to the pre-domain form.
+    #[serde(default, skip_serializing_if = "DomainId::is_local")]
+    pub domain: DomainId,
 }
 
 /// A location-independent contract for an object stored by the DAG data plane.
@@ -173,6 +219,7 @@ impl From<ArtifactRef> for FileRef {
             path: artifact.uri,
             format: artifact.format,
             fingerprint: artifact.fingerprint,
+            domain: DomainId::local(),
         }
     }
 }
@@ -183,7 +230,16 @@ impl FileRef {
             path: path.into(),
             format,
             fingerprint: None,
+            domain: DomainId::local(),
         }
+    }
+
+    /// Rebind this placement to an explicit filesystem domain. Use at the
+    /// publication/staging points that know which catalog-declared domain
+    /// the content physically lives in.
+    pub fn in_domain(mut self, domain: DomainId) -> Self {
+        self.domain = domain;
+        self
     }
 
     pub fn local(
@@ -204,6 +260,7 @@ impl FileRef {
             path: path.to_string_lossy().into_owned(),
             format,
             fingerprint: Some(FileFingerprint::from_metadata(&metadata)),
+            domain: DomainId::local(),
         })
     }
 
@@ -219,6 +276,7 @@ impl FileRef {
             path: uri.into(),
             format,
             fingerprint: Some(FileFingerprint::remote(size, sha256)),
+            domain: DomainId::local(),
         }
     }
 }
@@ -296,5 +354,40 @@ impl std::fmt::Display for PortType {
 impl PortType {
     pub fn accepts(&self, actual: PortType) -> bool {
         *self == PortType::Any || actual == PortType::Any || *self == actual
+    }
+}
+
+#[cfg(test)]
+mod domain_tests {
+    use super::*;
+
+    #[test]
+    fn pre_domain_records_parse_as_local() {
+        let legacy = r#"{"path":"/data/x.tsv","format":"tsv"}"#;
+        let file: FileRef = serde_json::from_str(legacy).unwrap();
+        assert!(file.domain.is_local());
+        // And the local wire form is unchanged: no domain key is emitted.
+        let round: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+        assert!(round.get("domain").is_none());
+    }
+
+    #[test]
+    fn named_domains_round_trip() {
+        let mut file = FileRef::new("/data/x.tsv", None);
+        assert!(file.domain.is_local());
+        file = file.in_domain(DomainId::new("hpc-b"));
+        let encoded = serde_json::to_string(&file).unwrap();
+        assert!(encoded.contains("\"domain\":\"hpc-b\""), "{encoded}");
+        let decoded: FileRef = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded.domain.as_str(), "hpc-b");
+        assert!(!decoded.domain.is_local());
+    }
+
+    #[test]
+    fn unknown_domain_ids_are_preserved_verbatim() {
+        let file: FileRef =
+            serde_json::from_str(r#"{"path":"/x","domain":"future-cluster"}"#).unwrap();
+        assert_eq!(file.domain.as_str(), "future-cluster");
     }
 }

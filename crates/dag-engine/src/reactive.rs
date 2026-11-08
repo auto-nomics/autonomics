@@ -120,6 +120,7 @@ fn source_value(value: &serde_json::Value) -> NodeValue {
 }
 fn file_value(path: &str) -> NodeValue {
     NodeValue::File(FileRef {
+        domain: dag_core::DomainId::local(),
         path: path.to_owned(),
         format: None,
         fingerprint: None,
@@ -162,6 +163,7 @@ fn coerce_file_inputs(inputs: &mut [NodeInput], node: &dyn dag_core::node::DagNo
                     .iter()
                     .map(|v| {
                         v.as_str().map(|path| FileRef {
+                            domain: dag_core::DomainId::local(),
                             path: path.to_owned(),
                             format: None,
                             fingerprint: None,
@@ -1276,6 +1278,7 @@ fn input_fingerprint_with_files(
                 let path = value.strip_prefix("file://").unwrap_or(value);
                 if std::path::Path::new(path).is_file() {
                     let reference = FileRef {
+                        domain: dag_core::DomainId::local(),
                         path: value.clone(),
                         format: None,
                         fingerprint: None,
@@ -1359,6 +1362,7 @@ fn input_fingerprint_with_files(
         .map(|path| {
             file(
                 &FileRef {
+                    domain: dag_core::DomainId::local(),
                     path,
                     format: None,
                     fingerprint: None,

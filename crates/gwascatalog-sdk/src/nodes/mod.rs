@@ -110,6 +110,7 @@ pub(crate) mod util {
                 DagError::Schedule(format!("cannot write file `{path}`: {error}"))
             })?;
             return Ok(FileRef {
+                domain: dag_core::DomainId::local(),
                 path: path.to_string(),
                 format: Some(format.to_string()),
                 fingerprint: Some(FileFingerprint {
@@ -137,6 +138,7 @@ pub(crate) mod util {
             })?;
 
         Ok(FileRef {
+            domain: dag_core::DomainId::local(),
             path: vfs_uri,
             format: Some(format.to_string()),
             fingerprint: Some(FileFingerprint {

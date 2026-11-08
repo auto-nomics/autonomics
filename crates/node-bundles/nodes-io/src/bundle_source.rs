@@ -97,6 +97,7 @@ impl DagNode for BundleSourceNode {
         outputs.insert_file(
             0,
             FileRef {
+                domain: dag_core::DomainId::local(),
                 path: self.bundle.vpath.clone(),
                 format: self.format.clone(),
                 fingerprint: Some(FileFingerprint {

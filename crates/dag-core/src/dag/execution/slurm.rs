@@ -35,7 +35,7 @@ use super::remote::RemoteTaskExecutor;
 use super::traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
 use crate::dag::DagError;
 use crate::dag::node_event::JobResult;
-use crate::value::{FileFingerprint, FileRef};
+use crate::value::{DomainId, FileFingerprint, FileRef};
 
 #[path = "slurm_submission.rs"]
 mod submission;
@@ -1638,6 +1638,7 @@ fi"#,
                 _ => None,
             };
             by_port.entry(port).or_default().push(FileRef {
+                domain: DomainId::local(),
                 path: format!("{}/output-{port}-{index}", job.task_dir),
                 format,
                 fingerprint,
@@ -2264,6 +2265,7 @@ impl TaskTransport for SlurmTaskTransport {
             exit_code,
             workspace: job.task_dir,
             task_manifest: FileRef {
+                domain: DomainId::local(),
                 path: task_manifest_path,
                 format: Some("json".into()),
                 fingerprint: Some(job.manifest_fingerprint),
@@ -2389,6 +2391,12 @@ pub struct SshDataHome {
     pub ssh_aliases: Vec<String>,
     pub remote_root: String,
     pub vfs_prefix: String,
+    /// Catalog identity of this domain, flowing into every placement the
+    /// store publishes so downstream consumers can compare domains by id.
+    /// Legacy profiles (frozen before domains existed) carry none: their
+    /// placements stay unmarked (`local`), preserving old behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_id: Option<String>,
     /// Optional dedicated output namespace. Both fields must be supplied;
     /// inputs remain confined to `remote_root` and its admitted SSH aliases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2543,6 +2551,17 @@ pub struct SshArtifactStore {
 }
 
 impl SshArtifactStore {
+    /// The catalog identity of the domain this store's in-place references
+    /// and retained publications belong to. Legacy profiles without a
+    /// declared domain keep placements unmarked (`local`).
+    fn placement_domain(&self) -> DomainId {
+        self.data_home
+            .as_ref()
+            .and_then(|home| home.domain_id.as_deref())
+            .map(DomainId::new)
+            .unwrap_or_default()
+    }
+
     pub fn new(
         ssh: SshTarget,
         scratch_dir: impl Into<String>,
@@ -2627,7 +2646,8 @@ impl SshArtifactStore {
             original.format.clone(),
             identity.size,
             Some(identity.sha256),
-        );
+        )
+        .in_domain(self.placement_domain());
         // A POSIX file is not an immutable object store, even after hashing.
         if let Some(fingerprint) = &mut result.fingerprint {
             fingerprint.immutable_remote = false;
@@ -2713,6 +2733,9 @@ impl TaskArtifactStore for SshArtifactStore {
         }
         let mut reference = self.measure_data_file(&artifact.path, &artifact).await?;
         reference.path = vfs::uri::uri(format!("{prefix}/{}", relative.to_string_lossy()));
+        // measure_data_file already stamps the domain; assert it stays put
+        // when the path is rewritten into the VFS projection.
+        debug_assert_eq!(reference.domain, self.placement_domain());
         Ok(Some(reference))
     }
 
@@ -2858,6 +2881,9 @@ impl TaskArtifactStore for SshArtifactStore {
                 content_hash: Some(digest),
                 immutable_remote: false,
             }),
+            // The uploaded copy physically lives in the target's scratch
+            // domain; the coordinator-side original keeps its own domain.
+            domain: self.placement_domain(),
         })
     }
 
@@ -2961,6 +2987,7 @@ impl TaskArtifactStore for SshArtifactStore {
         )
         .await?;
         Ok(FileRef {
+            domain: DomainId::local(),
             path: destination.to_string_lossy().into_owned(),
             format: artifact.format.clone(),
             fingerprint,

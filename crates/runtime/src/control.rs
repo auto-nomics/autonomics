@@ -193,12 +193,7 @@ impl HostControl {
     /// Notify the host pump that an identity was renamed in storage. The
     /// pump emits `HostEvent::IdentityRenamed` to every connected
     /// frontend — not just the one that issued the rename.
-    pub fn notify_identity_renamed(
-        &self,
-        agent_id: uuid::Uuid,
-        old_path: &str,
-        new_path: &str,
-    ) {
+    pub fn notify_identity_renamed(&self, agent_id: uuid::Uuid, old_path: &str, new_path: &str) {
         self.fire(HostCommand::NotifyIdentityRenamed {
             agent_id,
             old_path: old_path.into(),

@@ -66,7 +66,10 @@ pub(crate) fn declared_resources(
     spec: &serde_json::Value,
 ) -> dag_core::TaskResources {
     let mut resources = node.task_resources().unwrap_or_default();
-    if let Some(millis) = spec.get(SPEC_TIMEOUT_MS_KEY).and_then(|value| value.as_u64()) {
+    if let Some(millis) = spec
+        .get(SPEC_TIMEOUT_MS_KEY)
+        .and_then(|value| value.as_u64())
+    {
         resources.max_duration_ms = Some(millis);
     }
     resources
@@ -303,6 +306,7 @@ impl FlowScheduler {
                 delivery.insert_file(
                     0,
                     FileRef {
+                        domain: dag_core::DomainId::local(),
                         path: item.path.clone(),
                         format: None,
                         fingerprint: None,
@@ -1059,6 +1063,7 @@ fn release_ignored(
 #[allow(dead_code)]
 fn file_value(path: impl Into<String>) -> NodeValue {
     NodeValue::File(FileRef {
+        domain: dag_core::DomainId::local(),
         path: path.into(),
         format: None,
         fingerprint: None,

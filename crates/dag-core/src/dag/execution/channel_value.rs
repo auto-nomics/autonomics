@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::value::FileRef;
+use crate::value::{DomainId, FileRef};
 
 /// A transport representation, not an in-memory DataFusion plan. `Arrow`
 /// refers to a materialized Arrow IPC artifact.
@@ -127,6 +127,7 @@ mod tests {
 
     fn file(path: &str) -> FileRef {
         FileRef {
+            domain: DomainId::local(),
             path: path.into(),
             format: Some("fastq".into()),
             fingerprint: Some(FileFingerprint {

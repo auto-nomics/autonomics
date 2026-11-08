@@ -47,7 +47,7 @@ use super::slurm::{
 use super::traits::{TaskLease, TaskTransport};
 use crate::dag::DagError;
 use crate::dag::node_event::NodeReporter;
-use crate::value::{FileFingerprint, FileRef};
+use crate::value::{DomainId, FileFingerprint, FileRef};
 
 /// Operator-owned settings for the direct SSH backend.
 ///
@@ -255,6 +255,7 @@ impl SshTaskTransport {
                 _ => None,
             };
             by_port.entry(port).or_default().push(FileRef {
+                domain: DomainId::local(),
                 path: format!("{}/output-{port}-{index}", attempt.task_dir),
                 format,
                 fingerprint,
@@ -616,6 +617,7 @@ impl TaskTransport for SshTaskTransport {
             exit_code,
             workspace: attempt.task_dir.clone(),
             task_manifest: FileRef {
+                domain: DomainId::local(),
                 path: format!("{}/task.json", attempt.task_dir),
                 format: Some("json".into()),
                 fingerprint: Some(attempt.manifest_fingerprint.clone()),
@@ -792,6 +794,7 @@ fn parse_log_reference(raw: &str, stream: &str, task_dir: &str) -> Option<FileRe
             return None;
         }
         return Some(FileRef {
+            domain: DomainId::local(),
             path: format!("{task_dir}/{stream}.log"),
             format: Some("text".into()),
             fingerprint: Some(FileFingerprint {

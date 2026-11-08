@@ -377,7 +377,6 @@ fn delete_edge_after_delete_node() {
     assert_eq!(dag.incoming_edges_with_ports("c").len(), 1);
 }
 
-
 #[test]
 fn task_resources_reject_zero_requests() {
     let mut dag = DAG::default();

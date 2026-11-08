@@ -228,11 +228,7 @@ impl RuntimeHost {
     /// Shut down a named agent and remove it from the registry, tagging
     /// the `AgentUnregistered` event with why the instance left. The
     /// identity survives in storage for every cause.
-    pub fn shutdown_agent_with(
-        &mut self,
-        name: &str,
-        cause: super::events::RemovalCause,
-    ) {
+    pub fn shutdown_agent_with(&mut self, name: &str, cause: super::events::RemovalCause) {
         self.fail_pending_delegations(name, "target agent shut down before completion");
         if let Some(entry) = self.agents.remove(name) {
             let _ = entry.cmd_tx.send(AgentCommand::Shutdown);

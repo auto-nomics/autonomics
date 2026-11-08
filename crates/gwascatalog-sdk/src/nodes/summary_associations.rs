@@ -214,7 +214,10 @@ impl ColMap {
             pos: find(header, &["hm_pos", "base_pair_location"]),
             effect_allele: find(header, &["hm_effect_allele", "effect_allele"]),
             other_allele: find(header, &["hm_other_allele", "other_allele"]),
-            eaf: find(header, &["hm_effect_allele_frequency", "effect_allele_frequency"]),
+            eaf: find(
+                header,
+                &["hm_effect_allele_frequency", "effect_allele_frequency"],
+            ),
             beta: find(header, &["hm_beta", "beta"]),
             odds_ratio: find(header, &["hm_odds_ratio", "odds_ratio"]),
             ci_lower: find(header, &["hm_ci_lower", "ci_lower"]),
@@ -379,9 +382,9 @@ async fn resolve_targets(
     reveal: Reveal,
     assembly: Option<&str>,
 ) -> Result<Vec<FileTarget>, DagError> {
-    let block_url = client.ftp_block_url(accession).map_err(|e| {
-        DagError::Schedule(format!("source_gwascatalog_summary_associations: {e}"))
-    })?;
+    let block_url = client
+        .ftp_block_url(accession)
+        .map_err(|e| DagError::Schedule(format!("source_gwascatalog_summary_associations: {e}")))?;
     let study_url = format!("{block_url}/{accession}");
 
     match reveal {
@@ -427,23 +430,26 @@ async fn resolve_targets(
                 None => candidates.sort_by_key(|e| !e.to_ascii_uppercase().contains("GRCH38")),
             }
             // One raw file: the preferred assembly only.
-            candidates.first().map(|name| {
-                let meta_name = format!("{name}-meta.yaml");
-                let meta_url = entries
-                    .contains(&meta_name)
-                    .then(|| format!("{study_url}/{meta_name}"));
-                vec![FileTarget {
-                    name: (*name).clone(),
-                    url: format!("{study_url}/{name}"),
-                    gzipped: name.ends_with(".gz"),
-                    meta_url,
-                }]
-            }).ok_or_else(|| {
-                DagError::Schedule(format!(
-                    "source_gwascatalog_summary_associations: no raw summary-statistics file \
+            candidates
+                .first()
+                .map(|name| {
+                    let meta_name = format!("{name}-meta.yaml");
+                    let meta_url = entries
+                        .contains(&meta_name)
+                        .then(|| format!("{study_url}/{meta_name}"));
+                    vec![FileTarget {
+                        name: (*name).clone(),
+                        url: format!("{study_url}/{name}"),
+                        gzipped: name.ends_with(".gz"),
+                        meta_url,
+                    }]
+                })
+                .ok_or_else(|| {
+                    DagError::Schedule(format!(
+                        "source_gwascatalog_summary_associations: no raw summary-statistics file \
                      found for {accession} (assembly={assembly:?})"
-                ))
-            })
+                    ))
+                })
         }
     }
 }
@@ -507,12 +513,7 @@ impl DagNode for SummaryAssociationsNode {
         }
         let accession = accession.expect("validated above");
         let reveal = reveal_mode(&self.spec)?;
-        let max_results = self
-            .spec
-            .max_results
-            .unwrap_or(250)
-            .max(1)
-            .min(1_000_000) as usize;
+        let max_results = self.spec.max_results.unwrap_or(250).max(1).min(1_000_000) as usize;
 
         let client = crate::GwasCatalogClient::new();
         let targets = resolve_targets(
@@ -589,7 +590,7 @@ impl DagNode for SummaryAssociationsNode {
                     return Err(DagError::Schedule(format!(
                         "source_gwascatalog_summary_associations: parsing {} failed: {e}",
                         target.name
-                    )))
+                    )));
                 }
             }
         }
@@ -632,28 +633,22 @@ fn build_summary_batch(rows: &[FtpRow]) -> Result<RecordBatch, DagError> {
     RecordBatch::try_new(
         schema,
         vec![
-            crate::nodes::str_array(
-                rows.iter().map(|r| r.variant_id.clone()).collect(),
-            ),
+            crate::nodes::str_array(rows.iter().map(|r| r.variant_id.clone()).collect()),
             Arc::new(UInt32Array::from(
                 rows.iter().map(|r| r.chromosome).collect::<Vec<_>>(),
             )),
             Arc::new(UInt64Array::from(
-                rows.iter().map(|r| r.base_pair_location).collect::<Vec<_>>(),
+                rows.iter()
+                    .map(|r| r.base_pair_location)
+                    .collect::<Vec<_>>(),
             )),
-            crate::nodes::str_array(
-                rows.iter().map(|r| r.study_accession.clone()).collect(),
-            ),
+            crate::nodes::str_array(rows.iter().map(|r| r.study_accession.clone()).collect()),
             crate::nodes::str_array(rows.iter().map(|r| r.trait_.clone()).collect()),
             Arc::new(UInt32Array::from(
                 rows.iter().map(|r| r.hm_code).collect::<Vec<_>>(),
             )),
-            crate::nodes::str_array(
-                rows.iter().map(|r| r.effect_allele.clone()).collect(),
-            ),
-            crate::nodes::str_array(
-                rows.iter().map(|r| r.other_allele.clone()).collect(),
-            ),
+            crate::nodes::str_array(rows.iter().map(|r| r.effect_allele.clone()).collect()),
+            crate::nodes::str_array(rows.iter().map(|r| r.other_allele.clone()).collect()),
             Arc::new(Float64Array::from(
                 rows.iter()
                     .map(|r| r.effect_allele_frequency)
@@ -852,8 +847,7 @@ mod tests {
 
     #[test]
     fn gzipped_input_round_trips() {
-        let mut encoder =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         std::io::Write::write_all(&mut encoder, harmonised_tsv().as_bytes()).unwrap();
         let gz = encoder.finish().unwrap();
         let mut rows = Vec::new();

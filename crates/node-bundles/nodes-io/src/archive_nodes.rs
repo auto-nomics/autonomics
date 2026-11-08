@@ -966,6 +966,7 @@ impl DagNode for ArchiveExtractNode {
                 let mut fingerprint = extracted.fingerprint;
                 fingerprint.immutable_remote = true;
                 outputs.push(FileRef {
+                    domain: dag_core::DomainId::local(),
                     format: crate::file_decompress::format_from_path(&path),
                     path,
                     fingerprint: Some(fingerprint),
@@ -1028,6 +1029,7 @@ impl DagNode for ArchiveExtractNode {
                 let path = destination.to_string_lossy().into_owned();
                 published.push(path.clone());
                 outputs.push(FileRef {
+                    domain: dag_core::DomainId::local(),
                     format: crate::file_decompress::format_from_path(&path),
                     path,
                     fingerprint: Some(fingerprint),

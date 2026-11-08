@@ -926,11 +926,7 @@ pub(super) async fn execute_typed_worker_core(
         let value = rebound_task
             .spec
             .pointer_mut(pointer)
-            .filter(|value| {
-                value
-                    .as_str()
-                    .is_some_and(|path| vfs::uri::is_uri(path))
-            })
+            .filter(|value| value.as_str().is_some_and(|path| vfs::uri::is_uri(path)))
             .ok_or_else(|| failure("directory publication requires an original VFS target"))?;
         *value = serde_json::json!(format!(
             "file://{}",

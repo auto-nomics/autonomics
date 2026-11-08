@@ -67,7 +67,7 @@ fn fixture() -> Fixture {
 fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
     registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: registry.catalog().revision,
             id: id.into(),
             name: id.into(),
@@ -272,7 +272,7 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
     let settings = remote_settings(&f.config.state_dir, "environment-host");
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "remote".into(),
             name: "remote".into(),
@@ -528,7 +528,7 @@ async fn target_profiles_are_frozen_and_tampering_is_rejected_on_restart() {
     let source = settings.typed_worker_config.clone().unwrap();
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: 1,
             id: "remote".into(),
             name: "remote".into(),
@@ -656,19 +656,37 @@ async fn scheduler_binds_once_and_existing_agent_graphs_follow_next_run_policy()
     install_capture(&f.registry, "server-b", calls.clone(), false);
     let graph = FlowGraph::builder()
         .process(Process::new("first", "compute-test", serde_json::json!({})))
-        .process(Process::new("second", "compute-test", serde_json::json!({})))
-        .build().unwrap();
+        .process(Process::new(
+            "second",
+            "compute-test",
+            serde_json::json!({}),
+        ))
+        .build()
+        .unwrap();
     let ctx = NodeCtx::new(
         Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
         Some(f.registry.storage.clone()),
     );
-    let cfg = FlowRunConfig { max_concurrency: 1, resume: false };
-    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))), Arc::new(ctx));
-    let report = scheduler.run_dataflow(&graph, &SourceResolution::new(), &cfg, None).await.unwrap();
+    let cfg = FlowRunConfig {
+        max_concurrency: 1,
+        resume: false,
+    };
+    let scheduler = FlowScheduler::new(
+        Arc::new(ComputeExecutor(f.registry.clone())),
+        Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))),
+        Arc::new(ctx),
+    );
+    let report = scheduler
+        .run_dataflow(&graph, &SourceResolution::new(), &cfg, None)
+        .await
+        .unwrap();
     assert!(report.ok);
     assert_eq!(report.execution_binding.unwrap()["target_id"], "local");
     assert_eq!(*calls.lock().unwrap(), vec!["local", "local"]);
-    let report = scheduler.run_dataflow(&graph, &SourceResolution::new(), &cfg, None).await.unwrap();
+    let report = scheduler
+        .run_dataflow(&graph, &SourceResolution::new(), &cfg, None)
+        .await
+        .unwrap();
     assert!(report.ok);
     assert_eq!(report.execution_binding.unwrap()["target_id"], "server-b");
     assert_eq!(
@@ -685,7 +703,7 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
         assert!(
             f.registry
                 .save_target(SaveTarget {
-                data_domains: Vec::new(),
+                    data_domains: Vec::new(),
                     expected_revision: 1,
                     id: id.into(),
                     name: "invalid".into(),
@@ -773,7 +791,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
     let old = f.registry.target("a", Some(1)).unwrap();
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "a".into(),
             name: "disabled a".into(),
@@ -897,7 +915,7 @@ async fn connection_identity_is_retained_when_alias_configuration_changes() {
     let program = settings.ssh_command.clone();
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: 1,
             id: "a".into(),
             name: "a".into(),
@@ -934,7 +952,7 @@ else:
     fs::write(&settings.ssh_command, script).unwrap();
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: 1,
             id: "a".into(),
             name: "a".into(),
@@ -955,7 +973,7 @@ else:
     select(&f.registry, "local");
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "a".into(),
             name: "a".into(),
@@ -1127,20 +1145,41 @@ async fn containers_use_the_same_target_snapshot_as_the_dag_run() {
             .unwrap()
             .insert(target.monitor_key.clone(), target);
     }
-    let graph = FlowGraph::builder().process(Process::new("container", "compute-test", serde_json::json!({}))).build().unwrap();
+    let graph = FlowGraph::builder()
+        .process(Process::new(
+            "container",
+            "compute-test",
+            serde_json::json!({}),
+        ))
+        .build()
+        .unwrap();
     let ctx = NodeCtx::new(
         Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
         Some(f.registry.storage.clone()),
     );
-    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))), Arc::new(ctx));
+    let scheduler = FlowScheduler::new(
+        Arc::new(ComputeExecutor(f.registry.clone())),
+        Arc::new(|_, _| Ok(Box::new(EmptyNode(NodePorts::new())))),
+        Arc::new(ctx),
+    );
     let first = scheduler
-        .run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig::default(), None)
+        .run_dataflow(
+            &graph,
+            &SourceResolution::new(),
+            &FlowRunConfig::default(),
+            None,
+        )
         .await
         .unwrap();
     assert!(first.ok);
     assert_eq!(first.execution_binding.unwrap()["target_id"], "local");
     let second = scheduler
-        .run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig::default(), None)
+        .run_dataflow(
+            &graph,
+            &SourceResolution::new(),
+            &FlowRunConfig::default(),
+            None,
+        )
         .await
         .unwrap();
     assert!(second.ok);
@@ -1156,7 +1195,7 @@ async fn restart_uses_enrolled_profiles_instead_of_mutable_legacy_paths() {
     let source = settings.typed_worker_config.clone().unwrap();
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: 1,
             id: "remote".into(),
             name: "remote".into(),
@@ -1222,7 +1261,7 @@ async fn background_image_builds_cannot_bypass_remote_compute_policy() {
     let settings = remote_settings(&f.config.state_dir, "image-host");
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "remote".into(),
             name: "remote".into(),
@@ -1365,7 +1404,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let catalog = f
         .registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "old-worker".into(),
             name: "Old worker".into(),
@@ -1431,7 +1470,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let replacement = remote_settings(&f.config.state_dir, "matching-worker");
     reopened
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: reopened.catalog().revision,
             id: "old-worker".into(),
             name: "Matching replacement".into(),
@@ -1512,7 +1551,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     settings.apptainer_manifest = Some(inventory);
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "readiness".into(),
             name: "readiness".into(),
@@ -1542,36 +1581,78 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
         .unwrap();
     assert_eq!(valid["state"], "CONFIGURATION_READY");
     assert_eq!(valid["end_to_end_acceptance"], "NOT_VERIFIED");
-    assert_eq!(f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap()["state"], "NOT_VERIFIED");
+    assert_eq!(
+        f.registry
+            .readiness(&ReadinessRequest::default(), &[])
+            .unwrap()["state"],
+        "NOT_VERIFIED"
+    );
     assert_eq!(valid["remote_sif_bytes_verified"], false);
     let calls = Arc::new(Mutex::new(Vec::new()));
     install_capture(&f.registry, "readiness", calls.clone(), false);
-    let node = RequiredImageNode { ports:NodePorts::new(), image:missing };
+    let node = RequiredImageNode {
+        ports: NodePorts::new(),
+        image: missing,
+    };
     let graph = FlowGraph::builder()
-        .process(Process::new("a_ordinary", "compute-test", serde_json::json!({})))
-        .process(Process::new("z_missing", "readiness-probe", serde_json::json!({})))
-        .build().unwrap();
-    let ctx = NodeCtx::new(Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
-        Some(f.registry.storage.clone()));
+        .process(Process::new(
+            "a_ordinary",
+            "compute-test",
+            serde_json::json!({}),
+        ))
+        .process(Process::new(
+            "z_missing",
+            "readiness-probe",
+            serde_json::json!({}),
+        ))
+        .build()
+        .unwrap();
+    let ctx = NodeCtx::new(
+        Arc::new(datafusion::execution::runtime_env::RuntimeEnv::default()),
+        Some(f.registry.storage.clone()),
+    );
     let required = node.clone();
-    let scheduler = FlowScheduler::new(Arc::new(ComputeExecutor(f.registry.clone())), Arc::new(move |kind, _| {
-        match kind {
+    let scheduler = FlowScheduler::new(
+        Arc::new(ComputeExecutor(f.registry.clone())),
+        Arc::new(move |kind, _| match kind {
             "compute-test" => Ok(Box::new(EmptyNode(NodePorts::new()))),
             _ => Ok(Box::new(required.clone())),
-        }
-    }), Arc::new(ctx));
-    let error = scheduler.run_dataflow(&graph, &SourceResolution::new(), &FlowRunConfig { max_concurrency: 1, resume: false }, None).await.unwrap_err();
+        }),
+        Arc::new(ctx),
+    );
+    let error = scheduler
+        .run_dataflow(
+            &graph,
+            &SourceResolution::new(),
+            &FlowRunConfig {
+                max_concurrency: 1,
+                resume: false,
+            },
+            None,
+        )
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("WORKFLOW_BLOCKED"));
     // The streaming scheduler checks each instance at dispatch time, so a
     // preceding task may already have run when another image is rejected.
     assert_eq!(*calls.lock().unwrap(), vec!["readiness"]);
-    let executor = ComputeExecutor(f.registry.clone()).bind_run().await.unwrap().unwrap();
+    let executor = ComputeExecutor(f.registry.clone())
+        .bind_run()
+        .await
+        .unwrap()
+        .unwrap();
     select(&f.registry, "local");
-    let blocked = executor.preflight(&[("dynamic", &node)]).unwrap_err().to_string();
+    let blocked = executor
+        .preflight(&[("dynamic", &node)])
+        .unwrap_err()
+        .to_string();
     assert!(blocked.contains("IMAGE_MAPPING_UNAVAILABLE"));
     assert!(blocked.contains("\"blocked_nodes_submitted\":false"));
     assert!(!blocked.contains("\"new_job_submitted\""));
-    assert_eq!(executor.execution_binding().unwrap()["target_id"], "readiness");
+    assert_eq!(
+        executor.execution_binding().unwrap()["target_id"],
+        "readiness"
+    );
 }
 
 #[tokio::test]
@@ -1590,7 +1671,10 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
         .unwrap();
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["blockers"][0]["code"], "NODE_NOT_REGISTERED");
-    let empty = f.registry.readiness(&ReadinessRequest::default(), &[]).unwrap();
+    let empty = f
+        .registry
+        .readiness(&ReadinessRequest::default(), &[])
+        .unwrap();
     assert_eq!(empty["state"], "NOT_VERIFIED");
     assert_eq!(empty["requested_images"], 0);
     assert_eq!(empty["requested_identities"], 0);
@@ -1605,7 +1689,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     let settings = remote_settings(&f.config.state_dir, "network");
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "network".into(),
             name: "network".into(),
@@ -1647,7 +1731,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     );
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "network".into(),
             name: "network".into(),
@@ -1688,7 +1772,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     settings.apptainer_manifest = None;
     f.registry
         .save_target(SaveTarget {
-                data_domains: Vec::new(),
+            data_domains: Vec::new(),
             expected_revision: f.registry.catalog().revision,
             id: "ht-direct".into(),
             name: "Direct SSH host".into(),
@@ -1824,8 +1908,16 @@ fn data_domain_converts_to_transport_home_losslessly() {
     assert_eq!(home.ssh_aliases, vec!["data-a".to_string()]);
     assert_eq!(home.remote_root, "/lustre/share");
     assert_eq!(home.vfs_prefix, "/data/hpc-b");
-    assert_eq!(home.retained_vfs_prefix.as_deref(), Some("/data/hpc-b-kept"));
-    assert_eq!(home.retained_remote_root.as_deref(), Some("/lustre/share/kept"));
+    // The catalog id flows into every placement the store publishes.
+    assert_eq!(home.domain_id.as_deref(), Some("hpc-b"));
+    assert_eq!(
+        home.retained_vfs_prefix.as_deref(),
+        Some("/data/hpc-b-kept")
+    );
+    assert_eq!(
+        home.retained_remote_root.as_deref(),
+        Some("/lustre/share/kept")
+    );
 }
 
 #[tokio::test]
@@ -1890,11 +1982,7 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
             data_domains: vec![domain("domain-a")],
         })
         .unwrap();
-    let target = saved
-        .targets
-        .iter()
-        .find(|t| t.id == "dom")
-        .unwrap();
+    let target = saved.targets.iter().find(|t| t.id == "dom").unwrap();
     // The domain alias is frozen with the same endpoint identity
     // treatment as the target's own login alias.
     let endpoint = &target.endpoints["domain-a"];
