@@ -264,9 +264,11 @@ impl DataSource {
                 root,
                 python,
             } => {
-                if !self.read_only {
-                    return Err("SSH data sources must be read-only".into());
-                }
+                // Writable SSH data sources are an explicit operator opt-in:
+                // each source is one mount partition, and the permission
+                // layer governs access within it. Retained/publication
+                // namespaces must still be declared read_only — data domains
+                // validate that invariant at enrollment (SshDataHome).
                 vfs::BackendConfig::Ssh {
                     alias: alias.clone(),
                     root: root.clone(),

@@ -668,6 +668,17 @@ impl OpendalFileStorage {
             .unwrap_or(false)
     }
 
+    /// Whether the deepest mount covering `path` is declared read-only.
+    /// `None` when no attached mount covers the path. Consumers that
+    /// publish immutable fingerprints over a namespace use this to refuse
+    /// writable mounts where a silent overwrite would defeat caching.
+    pub fn mount_read_only(&self, path: &str) -> Option<bool> {
+        let mounts = self.mounts.as_ref()?;
+        let normalized = Self::normalize_path(path);
+        let parsed = Path::parse(&normalized).ok()?;
+        Some(mounts.handle_for(&parsed)?.read_only)
+    }
+
     /// Return true iff `path_a` and `path_b` resolve to the same
     /// backend operator. Used by `cp`/`mv` to decide between
     /// backend-internal rename/copy and an explicit read+write.

@@ -449,12 +449,12 @@ impl MountedObjectStore {
                         path: definition.path.clone(),
                         backend: definition.backend.clone(),
                     })?;
-            if matches!(backend.config, BackendConfig::Ssh { .. }) && !definition.read_only {
-                return Err(MountError::Config(format!(
-                    "SSH mount '{}' must explicitly set read_only = true",
-                    definition.path
-                )));
-            }
+            // SSH mounts are writable when the operator declares them so:
+            // isolation comes from explicit mount partitions (each mount is
+            // one filesystem domain) plus the permission layer, not from a
+            // blanket read-only rule. Publishing/retained namespaces must
+            // still be declared read_only — consumers (e.g. the compute
+            // catalog's data domains) validate that invariant themselves.
             let operator = built_backends
                 .get(&definition.backend)
                 .cloned()

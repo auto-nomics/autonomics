@@ -2471,6 +2471,16 @@ impl SshDataHome {
         vfs_prefix: &str,
         remote_root: &str,
     ) -> Result<(), DagError> {
+        // The published namespace must be mounted read-only: placements in
+        // this domain are measured once and trusted thereafter, and a
+        // writable mount would let silent overwrites defeat that trust.
+        // Writable work areas belong to a *different* mount partition of
+        // the same filesystem, not to the published domain namespace.
+        if storage.mount_read_only(vfs_prefix) == Some(false) {
+            return Err(DagError::Schedule(
+                "retained VFS namespace must be mounted read_only".into(),
+            ));
+        }
         let mut prefixes = vec![vfs_prefix.to_string()];
         if let Some(mounts) = &storage.mounts {
             prefixes.extend(

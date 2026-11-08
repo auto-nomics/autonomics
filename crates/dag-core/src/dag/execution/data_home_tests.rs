@@ -451,3 +451,24 @@ fn batch_payload_does_not_run_when_task_directory_is_gone() {
         "missing workspace executed its payload in the fallback cwd"
     );
 }
+
+#[test]
+fn writable_retained_mount_is_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let manifest = vfs::VfsManifest::from_toml(
+        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot='/cluster/data'\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=false\n",
+    )
+    .unwrap();
+    let home = SshDataHome {
+        ssh_aliases: vec!["fixture".into()],
+        remote_root: "/cluster/data".into(),
+        vfs_prefix: "/cluster".into(),
+        domain_id: None,
+        retained_vfs_prefix: None,
+        retained_remote_root: None,
+    };
+    let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+    let storage = vfs::OpendalFileStorage::with_mounts(root.path(), mounts);
+    let error = home.validate_vfs(&storage).unwrap_err().to_string();
+    assert!(error.contains("read_only"), "{error}");
+}

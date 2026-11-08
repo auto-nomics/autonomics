@@ -1,21 +1,32 @@
-//! Read-only, bounded-memory access to an operator-owned SSH data home.
-//! OpenSSH owns authentication and host identity. No password/key is accepted
-//! by this backend, and no dataset is mirrored onto the coordinator.
+//! Bounded-memory access to an operator-owned SSH data home: reads via
+//! [`ssh_read.py`], staged atomic writes via [`ssh_write.py`]. OpenSSH owns
+//! authentication and host identity. No password/key is accepted by this
+//! backend, and no dataset is mirrored onto the coordinator. Write
+//! admission is the mount layer's declaration — this backend performs
+//! whatever the authorized mount permits.
 
 use std::collections::VecDeque;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
-use opendal::raw::{Access, AccessorInfo, OpList, OpRead, OpStat, RpList, RpRead, RpStat, oio};
+use opendal::raw::{
+    Access, AccessorInfo, OpCreateDir, OpDelete, OpList, OpRead, OpRename, OpStat, OpWrite,
+    RpCreateDir, RpDelete, RpList, RpRead, RpRename, RpStat, RpWrite, oio,
+};
 use opendal::{Buffer, Capability, EntryMode, Error, ErrorKind, Metadata, Operator, Result};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 
 const SCRIPT: &str = include_str!("ssh_read.py");
+const WRITE_SCRIPT: &str = include_str!("ssh_write.py");
 const CHUNK: u64 = 1024 * 1024;
 const MAX_RESPONSE: u64 = 4 * 1024 * 1024;
+const MAX_STATUS: u64 = 64 * 1024;
+/// Largest single framed body chunk the writer will emit per frame.
+const MAX_FRAME: usize = 256 * 1024 * 1024;
 
 /// An authorized reference for same-host worker staging. It is metadata only;
 /// the worker must still enforce its own resource, host and path admission.
@@ -117,6 +128,10 @@ fn build_access(alias: &str, root: &str, python: &str) -> Result<SshAccess> {
             stat: true,
             read: true,
             list: true,
+            write: true,
+            create_dir: true,
+            delete: true,
+            rename: true,
             shared: true,
             ..Default::default()
         });
@@ -132,13 +147,11 @@ fn build_access(alias: &str, root: &str, python: &str) -> Result<SshAccess> {
 }
 
 impl SshAccess {
-    async fn request(&self, mut request: Value) -> Result<(Value, Vec<u8>)> {
-        request["root"] = json!(self.root);
-        let input = serde_json::to_vec(&request)
-            .map_err(|_| failure(ErrorKind::Unexpected, "SSH request serialization failed"))?;
-        let command = format!("{} -I -c {}", quote(&self.python), quote(SCRIPT));
-        // The remote shell only sees fixed source. Paths and file identities
-        // travel as JSON on stdin, so shell metacharacters are never expanded.
+    /// The remote command for one helper execution. The remote shell only
+    /// sees fixed source; paths and identities travel as JSON on stdin, so
+    /// shell metacharacters are never expanded.
+    fn command(&self, script: &str) -> tokio::process::Command {
+        let command = format!("{} -I -c {}", quote(&self.python), quote(script));
         let mut executable = tokio::process::Command::new("ssh");
         if let Some(endpoint) = &self.endpoint {
             executable.args(endpoint.options());
@@ -160,15 +173,26 @@ impl SshAccess {
         #[cfg(test)]
         if self.local_test_transport {
             executable = tokio::process::Command::new(&self.python);
-            executable.args(["-I", "-c", SCRIPT]);
+            executable.args(["-I", "-c", script]);
         }
-        let mut child = executable
+        executable
+    }
+
+    fn spawn(&self, script: &str) -> Result<Child> {
+        self.command(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|_| failure(ErrorKind::Unexpected, "SSH reader failed to start"))?;
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH helper failed to start"))
+    }
+
+    async fn request(&self, mut request: Value) -> Result<(Value, Vec<u8>)> {
+        request["root"] = json!(self.root);
+        let input = serde_json::to_vec(&request)
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH request serialization failed"))?;
+        let mut child = self.spawn(SCRIPT)?;
         let operation = async {
             let mut stdin = child
                 .stdin
@@ -230,6 +254,81 @@ impl SshAccess {
             .await
             .map_err(|_| failure(ErrorKind::Unexpected, "SSH read-only operation timed out"))?
     }
+
+    /// Execute one mutation (delete/rename/mkdir) through the write helper.
+    /// The single-line request travels on stdin; the JSON status returns on
+    /// stdout.
+    async fn mutate(&self, mut request: Value) -> Result<Value> {
+        request["root"] = json!(self.root);
+        let mut input = serde_json::to_vec(&request)
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH request serialization failed"))?;
+        input.push(b'\n');
+        let mut child = self.spawn(WRITE_SCRIPT)?;
+        let operation = async {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| failure(ErrorKind::Unexpected, "SSH input unavailable"))?;
+            stdin
+                .write_all(&input)
+                .await
+                .map_err(|_| failure(ErrorKind::Unexpected, "SSH request failed"))?;
+            stdin
+                .shutdown()
+                .await
+                .map_err(|_| failure(ErrorKind::Unexpected, "SSH request flush failed"))?;
+            drop(stdin);
+            Self::collect_status(&mut child).await
+        };
+        tokio::time::timeout(Duration::from_secs(120), operation)
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH write operation timed out"))?
+    }
+
+    /// Read the bounded single-line JSON status a helper prints on success.
+    async fn collect_status(child: &mut Child) -> Result<Value> {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| failure(ErrorKind::Unexpected, "SSH response unavailable"))?;
+        let mut output = Vec::new();
+        stdout
+            .take(MAX_STATUS + 1)
+            .read_to_end(&mut output)
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH response failed"))?;
+        if output.len() as u64 > MAX_STATUS {
+            return Err(failure(
+                ErrorKind::Unexpected,
+                "SSH status exceeded bounded limit",
+            ));
+        }
+        let status = child
+            .wait()
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH status unavailable"))?;
+        if !status.success() {
+            return Err(failure(ErrorKind::Unexpected, "SSH helper failed"));
+        }
+        let header: Value = serde_json::from_slice(output.trim_ascii_end())
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH response header invalid"))?;
+        if header["ok"] != true {
+            if header["error"] == "unsupported_runtime" {
+                return Err(failure(
+                    ErrorKind::ConfigInvalid,
+                    "SSH Python requires version 3.7+ with confined fd operations",
+                ));
+            }
+            let kind = match header["error"].as_str() {
+                Some("not_found") => ErrorKind::NotFound,
+                Some("not_a_directory") => ErrorKind::IsADirectory,
+                Some("permission_denied") => ErrorKind::PermissionDenied,
+                _ => ErrorKind::Unexpected,
+            };
+            return Err(failure(kind, "SSH write operation refused"));
+        }
+        Ok(header)
+    }
 }
 
 fn metadata(value: &Value) -> Result<Metadata> {
@@ -255,13 +354,64 @@ fn metadata(value: &Value) -> Result<Metadata> {
 
 impl Access for SshAccess {
     type Reader = SshReader;
-    type Writer = ();
+    type Writer = SshWriter;
     type Lister = SshLister;
-    type Deleter = ();
+    type Deleter = SshDeleter;
     type Copier = ();
 
     fn info(&self) -> Arc<AccessorInfo> {
         Arc::clone(&self.info)
+    }
+
+    async fn create_dir(&self, path: &str, _: OpCreateDir) -> Result<RpCreateDir> {
+        self.mutate(json!({"op":"mkdir", "path":path})).await?;
+        Ok(RpCreateDir::default())
+    }
+
+    async fn rename(&self, from: &str, to: &str, _: OpRename) -> Result<RpRename> {
+        self.mutate(json!({"op":"rename", "from":from, "to":to}))
+            .await?;
+        Ok(RpRename::default())
+    }
+
+    async fn delete(&self) -> Result<(RpDelete, Self::Deleter)> {
+        Ok((
+            RpDelete::default(),
+            SshDeleter {
+                access: self.clone(),
+                pending: Vec::new(),
+            },
+        ))
+    }
+
+    async fn write(&self, path: &str, _: OpWrite) -> Result<(RpWrite, Self::Writer)> {
+        let header = json!({"op":"write", "path":path, "root":self.root});
+        let mut line = serde_json::to_vec(&header)
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH request serialization failed"))?;
+        // The helper reads the request as one line; the framed body starts
+        // on the next line.
+        line.push(b'\n');
+        let mut child = self.spawn(WRITE_SCRIPT)?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| failure(ErrorKind::Unexpected, "SSH input unavailable"))?;
+        stdin
+            .write_all(&line)
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH upload request failed"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| failure(ErrorKind::Unexpected, "SSH response unavailable"))?;
+        Ok((
+            RpWrite::new(),
+            SshWriter {
+                child: Some(child),
+                stdin: Some(stdin),
+                stdout: Some(stdout),
+            },
+        ))
     }
 
     async fn stat(&self, path: &str, _: OpStat) -> Result<RpStat> {
@@ -366,6 +516,137 @@ impl oio::List for SshLister {
     }
 }
 
+/// One streamed staged upload. Body chunks travel as length-prefixed frames;
+/// `close` emits the zero-length terminator frame that authorizes the remote
+/// atomic rename. `abort` kills the transport, which the remote helper sees
+/// as a frame-stream without a terminator — it unlinks its staged file and
+/// never touches the destination.
+struct SshWriter {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    stdout: Option<ChildStdout>,
+}
+
+impl oio::Write for SshWriter {
+    async fn write(&mut self, bs: Buffer) -> Result<()> {
+        let Some(stdin) = self.stdin.as_mut() else {
+            return Err(failure(ErrorKind::Unexpected, "SSH writer is closed"));
+        };
+        if bs.is_empty() {
+            // The zero-length frame is the commit terminator, never a body.
+            return Ok(());
+        }
+        let body = bs.to_vec();
+        let mut view: &[u8] = &body;
+        while !view.is_empty() {
+            let frame = &view[..view.len().min(MAX_FRAME)];
+            let header = format!("{:08x}\n", frame.len());
+            stdin
+                .write_all(header.as_bytes())
+                .await
+                .map_err(|_| failure(ErrorKind::Unexpected, "SSH upload stream failed"))?;
+            stdin
+                .write_all(frame)
+                .await
+                .map_err(|_| failure(ErrorKind::Unexpected, "SSH upload stream failed"))?;
+            view = &view[frame.len()..];
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<Metadata> {
+        let Some(mut stdin) = self.stdin.take() else {
+            return Err(failure(ErrorKind::Unexpected, "SSH writer is closed"));
+        };
+        stdin
+            .write_all(b"00000000\n")
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH commit frame failed"))?;
+        stdin
+            .shutdown()
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH commit flush failed"))?;
+        drop(stdin);
+        let Some(child) = self.child.as_mut() else {
+            return Err(failure(ErrorKind::Unexpected, "SSH writer is closed"));
+        };
+        let header = Self::collect_status_of(child, self.stdout.take()).await?;
+        let size = header["size"].as_u64().unwrap_or_default();
+        Ok(Metadata::new(EntryMode::FILE).with_content_length(size))
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        self.stdin.take();
+        self.stdout.take();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill().await;
+        }
+        Ok(())
+    }
+}
+
+impl SshWriter {
+    async fn collect_status_of(
+        child: &mut Child,
+        stdout: Option<ChildStdout>,
+    ) -> Result<Value> {
+        let Some(mut stdout) = stdout else {
+            return Err(failure(ErrorKind::Unexpected, "SSH response unavailable"));
+        };
+        let mut output = Vec::new();
+        stdout
+            .take(MAX_STATUS + 1)
+            .read_to_end(&mut output)
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH response failed"))?;
+        if output.len() as u64 > MAX_STATUS {
+            return Err(failure(
+                ErrorKind::Unexpected,
+                "SSH status exceeded bounded limit",
+            ));
+        }
+        let status = child
+            .wait()
+            .await
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH status unavailable"))?;
+        if !status.success() {
+            return Err(failure(ErrorKind::Unexpected, "SSH helper failed"));
+        }
+        let header: Value = serde_json::from_slice(output.trim_ascii_end())
+            .map_err(|_| failure(ErrorKind::Unexpected, "SSH response header invalid"))?;
+        if header["ok"] != true {
+            let kind = match header["error"].as_str() {
+                Some("not_found") => ErrorKind::NotFound,
+                Some("not_a_directory") => ErrorKind::IsADirectory,
+                Some("permission_denied") => ErrorKind::PermissionDenied,
+                _ => ErrorKind::Unexpected,
+            };
+            return Err(failure(kind, "SSH write operation refused"));
+        }
+        Ok(header)
+    }
+}
+
+/// Batched deletion through the write helper.
+struct SshDeleter {
+    access: SshAccess,
+    pending: Vec<String>,
+}
+
+impl oio::Delete for SshDeleter {
+    async fn delete(&mut self, path: &str, _: OpDelete) -> Result<()> {
+        self.pending.push(path.to_string());
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        for path in self.pending.drain(..) {
+            self.access.mutate(json!({"op":"delete", "path":path})).await?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,7 +724,10 @@ mod tests {
             operator.stat("missing").await.unwrap_err().kind(),
             ErrorKind::NotFound
         );
-        assert!(operator.write("new", b"refused".to_vec()).await.is_err());
+        // Writes are admitted at the backend level; read-only enforcement
+        // belongs to the mount declaration (see the write-protocol tests
+        // and storage's write_to_read_only_mount_is_rejected).
+        assert_eq!(operator.write("new", b"refused".to_vec()).await.unwrap().content_length(), 7);
     }
 
     #[tokio::test]
@@ -520,7 +804,9 @@ mod tests {
         }
         let operator = build("sjtu", "/data/study", "python3").unwrap();
         assert!(operator.info().full_capability().read);
-        assert!(!operator.info().full_capability().write);
+        // The backend performs whatever an authorized mount permits; write
+        // admission is the mount declaration, not a backend-level ban.
+        assert!(operator.info().full_capability().write);
         for python in [
             "",
             "-I",
@@ -591,10 +877,84 @@ directory_mode = "0700"
             ErrorKind::PermissionDenied
         );
         let mut writable = manifest;
-        writable.mount[0].read_only = false;
-        assert!(MountedObjectStore::from_manifest(&writable).is_err());
         writable.mount[0].read_only = true;
         writable.mount[0].source = "/outside".into();
         assert!(MountedObjectStore::from_manifest(&writable).is_err());
+    }
+
+    #[tokio::test]
+    async fn python_write_protocol_roundtrips_write_rename_delete_and_mkdir() {
+        let root = tempfile::tempdir().unwrap();
+        let operator = local_operator(root.path());
+        operator.create_dir("nested/").await.unwrap();
+        operator
+            .write("nested/out '$(literal).bin", Vec::from(b"abcdefghij"))
+            .await
+            .unwrap();
+        let info = operator.stat("nested/out '$(literal).bin").await.unwrap();
+        assert_eq!(info.content_length(), 10);
+        assert_eq!(
+            operator
+                .read("nested/out '$(literal).bin")
+                .await
+                .unwrap()
+                .to_vec(),
+            b"abcdefghij"
+        );
+        operator
+            .rename("nested/out '$(literal).bin", "nested/moved.bin")
+            .await
+            .unwrap();
+        assert!(
+            operator
+                .stat("nested/out '$(literal).bin")
+                .await
+                .unwrap_err()
+                .kind()
+                == ErrorKind::NotFound
+        );
+        assert!(operator.stat("nested/moved.bin").await.unwrap().is_file());
+        // Overwrite an existing destination atomically.
+        operator.write("nested/moved.bin", Vec::from(b"replacement")).await.unwrap();
+        assert_eq!(
+            operator.read("nested/moved.bin").await.unwrap().to_vec(),
+            b"replacement"
+        );
+        operator.delete("nested/moved.bin").await.unwrap();
+        assert!(
+            operator
+                .stat("nested/moved.bin")
+                .await
+                .unwrap_err()
+                .kind()
+                == ErrorKind::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn staged_upload_never_publishes_a_torn_destination() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("victim.bin"), b"original").unwrap();
+        let operator = local_operator(root.path());
+        let mut writer = operator.writer("victim.bin").await.unwrap();
+        writer.write(Buffer::from("partial body")).await.unwrap();
+        // Abort instead of commit: the framing terminator never arrives, so
+        // the destination keeps its original bytes — a truncated body must
+        // never be observed at the destination path.
+        writer.abort().await.unwrap();
+        assert_eq!(
+            operator.read("victim.bin").await.unwrap().to_vec(),
+            b"original"
+        );
+        assert_eq!(std::fs::read(root.path().join("victim.bin")).unwrap(), b"original");
+    }
+
+    #[tokio::test]
+    async fn large_framed_bodies_survive_chunk_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let operator = local_operator(root.path());
+        let body: Vec<u8> = (0..5 * 1024 * 1024 + 7).map(|i| (i % 251) as u8).collect();
+        operator.write("large.bin", body.clone()).await.unwrap();
+        assert_eq!(operator.read("large.bin").await.unwrap().to_vec(), body);
     }
 }
