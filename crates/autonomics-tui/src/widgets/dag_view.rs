@@ -803,6 +803,7 @@ mod tests {
             dirty,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            execution: None,
         }
     }
 
@@ -829,6 +830,9 @@ mod tests {
                 edge("validate", "report"),
                 edge("transform", "report"),
             ],
+            running: false,
+            run_id: None,
+            observed_at_ms: 0,
         }
     }
 

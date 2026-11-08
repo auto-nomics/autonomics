@@ -4348,10 +4348,10 @@ mod tests {
         let mut buf = Buffer::empty(area);
         ratatui::widgets::WidgetRef::render_ref(&(&t), area, &mut buf);
 
-        // Should show "hello" with cyan foreground
+        // No custom display: buffer text renders in the theme accent.
         let cell = buf.cell((0, 0)).unwrap();
         assert_eq!(cell.symbol(), "h");
-        assert_eq!(cell.fg, Color::Cyan);
+        assert_eq!(cell.fg, crate::theme::current().accent);
     }
 
     #[test]
@@ -6694,8 +6694,11 @@ mod tests {
         let mut buf = ratatui::buffer::Buffer::empty(area);
         ratatui::widgets::WidgetRef::render_ref(&(&t), area, &mut buf);
 
-        let default_bg = Color::Rgb(49, 62, 115);
-        let default_fg = Color::Rgb(192, 202, 245);
+        // The default selection style is theme-driven; read whatever the
+        // active preset carries instead of pinning one palette.
+        let theme = crate::theme::current();
+        let default_bg = theme.selection_bg;
+        let default_fg = theme.selection_fg;
         // Cells 1, 2, 3 should have the default selection bg + fg
         for col in 1..4u16 {
             let cell = &buf[(col, 0)];
@@ -9194,7 +9197,8 @@ mod tests {
         let cell = &buf[(last_col, 0u16)];
         // Should be default (empty space), not scrollbar styled.
         assert!(
-            cell.style().bg.is_none() || !matches!(cell.style().bg, Some(Color::Rgb(32, 35, 53))),
+            cell.style().bg.is_none()
+                || cell.style().bg != Some(crate::theme::current().scroll_track),
             "should not have scrollbar bg when content fits"
         );
     }

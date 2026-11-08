@@ -159,6 +159,14 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 *v = 0;
             }
         }
+        if ts.cached_theme_gen != crate::theme::generation() {
+            // Preset switch: cached lines carry colors baked under the old
+            // preset, so force a full re-render from the new tokens.
+            ts.cached_theme_gen = crate::theme::generation();
+            for v in &mut ts.cached_msg_versions {
+                *v = 0;
+            }
+        }
 
         let mut total_rows = 0usize;
         for (i, msg) in ts.messages.iter().enumerate() {

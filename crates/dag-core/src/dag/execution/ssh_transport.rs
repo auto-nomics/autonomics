@@ -158,36 +158,35 @@ impl SshTaskTransport {
         // supervisor still gets to record its exit code; the executor's own
         // deadline remains the authority for cancelling.
         let deadline = horizon + Duration::from_secs(30);
-        loop {
-            match self
-                .settings
-                .ssh
-                .run_script_with_timeout(&wait, deadline)
-                .await
-            {
-                Ok(output) => {
-                    let stdout = ssh_stdout_text(output, "ssh exit code")?;
-                    return parse_exit_code(&stdout);
-                }
-                Err(error) => {
-                    // The connection may have died while the task kept
-                    // running. The state file is the durable answer: it is
-                    // written by the supervisor, not by this connection.
-                    match self.read_exit_code(&exit_path).await {
-                        Ok(code) => return Ok(code),
-                        Err(read_error) => {
-                            reporter.worker(
-                                "waiting_for_remote_task",
-                                "ssh",
-                                &attempt.dispatch.spec.id,
-                                "unknown",
-                                "remote",
-                            );
-                            return Err(DagError::Schedule(format!(
-                                "ssh wait for `{}` failed and its exit code is unreadable: {error}; {read_error}",
-                                attempt.dispatch.spec.id
-                            )));
-                        }
+        // Every arm below returns, so no loop is needed here.
+        match self
+            .settings
+            .ssh
+            .run_script_with_timeout(&wait, deadline)
+            .await
+        {
+            Ok(output) => {
+                let stdout = ssh_stdout_text(output, "ssh exit code")?;
+                return parse_exit_code(&stdout);
+            }
+            Err(error) => {
+                // The connection may have died while the task kept
+                // running. The state file is the durable answer: it is
+                // written by the supervisor, not by this connection.
+                match self.read_exit_code(&exit_path).await {
+                    Ok(code) => return Ok(code),
+                    Err(read_error) => {
+                        reporter.worker(
+                            "waiting_for_remote_task",
+                            "ssh",
+                            &attempt.dispatch.spec.id,
+                            "unknown",
+                            "remote",
+                        );
+                        return Err(DagError::Schedule(format!(
+                            "ssh wait for `{}` failed and its exit code is unreadable: {error}; {read_error}",
+                            attempt.dispatch.spec.id
+                        )));
                     }
                 }
             }

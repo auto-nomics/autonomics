@@ -1,8 +1,11 @@
 //! Theme tokens for the markdown renderer.
 //!
-//! Per-preset token sets synthesised from phloem-tui's existing
-//! `PhloemStyleSheet` and markdown-reader's `default_()` theme. The
-//! active set is carried on the global [`crate::theme::Theme`].
+//! Per-preset token sets: `dark()` synthesised from phloem-tui's existing
+//! `PhloemStyleSheet` and markdown-reader's `default_()` theme;
+//! `claude_code()` ported from cola-runner/awesome-tui-design's
+//! `designs/claude-code/DESIGN.md`; every other registered theme derives
+//! from its DESIGN.md palette via [`MdTokens::from_palette`]. The active
+//! set is carried on the global [`crate::theme::Theme`].
 
 use ratatui::style::Color;
 
@@ -110,41 +113,82 @@ impl MdTokens {
         }
     }
 
-    /// Light-preset tokens: dark-on-light chrome with the same hue
-    /// families as the dark set (blue headings, olive markers).
-    pub(crate) fn light() -> Self {
+    /// Claude Code preset, ported from cola-runner/awesome-tui-design's
+    /// `designs/claude-code/DESIGN.md`. Accent values are that document's
+    /// hex palette; structural neutrals (borders) use its `#505050`
+    /// Subtle divider color, and the code surface is its documented
+    /// `rgb(65,60,65)` tool-block background.
+    pub(crate) fn claude_code() -> Self {
         Self {
             surface: MdSurface {
-                raised: Color::Rgb(241, 243, 246),
+                raised: Color::Rgb(65, 60, 65), // rgb(65,60,65) bash output bg
             },
             text: MdText {
-                primary: Color::Rgb(33, 37, 41),
-                muted: Color::Rgb(134, 142, 150),
+                primary: Color::Rgb(255, 255, 255), // Foreground
+                muted: Color::Rgb(136, 136, 136),   // #888888 Muted
             },
             syntax: MdSyntax {
-                inline_code: Color::Rgb(40, 110, 70),
-                code_fg: Color::Rgb(55, 60, 66),
-                code_border: Color::Rgb(180, 186, 196),
+                inline_code: Color::Rgb(235, 159, 127), // #eb9f7f shimmer
+                code_fg: Color::Rgb(255, 255, 255),
+                code_border: Color::Rgb(80, 80, 80), // #505050 Subtle
             },
             heading: MdHeading {
-                h1: Color::Rgb(30, 45, 110),
-                h2: Color::Rgb(45, 60, 140),
-                h3: Color::Rgb(60, 75, 170),
-                other: Color::Rgb(80, 95, 190),
+                h1: Color::Rgb(215, 119, 87),     // #d77757 Primary (H1 spec)
+                h2: Color::Rgb(235, 159, 127),    // #eb9f7f shimmer
+                h3: Color::Rgb(255, 255, 255),    // bold modifier carries weight
+                other: Color::Rgb(153, 153, 153), // #999999 Inactive
             },
             list: MdList {
-                marker: Color::Rgb(140, 120, 20),
-                task_marker: Color::Rgb(140, 120, 20),
-                block_quote_fg: Color::Rgb(140, 120, 20),
-                block_quote_border: Color::Rgb(180, 186, 196),
+                marker: Color::Rgb(215, 119, 87), // #d77757 bullets
+                task_marker: Color::Rgb(215, 119, 87),
+                block_quote_fg: Color::Rgb(153, 153, 153),
+                block_quote_border: Color::Rgb(80, 80, 80),
             },
             table: MdTable {
-                header: Color::Rgb(50, 60, 160),
-                border: Color::Rgb(180, 186, 196),
+                header: Color::Rgb(235, 159, 127),
+                border: Color::Rgb(80, 80, 80),
             },
             accent: MdAccent {
-                link: Color::Rgb(0, 110, 130),
+                link: Color::Rgb(177, 185, 249), // #b1b9f9 lavender
             },
+        }
+    }
+
+    /// Derive the markdown token set from a DESIGN.md palette. Accents
+    /// follow the claude-code mapping (primary headings, secondary-leaning
+    /// inline code), structural neutrals blend toward the background.
+    pub(crate) fn from_palette(p: &crate::theme::Palette) -> Self {
+        let border = mix(p.muted, p.bg, 0.4);
+        Self {
+            surface: MdSurface {
+                raised: p.surface,
+            },
+            text: MdText {
+                primary: p.fg,
+                muted: p.muted,
+            },
+            syntax: MdSyntax {
+                inline_code: mix(p.secondary, p.fg, 0.35),
+                code_fg: p.fg,
+                code_border: border,
+            },
+            heading: MdHeading {
+                h1: p.primary,
+                h2: mix(p.primary, p.fg, 0.4),
+                h3: p.fg,
+                other: p.muted,
+            },
+            list: MdList {
+                marker: p.primary,
+                task_marker: p.primary,
+                block_quote_fg: p.muted,
+                block_quote_border: border,
+            },
+            table: MdTable {
+                header: mix(p.primary, p.fg, 0.4),
+                border,
+            },
+            accent: MdAccent { link: p.accent },
         }
     }
 
@@ -152,4 +196,15 @@ impl MdTokens {
     pub(crate) fn syntax_theme_name() -> &'static str {
         "base16-ocean.dark"
     }
+}
+
+/// Linear blend of two RGB colors at `t` (0 = `a`, 1 = `b`); non-RGB
+/// colors pass through. Local copy of [`crate::theme::mix`] — the token
+/// module sits below the theme module and keeps its own tiny helper.
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    let (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) = (a, b) else {
+        return a;
+    };
+    let blend = |c1: u8, c2: u8| (c1 as f32 + (c2 as f32 - c1 as f32) * t).round() as u8;
+    Color::Rgb(blend(r1, r2), blend(g1, g2), blend(b1, b2))
 }

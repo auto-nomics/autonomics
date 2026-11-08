@@ -86,7 +86,7 @@ impl MessageItem {
     /// blocks, errors, separators, etc. are all filtered out.
     pub fn from_chat_line(line: &ChatLine, index: usize) -> Option<Self> {
         let (text, role) = match line {
-            ChatLine::User(s) => (s.clone(), MessageRole::User),
+            ChatLine::User { text: s, .. } => (s.clone(), MessageRole::User),
             ChatLine::Assistant { text, .. } => (text.clone(), MessageRole::Assistant),
             // Everything else is intentionally excluded — the picker is
             // for copying conversational text, not internal events.
@@ -723,10 +723,14 @@ mod tests {
 
     fn make_messages() -> Vec<ChatLine> {
         vec![
-            ChatLine::User("hello world".into()),
+            ChatLine::User {
+                text: "hello world".into(),
+                ts: None,
+            },
             ChatLine::Assistant {
                 text: "hi! how can I help?".into(),
                 usage: None,
+                ts: None,
             },
             ChatLine::Thinking("let me think...".into()),
             ChatLine::ToolCall {
@@ -740,7 +744,10 @@ mod tests {
             ChatLine::Error("oops".into()),
             ChatLine::Separator,
             ChatLine::Cancelled,
-            ChatLine::User("   \n  ".into()),
+            ChatLine::User {
+                text: "   \n  ".into(),
+                ts: None,
+            },
             ChatLine::ToolBackground {
                 seq: 1,
                 name: "bg".into(),
@@ -804,6 +811,7 @@ mod tests {
             &ChatLine::Assistant {
                 text: "line one\nline two with keyword".into(),
                 usage: None,
+                ts: None,
             },
             1,
         )

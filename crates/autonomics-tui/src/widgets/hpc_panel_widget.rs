@@ -757,6 +757,10 @@ mod tests {
         assert_eq!(state.jobs.len(), 2);
         assert_eq!(state.jobs[0].id, "new");
         assert_eq!(state.jobs[0].job_id.as_deref(), Some("4201"));
-        assert_eq!(state.jobs[1].last_error.as_deref(), Some("boom"));
+        // The fixture puts `last_error` on the *newest* job, which sorts to
+        // index 0; the old assertion read index 1 (the error-free job) and
+        // could never pass.
+        assert_eq!(state.jobs[0].last_error.as_deref(), Some("boom"));
+        assert_eq!(state.jobs[1].last_error.as_deref(), None);
     }
 }

@@ -82,11 +82,12 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                 // render distinctly; typed prompts stay user lines.
                 let wrap_text = |text: String| -> state::ChatLine {
                     if msg.origin == agentik_types::MessageOrigin::User {
-                        state::ChatLine::User(text)
+                        state::ChatLine::User { text, ts: None }
                     } else {
                         state::ChatLine::Injected {
                             origin: msg.origin.clone(),
                             text,
+                            ts: None,
                         }
                     }
                 };
@@ -134,6 +135,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                                 lines.push(state::ChatLine::Assistant {
                                     text: std::mem::take(&mut text_parts),
                                     usage: None,
+                                    ts: None,
                                 });
                             }
                             lines.push(state::ChatLine::Thinking(thinking.clone()));
@@ -143,6 +145,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                                 lines.push(state::ChatLine::Assistant {
                                     text: std::mem::take(&mut text_parts),
                                     usage: None,
+                                    ts: None,
                                 });
                             }
                             lines.push(state::ChatLine::ToolCall {
@@ -158,6 +161,7 @@ pub(super) fn messages_to_chatlines(messages: &[Message]) -> Vec<state::ChatLine
                     lines.push(state::ChatLine::Assistant {
                         text: text_parts,
                         usage: None,
+                        ts: None,
                     });
                 }
             }

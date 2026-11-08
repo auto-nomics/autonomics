@@ -90,10 +90,17 @@ impl PlanState {
 
 #[derive(Debug, Clone)]
 pub enum ChatLine {
-    User(String),
+    /// A typed user prompt. `ts` is the arrival wall-clock (epoch ms);
+    /// `None` on lines reconstructed from persisted history, which the
+    /// wire protocol does not timestamp.
+    User {
+        text: String,
+        ts: Option<i64>,
+    },
     Assistant {
         text: String,
         usage: Option<TurnUsage>,
+        ts: Option<i64>,
     },
     Thinking(String),
     ToolCall {
@@ -125,8 +132,18 @@ pub enum ChatLine {
     Injected {
         origin: agentik_types::MessageOrigin,
         text: String,
+        ts: Option<i64>,
     },
     Separator,
+}
+
+/// Wall-clock epoch milliseconds, stamped onto live dialogue lines for
+/// the transcript's time captions.
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Unified agent lifecycle status — re-exported from `agentik-types` so
@@ -238,6 +255,9 @@ pub struct AgentTabState {
     pub cached_msg_width: u16,
     /// DisplaySettings.version at which cache was built; mismatch = invalidate.
     pub cached_display_version: u64,
+    /// `theme::generation()` at which the cache was built. Cached lines bake
+    /// in colors from the preset active at render time; mismatch = invalidate.
+    pub cached_theme_gen: u64,
     /// Index of the assistant line currently being streamed, so incoming
     /// `UsageUpdate` events can be attributed to the right turn. Reset on each
     /// `Requesting` (one per LLM call); `None` for tool-only turns.
@@ -319,6 +339,7 @@ impl Default for AgentTabState {
             cached_msg_versions: Vec::new(),
             cached_msg_width: 0,
             cached_display_version: 0,
+            cached_theme_gen: 0,
             streaming_assistant: None,
             frame: 0,
             compact_state: CompactState::default(),
@@ -397,7 +418,10 @@ impl AgentTabState {
 
     /// Push a user message and a separator after the previous assistant response.
     pub fn push_user_message(&mut self, text: String) {
-        self.push_line(ChatLine::User(text));
+        self.push_line(ChatLine::User {
+            text,
+            ts: Some(now_ms()),
+        });
     }
 
     // ── Per-message versioning helpers ──
@@ -537,7 +561,11 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
                 }
                 state.bump_last_version();
             } else {
-                state.push_line(ChatLine::Assistant { text, usage: None });
+                state.push_line(ChatLine::Assistant {
+                    text,
+                    usage: None,
+                    ts: Some(now_ms()),
+                });
                 state.streaming_assistant = Some(state.messages.len() - 1);
             }
             // Only auto-scroll if the user hasn't manually scrolled away.
@@ -698,7 +726,11 @@ pub fn apply_event(state: &mut AgentTabState, event: AgentEvent) {
             }
         }
         AgentEvent::MessageInjected { text, origin } => {
-            state.push_line(ChatLine::Injected { origin, text });
+            state.push_line(ChatLine::Injected {
+                origin,
+                text,
+                ts: Some(now_ms()),
+            });
             if state.auto_scroll {
                 state.scroll_to_bottom();
             }
@@ -1105,7 +1137,7 @@ mod tests {
         assert_eq!(ts.pending_queue_len(), 1);
         assert!(matches!(
             ts.messages.last(),
-            Some(ChatLine::User(text)) if text == "hello"
+            Some(ChatLine::User { text, .. }) if text == "hello"
         ));
 
         apply_event(
@@ -1133,6 +1165,7 @@ mod tests {
             Some(ChatLine::Injected {
                 text,
                 origin: agentik_types::MessageOrigin::Agent { .. },
+                ts: _,
             }) if text == "external"
         ));
     }
