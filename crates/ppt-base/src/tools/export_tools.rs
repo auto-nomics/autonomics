@@ -5,14 +5,17 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use super::{tool_err, DeckToolState};
+use std::sync::Arc;
+
+use super::{box_write, tool_err, DeckToolState};
+use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 
 /// Build export tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DeckExportTool { shared: state.shared.clone() }),
-        ToolRegistration::from(DeckExportStatusTool { shared: state.shared }),
+        ToolRegistration::from(DeckExportTool { handle: state.handle.clone() }),
+        ToolRegistration::from(DeckExportStatusTool { handle: state.handle }),
     ]
 }
 
@@ -44,7 +47,7 @@ pub struct DeckExportInput {
 }
 
 struct DeckExportTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -61,57 +64,53 @@ impl ToolFunction for DeckExportTool {
             }
         })?;
 
-        let deck = self
-            .shared
-            .load_deck(&input.deck_id)
-            .await
-            .map_err(tool_err)?;
-        let pages = deck.resolve_range(input.range.as_deref()).map_err(|e| {
-            agentik_core::tools::ToolError::ExecutionFailed {
-                source: Box::new(crate::Error::BadRange(e)),
-            }
-        })?;
+        let deck_id = input.deck_id.clone();
+        let deck_id_out = deck_id.clone();
+        let range = input.range.clone();
         let dpi = input.dpi.unwrap_or(192).clamp(96, 300);
-        let canvas_w = deck.meta.canvas_width.unwrap_or(980);
-        let canvas_h = deck.meta.canvas_height();
-
-        let notes = pages
-            .iter()
-            .map(|p| deck.slide(p + 1).and_then(|s| s.note.clone()).unwrap_or_default())
-            .collect();
-        let (record, _token) = self
-            .shared
-            .enqueue_export(
-                &input.deck_id,
-                format,
-                dpi,
-                pages.iter().map(|p| p + 1).collect(),
-                canvas_w,
-                canvas_h,
-                notes,
-            )
+        let has_queue = self.handle.shared().export_queue.is_some();
+        let (record, pages) = self
+            .handle
+            .write(move |s: Arc<DeckShared>| {
+                box_write(async move {
+                    let deck = s.load_deck(&deck_id).await?;
+                    let pages = deck.resolve_range(range.as_deref())?;
+                    let notes = pages
+                        .iter()
+                        .map(|p| deck.slide(p + 1).and_then(|sl| sl.note.clone()).unwrap_or_default())
+                        .collect();
+                    let canvas_w = deck.meta.canvas_width.unwrap_or(980);
+                    let canvas_h = deck.meta.canvas_height();
+                    let (record, _token) = s
+                        .enqueue_export(
+                            &deck_id,
+                            format,
+                            dpi,
+                            pages.iter().map(|p| p + 1).collect(),
+                            canvas_w,
+                            canvas_h,
+                            notes,
+                        )
+                        .await?;
+                    Ok((record, pages))
+                })
+            })
             .await
             .map_err(tool_err)?;
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "export_id": record.id,
-            "deck_id": input.deck_id,
+            "deck_id": deck_id_out,
             "format": format.as_str(),
             "status": record.status.as_str(),
             "pages": pages.iter().map(|p| p + 1).collect::<Vec<_>>(),
             "dpi": dpi,
-            "hint": self.export_queue_hint(),
+            "hint": if has_queue {
+                "queued; poll the export row for status"
+            } else {
+                "queued but no export worker is running in this process; the row stays queued"
+            },
         })))
-    }
-}
-
-impl DeckExportTool {
-    fn export_queue_hint(&self) -> &'static str {
-        if self.shared.export_queue.is_some() {
-            "queued; poll the export row for status"
-        } else {
-            "queued but no export worker is running in this process; the row stays queued"
-        }
     }
 }
 
@@ -131,7 +130,7 @@ pub struct DeckExportStatusInput {
 }
 
 struct DeckExportStatusTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -140,7 +139,8 @@ impl ToolFunction for DeckExportStatusTool {
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
         let record = self
-            .shared
+            .handle
+            .shared()
             .store
             .get_export(&input.export_id)
             .await

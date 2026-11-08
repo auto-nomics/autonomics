@@ -2,6 +2,7 @@
 //! in-memory store (writing-base tools_e2e pattern).
 
 use agentik_core::tools::ToolRegistration;
+use ppt_base::DeckHandle;
 use ppt_base::shared::DeckShared;
 use ppt_base::tools::deck_all_registrations;
 use serde_json::{Value, json};
@@ -44,8 +45,8 @@ async fn call_tool_err(regs: &[ToolRegistration], name: &str, input: Value) -> S
 
 #[tokio::test]
 async fn full_deck_lifecycle_through_tools() {
-    let shared = DeckShared::open_in_memory().await.unwrap();
-    let regs = deck_all_registrations(shared.clone());
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle.clone());
 
     // 5 deck + 4 slide + 1 asset + 2 export (export + status) + 1 citation
     assert_eq!(regs.len(), 13);
@@ -141,6 +142,7 @@ async fn full_deck_lifecycle_through_tools() {
     let asset_id = asset["asset_id"].as_str().unwrap().to_string();
     assert!(asset["ref"].as_str().unwrap().starts_with("assets://"));
 
+    let shared = handle.shared().clone();
     let meta = shared.store.get_asset(&deck_id, &asset_id).await.unwrap();
     let blob = shared.assets.get(&meta.blob_key).await.unwrap();
     assert!(!blob.is_empty());
@@ -199,11 +201,14 @@ async fn asset_attach_by_vfs_path() {
         .await
         .unwrap();
 
-    let shared = DeckShared::open_in_memory()
-        .await
-        .unwrap()
-        .with_vfs(Some(storage));
-    let regs = deck_all_registrations(shared.clone());
+    let shared = std::sync::Arc::new(
+        DeckShared::open_in_memory()
+            .await
+            .unwrap()
+            .with_vfs(Some(storage)),
+    );
+    let handle = DeckHandle::spawn(shared.clone());
+    let regs = deck_all_registrations(handle.clone());
 
     let created = call_tool(&regs, "deck_create", json!({"title": "T"})).await;
     let deck_id = created["deck_id"].as_str().unwrap().to_string();
@@ -224,6 +229,7 @@ async fn asset_attach_by_vfs_path() {
     assert_eq!(asset["filename"], json!("km_plot.png"));
     assert_eq!(asset["mime"], json!("image/png"));
 
+    let shared = handle.shared().clone();
     let meta = shared.store.get_asset(&deck_id, &asset_id).await.unwrap();
     let blob = shared.assets.get(&meta.blob_key).await.unwrap();
     assert_eq!(blob, bytes);
@@ -257,8 +263,7 @@ async fn asset_attach_by_vfs_path() {
 
 #[tokio::test]
 async fn headmatter_guard_surfaces_through_tool() {
-    let shared = DeckShared::open_in_memory().await.unwrap();
-    let regs = deck_all_registrations(shared);
+    let regs = deck_all_registrations(DeckHandle::spawn_in_memory().await.unwrap());
 
     let created = call_tool(&regs, "deck_create", json!({"title": "T"})).await;
     let deck_id = created["deck_id"].as_str().unwrap();
@@ -278,8 +283,7 @@ async fn headmatter_guard_surfaces_through_tool() {
 
 #[tokio::test]
 async fn bad_yaml_rejected_through_tool() {
-    let shared = DeckShared::open_in_memory().await.unwrap();
-    let regs = deck_all_registrations(shared);
+    let regs = deck_all_registrations(DeckHandle::spawn_in_memory().await.unwrap());
 
     let created = call_tool(&regs, "deck_create", json!({"title": "T"})).await;
     let deck_id = created["deck_id"].as_str().unwrap();
@@ -308,8 +312,7 @@ async fn bad_yaml_rejected_through_tool() {
 
 #[tokio::test]
 async fn slide_out_of_range_error_mentions_total() {
-    let shared = DeckShared::open_in_memory().await.unwrap();
-    let regs = deck_all_registrations(shared);
+    let regs = deck_all_registrations(DeckHandle::spawn_in_memory().await.unwrap());
 
     let created = call_tool(&regs, "deck_create", json!({"title": "T"})).await;
     let deck_id = created["deck_id"].as_str().unwrap();

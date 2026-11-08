@@ -1,4 +1,7 @@
 //! Deck management tools: create, list, get, outline, delete.
+//!
+//! Writes go through the [`DeckHandle`] actor (serialized); reads are
+//! direct on the shared engine.
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
@@ -6,16 +9,17 @@ use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
 use super::{tool_err, DeckToolState};
+use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 
 /// Build deck-management tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DeckCreateTool { shared: state.shared.clone() }),
-        ToolRegistration::from(DeckListTool { shared: state.shared.clone() }),
-        ToolRegistration::from(DeckGetTool { shared: state.shared.clone() }),
-        ToolRegistration::from(DeckOutlineTool { shared: state.shared.clone() }),
-        ToolRegistration::from(DeckDeleteTool { shared: state.shared.clone() }),
+        ToolRegistration::from(DeckCreateTool { handle: state.handle.clone() }),
+        ToolRegistration::from(DeckListTool { handle: state.handle.clone() }),
+        ToolRegistration::from(DeckGetTool { handle: state.handle.clone() }),
+        ToolRegistration::from(DeckOutlineTool { handle: state.handle.clone() }),
+        ToolRegistration::from(DeckDeleteTool { handle: state.handle }),
     ]
 }
 
@@ -48,7 +52,7 @@ pub struct DeckCreateInput {
 }
 
 struct DeckCreateTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -56,31 +60,28 @@ impl ToolFunction for DeckCreateTool {
     type Input = DeckCreateInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let mut deck = self
-            .shared
-            .create_deck(&input.title, input.template.as_deref())
+        let deck = self
+            .handle
+            .write({
+                let title = input.title.clone();
+                let template = input.template.clone();
+                let aspect = input.aspect_ratio.clone();
+                move |s: std::sync::Arc<DeckShared>| {
+                    super::box_write(async move {
+                        let mut deck = s.create_deck(&title, template.as_deref()).await?;
+                        if let Some(ar) = aspect.as_deref() {
+                            // Aspect change = headmatter edit; rebuild the source.
+                            let row = s.store.get_deck_row(&deck.meta.id).await?;
+                            let md =
+                                row.markdown.replacen("aspectRatio: 16/9", &format!("aspectRatio: {ar}"), 1);
+                            deck = s.save_markdown(&deck.meta.id, &md, "set aspect ratio").await?;
+                        }
+                        Ok(deck)
+                    })
+                }
+            })
             .await
             .map_err(tool_err)?;
-
-        if let Some(ar) = input.aspect_ratio.as_deref() {
-            // Aspect change = headmatter edit; rebuild the source.
-            let row = self
-                .shared
-                .store
-                .get_deck_row(&deck.meta.id)
-                .await
-                .map_err(tool_err)?;
-            let md = row.markdown.replacen(
-                "aspectRatio: 16/9",
-                &format!("aspectRatio: {ar}"),
-                1,
-            );
-            deck = self
-                .shared
-                .save_markdown(&deck.meta.id, &md, "set aspect ratio")
-                .await
-                .map_err(tool_err)?;
-        }
 
         let outline: Vec<serde_json::Value> = deck
             .slides
@@ -121,7 +122,7 @@ pub struct DeckListInput {
 }
 
 struct DeckListTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -129,12 +130,8 @@ impl ToolFunction for DeckListTool {
     type Input = DeckListInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let mut decks = self
-            .shared
-            .store
-            .list_decks()
-            .await
-            .map_err(tool_err)?;
+        let shared = self.handle.shared().clone();
+        let mut decks = shared.store.list_decks().await.map_err(tool_err)?;
         if let Some(f) = input.filter.as_deref().filter(|s| !s.is_empty()) {
             decks.retain(|d| d.title.contains(f));
         }
@@ -176,7 +173,7 @@ pub struct DeckGetInput {
 }
 
 struct DeckGetTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -184,15 +181,14 @@ impl ToolFunction for DeckGetTool {
     type Input = DeckGetInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let deck = self.shared.load_deck(&input.deck_id).await.map_err(tool_err)?;
-        let row = self
-            .shared
+        let shared = self.handle.shared().clone();
+        let deck = shared.load_deck(&input.deck_id).await.map_err(tool_err)?;
+        let row = shared
             .store
             .get_deck_row(&input.deck_id)
             .await
             .map_err(tool_err)?;
-        let assets = self
-            .shared
+        let assets = shared
             .store
             .list_assets(&input.deck_id)
             .await
@@ -257,7 +253,7 @@ pub struct DeckOutlineInput {
 }
 
 struct DeckOutlineTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -265,7 +261,12 @@ impl ToolFunction for DeckOutlineTool {
     type Input = DeckOutlineInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let deck = self.shared.load_deck(&input.deck_id).await.map_err(tool_err)?;
+        let deck = self
+            .handle
+            .shared()
+            .load_deck(&input.deck_id)
+            .await
+            .map_err(tool_err)?;
         let rows: Vec<serde_json::Value> = deck
             .slides
             .iter()
@@ -303,7 +304,7 @@ pub struct DeckDeleteInput {
 }
 
 struct DeckDeleteTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -311,32 +312,28 @@ impl ToolFunction for DeckDeleteTool {
     type Input = DeckDeleteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        // Best-effort blob cleanup, then the row cascade.
-        let assets = self
-            .shared
-            .store
-            .list_assets(&input.deck_id)
+        let deck_id = input.deck_id.clone();
+        self.handle
+            .write(move |s: std::sync::Arc<DeckShared>| {
+                super::box_write(async move {
+                    // blob cleanup best-effort, then the row cascade
+                    let assets = s.store.list_assets(&deck_id).await?;
+                    for a in &assets {
+                        let _ = s.assets.delete(&a.blob_key).await;
+                    }
+                    let exports = s.store.list_exports(&deck_id).await?;
+                    for e in &exports {
+                        if let Some(key) = &e.artifact_key {
+                            let _ = s.exports.delete(key).await;
+                        }
+                    }
+                    s.store.delete_deck(&deck_id).await?;
+                    Ok(())
+                })
+            })
             .await
             .map_err(tool_err)?;
-        for a in &assets {
-            let _ = self.shared.assets.delete(&a.blob_key).await;
-        }
-        let exports = self
-            .shared
-            .store
-            .list_exports(&input.deck_id)
-            .await
-            .map_err(tool_err)?;
-        for e in &exports {
-            if let Some(key) = &e.artifact_key {
-                let _ = self.shared.exports.delete(key).await;
-            }
-        }
-        self.shared
-            .store
-            .delete_deck(&input.deck_id)
-            .await
-            .map_err(tool_err)?;
+
         Ok(AgentToolResult::success_json(serde_json::json!({
             "deleted": input.deck_id,
         })))

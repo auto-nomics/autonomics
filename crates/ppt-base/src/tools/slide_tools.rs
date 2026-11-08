@@ -5,25 +5,25 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use super::{tool_err, DeckToolState};
+use std::sync::Arc;
+
+use super::{box_write, tool_err, DeckToolState};
+use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 use crate::operations::SlidePatch;
 
 /// Build slide-operation tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(SlidePatchTool { shared: state.shared.clone() }),
-        ToolRegistration::from(SlideInsertTool { shared: state.shared.clone() }),
-        ToolRegistration::from(SlideRemoveTool { shared: state.shared.clone() }),
-        ToolRegistration::from(SlideMoveTool { shared: state.shared.clone() }),
+        ToolRegistration::from(SlidePatchTool { handle: state.handle.clone() }),
+        ToolRegistration::from(SlideInsertTool { handle: state.handle.clone() }),
+        ToolRegistration::from(SlideRemoveTool { handle: state.handle.clone() }),
+        ToolRegistration::from(SlideMoveTool { handle: state.handle }),
     ]
 }
 
-async fn outline_delta(
-    shared: &super::super::shared::DeckShared,
-    deck_id: &str,
-) -> Result<serde_json::Value, ToolError> {
-    let deck = shared.load_deck(deck_id).await.map_err(tool_err)?;
+async fn outline_delta(shared: &DeckShared, deck_id: &str) -> crate::Result<serde_json::Value> {
+    let deck = shared.load_deck(deck_id).await?;
     Ok(serde_json::json!({
         "revision": deck.meta.revision,
         "slide_count": deck.len(),
@@ -66,7 +66,7 @@ pub struct SlidePatchInput {
 }
 
 struct SlidePatchTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -74,31 +74,32 @@ impl ToolFunction for SlidePatchTool {
     type Input = SlidePatchInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let row = self
-            .shared
-            .store
-            .get_deck_row(&input.deck_id)
+        let deck_id = input.deck_id.clone();
+        let patch_no = input.no;
+        let deck_id_out = deck_id.clone();
+        let mut out = self
+            .handle
+            .write(move |s: Arc<DeckShared>| {
+                box_write(async move {
+                    let row = s.store.get_deck_row(&deck_id).await?;
+                    let md = crate::operations::apply_slide_patch(
+                        &row.markdown,
+                        &deck_id,
+                        patch_no as usize,
+                        SlidePatch {
+                            content: input.content,
+                            frontmatter_raw: input.frontmatter_raw,
+                            note: input.note,
+                        },
+                    )?;
+                    s.save_markdown(&deck_id, &md, &format!("patch slide {patch_no}")).await?;
+                    outline_delta(&s, &deck_id).await
+                })
+            })
             .await
             .map_err(tool_err)?;
-        let md = crate::operations::apply_slide_patch(
-            &row.markdown,
-            &input.deck_id,
-            input.no as usize,
-            SlidePatch {
-                content: input.content,
-                frontmatter_raw: input.frontmatter_raw,
-                note: input.note,
-            },
-        )
-        .map_err(tool_err)?;
-        let deck = self
-            .shared
-            .save_markdown(&input.deck_id, &md, &format!("patch slide {}", input.no))
-            .await
-            .map_err(tool_err)?;
-        let mut out = outline_delta(&self.shared, &input.deck_id).await?;
-        out["deck_id"] = serde_json::Value::String(input.deck_id.clone());
-        out["patched"] = serde_json::json!(input.no);
+        out["deck_id"] = serde_json::Value::String(deck_id_out);
+        out["patched"] = serde_json::json!(patch_no);
         Ok(AgentToolResult::success_json(out))
     }
 }
@@ -127,7 +128,7 @@ pub struct SlideInsertInput {
 }
 
 struct SlideInsertTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -135,30 +136,31 @@ impl ToolFunction for SlideInsertTool {
     type Input = SlideInsertInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let row = self
-            .shared
-            .store
-            .get_deck_row(&input.deck_id)
+        let deck_id = input.deck_id.clone();
+        let after = input.after;
+        let deck_id_out = deck_id.clone();
+        let mut out = self
+            .handle
+            .write(move |s: Arc<DeckShared>| {
+                box_write(async move {
+                    let row = s.store.get_deck_row(&deck_id).await?;
+                    let md = crate::operations::insert_slide(
+                        &row.markdown,
+                        &deck_id,
+                        after as usize,
+                        input.content.as_deref().unwrap_or(""),
+                        input.frontmatter_raw.as_deref(),
+                        input.note.as_deref(),
+                    )?;
+                    s.save_markdown(&deck_id, &md, &format!("insert after {after}")).await?;
+                    let mut out = outline_delta(&s, &deck_id).await?;
+                    out["inserted_no"] = serde_json::json!(after as usize + 1);
+                    Ok(out)
+                })
+            })
             .await
             .map_err(tool_err)?;
-        let md = crate::operations::insert_slide(
-            &row.markdown,
-            &input.deck_id,
-            input.after as usize,
-            input.content.as_deref().unwrap_or(""),
-            input.frontmatter_raw.as_deref(),
-            input.note.as_deref(),
-        )
-        .map_err(tool_err)?;
-        let deck = self
-            .shared
-            .save_markdown(&input.deck_id, &md, &format!("insert after {}", input.after))
-            .await
-            .map_err(tool_err)?;
-        let mut out = outline_delta(&self.shared, &input.deck_id).await?;
-        out["deck_id"] = serde_json::Value::String(input.deck_id.clone());
-        out["inserted_no"] = serde_json::json!(input.after as usize + 1);
-        let _ = deck;
+        out["deck_id"] = serde_json::Value::String(deck_id_out);
         Ok(AgentToolResult::success_json(out))
     }
 }
@@ -180,7 +182,7 @@ pub struct SlideRemoveInput {
 }
 
 struct SlideRemoveTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -188,21 +190,24 @@ impl ToolFunction for SlideRemoveTool {
     type Input = SlideRemoveInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let row = self
-            .shared
-            .store
-            .get_deck_row(&input.deck_id)
+        let deck_id = input.deck_id.clone();
+        let no = input.no;
+        let deck_id_out = deck_id.clone();
+        let mut out = self
+            .handle
+            .write(move |s: Arc<DeckShared>| {
+                box_write(async move {
+                    let row = s.store.get_deck_row(&deck_id).await?;
+                    let md = crate::operations::remove_slide(&row.markdown, &deck_id, no as usize)?;
+                    s.save_markdown(&deck_id, &md, &format!("remove slide {no}")).await?;
+                    let mut out = outline_delta(&s, &deck_id).await?;
+                    out["removed"] = serde_json::json!(no);
+                    Ok(out)
+                })
+            })
             .await
             .map_err(tool_err)?;
-        let md = crate::operations::remove_slide(&row.markdown, &input.deck_id, input.no as usize)
-            .map_err(tool_err)?;
-        self.shared
-            .save_markdown(&input.deck_id, &md, &format!("remove slide {}", input.no))
-            .await
-            .map_err(tool_err)?;
-        let mut out = outline_delta(&self.shared, &input.deck_id).await?;
-        out["deck_id"] = serde_json::Value::String(input.deck_id.clone());
-        out["removed"] = serde_json::json!(input.no);
+        out["deck_id"] = serde_json::Value::String(deck_id_out);
         Ok(AgentToolResult::success_json(out))
     }
 }
@@ -226,7 +231,7 @@ pub struct SlideMoveInput {
 }
 
 struct SlideMoveTool {
-    shared: DeckShared,
+    handle: DeckHandle,
 }
 
 #[async_trait]
@@ -234,26 +239,24 @@ impl ToolFunction for SlideMoveTool {
     type Input = SlideMoveInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let row = self
-            .shared
-            .store
-            .get_deck_row(&input.deck_id)
+        let deck_id = input.deck_id.clone();
+        let (from, to) = (input.from, input.to);
+        let deck_id_out = deck_id.clone();
+        let mut out = self
+            .handle
+            .write(move |s: Arc<DeckShared>| {
+                box_write(async move {
+                    let row = s.store.get_deck_row(&deck_id).await?;
+                    let md = crate::operations::move_slide(&row.markdown, &deck_id, from as usize, to as usize)?;
+                    s.save_markdown(&deck_id, &md, &format!("move {from} -> {to}")).await?;
+                    let mut out = outline_delta(&s, &deck_id).await?;
+                    out["moved"] = serde_json::json!({"from": from, "to": to});
+                    Ok(out)
+                })
+            })
             .await
             .map_err(tool_err)?;
-        let md = crate::operations::move_slide(
-            &row.markdown,
-            &input.deck_id,
-            input.from as usize,
-            input.to as usize,
-        )
-        .map_err(tool_err)?;
-        self.shared
-            .save_markdown(&input.deck_id, &md, &format!("move {} -> {}", input.from, input.to))
-            .await
-            .map_err(tool_err)?;
-        let mut out = outline_delta(&self.shared, &input.deck_id).await?;
-        out["deck_id"] = serde_json::Value::String(input.deck_id.clone());
-        out["moved"] = serde_json::json!({"from": input.from, "to": input.to});
+        out["deck_id"] = serde_json::Value::String(deck_id_out);
         Ok(AgentToolResult::success_json(out))
     }
 }

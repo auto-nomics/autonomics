@@ -272,7 +272,7 @@ pub fn router_with_bib(
     gateway_token: String,
     bib_shared: bib_base::BibShared,
     wiki: Arc<wiki::service::WikiHandle>,
-    deck_shared: Arc<ppt_base::DeckShared>,
+    deck_shared: Arc<ppt_base::DeckHandle>,
     env_token: Option<String>,
 ) -> Router {
     let auth = Arc::new(AuthContext::new(gateway_token));

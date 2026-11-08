@@ -165,9 +165,9 @@ pub struct SharedInfra {
     /// `file_storage` 的 `wiki-attachments` 虚拟目录)。无条件启用:
     /// 每个 agent 挂读组工具,REST 端点始终可用。
     pub wiki: Arc<WikiHandle>,
-    /// Slide-deck engine (store + blob areas + exporter), opened **once**
-    /// per process. Deck 是写作交付物,与 writing 同一能力门控。
-    pub deck: Arc<ppt_base::DeckShared>,
+    /// Slide-deck engine write actor (store + blob areas + exporter),
+    /// opened **once** per process. Deck 是写作交付物,与 writing 同一能力门控。
+    pub deck: Arc<ppt_base::DeckHandle>,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -1128,7 +1128,7 @@ async fn open_deck(
     config: &RuntimeConfig,
     file_storage: &Arc<OpendalFileStorage>,
     bib: &Arc<bib_base::BibShared>,
-) -> Result<Arc<ppt_base::DeckShared>> {
+) -> Result<Arc<ppt_base::DeckHandle>> {
     let deck_db_path = config.deck_db_path.clone();
     tracing::info!(
         "SharedInfra::open: opening deck db at {}",
@@ -1161,7 +1161,7 @@ async fn open_deck(
             .with_vfs(Some(file_storage.clone()))
             .with_queue(),
     );
-    Ok(deck)
+    Ok(Arc::new(ppt_base::DeckHandle::spawn(deck)))
 }
 
 /// Persist the skill usage counters periodically so telemetry survives

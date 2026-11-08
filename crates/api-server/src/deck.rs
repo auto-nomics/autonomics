@@ -2,11 +2,10 @@
 //! print-token-authenticated open surface for the headless-Chromium
 //! export page.
 //!
-//! Mounted at `/api/v1/deck`. The state is [`ppt_base::DeckShared`].
-//! `router()` carries everything the GUI needs; gateway wraps it with
-//! `bearer_or_session` (when an env token is configured). `open_router()`
-//! is nested WITHOUT that layer and validates the one-time print token
-//! itself — that is the export page's only credential.
+//! Mounted at `/api/v1/deck`. The state is [`ppt_base::DeckHandle`] —
+//! the deck write actor. Mutating handlers enqueue one write closure
+//! (read-modify-write sequences serialize on the worker); read handlers
+//! hit `handle.shared()` directly.
 
 use axum::{
     Json, Router,
@@ -21,16 +20,16 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-use ppt_base::assets::{BlobArea, asset_blob_key};
+use ppt_base::DeckHandle;
+use ppt_base::assets::asset_blob_key;
 use ppt_base::operations::{SlidePatch, insert_slide, move_slide, remove_slide};
 use ppt_base::store::{ExportFormat, ExportRecord, ExportStatus};
 
 const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
-/// Print tokens live 15 minutes (single deck scope, one-time-ish).
-const PRINT_TOKEN_TTL_SECS: i64 = 15 * 60;
 
 type ApiErr = (StatusCode, Json<ApiError>);
 type ApiResult = Result<Json<Value>, ApiErr>;
+type WriteResult = Result<Response, ApiErr>;
 
 #[derive(serde::Serialize)]
 struct ApiError {
@@ -81,12 +80,22 @@ fn api_err(e: ppt_base::Error) -> ApiErr {
     }
 }
 
+/// Box a write-closure future into the shape [`DeckHandle::write`]
+/// expects, keeping call sites free of pin/cast noise.
+fn box_w<T, F>(f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = ppt_base::Result<T>> + Send>>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = ppt_base::Result<T>> + Send + 'static,
+{
+    Box::pin(f)
+}
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 
 /// The guarded API (session/bearer).
-pub fn router(shared: Arc<ppt_base::DeckShared>) -> Router {
+pub fn router(handle: Arc<DeckHandle>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/decks", get(list_decks).post(create_deck))
@@ -120,16 +129,16 @@ pub fn router(shared: Arc<ppt_base::DeckShared>) -> Router {
         .route("/exports/{eid}", get(get_export))
         .route("/exports/{eid}/download", get(download_export))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .with_state(shared)
+        .with_state(handle)
 }
 
 /// The open print surface (headless export page). Token-validated in the
 /// handlers; nested without the bearer/session layer.
-pub fn open_router(shared: Arc<ppt_base::DeckShared>) -> Router {
+pub fn open_router(handle: Arc<DeckHandle>) -> Router {
     Router::new()
         .route("/decks/{id}/print-data", get(print_data))
         .route("/decks/{id}/print-assets/{aid}", get(print_asset))
-        .with_state(shared)
+        .with_state(handle)
 }
 
 async fn health() -> impl IntoResponse {
@@ -204,9 +213,9 @@ struct PrintQuery {
 // Deck endpoints
 // ---------------------------------------------------------------------------
 
-async fn list_decks(State(shared): State<Arc<ppt_base::DeckShared>>) -> ApiResult {
+async fn list_decks(State(handle): State<Arc<DeckHandle>>) -> ApiResult {
+    let shared = handle.shared().clone();
     let decks = shared.store.list_decks().await.map_err(api_err)?;
-    // Enrich with live slide counts (cheap: single-column reads).
     let mut rows = Vec::with_capacity(decks.len());
     for d in decks {
         let slide_count = shared
@@ -227,62 +236,68 @@ async fn list_decks(State(shared): State<Arc<ppt_base::DeckShared>>) -> ApiResul
 }
 
 async fn create_deck(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Json(body): Json<CreateDeckBody>,
-) -> Result<Response, ApiErr> {
-    let deck = if let Some(md) = body.markdown {
-        let deck = ppt_base::deck::assemble(&md, &ppt_types::new_deck_id(), "", "");
-        let cache = serde_json::to_string(&ppt_base::CachedDeck {
-            meta: deck.meta.clone(),
-            slides: deck.slides.clone(),
+) -> WriteResult {
+    let deck = handle
+        .write({
+            let title = body.title.clone();
+            let template = body.template.clone();
+            let markdown = body.markdown.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    if let Some(md) = markdown {
+                        let deck =
+                            ppt_base::deck::assemble(&md, &ppt_types::new_deck_id(), "", "");
+                        let cache = serde_json::to_string(&ppt_base::CachedDeck {
+                            meta: deck.meta.clone(),
+                            slides: deck.slides.clone(),
+                        })
+                        .unwrap_or_default();
+                        s.store
+                            .create_deck(&deck.meta.id, &title, &md, &deck.meta.revision, &cache)
+                            .await?;
+                        let row = s.store.get_deck_row(&deck.meta.id).await?;
+                        let mut deck = deck;
+                        deck.meta.created_at = row.created_at;
+                        deck.meta.updated_at = row.updated_at;
+                        Ok(deck)
+                    } else {
+                        s.create_deck(&title, template.as_deref()).await
+                    }
+                })
+            }
         })
-        .unwrap_or_default();
-        shared
-            .store
-            .create_deck(&deck.meta.id, &body.title, &md, &deck.meta.revision, &cache)
-            .await
-            .map_err(api_err)?;
-        let row = shared.store.get_deck_row(&deck.meta.id).await.map_err(api_err)?;
-        let mut deck = deck;
-        deck.meta.created_at = row.created_at;
-        deck.meta.updated_at = row.updated_at;
-        deck
-    } else {
-        shared
-            .create_deck(&body.title, body.template.as_deref())
-            .await
-            .map_err(api_err)?
-    };
-    let (Json(payload),) = deck_payload(&shared, deck).await;
+        .await
+        .map_err(api_err)?;
+    let (Json(payload),) = deck_payload(&handle, deck).await;
     Ok((StatusCode::CREATED, Json(payload)).into_response())
 }
 
-async fn get_deck(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
-    Path(id): Path<String>,
-) -> Response {
-    match shared.load_deck(&id).await {
+async fn get_deck(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> Response {
+    match handle.shared().load_deck(&id).await {
         Ok(deck) => {
-            let (Json(mut payload),) = deck_payload(&shared, deck).await;
+            let (Json(mut payload),) = deck_payload(&handle, deck).await;
             let etag = format!(
                 "\"{}\"",
                 payload["deck"]["revision"].as_str().unwrap_or_default()
             );
-            (
-                [(header::ETAG, etag)],
-                Json(payload),
-            )
-                .into_response()
+            ([(header::ETAG, etag)], Json(payload)).into_response()
         }
         Err(e) => api_err(e).into_response(),
     }
 }
 
 async fn deck_payload(
-    shared: &Arc<ppt_base::DeckShared>,
+    handle: &Arc<DeckHandle>,
     deck: ppt_base::deck::Deck,
 ) -> (Json<Value>,) {
-    let assets = shared.store.list_assets(&deck.meta.id).await.unwrap_or_default();
+    let shared = handle.shared();
+    let assets = shared
+        .store
+        .list_assets(&deck.meta.id)
+        .await
+        .unwrap_or_default();
     let asset_rows: Vec<Value> = assets
         .iter()
         .map(|a| {
@@ -307,12 +322,17 @@ async fn deck_payload(
 }
 
 async fn put_source(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     Query(q): Query<std::collections::HashMap<String, String>>,
     Json(body): Json<PutSourceBody>,
-) -> ApiResult {
-    let row = shared.store.get_deck_row(&id).await.map_err(api_err)?;
+) -> WriteResult {
+    let row = handle
+        .shared()
+        .store
+        .get_deck_row(&id)
+        .await
+        .map_err(api_err)?;
     // Optimistic concurrency: ?rev= in the query or `revision` in the body.
     if let Some(expected) = q
         .get("rev")
@@ -330,30 +350,49 @@ async fn put_source(
             ));
         }
     }
-    let deck = shared
-        .save_markdown(&id, &body.markdown, body.message.as_deref().unwrap_or("set source"))
+    let deck = handle
+        .write({
+            let id = id.clone();
+            let markdown = body.markdown.clone();
+            let message = body
+                .message
+                .clone()
+                .unwrap_or_else(|| "set source".to_string());
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move { s.save_markdown(&id, &markdown, &message).await })
+            }
+        })
         .await
         .map_err(api_err)?;
     Ok(Json(json!({
         "deck": deck.meta,
         "slideCount": deck.len(),
-    })))
+    }))
+    .into_response())
 }
 
 async fn delete_deck(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
 ) -> ApiResult {
-    // blob cleanup best-effort, then the row cascade
-    for a in shared.store.list_assets(&id).await.map_err(api_err)? {
-        let _ = shared.assets.delete(&a.blob_key).await;
-    }
-    for e in shared.store.list_exports(&id).await.map_err(api_err)? {
-        if let Some(key) = e.artifact_key {
-            let _ = shared.exports.delete(&key).await;
-        }
-    }
-    shared.store.delete_deck(&id).await.map_err(api_err)?;
+    let deleted = id.clone();
+    handle
+        .write(move |s: Arc<ppt_base::shared::DeckShared>| {
+            Box::pin(async move {
+                // blob cleanup best-effort, then the row cascade
+                for a in s.store.list_assets(&deleted).await? {
+                    let _ = s.assets.delete(&a.blob_key).await;
+                }
+                for e in s.store.list_exports(&deleted).await? {
+                    if let Some(key) = e.artifact_key {
+                        let _ = s.exports.delete(&key).await;
+                    }
+                }
+                s.store.delete_deck(&deleted).await
+            })
+        })
+        .await
+        .map_err(api_err)?;
     Ok(Json(json!({ "deleted": id })))
 }
 
@@ -361,15 +400,11 @@ async fn delete_deck(
 // Slide endpoints
 // ---------------------------------------------------------------------------
 
-async fn deck_markdown(shared: &Arc<ppt_base::DeckShared>, id: &str) -> Result<String, ApiErr> {
-    Ok(shared.store.get_deck_row(id).await.map_err(api_err)?.markdown)
-}
-
 async fn get_slide(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, no)): Path<(String, u32)>,
 ) -> ApiResult {
-    let deck = shared.load_deck(&id).await.map_err(api_err)?;
+    let deck = handle.shared().load_deck(&id).await.map_err(api_err)?;
     let total = deck.len();
     let slide = deck.slide(no as usize).ok_or_else(|| {
         error(
@@ -381,24 +416,30 @@ async fn get_slide(
 }
 
 async fn patch_slide(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, no)): Path<(String, u32)>,
     Json(body): Json<PatchSlideBody>,
 ) -> ApiResult {
-    let md = deck_markdown(&shared, &id).await?;
-    let md = ppt_base::operations::apply_slide_patch(
-        &md,
-        &id,
-        no as usize,
-        SlidePatch {
-            content: body.content,
-            frontmatter_raw: body.frontmatter_raw,
-            note: body.note,
-        },
-    )
-    .map_err(api_err)?;
-    let deck = shared
-        .save_markdown(&id, &md, &format!("patch slide {no}"))
+    let deck = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    let row = s.store.get_deck_row(&id).await?;
+                    let md = ppt_base::operations::apply_slide_patch(
+                        &row.markdown,
+                        &id,
+                        no as usize,
+                        SlidePatch {
+                            content: body.content,
+                            frontmatter_raw: body.frontmatter_raw,
+                            note: body.note,
+                        },
+                    )?;
+                    s.save_markdown(&id, &md, &format!("patch slide {no}")).await
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
     Ok(Json(json!({
@@ -408,22 +449,30 @@ async fn patch_slide(
 }
 
 async fn insert_slide_route(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     Json(body): Json<InsertSlideBody>,
-) -> Result<Response, ApiErr> {
-    let md = deck_markdown(&shared, &id).await?;
-    let md = insert_slide(
-        &md,
-        &id,
-        body.after as usize,
-        body.content.as_deref().unwrap_or(""),
-        body.frontmatter_raw.as_deref(),
-        body.note.as_deref(),
-    )
-    .map_err(api_err)?;
-    let deck = shared
-        .save_markdown(&id, &md, &format!("insert after {}", body.after))
+) -> WriteResult {
+    let after = body.after;
+    let deck = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    let row = s.store.get_deck_row(&id).await?;
+                    let md = insert_slide(
+                        &row.markdown,
+                        &id,
+                        after as usize,
+                        body.content.as_deref().unwrap_or(""),
+                        body.frontmatter_raw.as_deref(),
+                        body.note.as_deref(),
+                    )?;
+                    s.save_markdown(&id, &md, &format!("insert after {after}"))
+                        .await
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
     Ok((
@@ -431,34 +480,49 @@ async fn insert_slide_route(
         Json(json!({
             "deck": deck.meta,
             "slideCount": deck.len(),
-            "insertedNo": body.after as u64 + 1,
+            "insertedNo": after as u64 + 1,
         })),
     )
         .into_response())
 }
 
 async fn delete_slide(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, no)): Path<(String, u32)>,
 ) -> ApiResult {
-    let md = deck_markdown(&shared, &id).await?;
-    let md = remove_slide(&md, &id, no as usize).map_err(api_err)?;
-    let deck = shared
-        .save_markdown(&id, &md, &format!("remove slide {no}"))
+    let deck = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    let row = s.store.get_deck_row(&id).await?;
+                    let md = remove_slide(&row.markdown, &id, no as usize)?;
+                    s.save_markdown(&id, &md, &format!("remove slide {no}")).await
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
     Ok(Json(json!({ "deck": deck.meta, "slideCount": deck.len() })))
 }
 
 async fn move_slide_route(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, no)): Path<(String, u32)>,
     Json(body): Json<MoveSlideBody>,
 ) -> ApiResult {
-    let md = deck_markdown(&shared, &id).await?;
-    let md = move_slide(&md, &id, no as usize, body.to as usize).map_err(api_err)?;
-    let deck = shared
-        .save_markdown(&id, &md, &format!("move {no} -> {}", body.to))
+    let to = body.to;
+    let deck = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    let row = s.store.get_deck_row(&id).await?;
+                    let md = move_slide(&row.markdown, &id, no as usize, to as usize)?;
+                    s.save_markdown(&id, &md, &format!("move {no} -> {to}")).await
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
     Ok(Json(json!({ "deck": deck.meta, "slideCount": deck.len() })))
@@ -475,11 +539,11 @@ struct AssetListQuery {
 }
 
 async fn list_assets(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     Query(q): Query<AssetListQuery>,
 ) -> ApiResult {
-    // validate deck exists
+    let shared = handle.shared();
     shared.store.get_deck_row(&id).await.map_err(api_err)?;
     let mut assets = shared.store.list_assets(&id).await.map_err(api_err)?;
     if let Some(limit) = q.limit {
@@ -504,10 +568,11 @@ async fn list_assets(
 }
 
 async fn upload_asset(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     mut multipart: Multipart,
-) -> Result<Response, ApiErr> {
+) -> WriteResult {
+    let shared = handle.shared();
     shared.store.get_deck_row(&id).await.map_err(api_err)?;
 
     let mut filename = String::new();
@@ -557,70 +622,79 @@ async fn upload_asset(
         .filter(|b| !b.is_empty())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "missing 'file' field"))?;
 
-    let asset_id = format!("asset-{}", uuid::Uuid::new_v4().simple());
-    let blob_key = asset_blob_key(&id, &asset_id, &filename);
-    shared
-        .assets
-        .put(&blob_key, bytes.clone())
+    let asset = handle
+        .write({
+            let id = id.clone();
+            let filename = filename.clone();
+            let bytes = bytes.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move {
+                    let asset_id = format!("asset-{}", uuid::Uuid::new_v4().simple());
+                    let blob_key = asset_blob_key(&id, &asset_id, &filename);
+                    s.assets.put(&blob_key, bytes.clone()).await?;
+                    let sha = {
+                        let mut h = Sha256::new();
+                        h.update(&bytes);
+                        format!("{:x}", h.finalize())
+                    };
+                    let mime = ppt_base::tools::asset_tools::guess_mime(&filename);
+                    let meta = ppt_base::store::AssetMeta {
+                        id: asset_id.clone(),
+                        deck_id: id.clone(),
+                        filename: filename.clone(),
+                        mime: mime.into(),
+                        size: bytes.len() as i64,
+                        sha256: sha,
+                        caption: caption.clone().filter(|c| !c.is_empty()),
+                        provenance: provenance.clone().filter(|p| !p.is_empty()),
+                        blob_key: blob_key.clone(),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    s.store.add_asset(&meta).await?;
+                    Ok(meta)
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
-
-    let sha = {
-        let mut h = Sha256::new();
-        h.update(&bytes);
-        format!("{:x}", h.finalize())
-    };
-    let mime = ppt_base::tools::asset_tools::guess_mime(&filename);
-    let meta = ppt_base::store::AssetMeta {
-        id: asset_id.clone(),
-        deck_id: id.clone(),
-        filename: filename.clone(),
-        mime: mime.into(),
-        size: bytes.len() as i64,
-        sha256: sha,
-        caption: caption.filter(|c| !c.is_empty()),
-        provenance: provenance.filter(|p| !p.is_empty()),
-        blob_key: blob_key.clone(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-    };
-    shared.store.add_asset(&meta).await.map_err(api_err)?;
 
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "assetId": asset_id,
-            "filename": filename,
-            "mime": mime,
-            "size": bytes.len(),
-            "ref": format!("assets://{asset_id}"),
+            "assetId": asset.id,
+            "filename": asset.filename,
+            "mime": asset.mime,
+            "size": asset.size,
+            "ref": format!("assets://{}", asset.id),
         })),
     )
         .into_response())
 }
 
 async fn download_asset(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, aid)): Path<(String, String)>,
 ) -> Response {
-    serve_asset(&shared, &id, &aid).await
+    serve_asset(&handle, &id, &aid).await
 }
 
 async fn print_asset(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, aid)): Path<(String, String)>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     // Token-authenticated sibling of `download_asset` for the export page.
     match q.get("token").map(String::as_str) {
-        Some(token) if validate_print_token(&shared, &id, token).await.is_ok() => {
-            serve_asset(&shared, &id, &aid).await
+        Some(token) if validate_print_token(&handle, &id, token).await.is_ok() => {
+            serve_asset(&handle, &id, &aid).await
         }
         _ => error(StatusCode::UNAUTHORIZED, "invalid or expired print token")
             .into_response(),
     }
 }
 
-async fn serve_asset(shared: &Arc<ppt_base::DeckShared>, id: &str, aid: &str) -> Response {
+async fn serve_asset(handle: &Arc<DeckHandle>, id: &str, aid: &str) -> Response {
+    let shared = handle.shared();
     let meta = match shared.store.get_asset(id, aid).await {
         Ok(m) => m,
         Err(e) => return api_err(e).into_response(),
@@ -639,15 +713,20 @@ async fn serve_asset(shared: &Arc<ppt_base::DeckShared>, id: &str, aid: &str) ->
 }
 
 async fn delete_asset(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path((id, aid)): Path<(String, String)>,
 ) -> ApiResult {
-    let blob_key = shared
-        .store
-        .delete_asset(&id, &aid)
+    let deleted = aid.clone();
+    let blob_key = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                box_w(async move { s.store.delete_asset(&id, &deleted).await })
+            }
+        })
         .await
         .map_err(api_err)?;
-    let _ = shared.assets.delete(&blob_key).await;
+    let _ = handle.shared().assets.delete(&blob_key).await;
     Ok(Json(json!({ "deleted": aid })))
 }
 
@@ -656,11 +735,18 @@ async fn delete_asset(
 // ---------------------------------------------------------------------------
 
 async fn list_exports(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let exports = shared.store.list_exports(&id).await.map_err(api_err)?;
-    Ok(Json(json!({ "exports": exports.iter().map(export_json).collect::<Vec<_>>() })))
+    let exports = handle
+        .shared()
+        .store
+        .list_exports(&id)
+        .await
+        .map_err(api_err)?;
+    Ok(Json(
+        json!({ "exports": exports.iter().map(export_json).collect::<Vec<_>>() }),
+    ))
 }
 
 fn export_json(e: &ExportRecord) -> Value {
@@ -677,34 +763,49 @@ fn export_json(e: &ExportRecord) -> Value {
 }
 
 async fn create_export(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     Json(body): Json<CreateExportBody>,
-) -> Result<Response, ApiErr> {
+) -> WriteResult {
     let format = ExportFormat::parse(&body.format)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "format must be pdf | png | pptx"))?;
-    let deck = shared.load_deck(&id).await.map_err(api_err)?;
-    let pages = deck
-        .resolve_range(body.range.as_deref())
-        .map_err(|e| api_err(ppt_base::Error::BadRange(e)))?;
     let dpi = body.dpi.unwrap_or(192).clamp(96, 300);
+    let export_body = body;
 
     // Token minting + queueing live in the engine (worker consumes the
-    // raw token; only its hash is persisted).
-    let notes = pages
-        .iter()
-        .map(|p| deck.slide(p + 1).and_then(|s| s.note.clone()).unwrap_or_default())
-        .collect();
-    let (record, _token) = shared
-        .enqueue_export(
-            &id,
-            format,
-            dpi,
-            pages.iter().map(|p| p + 1).collect(),
-            deck.meta.canvas(),
-            deck.meta.canvas_height(),
-            notes,
-        )
+    // raw token; only its hash is persisted). Enqueue through the actor.
+    let (record, pages) = handle
+        .write({
+            let id = id.clone();
+            move |s: Arc<ppt_base::shared::DeckShared>| {
+                Box::pin(async move {
+                    let deck = s.load_deck(&id).await?;
+                    let pages = deck
+                        .resolve_range(export_body.range.as_deref())
+                        .map_err(ppt_base::Error::BadRange)?;
+                    let notes = pages
+                        .iter()
+                        .map(|p| {
+                            deck.slide(p + 1)
+                                .and_then(|sl| sl.note.clone())
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                    let (record, _token) = s
+                        .enqueue_export(
+                            &id,
+                            format,
+                            dpi,
+                            pages.iter().map(|p| p + 1).collect(),
+                            deck.meta.canvas(),
+                            deck.meta.canvas_height(),
+                            notes,
+                        )
+                        .await?;
+                    Ok((record, pages))
+                })
+            }
+        })
         .await
         .map_err(api_err)?;
 
@@ -723,17 +824,23 @@ async fn create_export(
 }
 
 async fn get_export(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(eid): Path<String>,
 ) -> ApiResult {
-    let record = shared.store.get_export(&eid).await.map_err(api_err)?;
+    let record = handle
+        .shared()
+        .store
+        .get_export(&eid)
+        .await
+        .map_err(api_err)?;
     Ok(Json(export_json(&record)))
 }
 
 async fn download_export(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(eid): Path<String>,
 ) -> Response {
+    let shared = handle.shared();
     let record = match shared.store.get_export(&eid).await {
         Ok(r) => r,
         Err(e) => return api_err(e).into_response(),
@@ -741,7 +848,10 @@ async fn download_export(
     let Some(key) = record.artifact_key.clone() else {
         return error(
             StatusCode::NOT_FOUND,
-            format!("export {eid} has no artifact yet (status: {})", record.status.as_str()),
+            format!(
+                "export {eid} has no artifact yet (status: {})",
+                record.status.as_str()
+            ),
         )
         .into_response();
     };
@@ -779,11 +889,12 @@ fn print_token_hash(token: &str) -> String {
 }
 
 async fn validate_print_token(
-    shared: &Arc<ppt_base::DeckShared>,
+    handle: &Arc<DeckHandle>,
     deck_id: &str,
     token: &str,
-) -> Result<ppt_base::store::ExportRecord, ApiErr> {
-    let record = shared
+) -> Result<ExportRecord, ApiErr> {
+    let record = handle
+        .shared()
         .store
         .get_export_by_token(deck_id, &print_token_hash(token))
         .await
@@ -801,12 +912,13 @@ async fn validate_print_token(
 /// Full render payload for the headless export page: deck meta, slides,
 /// and asset URLs (token-gated siblings).
 async fn print_data(
-    State(shared): State<Arc<ppt_base::DeckShared>>,
+    State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
     Query(q): Query<PrintQuery>,
 ) -> ApiResult {
     let token = q.token.clone().unwrap_or_default();
-    validate_print_token(&shared, &id, &token).await?;
+    validate_print_token(&handle, &id, &token).await?;
+    let shared = handle.shared();
     let deck = shared.load_deck(&id).await.map_err(api_err)?;
     let assets = shared.store.list_assets(&id).await.map_err(api_err)?;
     let asset_rows: Vec<Value> = assets
@@ -816,8 +928,8 @@ async fn print_data(
                 "assetId": a.id,
                 "ref": format!("assets://{}", a.id),
                 "url": format!(
-                    "/api/v1/deck/decks/{id}/print-assets/{}?token={}",
-                    a.id, token
+                    "/api/v1/deck/decks/{id}/print-assets/{}?token={token}",
+                    a.id
                 ),
                 "mime": a.mime,
             })

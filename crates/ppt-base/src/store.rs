@@ -600,6 +600,18 @@ impl DeckStore {
         Ok(out)
     }
 
+    /// Mark every queued/running export as errored (restart sweep: print
+    /// tokens are hash-only, so those jobs cannot be re-driven).
+    pub async fn fail_stale_exports(&self, message: &str) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE deck_exports SET status = 'error', error = ?1, updated_at = ?2                  WHERE status IN ('queued', 'running')",
+                turso::params![message, chrono::Utc::now().to_rfc3339()],
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Find an export by deck id + valid print token hash.
     pub async fn get_export_by_token(&self, deck_id: &str, token_hash: &str) -> Result<ExportRecord> {
         let mut rows = self

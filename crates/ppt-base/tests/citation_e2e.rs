@@ -4,6 +4,7 @@
 use agentik_core::tools::ToolRegistration;
 use bib_base::BibBase;
 use bib_types::Article;
+use ppt_base::DeckHandle;
 use ppt_base::shared::DeckShared;
 use ppt_base::tools::deck_all_registrations;
 use serde_json::{json, Value};
@@ -77,11 +78,14 @@ async fn deck_references_generates_and_refreshes() {
     .await
     .unwrap();
 
-    let shared = DeckShared::open_in_memory()
-        .await
-        .unwrap()
-        .with_bib(Some(bib.clone()));
-    let regs = deck_all_registrations(shared.clone());
+    let shared = std::sync::Arc::new(
+        DeckShared::open_in_memory()
+            .await
+            .unwrap()
+            .with_bib(Some(bib.clone())),
+    );
+    let handle = DeckHandle::spawn(shared.clone());
+    let regs = deck_all_registrations(handle);
 
     // deck with two cite markers (meeting template's references slide is a
     // plain slide — no layout: references — so deck_references appends).
@@ -143,8 +147,8 @@ async fn deck_references_generates_and_refreshes() {
 
 #[tokio::test]
 async fn deck_references_without_bib_reports_clearly() {
-    let shared = DeckShared::open_in_memory().await.unwrap();
-    let regs = deck_all_registrations(shared);
+    let handle = DeckHandle::spawn_in_memory().await.unwrap();
+    let regs = deck_all_registrations(handle);
     let created = call_tool(&regs, "deck_create", json!({"title": "T"})).await;
     let deck_id = created["deck_id"].as_str().unwrap();
 

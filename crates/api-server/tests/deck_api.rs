@@ -7,6 +7,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use http_body_util::BodyExt;
+use ppt_base::DeckHandle;
 use ppt_base::shared::DeckShared;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -23,15 +24,15 @@ fn request(method: &str, uri: &str, body: Option<String>) -> Request<Body> {
         .unwrap()
 }
 
-async fn deck_shared() -> Arc<ppt_base::DeckShared> {
-    Arc::new(DeckShared::open_in_memory().await.unwrap())
+async fn deck_handle() -> Arc<DeckHandle> {
+    Arc::new(DeckHandle::spawn(Arc::new(DeckShared::open_in_memory().await.unwrap())))
 }
 
-async fn app() -> (Router, Arc<ppt_base::DeckShared>) {
-    let shared = deck_shared().await;
-    let router = api_server::deck::router(shared.clone())
-        .merge(api_server::deck::open_router(shared.clone()));
-    (router, shared)
+async fn app() -> (Router, Arc<DeckHandle>) {
+    let handle = deck_handle().await;
+    let router = api_server::deck::router(handle.clone())
+        .merge(api_server::deck::open_router(handle.clone()));
+    (router, handle)
 }
 
 async fn json_of(body: Body) -> Value {
@@ -308,6 +309,7 @@ async fn print_data_requires_valid_token() {
     // The test mints its own token through the engine to exercise the
     // print surface (production: the export worker builds the URL).
     let (_record, token) = shared
+        .shared()
         .enqueue_export(&id, ppt_base::store::ExportFormat::Pdf, 96, vec![1], 980, 551, vec![])
         .await
         .unwrap();

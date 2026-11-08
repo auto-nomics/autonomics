@@ -15,6 +15,7 @@
 //! - [`store`] — Turso persistence for decks/versions/assets/exports.
 //! - [`tools`] — agent tool registrations.
 
+pub mod actor;
 pub mod assets;
 pub mod citation;
 pub mod export;
@@ -25,6 +26,7 @@ pub mod operations;
 pub mod parser;
 pub mod store;
 
+pub use actor::DeckHandle;
 pub use assets::BlobArea;
 pub use error::{Error, Result};
 pub use export::{DeckExporter, NullExporter};
