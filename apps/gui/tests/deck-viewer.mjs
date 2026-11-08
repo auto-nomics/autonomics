@@ -221,6 +221,22 @@ try {
   await page.locator('.deck-toc-item').nth(3).click();
   await page.locator('.deck-canvas .deck-slide[data-slide-no="4"] .deck-mermaid svg').waitFor({ state: 'visible', timeout: 10000 });
 
+  // 6. live update: agent edits land in the open tab within a poll
+  //    interval (4s poll — no reload, navigation preserved)
+  await page.locator('.deck-toc-item').nth(0).click();
+  await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').waitFor({ state: 'visible' });
+  await page.waitForTimeout(200);
+  assert.ok((await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]').innerText()).includes('封面副标题'));
+
+  deckPayload.deck.revision = 'deckrev-live';
+  deckPayload.slides[0].content = '# Mock Deck\n\n已实时更新';
+  deckPayload.slides[0].raw = '---\ntitle: Mock Deck\n---\n\n# Mock Deck\n\n已实时更新';
+
+  await page.locator('.deck-canvas .deck-slide[data-slide-no="1"]')
+    .locator('text=已实时更新')
+    .waitFor({ state: 'visible', timeout: 9000 });
+
+  // no page errors
   assert.deepEqual(errors.filter(e => !e.includes('ResizeObserver')), [], 'no page errors');
   console.log('deck-viewer: all assertions passed');
 } finally {

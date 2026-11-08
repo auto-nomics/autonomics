@@ -1,12 +1,21 @@
 /**
  * DeckEditorBody — the workbench editor body for `deck:{deckId}` tabs:
  * fetches the deck payload, renders DeckRenderer, handles load states.
- * Per-tab state (last slide) lives in `editor.state` via patchEditorState.
+ *
+ * Live updates: while the tab is mounted (and the document visible) the
+ * payload is re-fetched every LIVE_POLL_MS and swapped in when the
+ * server revision changes — agent edits (slide_patch / insert / …) show
+ * up in the open tab within a poll interval. DeckRenderer keeps its
+ * navigation state across swaps, so the viewer stays on the current
+ * slide. Per-tab state (last slide) lives in `editor.state` via
+ * patchEditorState.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { fetchDeck, type DeckPayload } from "./deck-api";
 import { DeckRenderer } from "./render/deck-renderer";
+
+const LIVE_POLL_MS = 4000;
 
 export interface DeckEditorBodyProps {
   deckId: string;
@@ -19,14 +28,17 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [reloadTick, setReloadTick] = useState(0);
+  const revisionRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    revisionRef.current = null;
     fetchDeck(deckId)
       .then(p => {
         if (!cancelled) {
+          revisionRef.current = p.deck.revision;
           setPayload(p);
           setLoading(false);
         }
@@ -41,6 +53,39 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
       cancelled = true;
     };
   }, [deckId, reloadTick]);
+
+  // Live sync: poll while visible; swap on revision change. Poll errors
+  // are transient (daemon restart etc.) — keep the last good payload.
+  useEffect(() => {
+    let cancelled = false;
+    let inFlight = false;
+    const tick = async () => {
+      if (cancelled || inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        const next = await fetchDeck(deckId);
+        if (cancelled) return;
+        if (next.deck.revision !== revisionRef.current) {
+          revisionRef.current = next.deck.revision;
+          setPayload(next);
+        }
+      } catch {
+        // keep last good payload; retry next tick
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = window.setInterval(tick, LIVE_POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [deckId]);
 
   const dark = useDeckDark();
 
