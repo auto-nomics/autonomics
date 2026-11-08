@@ -118,55 +118,6 @@ fn make_executable(path: &Path) {
 
 // ── submission builders ───────────────────────────────────────────────────
 
-fn noop_node() -> Box<dyn dag_core::DagNode> {
-    #[derive(Clone)]
-    struct NoopNode {
-        ports: NodePorts,
-    }
-
-    impl Default for NoopNode {
-        fn default() -> Self {
-            Self {
-                ports: NodePorts::new().add_output_port(None),
-            }
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl dag_core::DagNode for NoopNode {
-        fn ports(&self) -> &NodePorts {
-            &self.ports
-        }
-
-        async fn execute(
-            &mut self,
-            _ctx: &NodeCtx,
-            _inputs: &[NodeInput],
-            _reporter: &NodeReporter,
-        ) -> Result<PortOutputs, dag_core::dag::DagError> {
-            Ok(PortOutputs::default())
-        }
-
-        fn clone_box(&self) -> Box<dyn dag_core::DagNode> {
-            Box::new(self.clone())
-        }
-
-        fn kind(&self) -> &'static str {
-            "noop"
-        }
-
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-    }
-
-    Box::new(NoopNode::default())
-}
-
-fn test_ctx() -> Arc<NodeCtx> {
-    Arc::new(NodeCtx::new(SessionContext::new().runtime_env(), None))
-}
-
 fn base_spec(
     id: &str,
     kind: &str,
@@ -228,16 +179,6 @@ fn process_submission(
         spec,
         inputs: Vec::new(),
         resources,
-    }
-}
-
-fn execution(submission: TaskSubmission) -> TaskExecution {
-    TaskExecution {
-        submission,
-        node: noop_node(),
-        engine_ctx: test_ctx(),
-        reporter: NodeReporter::noop(),
-        cancellation: CancellationToken::new(),
     }
 }
 

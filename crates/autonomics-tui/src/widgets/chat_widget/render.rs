@@ -580,7 +580,7 @@ mod tests {
         let lines = render_user_message("hello", 40, Some(1_733_133_600_000));
         let caption = line_text(&lines[0]);
         assert!(
-            caption.starts_with("· ") && caption.ends_with(':') == false,
+            caption.starts_with("· ") && !caption.ends_with(':'),
             "caption shape: {caption}"
         );
         let (clock_part, clock) = caption.split_once("· ").expect("· prefix");
@@ -603,7 +603,7 @@ mod tests {
         let lines = render(&msg, 80);
         let header = line_text(&lines[0]);
         assert!(
-            header.starts_with("Assistant · ") && header.ends_with(':') == false,
+            header.starts_with("Assistant · ") && !header.ends_with(':'),
             "header: {header}"
         );
         let clock = header.split_once("· ").expect("clock").1;

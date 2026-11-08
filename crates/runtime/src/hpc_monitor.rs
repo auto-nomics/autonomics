@@ -157,6 +157,9 @@ impl CompletionSink for TargetSink {
     }
 }
 
+/// Ownership predicate pinned by the hpc_monitor and compute test suites:
+/// a job stays pending only for its exact owner agent and context.
+#[cfg(test)]
 pub(crate) fn owner_has_pending_jobs(
     jobs: &[MonitorView],
     agent_id: Uuid,

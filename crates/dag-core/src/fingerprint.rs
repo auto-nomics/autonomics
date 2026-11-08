@@ -436,10 +436,6 @@ async fn file_sha256_observed(
     .await
 }
 
-async fn host_sha256(path: &str) -> Option<(u64, String)> {
-    host_sha256_observed(path, None, "hashing_input").await
-}
-
 async fn host_sha256_observed(
     path: &str,
     reporter: Option<&crate::dag::node_event::NodeReporter>,

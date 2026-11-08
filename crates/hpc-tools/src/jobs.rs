@@ -202,10 +202,10 @@ impl JobsTool {
             // caller-supplied replacements made reconstructed scripts look frozen.
             let supplied = serde_json::to_value(&input)?;
             for (field, value) in supplied.as_object().unwrap() {
-                if !value.is_null()
-                    && !matches!(field.as_str(), "action" | "cluster" | "submission_key")
-                    && !(input.action == "inspect"
-                        && matches!(field.as_str(), "offset" | "max_bytes"))
+                if !(value.is_null()
+                    || matches!(field.as_str(), "action" | "cluster" | "submission_key")
+                    || (input.action == "inspect"
+                        && matches!(field.as_str(), "offset" | "max_bytes")))
                 {
                     return Err(ToolError::ValidationFailed {
                         message: format!(

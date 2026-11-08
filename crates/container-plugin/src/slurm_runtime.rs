@@ -243,10 +243,6 @@ fn report_stopped_worker(
     Ok(())
 }
 
-fn workspace_files(request: &ContainerRunRequest) -> Result<(Vec<String>, Vec<(Value, PathBuf)>)> {
-    workspace_files_observed(request, &dag_core::dag::node_event::NodeReporter::noop())
-}
-
 fn workspace_files_observed(
     request: &ContainerRunRequest,
     reporter: &dag_core::dag::node_event::NodeReporter,
@@ -447,7 +443,7 @@ impl SlurmContainerRuntime {
             || budget["max_concurrency"].as_u64() != Some(1)
             || positive
                 .iter()
-                .any(|k| !budget[*k].as_u64().is_some_and(|n| n > 0))
+                .any(|k| budget[*k].as_u64().is_none_or(|n| n == 0))
             || budget["memory_bytes"]
                 .as_u64()
                 .zip(budget["memory_available_reserve_bytes"].as_u64())
@@ -1640,16 +1636,16 @@ mod tests {
             timeout_secs: 60,
             name: "toy".into(),
         };
-        let (_, files) = workspace_files(&request).unwrap();
+        let (_, files) = workspace_files_observed(&request, &dag_core::dag::node_event::NodeReporter::noop()).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0["path"], "staged");
         assert_eq!(files[0].0["readonly"], true);
         assert_eq!(files[0].1, inputs.join("selected").canonicalize().unwrap());
         request.input_mounts.clear();
-        assert!(workspace_files(&request).is_err());
+        assert!(workspace_files_observed(&request, &dag_core::dag::node_event::NodeReporter::noop()).is_err());
         request.input_mounts.push(InputMount { host_dir: inputs });
         std::os::unix::fs::symlink(fixture.path(), work.join("directory-link")).unwrap();
-        assert!(workspace_files(&request).is_err());
+        assert!(workspace_files_observed(&request, &dag_core::dag::node_event::NodeReporter::noop()).is_err());
     }
 
     #[test]

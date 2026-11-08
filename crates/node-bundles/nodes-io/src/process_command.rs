@@ -68,6 +68,19 @@ fn port_layout(spec: &ProcessCommandSpec) -> Result<NodePorts, String> {
     if spec.outputs.is_empty() {
         return Err("process requires at least one output contract".into());
     }
+    // The backends export these names verbatim (`command.env(name, value)`),
+    // so a name that cannot exist in a POSIX environment would only fail at
+    // task spawn; refuse it while the spec is still being validated.
+    for name in spec.env.keys() {
+        if name.is_empty()
+            || name.contains('=')
+            || name.chars().any(|character| character == '\0')
+        {
+            return Err(format!(
+                "process env name `{name}` is not a valid environment variable name"
+            ));
+        }
+    }
     let mut ports: Vec<&ProcessCommandOutput> = spec.outputs.iter().collect();
     ports.sort_by_key(|output| output.port);
     for (index, output) in ports.iter().enumerate() {
@@ -191,6 +204,6 @@ impl NodeFactory for ProcessCommandNodeFactory {
         spec: serde_json::Value,
     ) -> dag_core::registry::error::Result<NodePorts> {
         let spec: ProcessCommandSpec = serde_json::from_value(spec)?;
-        Ok(port_layout(&spec).map_err(dag_core::registry::error::Error::Unknown)?)
+        port_layout(&spec).map_err(dag_core::registry::error::Error::Unknown)
     }
 }

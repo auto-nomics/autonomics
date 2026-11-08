@@ -33,9 +33,6 @@ pub const ENV_SLURM_SSH_COMMAND: &str = "AUTONOMICS_SLURM_SSH_COMMAND";
 /// Env var overriding the remote scratch root for Slurm task workspaces.
 pub const ENV_SLURM_SCRATCH_DIR: &str = "AUTONOMICS_SLURM_SCRATCH_DIR";
 
-/// Env var overriding the local download root for Slurm artifacts.
-pub const ENV_SLURM_ARTIFACT_ROOT: &str = "AUTONOMICS_SLURM_ARTIFACT_ROOT";
-
 /// Operator-owned JSON placement profile for typed remote workers.
 pub const ENV_SLURM_TYPED_WORKER_CONFIG: &str = "AUTONOMICS_SLURM_TYPED_WORKER_CONFIG";
 

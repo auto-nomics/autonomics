@@ -2982,25 +2982,6 @@ impl StagedDownload {
     }
 }
 
-async fn stream_download(
-    ssh: &SshTarget,
-    source: &str,
-    destination: &Path,
-    expected_size: u64,
-    expected_hash: &str,
-) -> Result<(), DagError> {
-    stream_download_observed(
-        ssh,
-        source,
-        destination,
-        expected_size,
-        expected_hash,
-        &crate::dag::node_event::NodeReporter::noop(),
-        "downloading",
-    )
-    .await
-}
-
 async fn stream_download_observed(
     ssh: &SshTarget,
     source: &str,
@@ -3043,25 +3024,6 @@ async fn stream_download_observed(
         }
     }
     unreachable!()
-}
-
-async fn stream_download_once(
-    ssh: &SshTarget,
-    source: &str,
-    destination: &Path,
-    expected_size: u64,
-    expected_hash: &str,
-) -> Result<(), DagError> {
-    stream_download_once_observed(
-        ssh,
-        source,
-        destination,
-        expected_size,
-        expected_hash,
-        &crate::dag::node_event::NodeReporter::noop(),
-        "downloading",
-    )
-    .await
 }
 
 async fn stream_download_once_observed(

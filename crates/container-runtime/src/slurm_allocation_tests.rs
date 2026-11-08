@@ -227,9 +227,8 @@ fn exact_uid_job_step_and_unambiguous_mounts_are_required() {
         assert!(fixture.read().is_err(), "accepted {}", from_to.1);
     }
     let mut fixture = Fixture::new();
-    fixture
-        .mountinfo
-        .push_str(&fixture.mountinfo.lines().next().unwrap().to_string());
+    let first_line = fixture.mountinfo.lines().next().unwrap().to_owned();
+    fixture.mountinfo.push_str(&first_line);
     fixture.mountinfo.push('\n');
     assert!(fixture.read().is_err());
     let mut fixture = Fixture::new();

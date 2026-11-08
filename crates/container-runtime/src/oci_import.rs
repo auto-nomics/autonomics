@@ -312,6 +312,258 @@ fn verify_image_identity(
     Ok(())
 }
 
+fn hash(file: &mut File, maximum: u64) -> Result<String, ContainerRuntimeError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| invalid(e.to_string()))?;
+    let mut hash = Sha256::new();
+    let mut buffer = [0u8; 65536];
+    let mut total = 0u64;
+    loop {
+        let n = file.read(&mut buffer).map_err(|e| invalid(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if total > maximum {
+            return Err(invalid("OCI archive exceeds its declared byte limit"));
+        }
+        hash.update(&buffer[..n]);
+    }
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| invalid(e.to_string()))?;
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+fn remaining_import_budget(
+    deadline: tokio::time::Instant,
+) -> Result<Duration, ContainerRuntimeError> {
+    deadline
+        .checked_duration_since(tokio::time::Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| invalid("OCI import total task budget exhausted"))
+}
+
+impl PodmanRuntime {
+    /// Import local, content-verified software without pulling or starting a
+    /// container. The caller supplies authorization/resource admission; this
+    /// operation does not provide scientific qualification or execution grants.
+    pub async fn import_oci_archive(
+        &self,
+        request: OciImageImportRequest,
+    ) -> Result<OciImageImportReceipt, ContainerRuntimeError> {
+        let config = self.config();
+        let manifest = request
+            .image_reference
+            .rsplit_once("@sha256:")
+            .filter(|(name, sha)| {
+                !name.is_empty()
+                    && !name.starts_with('-')
+                    && !name
+                        .bytes()
+                        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+                    && digest(sha)
+            })
+            .ok_or_else(|| invalid("immutable image reference required for OCI import"))?
+            .1
+            .to_owned();
+        if !digest(&request.archive_sha256)
+            || !digest(&request.image_config_sha256)
+            || request.archive_bytes == 0
+            || request.archive_bytes > 64 * 1024 * 1024 * 1024
+            || !(1..=3600).contains(&request.timeout_secs)
+            || !request.archive.is_absolute()
+            || !config
+                .storage_root
+                .as_ref()
+                .is_some_and(|p| p.is_absolute())
+            || !config.run_root.as_ref().is_some_and(|p| p.is_absolute())
+            || !matches!(config.storage_driver.as_deref(), Some("vfs" | "overlay"))
+        {
+            return Err(invalid(
+                "bounded OCI import and explicit private backend required",
+            ));
+        }
+        // One admission budget covers hashing, load and every identity/tag
+        // step. A later step never starts with a fresh fixed timeout.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(request.timeout_secs);
+        let before_request = request.clone();
+        let (file, before) = tokio::task::spawn_blocking(move || {
+            if fs::canonicalize(&before_request.archive).map_err(|e| invalid(e.to_string()))?
+                != before_request.archive
+            {
+                return Err(invalid("OCI archive alias forbidden"));
+            }
+            let mut file = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&before_request.archive)
+                .map_err(|e| invalid(e.to_string()))?;
+            let m = file.metadata().map_err(|e| invalid(e.to_string()))?;
+            // SAFETY: geteuid has no memory arguments or side effects.
+            if !m.is_file()
+                || m.nlink() != 1
+                || m.uid() != unsafe { libc::geteuid() }
+                || m.mode() & 0o022 != 0
+                || m.len() != before_request.archive_bytes
+                || hash(&mut file, before_request.archive_bytes)? != before_request.archive_sha256
+            {
+                return Err(invalid("OCI archive content/ownership differs"));
+            }
+            if stamp(&m)
+                != stamp(
+                    &fs::symlink_metadata(&before_request.archive)
+                        .map_err(|e| invalid(e.to_string()))?,
+                )
+            {
+                return Err(invalid("OCI archive changed during verification"));
+            }
+            Ok((file, m))
+        })
+        .await
+        .map_err(|e| invalid(e.to_string()))??;
+        let mut backend = ImportBackendLock::acquire(config)?;
+        backend.archive = Some(file);
+        let fd = backend
+            .archive
+            .as_ref()
+            .expect("verified archive held")
+            .as_raw_fd();
+        let mut command = config.async_command();
+        command
+            .arg("--remote=false")
+            .args(["load", "--input"])
+            .arg(format!("/proc/self/fd/{fd}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: only async-signal-safe fcntl is called after fork. Clearing
+        // CLOEXEC in the child preserves the verified FD, never a reopened path.
+        unsafe {
+            command.pre_exec(move || {
+                let flags = libc::fcntl(fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let (loaded, backend) =
+            import_command(command, remaining_import_budget(deadline)?, backend).await?;
+        if !loaded.status.success() {
+            return Err(invalid(format!(
+                "OCI import failed: {}",
+                truncate_captured_bytes(&loaded.stderr)
+            )));
+        }
+        let (inspected, mut backend) = import_command(
+            inspect_command(config, &request.image_reference),
+            remaining_import_budget(deadline)?,
+            backend,
+        )
+        .await?;
+        let repository_alias = if inspected.status.success() {
+            verify_image_identity(&inspected, &request, &manifest)?;
+            None
+        } else {
+            // OCI archives may retain only a local ref-name annotation. Match
+            // immutable content BEFORE associating the requested repository.
+            let config_id = format!("sha256:{}", request.image_config_sha256);
+            let (source, held) = import_command(
+                inspect_command(config, &config_id),
+                remaining_import_budget(deadline)?,
+                backend,
+            )
+            .await?;
+            backend = held;
+            verify_image_identity(&source, &request, &manifest)?;
+            let repository = request
+                .image_reference
+                .rsplit_once("@sha256:")
+                .expect("validated immutable image reference")
+                .0;
+            let alias = unpredictable_alias(repository)?;
+            let mut exists = config.async_command();
+            exists
+                .arg("--remote=false")
+                .args(["image", "exists", &alias]);
+            let (existing, held) =
+                import_command(exists, remaining_import_budget(deadline)?, backend).await?;
+            backend = held;
+            // Exit1 alone means absent. Never replace an existing tag, even
+            // one apparently pointing at the same content, or retry a clash.
+            if existing.status.code() != Some(1) {
+                return Err(invalid(
+                    "OCI private repository alias already exists or absence is unproven",
+                ));
+            }
+            // This is not an atomic tag CAS. Safety is the exclusive owned
+            // private backend plus an unpredictable fresh 256-bit name. An
+            // independently controlled/shared backend is not supported here.
+            let mut tag = config.async_command();
+            tag.arg("--remote=false")
+                .args(["image", "tag", &config_id, &alias]);
+            let (tagged, held) =
+                import_command(tag, remaining_import_budget(deadline)?, backend).await?;
+            backend = held;
+            if !tagged.status.success() {
+                return Err(invalid("OCI private repository association failed"));
+            }
+            let (associated, held) = import_command(
+                inspect_command(config, &alias),
+                remaining_import_budget(deadline)?,
+                backend,
+            )
+            .await?;
+            backend = held;
+            verify_image_identity(&associated, &request, &manifest)?;
+            let (resolved, held) = import_command(
+                inspect_command(config, &request.image_reference),
+                remaining_import_budget(deadline)?,
+                backend,
+            )
+            .await?;
+            backend = held;
+            // Never execute by the mutable alias or rewrite the caller's
+            // reference. The ORIGINAL repo@digest must now resolve correctly.
+            verify_image_identity(&resolved, &request, &manifest)?;
+            Some(alias)
+        };
+        let after_request = request.clone();
+        let _backend = tokio::task::spawn_blocking(move || {
+            backend.verify()?;
+            let file = backend
+                .archive
+                .as_mut()
+                .ok_or_else(|| invalid("verified archive missing"))?;
+            if stamp(&before) != stamp(&file.metadata().map_err(|e| invalid(e.to_string()))?)
+                || stamp(&before)
+                    != stamp(
+                        &fs::symlink_metadata(&after_request.archive)
+                            .map_err(|e| invalid(e.to_string()))?,
+                    )
+                || hash(file, after_request.archive_bytes)? != after_request.archive_sha256
+            {
+                return Err(invalid("OCI archive changed during import"));
+            }
+            backend.verify()?;
+            Ok(backend)
+        })
+        .await
+        .map_err(|e| invalid(e.to_string()))??;
+        remaining_import_budget(deadline)?;
+        Ok(OciImageImportReceipt {
+            archive_sha256: request.archive_sha256,
+            archive_bytes: request.archive_bytes,
+            image_reference: request.image_reference,
+            image_config_sha256: request.image_config_sha256,
+            manifest_digest: format!("sha256:{manifest}"),
+            repository_alias,
+            load_stdout: truncate_captured_bytes(&loaded.stdout),
+            load_stderr: truncate_captured_bytes(&loaded.stderr),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -703,256 +955,5 @@ else:sys.exit(3)
         );
         assert!(!directory.path().join("finished").exists());
         assert!(ImportBackendLock::acquire(runtime.config()).is_ok());
-    }
-}
-fn hash(file: &mut File, maximum: u64) -> Result<String, ContainerRuntimeError> {
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| invalid(e.to_string()))?;
-    let mut hash = Sha256::new();
-    let mut buffer = [0u8; 65536];
-    let mut total = 0u64;
-    loop {
-        let n = file.read(&mut buffer).map_err(|e| invalid(e.to_string()))?;
-        if n == 0 {
-            break;
-        }
-        total += n as u64;
-        if total > maximum {
-            return Err(invalid("OCI archive exceeds its declared byte limit"));
-        }
-        hash.update(&buffer[..n]);
-    }
-    file.seek(SeekFrom::Start(0))
-        .map_err(|e| invalid(e.to_string()))?;
-    Ok(format!("{:x}", hash.finalize()))
-}
-
-fn remaining_import_budget(
-    deadline: tokio::time::Instant,
-) -> Result<Duration, ContainerRuntimeError> {
-    deadline
-        .checked_duration_since(tokio::time::Instant::now())
-        .filter(|remaining| !remaining.is_zero())
-        .ok_or_else(|| invalid("OCI import total task budget exhausted"))
-}
-
-impl PodmanRuntime {
-    /// Import local, content-verified software without pulling or starting a
-    /// container. The caller supplies authorization/resource admission; this
-    /// operation does not provide scientific qualification or execution grants.
-    pub async fn import_oci_archive(
-        &self,
-        request: OciImageImportRequest,
-    ) -> Result<OciImageImportReceipt, ContainerRuntimeError> {
-        let config = self.config();
-        let manifest = request
-            .image_reference
-            .rsplit_once("@sha256:")
-            .filter(|(name, sha)| {
-                !name.is_empty()
-                    && !name.starts_with('-')
-                    && !name
-                        .bytes()
-                        .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
-                    && digest(sha)
-            })
-            .ok_or_else(|| invalid("immutable image reference required for OCI import"))?
-            .1
-            .to_owned();
-        if !digest(&request.archive_sha256)
-            || !digest(&request.image_config_sha256)
-            || request.archive_bytes == 0
-            || request.archive_bytes > 64 * 1024 * 1024 * 1024
-            || !(1..=3600).contains(&request.timeout_secs)
-            || !request.archive.is_absolute()
-            || !config
-                .storage_root
-                .as_ref()
-                .is_some_and(|p| p.is_absolute())
-            || !config.run_root.as_ref().is_some_and(|p| p.is_absolute())
-            || !matches!(config.storage_driver.as_deref(), Some("vfs" | "overlay"))
-        {
-            return Err(invalid(
-                "bounded OCI import and explicit private backend required",
-            ));
-        }
-        // One admission budget covers hashing, load and every identity/tag
-        // step. A later step never starts with a fresh fixed timeout.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(request.timeout_secs);
-        let before_request = request.clone();
-        let (file, before) = tokio::task::spawn_blocking(move || {
-            if fs::canonicalize(&before_request.archive).map_err(|e| invalid(e.to_string()))?
-                != before_request.archive
-            {
-                return Err(invalid("OCI archive alias forbidden"));
-            }
-            let mut file = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(&before_request.archive)
-                .map_err(|e| invalid(e.to_string()))?;
-            let m = file.metadata().map_err(|e| invalid(e.to_string()))?;
-            // SAFETY: geteuid has no memory arguments or side effects.
-            if !m.is_file()
-                || m.nlink() != 1
-                || m.uid() != unsafe { libc::geteuid() }
-                || m.mode() & 0o022 != 0
-                || m.len() != before_request.archive_bytes
-                || hash(&mut file, before_request.archive_bytes)? != before_request.archive_sha256
-            {
-                return Err(invalid("OCI archive content/ownership differs"));
-            }
-            if stamp(&m)
-                != stamp(
-                    &fs::symlink_metadata(&before_request.archive)
-                        .map_err(|e| invalid(e.to_string()))?,
-                )
-            {
-                return Err(invalid("OCI archive changed during verification"));
-            }
-            Ok((file, m))
-        })
-        .await
-        .map_err(|e| invalid(e.to_string()))??;
-        let mut backend = ImportBackendLock::acquire(config)?;
-        backend.archive = Some(file);
-        let fd = backend
-            .archive
-            .as_ref()
-            .expect("verified archive held")
-            .as_raw_fd();
-        let mut command = config.async_command();
-        command
-            .arg("--remote=false")
-            .args(["load", "--input"])
-            .arg(format!("/proc/self/fd/{fd}"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // SAFETY: only async-signal-safe fcntl is called after fork. Clearing
-        // CLOEXEC in the child preserves the verified FD, never a reopened path.
-        unsafe {
-            command.pre_exec(move || {
-                let flags = libc::fcntl(fd, libc::F_GETFD);
-                if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let (loaded, backend) =
-            import_command(command, remaining_import_budget(deadline)?, backend).await?;
-        if !loaded.status.success() {
-            return Err(invalid(format!(
-                "OCI import failed: {}",
-                truncate_captured_bytes(&loaded.stderr)
-            )));
-        }
-        let (inspected, mut backend) = import_command(
-            inspect_command(config, &request.image_reference),
-            remaining_import_budget(deadline)?,
-            backend,
-        )
-        .await?;
-        let repository_alias = if inspected.status.success() {
-            verify_image_identity(&inspected, &request, &manifest)?;
-            None
-        } else {
-            // OCI archives may retain only a local ref-name annotation. Match
-            // immutable content BEFORE associating the requested repository.
-            let config_id = format!("sha256:{}", request.image_config_sha256);
-            let (source, held) = import_command(
-                inspect_command(config, &config_id),
-                remaining_import_budget(deadline)?,
-                backend,
-            )
-            .await?;
-            backend = held;
-            verify_image_identity(&source, &request, &manifest)?;
-            let repository = request
-                .image_reference
-                .rsplit_once("@sha256:")
-                .expect("validated immutable image reference")
-                .0;
-            let alias = unpredictable_alias(repository)?;
-            let mut exists = config.async_command();
-            exists
-                .arg("--remote=false")
-                .args(["image", "exists", &alias]);
-            let (existing, held) =
-                import_command(exists, remaining_import_budget(deadline)?, backend).await?;
-            backend = held;
-            // Exit1 alone means absent. Never replace an existing tag, even
-            // one apparently pointing at the same content, or retry a clash.
-            if existing.status.code() != Some(1) {
-                return Err(invalid(
-                    "OCI private repository alias already exists or absence is unproven",
-                ));
-            }
-            // This is not an atomic tag CAS. Safety is the exclusive owned
-            // private backend plus an unpredictable fresh 256-bit name. An
-            // independently controlled/shared backend is not supported here.
-            let mut tag = config.async_command();
-            tag.arg("--remote=false")
-                .args(["image", "tag", &config_id, &alias]);
-            let (tagged, held) =
-                import_command(tag, remaining_import_budget(deadline)?, backend).await?;
-            backend = held;
-            if !tagged.status.success() {
-                return Err(invalid("OCI private repository association failed"));
-            }
-            let (associated, held) = import_command(
-                inspect_command(config, &alias),
-                remaining_import_budget(deadline)?,
-                backend,
-            )
-            .await?;
-            backend = held;
-            verify_image_identity(&associated, &request, &manifest)?;
-            let (resolved, held) = import_command(
-                inspect_command(config, &request.image_reference),
-                remaining_import_budget(deadline)?,
-                backend,
-            )
-            .await?;
-            backend = held;
-            // Never execute by the mutable alias or rewrite the caller's
-            // reference. The ORIGINAL repo@digest must now resolve correctly.
-            verify_image_identity(&resolved, &request, &manifest)?;
-            Some(alias)
-        };
-        let after_request = request.clone();
-        let _backend = tokio::task::spawn_blocking(move || {
-            backend.verify()?;
-            let file = backend
-                .archive
-                .as_mut()
-                .ok_or_else(|| invalid("verified archive missing"))?;
-            if stamp(&before) != stamp(&file.metadata().map_err(|e| invalid(e.to_string()))?)
-                || stamp(&before)
-                    != stamp(
-                        &fs::symlink_metadata(&after_request.archive)
-                            .map_err(|e| invalid(e.to_string()))?,
-                    )
-                || hash(file, after_request.archive_bytes)? != after_request.archive_sha256
-            {
-                return Err(invalid("OCI archive changed during import"));
-            }
-            backend.verify()?;
-            Ok(backend)
-        })
-        .await
-        .map_err(|e| invalid(e.to_string()))??;
-        remaining_import_budget(deadline)?;
-        Ok(OciImageImportReceipt {
-            archive_sha256: request.archive_sha256,
-            archive_bytes: request.archive_bytes,
-            image_reference: request.image_reference,
-            image_config_sha256: request.image_config_sha256,
-            manifest_digest: format!("sha256:{manifest}"),
-            repository_alias,
-            load_stdout: truncate_captured_bytes(&loaded.stdout),
-            load_stderr: truncate_captured_bytes(&loaded.stderr),
-        })
     }
 }

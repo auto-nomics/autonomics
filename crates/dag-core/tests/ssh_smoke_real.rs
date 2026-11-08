@@ -99,7 +99,7 @@ fn process_submission(
     }
 }
 
-fn settings(host: &str, scratch: String, local_artifacts: &Path) -> SshSettings {
+fn settings(host: &str, scratch: String, _local_artifacts: &Path) -> SshSettings {
     SshSettings {
         ssh: SshTarget::new("ssh", host).with_keepalive(Duration::from_secs(15), 2),
         scratch_dir: scratch,
@@ -249,7 +249,6 @@ async fn real_host_cancel_stops_a_running_task() {
         );
         // run.pid records "PID PGID"; the pid is the first field.
         if pid
-            .trim()
             .split_whitespace()
             .next()
             .and_then(|first| first.parse::<i64>().ok())

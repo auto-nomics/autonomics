@@ -124,7 +124,7 @@ impl NodeFactory for EchoFactory {
             host_service: spec["host_service"].as_bool().unwrap_or(false),
             path: spec["path"].as_str().map(str::to_owned),
             ports: NodePorts::new()
-                .add_input_port_of_type(None, ty.clone())
+                .add_input_port_of_type(None, ty)
                 .add_output_port_of_type(None, ty),
         }))
     }
@@ -173,7 +173,7 @@ async fn spec_file_is_staged_from_coordinator_vfs_and_rebound_without_a_node_por
     )
     .unwrap();
     coordinator
-        .stage_inputs(&mut invocation.submission, Some(&storage))
+        .stage_inputs_with_remote_observed(&mut invocation.submission, Some(&storage), None, None)
         .await
         .unwrap();
     let staged = &invocation.submission.spec.inputs[0].staged_paths[0];
@@ -753,7 +753,7 @@ async fn remote_file_staging_never_opens_cluster_paths_on_the_coordinator() {
         crate::dag::execution::workspace::LocalTaskWorkspace::create(temp.path(), &submission)
             .unwrap();
     let remote = workspace
-        .stage_inputs_with_remote(&mut submission, None, Some(&AlreadyRemoteStore))
+        .stage_inputs_with_remote_observed(&mut submission, None, Some(&AlreadyRemoteStore), None)
         .await
         .unwrap();
     assert_eq!(remote[&(0, 0)].path, "/cluster/data/input.tsv");

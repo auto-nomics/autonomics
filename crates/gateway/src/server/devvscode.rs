@@ -20,15 +20,7 @@ use tokio::net::UnixStream;
 
 use super::error::{GatewayError, GatewayResult};
 
-/// Forward a request to an already-connected project socket.
-///
-/// Authentication belongs to the eventual isolated-origin listener. Never
-/// pass its credentials to a server controlled by the project container.
-pub(crate) async fn forward(stream: UnixStream, request: Request) -> GatewayResult<Response> {
-    forward_with_prefix(stream, request, None).await
-}
-
-async fn forward_with_prefix(
+pub(crate) async fn forward_with_prefix(
     stream: UnixStream,
     mut request: Request,
     prefix: Option<&str>,
@@ -343,7 +335,7 @@ mod tests {
             .header("x-test", "kept")
             .body(Body::empty())
             .unwrap();
-        let response = forward(UnixStream::connect(&socket).await.unwrap(), request)
+        let response = forward_with_prefix(UnixStream::connect(&socket).await.unwrap(), request, None)
             .await
             .unwrap_or_else(|_| panic!("forward request"));
         assert_eq!(response.status(), StatusCode::OK);
@@ -412,7 +404,7 @@ mod tests {
                 let socket = socket.clone();
                 async move {
                     let stream = UnixStream::connect(socket).await.unwrap();
-                    forward(stream, request)
+                    forward_with_prefix(stream, request, None)
                         .await
                         .unwrap_or_else(|_| panic!("forward upgrade"))
                 }

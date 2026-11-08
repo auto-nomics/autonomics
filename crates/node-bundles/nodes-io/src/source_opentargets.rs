@@ -1022,7 +1022,7 @@ impl DagNode for OpentargetsGeneticNode {
         let df = input
             .dataframe()
             .map_err(|e| err(format!("input is not a DataFrame: {e}")))?;
-        let ids = genetic_string_values(&df, &self.spec.id_column).await?;
+        let ids = genetic_string_values(df, &self.spec.id_column).await?;
         if ids.is_empty() {
             return Err(err(format!(
                 "column '{}' contains no usable IDs",
@@ -1549,7 +1549,7 @@ mod genetic_tests {
         use datafusion::prelude::SessionContext;
         use std::sync::Arc;
 
-        let ids = vec![
+        let ids = [
             Some("1_555168_A_G".to_string()),
             None,
             Some("17_66232877_G_C_longer_than_12_bytes".to_string()),
@@ -1700,7 +1700,7 @@ impl DagNode for OpentargetsPhewasNode {
             })?
             .dataframe()
             .map_err(|e| DagError::Schedule(format!("input is not a DataFrame: {e}")))?;
-        let ids = genetic_string_values(&df, &self.spec.id_column).await?;
+        let ids = genetic_string_values(df, &self.spec.id_column).await?;
         let column_index = df
             .schema()
             .index_of_column_by_name(None, &self.spec.id_column)

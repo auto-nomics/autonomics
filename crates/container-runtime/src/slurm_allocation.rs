@@ -859,7 +859,6 @@ where
             }
         }
     }
-    drop(get);
     for (path, value) in &snapshots {
         if &read(path)? != value {
             return Err(invalid(format!(

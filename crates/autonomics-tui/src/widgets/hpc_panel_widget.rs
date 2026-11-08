@@ -667,7 +667,7 @@ mod tests {
         });
         let mut state = state_with_values();
         state.load_config(&reply);
-        assert_eq!(state.pending_restart, true);
+        assert!(state.pending_restart);
         assert_eq!(
             state.site_profile_path.as_deref(),
             Some("/s/slurm-site.json")

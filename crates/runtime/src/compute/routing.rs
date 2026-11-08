@@ -137,10 +137,13 @@ pub(crate) struct UnavailableContainers {
 
 /// Image preparation has a local implementation only. Background preparation
 /// and direct callers must obey the same policy as agent tool admission.
+/// Exercised by the compute test suite's policy checks.
+#[cfg(test)]
 pub(crate) struct ImageBuilder {
     pub registry: Arc<ComputeRegistry>,
     pub local: Arc<dyn container_runtime::ImageBuildConnection>,
 }
+#[cfg(test)]
 #[async_trait]
 impl container_runtime::ImageBuildConnection for ImageBuilder {
     async fn build(

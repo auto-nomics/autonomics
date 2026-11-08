@@ -25,6 +25,7 @@ use std::{
 
 pub use routing::ComputeExecutor;
 pub(crate) use routing::ContainerRouter;
+#[cfg(test)]
 pub(crate) use routing::ImageBuilder as ComputeImageBuilder;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -375,7 +375,7 @@ async fn retained_arrow_stage_forwards_origin_without_reading_rows_or_writing_a_
     let store = store(temp.path(), origin);
     let mut workspace = LocalTaskWorkspace::create(&temp.path().join("attempts"), &task).unwrap();
     let resolved = workspace
-        .stage_inputs_with_remote(&mut task, ctx.opendal.as_deref(), Some(&store))
+        .stage_inputs_with_remote_observed(&mut task, ctx.opendal.as_deref(), Some(&store), None)
         .await
         .unwrap();
     assert_eq!(resolved[&(0, 0)].path, "/cluster/retained");
@@ -437,7 +437,7 @@ async fn user_tables_and_transformed_retained_tables_cannot_claim_an_unchanged_o
     let mut task = submission(frame.select_columns(&["id"]).unwrap());
     let mut workspace = LocalTaskWorkspace::create(&temp.path().join("attempts"), &task).unwrap();
     let rejected = workspace
-        .stage_inputs_with_remote(&mut task, ctx.opendal.as_deref(), Some(&store))
+        .stage_inputs_with_remote_observed(&mut task, ctx.opendal.as_deref(), Some(&store), None)
         .await
         .unwrap_err();
     assert!(rejected.to_string().contains("require remote placement"));
@@ -449,7 +449,7 @@ async fn user_tables_and_transformed_retained_tables_cannot_claim_an_unchanged_o
         LocalTaskWorkspace::create(&temp.path().join("local-attempts"), &task).unwrap();
     assert!(
         workspace
-            .stage_inputs_with_remote(&mut task, ctx.opendal.as_deref(), Some(&store))
+            .stage_inputs_with_remote_observed(&mut task, ctx.opendal.as_deref(), Some(&store), None)
             .await
             .unwrap()
             .is_empty()
@@ -497,7 +497,7 @@ async fn changed_retained_bytes_cannot_be_scanned_locally_or_forwarded_under_the
     let mut task = submission(frame);
     let mut workspace = LocalTaskWorkspace::create(&temp.path().join("attempts"), &task).unwrap();
     let error = workspace
-        .stage_inputs_with_remote(&mut task, ctx.opendal.as_deref(), Some(&store))
+        .stage_inputs_with_remote_observed(&mut task, ctx.opendal.as_deref(), Some(&store), None)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("SHA256 mismatch"));

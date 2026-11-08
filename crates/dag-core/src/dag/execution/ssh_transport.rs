@@ -167,14 +167,14 @@ impl SshTaskTransport {
         {
             Ok(output) => {
                 let stdout = ssh_stdout_text(output, "ssh exit code")?;
-                return parse_exit_code(&stdout);
+                parse_exit_code(&stdout)
             }
             Err(error) => {
                 // The connection may have died while the task kept
                 // running. The state file is the durable answer: it is
                 // written by the supervisor, not by this connection.
                 match self.read_exit_code(&exit_path).await {
-                    Ok(code) => return Ok(code),
+                    Ok(code) => Ok(code),
                     Err(read_error) => {
                         reporter.worker(
                             "waiting_for_remote_task",
@@ -183,10 +183,10 @@ impl SshTaskTransport {
                             "unknown",
                             "remote",
                         );
-                        return Err(DagError::Schedule(format!(
+                        Err(DagError::Schedule(format!(
                             "ssh wait for `{}` failed and its exit code is unreadable: {error}; {read_error}",
                             attempt.dispatch.spec.id
-                        )));
+                        )))
                     }
                 }
             }

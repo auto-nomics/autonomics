@@ -113,7 +113,7 @@ impl TypedPodmanSettings {
                     TypedPodmanResourceControl::DelegatedCgroups
                 ) =>
             {
-                ()
+                
             }
             (Some(path), Some(hash)) if path.is_absolute() && valid_sha256(hash) => (),
             _ => {
@@ -212,7 +212,7 @@ impl TypedWorkerSettings {
             (Some(catalog), Some(executable))
                 if catalog.is_absolute() && executable.is_absolute() =>
             {
-                ()
+                
             }
             _ => {
                 return Err(failure(

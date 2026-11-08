@@ -11,7 +11,6 @@ pub mod loader;
 pub mod manifest;
 pub mod manager;
 pub mod node_definition;
-mod private_environment;
 pub mod slurm_runtime;
 pub mod sync;
 mod worker_software;

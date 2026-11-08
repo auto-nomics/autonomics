@@ -303,26 +303,6 @@ impl LocalTaskWorkspace {
         FileRef::local(path, Some("json".into()))
     }
 
-    pub(super) async fn stage_inputs(
-        &mut self,
-        submission: &mut TaskSubmission,
-        storage: Option<&vfs::OpendalFileStorage>,
-    ) -> Result<(), DagError> {
-        self.stage_inputs_with_remote(submission, storage, None)
-            .await?;
-        Ok(())
-    }
-
-    pub(super) async fn stage_inputs_with_remote(
-        &mut self,
-        submission: &mut TaskSubmission,
-        storage: Option<&vfs::OpendalFileStorage>,
-        artifact_store: Option<&dyn super::traits::TaskArtifactStore>,
-    ) -> Result<BTreeMap<(u8, usize), FileRef>, DagError> {
-        self.stage_inputs_with_remote_observed(submission, storage, artifact_store, None)
-            .await
-    }
-
     pub(super) async fn stage_inputs_with_remote_observed(
         &mut self,
         submission: &mut TaskSubmission,

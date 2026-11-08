@@ -342,7 +342,7 @@ impl App {
         self.fetch_stored_agents(&query);
         // Model column: fill the cache for live agents the popup covers.
         for live in self.state.live_agents.clone() {
-            if self.agent_model_cache.get(&live.name).is_none() {
+            if !self.agent_model_cache.contains_key(&live.name) {
                 self.refresh_agent_model_info(&live.name);
             }
         }

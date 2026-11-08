@@ -66,7 +66,7 @@ impl AgentHandle {
         delegation_id: uuid::Uuid,
         origin: agentik_types::MessageOrigin,
     ) {
-        let _ = self.send_with_origin(text, origin, Some(delegation_id));
+        self.send_with_origin(text, origin, Some(delegation_id));
     }
 
     pub fn cancel(&mut self) {

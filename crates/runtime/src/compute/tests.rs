@@ -1267,8 +1267,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let old = reopened.target("old-worker", Some(1)).unwrap().target.clone();
     let old_bytes = fs::read(match &old.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
-        ComputeBackend::Local => unreachable!(),        ComputeBackend::Ssh { .. } => unreachable!(),
-        ComputeBackend::Local => unreachable!(),
+        ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
     }).unwrap();
     let replacement = remote_settings(&f.config.state_dir, "matching-worker");
     reopened.save_target(SaveTarget {
@@ -1286,8 +1285,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     assert_eq!(historical.target.capsule_sha256, old.capsule_sha256);
     assert_eq!(fs::read(match &historical.target.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
-        ComputeBackend::Local => unreachable!(),        ComputeBackend::Ssh { .. } => unreachable!(),
-        ComputeBackend::Local => unreachable!(),
+        ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
     }).unwrap(), old_bytes);
     select(&reopened, "local");
     assert_eq!(reopened.status().unwrap().deployment["source_compatible"], true);

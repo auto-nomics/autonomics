@@ -277,6 +277,7 @@ fn all_wave_families_install_from_git_and_register() {
             program: "podman".into(),
             workspace_root: root.join("workspace"),
             panel_cache_root: root.join("panels"),
+            ..Default::default()
         }),
     );
     let panel_cache = Arc::new(container_runtime::PanelCache::new(root.join("panels")));

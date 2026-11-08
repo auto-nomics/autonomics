@@ -1658,7 +1658,7 @@ mod tests {
             .unwrap();
         let response = timeout(
             Duration::from_secs(30),
-            super::super::devvscode::forward(stream, request),
+            super::super::devvscode::forward_with_prefix(stream, request, None),
         )
         .await
         .unwrap()
