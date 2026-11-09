@@ -174,12 +174,18 @@ pub async fn run_daemon(
     let sweep_shared = bib_shared.clone();
     let wiki_shared = state.infra.wiki.clone();
     let deck_shared = state.infra.deck.clone();
+    let visualization_store =
+        visualization::Store::open(config.app_db_path.with_file_name("visualizations.sqlite"))
+            .map_err(|error| {
+                DaemonError::Message(format!("open visualization storage: {error}"))
+            })?;
     let router = router_with_bib(
         state,
         gateway_token.clone(),
         bib_shared,
         wiki_shared,
         deck_shared,
+        visualization_store,
         env_token.clone(),
     );
 

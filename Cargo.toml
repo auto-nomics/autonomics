@@ -49,6 +49,7 @@ members = [
   "crates/biofusion",
   "crates/bioart",
   "crates/visualization",
+  "crates/visualization-tools",
   "crates/alphafold",
   "crates/interpro",
   "crates/pubchem",

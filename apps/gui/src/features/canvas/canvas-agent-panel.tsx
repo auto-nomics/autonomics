@@ -1,0 +1,51 @@
+import { useState } from "react";
+import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
+import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
+import { openAgentEditor } from "@/app/workbench/workbench-store";
+import { CanvasAnnotations, type Annotation } from "./canvas-annotations";
+import { gatewayRequest } from "@/gateway";
+import { Button } from "@/components/ui/button";
+
+export function CanvasAgentPanel({ projectId, canvasId, getRevision, getApi, ensureSaved, capturePreview }: {
+  projectId: string; canvasId: string; getRevision: () => number | undefined;
+  getApi: () => ExcalidrawImperativeAPI | null; ensureSaved: () => Promise<boolean>; capturePreview: () => Promise<boolean>;
+}) {
+  const runtime = useWorkbenchRuntime();
+  const [target, setTarget] = useState(runtime.activeAgent || runtime.agents[0]?.path || "");
+  const [request, setRequest] = useState("");
+  const [audience, setAudience] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return <aside aria-label="画布 Agent" className="w-72 shrink-0 overflow-auto border-l p-3 text-sm">
+    <form className="flex flex-col gap-3" onSubmit={async event => {
+      event.preventDefault(); if (busy || !target || !request.trim()) return;
+      setBusy(true); setError("");
+      try {
+        if (!await ensureSaved()) throw new Error("画布未能保存，请先解决保存错误。");
+        const api = getApi(); const revision = getRevision();
+        if (!api || revision === undefined) throw new Error("画布尚未就绪");
+        const previewAvailable = api.getSceneElements().length > 0 ? await capturePreview() : false;
+        if (api.getSceneElements().length > 0 && !previewAvailable) throw new Error("画布预览未能生成，请重试。");
+        const selected = api.getAppState().selectedElementIds;
+        const objects = api.getSceneElements().filter(element => selected[element.id]).slice(0, 100).map(element => ({ id: element.id, type: element.type, x: element.x, y: element.y, width: element.width, height: element.height, ...("text" in element ? { text: element.text.slice(0, 1000) } : {}) }));
+        const annotations = (await gatewayRequest("GET", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/annotations`) as Annotation[]).filter(note => note.status === "open").slice(0, 30);
+        const prompt = [
+          "请作为科研绘图助手处理下面的画布需求。先用 visualization read 获取当前文档与版本；若 preview_available 为 true，使用 read_preview 查看同版本整图，选中参考图可用 read_image 查看；优先通过 propose 提交可在画布中预览的局部修改提案，保留无关元素。需要素材时使用 bioart。需要新草图时先澄清图意、受众、组件及关系，再使用 sketch；不要猜测缺失的科学机制。完成后说明修改和需要用户核对的科学假设，并提示点击查看 Agent 提案进行预览和采用。",
+          JSON.stringify({ project_id: projectId, figure_id: canvasId, observed_revision: revision, audience: audience.trim(), request: request.trim(), selected_objects: objects, annotations, preview_available: previewAvailable }, null, 2),
+        ].join("\n\n");
+        const previous = runtime.drafts[target] || "";
+        runtime.setDraftFor(target, previous ? `${previous}\n\n${prompt}` : prompt);
+        runtime.selectAgent(target); openAgentEditor(target);
+      } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+    }}>
+      <p className="font-medium">与 Agent 一起绘图</p>
+      <label>Agent<select aria-label="绘图 Agent" className="mt-1 w-full rounded border bg-background p-1" value={target} onChange={event => setTarget(event.target.value)}><option value="">选择 Agent</option>{runtime.agents.map(agent => <option key={agent.path} value={agent.path}>{agent.path}</option>)}</select></label>
+      <label>受众<input aria-label="绘图受众" className="mt-1 w-full rounded border bg-background p-1" value={audience} onChange={event => setAudience(event.target.value)} placeholder="如：免疫学研究者" /></label>
+      <label>绘图或修改需求<textarea aria-label="绘图需求" className="mt-1 min-h-32 w-full rounded border bg-background p-2" value={request} onChange={event => setRequest(event.target.value)} placeholder="希望表达什么？选中的部分需要如何修改？" /></label>
+      <p className="text-xs text-muted-foreground">将先保存画布，再把需求和选中对象放入 Agent 草稿，供你检查并发送。</p>
+      <Button type="submit" disabled={busy || !target || !request.trim()}>{busy ? "准备中…" : "交给 Agent"}</Button>
+      {error && <p role="alert" className="text-destructive">{error}</p>}
+    </form>
+    <CanvasAnnotations projectId={projectId} canvasId={canvasId} getApi={getApi} getRevision={getRevision} ensureSaved={ensureSaved} />
+  </aside>;
+}

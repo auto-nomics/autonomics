@@ -168,6 +168,7 @@ pub struct SharedInfra {
     /// Slide-deck engine write actor (store + blob areas + exporter),
     /// opened **once** per process. Deck 是写作交付物,与 writing 同一能力门控。
     pub deck: Arc<ppt_base::DeckHandle>,
+    pub visualization_db: std::path::PathBuf,
     /// Central skill manager (tiered registry + generation counter +
     /// change broadcast + usage telemetry). Initialized as the
     /// process-wide singleton so every mutation path — agent tools,
@@ -343,6 +344,7 @@ impl SharedInfra {
             kms,
             wiki,
             deck,
+            visualization_db: config.app_db_path.with_file_name("visualizations.sqlite"),
             skills,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
@@ -641,6 +643,13 @@ impl SharedInfra {
         if let Some(kms) = self.kms.clone() {
             tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
+
+        tools.extend(visualization_tools::bioart_registrations(
+            self.visualization_db.clone(),
+        ));
+        tools.extend(visualization_tools::registrations(
+            self.visualization_db.clone(),
+        ));
 
         // wiki 读组对每个 kind 挂载(知识库是共享长期记忆,任何
         // agent 都可查阅);写组只给 curator kind——任务 agent 对
@@ -1134,18 +1143,12 @@ async fn open_deck(
         "SharedInfra::open: opening deck db at {}",
         deck_db_path.display()
     );
-    let assets = ppt_base::assets::BlobArea::on_vfs(
-        (**file_storage).clone(),
-        "deck-assets",
-    );
-    let exports = ppt_base::assets::BlobArea::on_vfs(
-        (**file_storage).clone(),
-        "deck-exports",
-    );
+    let assets = ppt_base::assets::BlobArea::on_vfs((**file_storage).clone(), "deck-assets");
+    let exports = ppt_base::assets::BlobArea::on_vfs((**file_storage).clone(), "deck-exports");
     // The print page lives on this daemon's own loopback API; the same
     // env resolution as the gateway bind address keeps them consistent.
-    let api_addr = std::env::var("AUTONOMICS_HTTP_API_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:8765".to_string());
+    let api_addr =
+        std::env::var("AUTONOMICS_HTTP_API_ADDR").unwrap_or_else(|_| "127.0.0.1:8765".to_string());
     let origin = format!("http://{api_addr}");
     let exporter: std::sync::Arc<dyn ppt_base::DeckExporter> =
         match browser_use::BrowserOptions::default() {

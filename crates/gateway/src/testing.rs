@@ -295,6 +295,8 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         bib_shared,
         wiki_shared,
         deck_shared,
+        visualization::Store::open(config.app_db_path.with_file_name("visualizations.sqlite"))
+            .unwrap(),
         None,
     );
     let server = api_server::server::start(router, "127.0.0.1:0")

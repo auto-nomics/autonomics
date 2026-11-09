@@ -1,49 +1,39 @@
 import { useSyncExternalStore } from "react";
-export type CanvasRecord = { id: string; title: string; scene: string | null; updatedAt: number };
-let database: Promise<IDBDatabase> | undefined;
-function db() {
-  return database ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("autonomics.canvas.v1", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("canvases", { keyPath: "id" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => { database = undefined; reject(request.error); };
-  });
-}
-export async function readCanvas(id: string): Promise<CanvasRecord> {
-  const connection = await db();
-  return new Promise((resolve, reject) => {
-    const request = connection.transaction("canvases").objectStore("canvases").get(id);
-    request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error("画布不存在"));
-    request.onerror = () => reject(request.error);
-  });
-}
+import { gatewayRequest } from "@/gateway";
+import * as legacy from "./legacy-canvas-store";
+export type Project = { id: string; title: string };
+export type CanvasRecord = { id: string; projectId?: string; revision?: number; title: string; scene: string | null; updatedAt: number };
+type Metadata = { id: string; project_id: string; revision: number; title: string; updated_at: string };
 let summaries: CanvasRecord[] = [];
+let selectedProject: string | undefined;
 const listeners = new Set<() => void>();
-export async function refreshCanvases() {
-  const connection = await db();
-  const records = await new Promise<CanvasRecord[]>((resolve, reject) => {
-    const request = connection.transaction("canvases").objectStore("canvases").getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  summaries = records.map(record => ({ ...record, scene: null })).sort((a, b) => b.updatedAt - a.updatedAt);
-  listeners.forEach(listener => listener());
+const emit = () => listeners.forEach(listener => listener());
+const path = (projectId: string) => `/visualization/projects/${encodeURIComponent(projectId)}/figures`;
+const record = (meta: Metadata): CanvasRecord => ({ id: meta.id, projectId: meta.project_id, revision: meta.revision, title: meta.title, updatedAt: Date.parse(meta.updated_at), scene: null });
+export const listProjects = (): Promise<Project[]> => gatewayRequest("GET", "/visualization/projects");
+export const createProject = (title: string): Promise<Project> => gatewayRequest("POST", "/visualization/projects", { id: crypto.randomUUID(), title });
+export async function readCanvas(id: string, projectId?: string): Promise<CanvasRecord> {
+  if (!projectId) return legacy.readCanvas(id);
+  const response = await gatewayRequest("GET", `${path(projectId)}/${encodeURIComponent(id)}`) as { metadata: Metadata; scene: { document: unknown } };
+  return { ...record(response.metadata), scene: JSON.stringify(response.scene.document) };
 }
-export async function saveCanvas(record: CanvasRecord) {
-  const connection = await db();
-  await new Promise<void>((resolve, reject) => {
-    const transaction = connection.transaction("canvases", "readwrite");
-    transaction.objectStore("canvases").put(record);
-    transaction.oncomplete = () => resolve();
-    transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error ?? new Error("保存已中止"));
-  });
-  await refreshCanvases();
+export async function refreshCanvases(projectId?: string) {
+  selectedProject = projectId;
+  if (!projectId) { summaries = []; emit(); return; }
+  const records = await gatewayRequest("GET", path(projectId)) as Metadata[];
+  if (selectedProject === projectId) { summaries = records.map(record); emit(); }
 }
-export async function createCanvas() {
-  const record: CanvasRecord = { id: crypto.randomUUID(), title: "未命名画布", scene: null, updatedAt: Date.now() };
-  await saveCanvas(record);
-  return record;
+export async function saveCanvas(canvas: CanvasRecord): Promise<number | undefined> {
+  if (!canvas.projectId) { await legacy.saveCanvas(canvas); return; }
+  const saved = await gatewayRequest("PUT", `${path(canvas.projectId)}/${encodeURIComponent(canvas.id)}`, { expected_revision: canvas.revision, title: canvas.title, document: JSON.parse(canvas.scene || "{}") }) as Metadata;
+  // A successful write stays successful even when the sidebar refresh fails.
+  if (selectedProject === canvas.projectId) { summaries = summaries.map(item => item.id === saved.id ? record(saved) : item); emit(); }
+  return saved.revision;
+}
+export async function createCanvas(projectId: string) {
+  const saved = await gatewayRequest("POST", path(projectId), { title: "未命名画布", format: "excalidraw/v2", document: { type: "excalidraw", version: 2, elements: [], files: {}, appState: { currentItemRoughness: 0, currentItemFontFamily: 2, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } } }) as Metadata;
+  if (selectedProject === projectId) { summaries = [record(saved), ...summaries]; emit(); }
+  return record(saved);
 }
 export function useCanvases() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => summaries);

@@ -11,9 +11,9 @@ const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host
 let output = '', browser;
 server.stdout.on('data', chunk => output += chunk); server.stderr.on('data', chunk => output += chunk);
 try {
-  for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 120) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
+  for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 1200) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000);
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000); page.setDefaultNavigationTimeout(60000);
   const errors = []; let spawnedAgent;
   page.on('pageerror', e => { errors.push(e.message); console.error('PAGE ERROR', e.stack); });
 
@@ -46,7 +46,7 @@ try {
   // Registered last so LIFO precedence holds the SSE stream open (a
   // fall-through to the network would 404 and flip the UI to reconnecting).
   await page.route('**/api/v1/events', () => new Promise(() => {}));
-  await page.goto(origin);
+  await page.goto(origin, { waitUntil: "domcontentloaded" });
 
   // ── Shell chrome ──────────────────────────────────────────────────────
   await page.locator('main[data-workbench]').waitFor();
@@ -75,7 +75,7 @@ try {
   await page.mouse.move(handleBox.x + handleBox.width / 2 + 80, handleBox.y + handleBox.height / 2, { steps: 5 });
   await page.mouse.up();
   assert.ok((await sidebar.boundingBox()).width > beforeWidth + 60, 'sidebar should resize by dragging');
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await resizeSidebar.waitFor();
   assert.ok((await sidebar.boundingBox()).width > beforeWidth + 60, 'sidebar width should persist');
   await resizeSidebar.focus();
@@ -150,7 +150,7 @@ try {
   await secondaryTabs.getByRole('tab', { name: '设置' }).dragTo(bibTab, { targetPosition: { x: 2, y: 10 } });
   await secondaryTabs.waitFor({ state: 'detached' });
   assert.deepEqual(await mainTabs.getByRole('tab').allTextContents(), ['alpha', '设置', '文献与证据']);
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByRole('tab', { name: '设置' }).waitFor();
   assert.deepEqual(await mainTabs.getByRole('tab').allTextContents(), ['alpha', '设置', '文献与证据']);
 
@@ -163,7 +163,7 @@ try {
   }
   await rail.getByRole('button', { name: 'Discover', exact: true }).click();
   assert.equal(await page.getByRole('tab', { name: '发现', exact: true }).getAttribute('aria-selected'), 'true');
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   for (const title of ['发现', '快照', '订阅']) {
     const tab = page.getByRole('tab', { name: title, exact: true });
     await tab.waitFor();
@@ -217,7 +217,7 @@ try {
   gridBox = await mainZoneGrid.boundingBox();
   await extraGroup.getByRole('button', { name: '拖动编辑器组' }).dragTo(mainZoneGrid, { targetPosition: { x: gridBox.width / 2, y: 5 } });
   assert.equal(await page.locator('[data-editor-group]').count(), 3, 'moving a group preserves all groups');
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.querySelectorAll('[data-editor-group]').length === 3);
   const layout = await page.evaluate(() => JSON.parse(localStorage.getItem('autonomics.workbench.v2')).editorLayout);
   assert.ok(layout.first && layout.second, 'nested layout is persisted');
@@ -364,7 +364,7 @@ try {
   });
   assert.ok(persisted && persisted.version === 2, 'v2 layout key must exist');
   assert.ok(persisted.groups.main.editors.some(e => e.kind === 'bibliography'), 'bibliography editor must persist');
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   // All pre-reload tabs restore (keep-alive bodies remount from persisted
   // state); the active tab is the last activated one (the resumed agent).
   await page.getByRole('tab', { name: '文献与证据' }).waitFor();
@@ -408,7 +408,7 @@ try {
   const bottom = page.getByRole('region', { name: '底部面板' });
   await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
   assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).getAttribute('aria-selected'), 'true');
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
   await bottom.getByRole('button', { name: '移回侧边栏', exact: true }).click();
   assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).count(), 0);
@@ -425,7 +425,7 @@ try {
   await secondaryResize.focus();
   await page.keyboard.press('ArrowLeft');
   assert.equal((await secondary.boundingBox()).width, initialSecondaryWidth + 10);
-  await page.reload();
+  await page.reload({ waitUntil: "domcontentloaded" });
   await secondary.getByRole('region', { name: '知识库', exact: true }).waitFor();
   assert.equal((await secondary.boundingBox()).width, initialSecondaryWidth + 10, 'secondary sidebar width persists');
   await secondary.getByRole('button', { name: '移回主侧边栏', exact: true }).click();

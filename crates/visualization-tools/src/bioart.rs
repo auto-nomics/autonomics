@@ -1,0 +1,238 @@
+//! BioArt search and version-checked insertion into shared project figures.
+use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
+use agentik_proc::tool;
+use agentik_sdk::types::{ToolResult, tools::ToolResultBlock};
+use async_trait::async_trait;
+use serde_json::json;
+use std::path::PathBuf;
+
+fn error(error: impl std::error::Error + Send + Sync + 'static) -> ToolError {
+    ToolError::ExecutionFailed {
+        source: Box::new(error),
+    }
+}
+fn missing(field: &str) -> ToolError {
+    error(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        field.to_owned(),
+    ))
+}
+#[tool(
+    name = "bioart",
+    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. replace creates a reviewable proposal while preserving layout, labels and arrow anchors; it does not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and reload the canvas after insertion."
+)]
+pub struct Input {
+    #[desc = "search | preview | insert | replace"]
+    pub action: String,
+    #[desc = "Search terms; required for search"]
+    pub query: Option<String>,
+    #[desc = "Numeric asset ID returned by search; required for insert"]
+    pub asset_id: Option<u64>,
+    #[desc = "Target project ID; required for insert"]
+    pub project_id: Option<String>,
+    #[desc = "Target figure ID; required for insert"]
+    pub figure_id: Option<String>,
+    #[desc = "Placeholder, semantic anchor or image object ID; required for replace"]
+    pub element_id: Option<String>,
+    #[desc = "Current figure revision from visualization read; required for insert"]
+    pub expected_revision: Option<i64>,
+    #[desc = "Scene x coordinate, defaults to zero"]
+    pub x: Option<f64>,
+    #[desc = "Scene y coordinate, defaults to zero"]
+    pub y: Option<f64>,
+}
+struct BioArtTool {
+    path: PathBuf,
+}
+#[async_trait]
+impl ToolFunction for BioArtTool {
+    type Input = Input;
+    async fn run(&self, input: Input) -> Result<ToolResult, ToolError> {
+        let client = bioart::BioArtClient::new().map_err(error)?;
+        if input.action == "search" {
+            let query = input.query.ok_or_else(|| missing("query required"))?;
+            if query.trim().is_empty() || query.len() > 300 {
+                return Err(missing("query must contain 1..300 characters"));
+            }
+            return Ok(ToolResult::success_json(json!(
+                client.search(query.trim(), 0, 12).await.map_err(error)?
+            )));
+        }
+        if input.action == "preview" {
+            let asset = client
+                .canvas_image(input.asset_id.ok_or_else(|| missing("asset_id required"))?)
+                .await
+                .map_err(error)?;
+            return asset_preview(asset);
+        }
+        if !matches!(input.action.as_str(), "insert" | "replace") {
+            return Err(missing("unknown bioart action"));
+        }
+        let replacement = input.action == "replace";
+        if replacement && input.element_id.is_none() {
+            return Err(missing("element_id required"));
+        }
+        let project = input
+            .project_id
+            .ok_or_else(|| missing("project_id required"))?;
+        let figure = input
+            .figure_id
+            .ok_or_else(|| missing("figure_id required"))?;
+        let revision = input
+            .expected_revision
+            .ok_or_else(|| missing("expected_revision required"))?;
+        let asset = client
+            .canvas_image(input.asset_id.ok_or_else(|| missing("asset_id required"))?)
+            .await
+            .map_err(error)?;
+        let path = self.path.clone();
+        let placement = Placement {
+            project,
+            figure,
+            revision,
+            replacement,
+            element_id: input.element_id,
+            x: input.x.unwrap_or(0.0),
+            y: input.y.unwrap_or(0.0),
+        };
+        let result = tokio::task::spawn_blocking(move || persist_asset(path, placement, asset))
+            .await
+            .map_err(error)??;
+        Ok(ToolResult::success_json(result))
+    }
+}
+pub fn registrations(path: PathBuf) -> Vec<ToolRegistration> {
+    vec![ToolRegistration::from(BioArtTool { path })]
+}
+
+fn asset_preview(asset: bioart::CanvasImage) -> Result<ToolResult, ToolError> {
+    let data = asset
+        .data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or_else(|| missing("PNG preview unavailable"))?;
+    if data.len() > 6 * 1024 * 1024 {
+        return Err(missing(
+            "asset exceeds vision transfer limit; choose a smaller asset representation",
+        ));
+    }
+    let caption = json!({"asset":asset.asset,"file":asset.file,"sha256":asset.sha256,"width":asset.width,"height":asset.height});
+    Ok(ToolResult::with_blocks(vec![
+        ToolResultBlock::text(caption.to_string()),
+        ToolResultBlock::image_base64("image/png", data),
+    ]))
+}
+struct Placement {
+    project: String,
+    figure: String,
+    revision: i64,
+    replacement: bool,
+    element_id: Option<String>,
+    x: f64,
+    y: f64,
+}
+fn persist_asset(
+    path: PathBuf,
+    placement: Placement,
+    asset: bioart::CanvasImage,
+) -> Result<serde_json::Value, ToolError> {
+    let Placement {
+        project,
+        figure,
+        revision,
+        replacement,
+        element_id,
+        x,
+        y,
+    } = placement;
+
+    let mut store = visualization::Store::open(path).map_err(error)?;
+    let metadata = store.get(&project, &figure).map_err(error)?;
+    if metadata.revision != revision {
+        return Err(error(visualization::Error::Conflict));
+    }
+    let current = store.revision(&project, &figure, revision).map_err(error)?;
+    let summary = format!("Replace placeholder with {}", asset.asset.title);
+    let image = visualization::image::Image {
+        file_id: &asset.sha256,
+        data_url: &asset.data_url,
+        width: asset.width,
+        height: asset.height,
+        provenance: json!({"source":"NIH BioArt","asset":asset.asset,"file":asset.file,"sha256":asset.sha256}),
+    };
+    if replacement {
+        let (document, element_id) = visualization::image::illustrate(
+            &current.document,
+            element_id.as_deref().unwrap(),
+            image,
+        )
+        .map_err(error)?;
+        let proposal = store
+            .propose(&project, &figure, revision, &summary, &document)
+            .map_err(error)?;
+        return Ok(
+            json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending"}),
+        );
+    }
+    let (document, element_id) =
+        visualization::image::insert(&current.document, image, x, y).map_err(error)?;
+    let saved = store
+        .save(&project, &figure, revision, &metadata.title, &document)
+        .map_err(error)?;
+    Ok::<_, ToolError>(json!({"figure":saved,"element_id":element_id}))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn downloaded_asset_becomes_a_version_checked_proposal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = visualization::Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let plan=serde_json::from_value(json!({"message":"Layout test","audience":"researchers","nodes":[{"id":"cell","label":"Cell","row":0,"column":0},{"id":"response","label":"Response","row":0,"column":1}],"edges":[{"from":"cell","to":"response"}]})).unwrap();
+        let original = visualization::sketch::compile(&plan).unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &original)
+            .unwrap();
+        let asset:bioart::CanvasImage=serde_json::from_value(json!({"asset":{"id":82,"accession":"mock","title":"Cell","description":"","source_url":"https://bioart.niaid.nih.gov/asset/82","licenses":["Public Domain"],"creators":["NIH"],"collections":[],"keywords":[],"ontology_terms":[],"created":null,"updated":null,"files":[]},"file":{"asset_id":82,"file_id":1,"format":"PNG","url":"https://bioart.niaid.nih.gov"},"sha256":"fixture","dataURL":"data:image/png;base64,abc","width":100,"height":100})).unwrap();
+        let preview = serde_json::to_value(asset_preview(asset.clone()).unwrap()).unwrap();
+        assert_eq!(preview["content"][1]["type"], "image");
+        assert!(
+            preview["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Public Domain")
+        );
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        let placement = || Placement {
+            project: "p".into(),
+            figure: figure.id.clone(),
+            revision: 1,
+            replacement: true,
+            element_id: Some("node-0".into()),
+            x: 0.0,
+            y: 0.0,
+        };
+        let result = persist_asset(path.clone(), placement(), asset.clone()).unwrap();
+        assert!(!result.to_string().contains("data:image"));
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        let proposal = store.proposals("p", &figure.id).unwrap().remove(0);
+        assert_eq!(
+            proposal.document["elements"][4]["startBinding"]["elementId"],
+            "node-0"
+        );
+        assert_eq!(
+            proposal.document["elements"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["customData"]["asset"]["licenses"][0],
+            "Public Domain"
+        );
+        store
+            .accept_proposal("p", &figure.id, &proposal.id)
+            .unwrap();
+        assert!(persist_asset(path, placement(), asset).is_err());
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
+    }
+}

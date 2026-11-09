@@ -1,0 +1,50 @@
+import { useSyncExternalStore } from "react";
+export type CanvasRecord = { id: string; title: string; scene: string | null; updatedAt: number };
+let database: Promise<IDBDatabase> | undefined;
+function db() {
+  return database ??= new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("autonomics.canvas.v1", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("canvases", { keyPath: "id" });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => { database = undefined; reject(request.error); };
+  });
+}
+export async function readCanvas(id: string): Promise<CanvasRecord> {
+  const connection = await db();
+  return new Promise((resolve, reject) => {
+    const request = connection.transaction("canvases").objectStore("canvases").get(id);
+    request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error("画布不存在"));
+    request.onerror = () => reject(request.error);
+  });
+}
+let summaries: CanvasRecord[] = [];
+const listeners = new Set<() => void>();
+export async function refreshCanvases() {
+  const connection = await db();
+  const records = await new Promise<CanvasRecord[]>((resolve, reject) => {
+    const request = connection.transaction("canvases").objectStore("canvases").getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  summaries = records.map(record => ({ ...record, scene: null })).sort((a, b) => b.updatedAt - a.updatedAt);
+  listeners.forEach(listener => listener());
+}
+export async function saveCanvas(record: CanvasRecord) {
+  const connection = await db();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = connection.transaction("canvases", "readwrite");
+    transaction.objectStore("canvases").put(record);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error ?? new Error("保存已中止"));
+  });
+  await refreshCanvases();
+}
+export async function createCanvas() {
+  const record: CanvasRecord = { id: crypto.randomUUID(), title: "未命名画布", scene: null, updatedAt: Date.now() };
+  await saveCanvas(record);
+  return record;
+}
+export function useCanvases() {
+  return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => summaries);
+}

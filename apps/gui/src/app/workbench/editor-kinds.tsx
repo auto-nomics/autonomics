@@ -1,4 +1,3 @@
-import { CanvasEditor } from "@/features/canvas/canvas-editor";
 /**
  * Editor kinds. Bibliography/config/dag are adapted feature views; the
  * agent and wiki-entry kinds are native workbench editors:
@@ -10,7 +9,7 @@ import { CanvasEditor } from "@/features/canvas/canvas-editor";
  *   bridge so wiki UI can open tabs without importing the workbench.
  */
 
-import { useCallback, useEffect } from "react";
+import { lazy, Suspense, useCallback, useEffect } from "react";
 import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
@@ -252,15 +251,20 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
 let registered = false;
 
 /** Idempotent registration; imported by the shell for side effects. */
+const LazyCanvasEditor = lazy(() => import("@/features/canvas/canvas-editor").then(module => ({ default: module.CanvasEditor })));
+function CanvasEditorBody(context: EditorContext) {
+  return <Suspense fallback={<p role="status" className="p-4 text-sm text-muted-foreground">加载画布编辑器…</p>}><LazyCanvasEditor {...context} /></Suspense>;
+}
+
 export function registerWorkbenchEditorKinds(): void {
   if (registered) return;
   registered = true;
 
   registerEditorKind({
     kind: "canvas", title: editor => (editor.state as { title?: string } | null)?.title || "未命名画布",
-    body: CanvasEditor, mount: "keep-alive", hideMode: "visibility",
+    body: CanvasEditorBody, mount: "keep-alive", hideMode: "visibility",
     resource: editor => `canvas:${editor.params.canvasId}`,
-    agentContext: editor => ({ canvasId: String(editor.params.canvasId), title: (editor.state as { title?: string } | null)?.title ?? "", objectCount: (editor.state as { objectCount?: number } | null)?.objectCount ?? 0 }),
+    agentContext: editor => ({ canvasId: String(editor.params.canvasId), projectId: String(editor.params.projectId ?? ""), revision: (editor.state as { revision?: number } | null)?.revision ?? 0, dirty: (editor.state as { dirty?: boolean } | null)?.dirty ?? false, selectedObjectIds: (editor.state as { selectedObjectIds?: string } | null)?.selectedObjectIds ?? "[]", title: (editor.state as { title?: string } | null)?.title ?? "", objectCount: (editor.state as { objectCount?: number } | null)?.objectCount ?? 0 }),
     confirmLeave: editor => {
       const state = editor.state as { dirty?: boolean; saving?: boolean } | null;
       return Boolean(state?.saving) || Boolean(state?.dirty) && !window.confirm("画布有未保存的修改，关闭将丢弃修改。继续？");

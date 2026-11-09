@@ -372,6 +372,7 @@ dependencies = [
  "base64 0.23.1",
  "bib-base",
  "bib-types",
+ "bioart",
  "chrono",
  "http-body-util",
  "opendal",
@@ -388,6 +389,8 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "visualization",
+ "visualization-tools",
  "wiki",
 ]
 
@@ -1359,6 +1362,7 @@ dependencies = [
 name = "bioart"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "regex",
  "reqwest 0.13.5",
  "scraper",
@@ -5300,6 +5304,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "vfs",
+ "visualization",
  "wiki",
 ]
 
@@ -12267,6 +12272,7 @@ dependencies = [
  "turso",
  "uuid",
  "vfs",
+ "visualization-tools",
  "wiki",
  "writing-base",
 ]
@@ -15868,12 +15874,30 @@ dependencies = [
 name = "visualization"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "rusqlite",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "uuid",
+]
+
+[[package]]
+name = "visualization-tools"
+version = "0.1.0"
+dependencies = [
+ "agentik-core",
+ "agentik-proc",
+ "agentik-sdk",
+ "async-trait",
+ "bioart",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "visualization",
 ]
 
 [[package]]

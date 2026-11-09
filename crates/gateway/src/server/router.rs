@@ -13,8 +13,8 @@ use super::auth::{self, AuthContext, bearer_or_session};
 use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
-    agents, compute, context, dev_terminal, events, gui, hpc_config, hpc_jobs, hydration, lifecycle,
-    model_config, plugin_environments, plugins, settings, skills, storage, vfs,
+    agents, compute, context, dev_terminal, events, gui, hpc_config, hpc_jobs, hydration,
+    lifecycle, model_config, plugin_environments, plugins, settings, skills, storage, vfs,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -186,15 +186,42 @@ pub fn api_router(state: GatewayState) -> Router {
             "/plugin-projects/{name}/directory/rename",
             post(plugins::rename_project_directory),
         )
-        .route("/plugin-projects/{name}/nodes", get(plugins::list_project_nodes))
-        .route("/plugin-projects/{name}/dev-files", get(plugins::dev_project_files))
-        .route("/plugin-projects/{name}/dev-file", get(plugins::read_dev_project_file).put(plugins::save_dev_project_file))
-        .route("/plugin-projects/{name}/dev-terminal", get(dev_terminal::terminal))
-        .route("/plugin-projects/{name}/dev-session", get(plugins::dev_session_status).post(plugins::dev_session_action))
-        .route("/plugin-projects/{name}/validate", post(plugins::validate_project))
-        .route("/plugin-projects/{name}/activate", post(plugins::activate_project))
-        .route("/plugin-projects/{name}/report", get(plugins::latest_report))
-        .route("/plugin-projects/{name}/nodes/{kind}/test-run", post(plugins::test_run_node))
+        .route(
+            "/plugin-projects/{name}/nodes",
+            get(plugins::list_project_nodes),
+        )
+        .route(
+            "/plugin-projects/{name}/dev-files",
+            get(plugins::dev_project_files),
+        )
+        .route(
+            "/plugin-projects/{name}/dev-file",
+            get(plugins::read_dev_project_file).put(plugins::save_dev_project_file),
+        )
+        .route(
+            "/plugin-projects/{name}/dev-terminal",
+            get(dev_terminal::terminal),
+        )
+        .route(
+            "/plugin-projects/{name}/dev-session",
+            get(plugins::dev_session_status).post(plugins::dev_session_action),
+        )
+        .route(
+            "/plugin-projects/{name}/validate",
+            post(plugins::validate_project),
+        )
+        .route(
+            "/plugin-projects/{name}/activate",
+            post(plugins::activate_project),
+        )
+        .route(
+            "/plugin-projects/{name}/report",
+            get(plugins::latest_report),
+        )
+        .route(
+            "/plugin-projects/{name}/nodes/{kind}/test-run",
+            post(plugins::test_run_node),
+        )
         // ── plugins ──
         .route("/plugins", get(plugins::list_plugins))
         .route("/plugins/{name}/uninstall", post(plugins::uninstall_plugin))
@@ -273,6 +300,7 @@ pub fn router_with_bib(
     bib_shared: bib_base::BibShared,
     wiki: Arc<wiki::service::WikiHandle>,
     deck_shared: Arc<ppt_base::DeckHandle>,
+    visualization_store: visualization::Store,
     env_token: Option<String>,
 ) -> Router {
     let auth = Arc::new(AuthContext::new(gateway_token));
@@ -310,6 +338,9 @@ pub fn router_with_bib(
         )),
         None => deck_router,
     };
+    let visualization_router = api_server::visualization::router(visualization_store).layer(
+        axum::middleware::from_fn_with_state(auth.clone(), bearer_or_session),
+    );
     let session: Router = Router::new()
         .route(
             "/api/session",
@@ -322,6 +353,7 @@ pub fn router_with_bib(
         .merge(docs)
         .merge(session)
         .nest("/api/v1/bib", bib)
+        .nest("/api/v1/visualization", visualization_router)
         .nest("/api/v1/wiki", wiki_router)
         .nest("/api/v1/deck", deck_router)
         .nest("/api/v1/deck", deck_open_router)

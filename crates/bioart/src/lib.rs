@@ -95,6 +95,17 @@ pub struct Download {
     pub sha256: String,
     pub bytes: Vec<u8>,
 }
+/// Bounded PNG and provenance, ready to embed in an editable scene.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanvasImage {
+    pub asset: Asset,
+    pub file: AssetFile,
+    pub sha256: String,
+    #[serde(rename = "dataURL")]
+    pub data_url: String,
+    pub width: u32,
+    pub height: u32,
+}
 #[derive(Clone)]
 pub struct BioArtClient {
     http: reqwest::Client,
@@ -239,6 +250,35 @@ impl BioArtClient {
         Ok(AssetDetail {
             asset,
             representations,
+        })
+    }
+    pub async fn canvas_image(&self, id: u64) -> Result<CanvasImage> {
+        use base64::Engine as _;
+        let detail = self.detail(id).await?;
+        let file = detail
+            .asset
+            .files
+            .iter()
+            .chain(
+                detail
+                    .representations
+                    .iter()
+                    .flat_map(|group| group.files.iter()),
+            )
+            .find(|file| file.format.eq_ignore_ascii_case("PNG"))
+            .ok_or_else(|| Error::Invalid("asset has no PNG representation".into()))?;
+        let download = self.download(file, 8 * 1024 * 1024).await?;
+        let (width, height) = png_dimensions(&download.bytes)?;
+        Ok(CanvasImage {
+            asset: detail.asset,
+            file: download.file,
+            sha256: download.sha256,
+            data_url: format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(download.bytes)
+            ),
+            width,
+            height,
         })
     }
     /// Downloads only the numeric upstream asset/file path, never a caller URL.
@@ -400,5 +440,31 @@ mod tests {
         assert!(page.assets[0].licenses.is_empty());
         assert_eq!(page.assets[0].files[0].format, "NEW_FORMAT");
         assert!(parse_page(&serde_json::json!({"hits":{"found":1}}), &client).is_err());
+    }
+}
+
+fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
+        return Err(Error::Protocol("invalid PNG header".into()));
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 16_000_000 {
+        return Err(Error::Invalid("PNG dimensions exceed import limit".into()));
+    }
+    Ok((width, height))
+}
+#[cfg(test)]
+mod png_tests {
+    use super::*;
+    #[test]
+    fn rejects_invalid_and_oversized_png_headers() {
+        assert!(png_dimensions(&[]).is_err());
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend(20u32.to_be_bytes());
+        bytes.extend(10u32.to_be_bytes());
+        assert_eq!(png_dimensions(&bytes).unwrap(), (20, 10));
+        bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(png_dimensions(&bytes).is_err());
     }
 }
