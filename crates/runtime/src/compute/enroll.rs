@@ -146,8 +146,12 @@ impl ComputeRegistry {
         })?;
         if !output.status.success() {
             return Err(format!(
-                "worker executable `{}` is missing or not executable on `{}`",
-                request.worker_executable, request.login_alias
+                "worker probe failed for `{}` on `{}` ({}); stdout: {}; stderr: {}",
+                request.worker_executable,
+                request.login_alias,
+                output.status,
+                String::from_utf8_lossy(&output.stdout).trim(),
+                String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -287,7 +291,7 @@ async fn deploy_worker_binary(
         ));
     }
     let ssh_command = request.ssh_command.clone().unwrap_or_else(|| "ssh".into());
-    let python = "python3".to_string();
+    let python = request.python.as_deref().unwrap_or("python3");
 
     // Ensure the destination directory exists, then stream the binary.
     let ssh = dag_core::SshTarget::new(ssh_command.clone(), &request.login_alias);
@@ -296,9 +300,11 @@ async fn deploy_worker_binary(
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "/".into());
     let mkdir = format!("mkdir -p {}", shq(&parent));
-    ssh.run_script_once(&mkdir)
+    let output = ssh
+        .run_script_once(&mkdir)
         .await
         .map_err(|error| format!("worker deploy mkdir failed: {error}"))?;
+    check_deploy_output(&output, "mkdir")?;
 
     // The ssh backend refuses a root of `/`, so the operator is rooted at
     // the destination's parent directory and the file name is the object.
@@ -317,7 +323,7 @@ async fn deploy_worker_binary(
     if root == "/" || file_name.is_empty() {
         return Err("worker deploy destination must be a file inside a directory".into());
     }
-    let operator = vfs::build_ssh_operator(&request.login_alias, &root, &python, None)
+    let operator = vfs::build_ssh_operator(&request.login_alias, &root, python, None)
         .map_err(|error| format!("worker deploy channel: {error}"))?;
     let object_path = file_name;
     let mut writer = operator
@@ -345,13 +351,30 @@ async fn deploy_worker_binary(
         .await
         .map_err(|error| format!("worker deploy commit failed: {error}"))?;
     let chmod = format!("chmod +x {}", shq(destination));
-    ssh.run_script_once(&chmod)
+    let output = ssh
+        .run_script_once(&chmod)
         .await
         .map_err(|error| format!("worker deploy chmod failed: {error}"))?;
+    check_deploy_output(&output, "chmod")?;
     tracing::info!(
         destination,
         bytes = metadata.len(),
         "deployed worker binary"
     );
+    Ok(())
+}
+
+fn check_deploy_output(output: &std::process::Output, stage: &str) -> Result<(), String> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    tracing::info!(stage, status = %output.status, stdout = %stdout.trim(), stderr = %stderr.trim(), "worker deployment remote response");
+    if !output.status.success() {
+        return Err(format!(
+            "worker deploy {stage} failed ({}); stdout: {}; stderr: {}",
+            output.status,
+            stdout.trim(),
+            stderr.trim()
+        ));
+    }
     Ok(())
 }

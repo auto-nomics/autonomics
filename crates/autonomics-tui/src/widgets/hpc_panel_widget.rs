@@ -201,6 +201,7 @@ pub struct HpcPanelState {
     pub selected_target: usize,
     /// Inline edit buffer — `Some` while a text/number field is being edited.
     pub edit_buffer: Option<String>,
+    pub edit_cursor: usize,
     /// One-line operator feedback (save result, refresh errors).
     pub status: Option<String>,
     pub loading: bool,
@@ -229,12 +230,37 @@ impl HpcPanelState {
             .is_some_and(|kind| kind == "local")
         {
             vec![0, 1, 2, 3, 4 + FIELD_DEFS.len()]
+        } else if self
+            .dashboard_fields
+            .get(2)
+            .is_some_and(|kind| kind == "ssh")
+        {
+            (0..self.dashboard_fields.len())
+                .filter(|&index| {
+                    index < 4
+                        || index == 4 + FIELD_DEFS.len()
+                        || !matches!(
+                            FIELD_DEFS[index - 4].key,
+                            "partition"
+                                | "account"
+                                | "mem_per_cpu"
+                                | "default_time"
+                                | "gpu_partition"
+                                | "gpu_cpus_per_gpu"
+                                | "gpu_qos"
+                                | "poll_interval_secs"
+                                | "apptainer_manifest"
+                                | "tools_enabled"
+                        )
+                })
+                .collect()
         } else {
             (0..self.dashboard_fields.len()).collect()
         }
     }
 
     fn dashboard_move_field(&mut self, down: bool) {
+        self.status = None;
         let visible = self.dashboard_visible_fields();
         let index = visible
             .iter()
@@ -247,6 +273,50 @@ impl HpcPanelState {
         };
         if let Some(field) = visible.get(next) {
             self.dashboard_field = *field;
+        }
+    }
+
+    fn dashboard_field_help(&self) -> &'static str {
+        match self.dashboard_field {
+            0 => "ID: letters, digits, _ or -; fixed after creation.",
+            1 => "Name: a recognizable display name.",
+            2 if self.dashboard_new => "Backend: Enter cycles Slurm, SSH and local.",
+            2 => "Backend is fixed after creation.",
+            3 => "Enabled: Enter toggles whether the target can be selected.",
+            index if index == 4 + FIELD_DEFS.len() => {
+                "Data domains: JSON array; [] means no in-place data domain."
+            }
+            index if index >= 4 => match FIELD_DEFS[index - 4].key {
+                "ssh_host" => "SSH host: a configured alias or user@host, available to the daemon.",
+                "typed_worker_config" => {
+                    "Worker profile: absolute path on the daemon; required for new Slurm targets."
+                }
+                "apptainer_manifest" => {
+                    "Image manifest: absolute daemon-side path; needed for remote container workloads."
+                }
+                "scratch_remote_dir" => {
+                    "Scratch directory on the remote host; ~/ expands to the remote home."
+                }
+                "account" | "gpu_qos" | "data_ssh_host" | "pi_ssh_host" => {
+                    "Optional: leave blank to clear."
+                }
+                _ => "Leave blank to use the default; Enter edits the value.",
+            },
+            _ => "",
+        }
+    }
+
+    pub fn paste_into_edit(&mut self, text: &str) {
+        if let Some(buffer) = &mut self.edit_buffer {
+            self.status = None;
+            let offset = buffer
+                .char_indices()
+                .nth(self.edit_cursor)
+                .map(|(i, _)| i)
+                .unwrap_or(buffer.len());
+            let clean = text.replace(['\r', '\n'], " ");
+            buffer.insert_str(offset, &clean);
+            self.edit_cursor += clean.chars().count();
         }
     }
     pub fn load_dashboard(&mut self, status: &serde_json::Value) {
@@ -338,6 +408,45 @@ impl HpcPanelState {
         self.dashboard_field = 0;
     }
 
+    fn dashboard_save_command(&mut self) -> Option<HpcPanelCommand> {
+        match self.dashboard_save() {
+            Ok(request) => {
+                self.status = None;
+                Some(HpcPanelCommand::SaveTarget(request))
+            }
+            Err(error) => {
+                self.dashboard_field = if error.contains("ID") {
+                    0
+                } else if error.contains("name") {
+                    1
+                } else if error.contains("Backend") {
+                    2
+                } else if error.contains("SSH host") {
+                    4 + FIELD_DEFS
+                        .iter()
+                        .position(|field| field.key == "ssh_host")
+                        .unwrap()
+                } else if error.contains("Worker profile") {
+                    4 + FIELD_DEFS
+                        .iter()
+                        .position(|field| field.key == "typed_worker_config")
+                        .unwrap()
+                } else if error.contains("Data domains") {
+                    4 + FIELD_DEFS.len()
+                } else {
+                    FIELD_DEFS
+                        .iter()
+                        .position(|field| error.contains(field.label))
+                        .map(|index| index + 4)
+                        .unwrap_or(self.dashboard_field)
+                };
+                self.dashboard_focus_form = true;
+                self.status = Some(error);
+                None
+            }
+        }
+    }
+
     fn dashboard_save(&self) -> Result<serde_json::Value, String> {
         let id = self.dashboard_fields[0].trim();
         let name = self.dashboard_fields[1].trim();
@@ -345,8 +454,18 @@ impl HpcPanelState {
         let enabled = self.dashboard_fields[3]
             .parse::<bool>()
             .map_err(|_| "Enabled must be true or false")?;
-        if id.is_empty() || name.is_empty() {
-            return Err("ID and name are required".into());
+        if id.is_empty() {
+            return Err("ID is required".into());
+        }
+        if name.is_empty() {
+            return Err("Target name is required".into());
+        }
+        if id.len() > 64
+            || !id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+        {
+            return Err("ID must contain 1–64 letters, digits, underscores or dashes".into());
         }
         if self.dashboard_new
             && self
@@ -406,6 +525,15 @@ impl HpcPanelState {
                 .is_none_or(|v| v.trim().is_empty())
         {
             return Err("SSH host is required".into());
+        }
+        if kind == "slurm"
+            && id != "legacy-slurm"
+            && settings
+                .get("typed_worker_config")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|path| path.trim().is_empty())
+        {
+            return Err("Worker profile is required for Slurm".into());
         }
         let backend = if kind == "local" {
             serde_json::json!({"type":"local"})
@@ -702,28 +830,82 @@ impl HpcPanelState {
     }
 
     fn handle_dashboard_key(&mut self, key: crossterm::event::KeyEvent) -> Option<HpcPanelCommand> {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if self.loading {
             return None;
         }
         if let Some(buffer) = &mut self.edit_buffer {
+            if matches!(
+                key.code,
+                KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete
+            ) {
+                self.status = None;
+            }
             match key.code {
-                KeyCode::Enter => {
+                KeyCode::Enter | KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('s')
+                    if key.code != KeyCode::Char('s') || ctrl =>
+                {
+                    let navigate = matches!(key.code, KeyCode::Tab | KeyCode::BackTab);
+                    let backwards = key.code == KeyCode::BackTab;
+                    let save = ctrl && key.code == KeyCode::Char('s');
                     self.dashboard_fields[self.dashboard_field] = std::mem::take(buffer);
                     self.edit_buffer = None;
+                    if navigate {
+                        self.dashboard_move_field(!backwards);
+                    }
+                    if save {
+                        return self.dashboard_save_command();
+                    }
                 }
                 KeyCode::Esc => self.edit_buffer = None,
-                KeyCode::Backspace => {
-                    buffer.pop();
+                KeyCode::Left => self.edit_cursor = self.edit_cursor.saturating_sub(1),
+                KeyCode::Right => {
+                    self.edit_cursor = (self.edit_cursor + 1).min(buffer.chars().count())
                 }
-                KeyCode::Char(ch) => buffer.push(ch),
+                KeyCode::Home => self.edit_cursor = 0,
+                KeyCode::End => self.edit_cursor = buffer.chars().count(),
+                KeyCode::Backspace => {
+                    if self.edit_cursor > 0 {
+                        let start = buffer
+                            .char_indices()
+                            .nth(self.edit_cursor - 1)
+                            .map(|(i, _)| i)
+                            .unwrap();
+                        let end = buffer
+                            .char_indices()
+                            .nth(self.edit_cursor)
+                            .map(|(i, _)| i)
+                            .unwrap_or(buffer.len());
+                        buffer.replace_range(start..end, "");
+                        self.edit_cursor -= 1;
+                    }
+                }
+                KeyCode::Delete => {
+                    if let Some((start, ch)) = buffer.char_indices().nth(self.edit_cursor) {
+                        buffer.replace_range(start..start + ch.len_utf8(), "");
+                    }
+                }
+                KeyCode::Char('u') if ctrl => {
+                    buffer.clear();
+                    self.edit_cursor = 0;
+                }
+                KeyCode::Char(ch) if !ctrl => {
+                    let offset = buffer
+                        .char_indices()
+                        .nth(self.edit_cursor)
+                        .map(|(i, _)| i)
+                        .unwrap_or(buffer.len());
+                    buffer.insert(offset, ch);
+                    self.edit_cursor += 1;
+                }
                 _ => {}
             }
             return None;
         }
         if self.dashboard_confirm_delete {
             self.dashboard_confirm_delete = false;
-            if key.code == KeyCode::Char('y') {
+            if key.code == KeyCode::Char('y') || (ctrl && key.code == KeyCode::Char('x')) {
                 return self
                     .dashboard_targets
                     .get(self.selected_target)
@@ -742,7 +924,10 @@ impl HpcPanelState {
                 self.load_dashboard_draft();
             }
             KeyCode::Esc => return Some(HpcPanelCommand::Close),
-            KeyCode::Tab if !self.dashboard_editing => {
+            KeyCode::Tab | KeyCode::BackTab if self.dashboard_editing => {
+                self.dashboard_move_field(key.code == KeyCode::Tab)
+            }
+            KeyCode::Tab | KeyCode::BackTab if !self.dashboard_editing => {
                 self.dashboard_focus_form = !self.dashboard_focus_form
             }
             KeyCode::Char('r') if !self.dashboard_editing => {
@@ -753,6 +938,7 @@ impl HpcPanelState {
                 self.dashboard_focus_form = self.dashboard_show_jobs;
             }
             KeyCode::Char('n') if !self.dashboard_editing => {
+                self.status = None;
                 self.dashboard_show_jobs = false;
                 self.dashboard_new = true;
                 self.dashboard_editing = true;
@@ -770,15 +956,20 @@ impl HpcPanelState {
                 self.dashboard_field = 0;
             }
             KeyCode::Char('e') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
+                self.status = None;
                 self.dashboard_show_jobs = false;
                 self.dashboard_editing = true;
                 self.dashboard_focus_form = true;
                 self.dashboard_field = 1;
             }
-            KeyCode::Char('d') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
+            KeyCode::Char('d') | KeyCode::Char('x')
+                if !self.dashboard_editing
+                    && !self.dashboard_targets.is_empty()
+                    && (key.code == KeyCode::Char('d') || ctrl) =>
+            {
                 self.dashboard_confirm_delete = true;
                 self.status = Some(format!(
-                    "Delete {}? y confirm, any other key cancels",
+                    "Delete {}? y or Ctrl+X confirms; any other key cancels",
                     self.dashboard_targets[self.selected_target]["id"]
                         .as_str()
                         .unwrap_or("?")
@@ -793,10 +984,7 @@ impl HpcPanelState {
                         HpcPanelCommand::SelectTarget(id.to_string(), self.registry_revision)
                     });
             }
-            KeyCode::Char('s') if self.dashboard_editing => match self.dashboard_save() {
-                Ok(request) => return Some(HpcPanelCommand::SaveTarget(request)),
-                Err(error) => self.status = Some(error),
-            },
+            KeyCode::Char('s') if self.dashboard_editing => return self.dashboard_save_command(),
             KeyCode::Up | KeyCode::Char('k')
                 if !self.dashboard_focus_form && !self.dashboard_editing =>
             {
@@ -834,6 +1022,13 @@ impl HpcPanelState {
                     || (!self.dashboard_new && self.dashboard_field == 2)
                 {
                     self.status = Some("ID and backend are fixed for existing targets".into());
+                } else if self.dashboard_new && self.dashboard_field == 2 {
+                    self.dashboard_fields[2] = match self.dashboard_fields[2].as_str() {
+                        "slurm" => "ssh",
+                        "ssh" => "local",
+                        _ => "slurm",
+                    }
+                    .into();
                 } else if self.dashboard_field == 3
                     || (self.dashboard_field >= 4
                         && self.dashboard_field < 4 + FIELD_DEFS.len()
@@ -843,6 +1038,7 @@ impl HpcPanelState {
                         (self.dashboard_fields[self.dashboard_field] != "true").to_string();
                 } else {
                     self.edit_buffer = Some(self.dashboard_fields[self.dashboard_field].clone());
+                    self.edit_cursor = self.dashboard_fields[self.dashboard_field].chars().count();
                 }
             }
             _ => {}
@@ -969,13 +1165,15 @@ impl HpcPanelWidget {
     fn render_dashboard(&self, area: Rect, buf: &mut Buffer, state: &HpcPanelState) {
         let theme = theme::current();
         let hint = if state.dashboard_editing {
-            "↑↓ field · Enter edit · s save · Esc cancel"
+            "Tab/↑↓ field · Enter edit/toggle · Ctrl+S save · Esc cancel"
         } else {
-            "Tab focus · ↑↓ move · n new · e edit · x select · d delete · J jobs · r refresh · Esc close"
+            "Tab focus · ↑↓ move · n new · e edit · x select · Ctrl+X delete · J jobs · r refresh · Esc close"
         };
         let mut footer = Vec::new();
         if let Some(status) = &state.status {
             footer.push(Line::from(status.clone()));
+        } else if state.dashboard_editing {
+            footer.push(Line::from(state.dashboard_field_help()));
         }
         footer.push(Line::from(hint));
         let width = usize::from(area.width.max(1));
@@ -1002,15 +1200,17 @@ impl HpcPanelWidget {
             .enumerate()
             .map(|(i, target)| {
                 let id = target["id"].as_str().unwrap_or("?");
+                let name = target["name"].as_str().unwrap_or(id);
                 let active = state.target_id.as_deref() == Some(id);
                 Line::from(Span::styled(
                     format!(
-                        "{}{}{}",
+                        "{}{} ({}){}",
                         if i == state.selected_target {
                             "> "
                         } else {
                             "  "
                         },
+                        name,
                         id,
                         if active && target["revision"].as_u64() != Some(state.target_revision) {
                             " (active: older revision)"
@@ -1075,7 +1275,22 @@ impl HpcPanelWidget {
                     FIELD_DEFS[i - 4].label
                 };
                 let display = if i == state.dashboard_field && state.edit_buffer.is_some() {
-                    format!("{}_", state.edit_buffer.as_deref().unwrap_or(""))
+                    let buffer = state.edit_buffer.as_deref().unwrap_or("");
+                    let offset = buffer
+                        .char_indices()
+                        .nth(state.edit_cursor)
+                        .map(|(index, _)| index)
+                        .unwrap_or(buffer.len());
+                    let mut marked = format!("{}▏{}", &buffer[..offset], &buffer[offset..]);
+                    let available = usize::from(form_area.width)
+                        .saturating_sub(label.chars().count() + 4)
+                        .max(1);
+                    let cursor = state.edit_cursor;
+                    if marked.chars().count() > available && cursor >= available {
+                        let start = cursor.saturating_sub(available.saturating_sub(2));
+                        marked = format!("…{}", marked.chars().skip(start).collect::<String>());
+                    }
+                    marked
                 } else if value.is_empty() {
                     "(default)".into()
                 } else {
@@ -1315,6 +1530,60 @@ impl HpcPanelWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dashboard_edits_unicode_at_cursor_and_tabs_between_fields() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"中文","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        panel.handle_key(key(KeyCode::Char('e')));
+        panel.handle_key(key(KeyCode::Enter));
+        panel.handle_key(key(KeyCode::Left));
+        panel.handle_key(key(KeyCode::Char('好')));
+        panel.paste_into_edit("X");
+        panel.handle_key(key(KeyCode::Backspace));
+        panel.handle_key(key(KeyCode::Tab));
+        assert_eq!(panel.dashboard_fields[1], "中好文");
+        assert_eq!(panel.dashboard_field, 2);
+    }
+
+    #[test]
+    fn dashboard_ctrl_save_commits_the_active_editor() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        panel.handle_key(key(KeyCode::Char('e')));
+        panel.handle_key(key(KeyCode::Enter));
+        panel.handle_key(key(KeyCode::Char('s')));
+        let command = panel.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        match command {
+            Some(HpcPanelCommand::SaveTarget(request)) => assert_eq!(request["name"], "Locals"),
+            other => panic!("expected committed save, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dashboard_backend_selection_filters_ssh_and_validates_required_fields() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        panel.handle_key(key(KeyCode::Char('n')));
+        panel.dashboard_field = 2;
+        panel.handle_key(key(KeyCode::Enter));
+        assert_eq!(panel.dashboard_fields[2], "ssh");
+        let partition = 4 + FIELD_DEFS
+            .iter()
+            .position(|f| f.key == "partition")
+            .unwrap();
+        assert!(!panel.dashboard_visible_fields().contains(&partition));
+        panel.dashboard_fields[0] = "remote".into();
+        panel.handle_key(key(KeyCode::Char('s')));
+        assert_eq!(panel.dashboard_field, 1);
+        assert!(panel.status.as_deref().unwrap().contains("name"));
+    }
 
     #[test]
     fn dashboard_edits_highlighted_target_without_changing_selection() {

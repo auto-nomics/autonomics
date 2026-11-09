@@ -591,44 +591,30 @@ impl SshWriter {
     /// Turn a broken stdin write into an error that carries the remote
     /// helper's last words (stderr) — a missing/too-old python or a
     /// syntax failure then names itself instead of "stream failed".
-    async fn stream_failure(&mut self, _error: std::io::Error) -> Error {
-        let mut detail = String::new();
-        if let Some(child) = self.child.as_mut() {
-            // Give a just-crashed helper a moment to flush its stderr.
-            if let Ok(Some(stderr)) =
-                tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                    match child.stderr.take() {
-                        Some(mut stderr) => {
-                            use tokio::io::AsyncReadExt;
-                            let mut buffer = vec![0u8; 4096];
-                            match stderr.read(&mut buffer).await {
-                                Ok(n) if n > 0 => Some(stderr),
-                                _ => None,
-                            }
-                        }
-                        None => None,
-                    }
-                })
-                .await
-            {
-                let mut buffer = String::new();
-                use tokio::io::AsyncReadExt;
-                let mut stderr = stderr;
-                let _ = stderr.read_to_string(&mut buffer).await;
-                detail = buffer.trim_ascii().to_string();
+    async fn stream_failure(&mut self, error: std::io::Error) -> Error {
+        self.stdin.take();
+        let stderr = self.child.as_mut().and_then(|child| child.stderr.take());
+        let stdout = self.stdout.take();
+        let details = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            async fn read_bounded<R: tokio::io::AsyncRead + Unpin>(stream: Option<R>) -> String {
+                let mut bytes = Vec::new();
+                if let Some(stream) = stream {
+                    let _ = stream.take(MAX_STATUS + 1).read_to_end(&mut bytes).await;
+                }
+                String::from_utf8_lossy(&bytes).trim().to_owned()
             }
+            tokio::join!(read_bounded(stderr), read_bounded(stdout))
+        })
+        .await
+        .unwrap_or_default();
+        let mut message = format!("SSH upload stream failed: {error}");
+        if !details.0.is_empty() {
+            message.push_str(&format!("; remote stderr: {}", details.0));
         }
-        if detail.is_empty() {
-            failure(
-                ErrorKind::Unexpected,
-                "SSH upload stream failed (remote helper exited)",
-            )
-        } else {
-            Error::new(
-                ErrorKind::Unexpected,
-                format!("SSH upload stream failed; remote helper stderr: {detail}"),
-            )
+        if !details.1.is_empty() {
+            message.push_str(&format!("; remote response: {}", details.1));
         }
+        Error::new(ErrorKind::Unexpected, message)
     }
 
     async fn collect_status_of(child: &mut Child, stdout: Option<ChildStdout>) -> Result<Value> {
