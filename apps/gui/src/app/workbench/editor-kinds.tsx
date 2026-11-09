@@ -1,3 +1,4 @@
+import { CanvasEditor } from "@/features/canvas/canvas-editor";
 /**
  * Editor kinds. Bibliography/config/dag are adapted feature views; the
  * agent and wiki-entry kinds are native workbench editors:
@@ -254,6 +255,17 @@ let registered = false;
 export function registerWorkbenchEditorKinds(): void {
   if (registered) return;
   registered = true;
+
+  registerEditorKind({
+    kind: "canvas", title: editor => (editor.state as { title?: string } | null)?.title || "未命名画布",
+    body: CanvasEditor, mount: "keep-alive", hideMode: "visibility",
+    resource: editor => `canvas:${editor.params.canvasId}`,
+    agentContext: editor => ({ canvasId: String(editor.params.canvasId), title: (editor.state as { title?: string } | null)?.title ?? "", objectCount: (editor.state as { objectCount?: number } | null)?.objectCount ?? 0 }),
+    confirmLeave: editor => {
+      const state = editor.state as { dirty?: boolean; saving?: boolean } | null;
+      return Boolean(state?.saving) || Boolean(state?.dirty) && !window.confirm("画布有未保存的修改，关闭将丢弃修改。继续？");
+    },
+  });
 
   // Wiki opener bridge: feature code calls openWikiEntry, we open tabs.
   registerWikiOpener((entryId, options) => {

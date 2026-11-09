@@ -73,7 +73,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    assetsInlineLimit: (filePath) => filePath.includes("codicon.ttf") ? true : undefined,
+    assetsInlineLimit: (filePath) => filePath.includes("codicon.ttf") || /\.woff2?$/.test(filePath) ? true : undefined,
     rollupOptions: {
       output: {
         inlineDynamicImports: true,

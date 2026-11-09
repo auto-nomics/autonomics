@@ -47,6 +47,8 @@ members = [
   "crates/vfs",
   "crates/hpc-tools",
   "crates/biofusion",
+  "crates/bioart",
+  "crates/visualization",
   "crates/alphafold",
   "crates/interpro",
   "crates/pubchem",

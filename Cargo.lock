@@ -1356,6 +1356,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bioart"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "reqwest 0.13.5",
+ "scraper",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "biofusion"
 version = "0.1.0"
 dependencies = [
@@ -15846,6 +15862,18 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "visualization"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
