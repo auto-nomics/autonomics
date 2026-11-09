@@ -2,7 +2,7 @@
  * HPC/计算目标 API 封装。所有调用走统一网关请求(会话 Cookie 鉴权,
  * token 不进前端)。
  */
-import { gatewayRequest } from "@/gateway";
+import { gatewayEnrollment, gatewayRequest } from "@/gateway";
 import type {
   ComputeRegistryState,
   DataDomain,
@@ -41,7 +41,7 @@ export async function saveComputeTarget(
   });
 }
 
-export async function enrollComputeTarget(request: {
+export type EnrollComputeRequest = {
   expected_revision: number;
   id: string;
   name?: string;
@@ -53,8 +53,18 @@ export async function enrollComputeTarget(request: {
   account?: string;
   scratch_dir?: string;
   select: boolean;
-}): Promise<ComputeRegistryState> {
-  return gatewayRequest("POST", "/compute/enroll", request);
+  deploy_worker?: string;
+  python?: string;
+  ssh_command?: string;
+};
+
+export type EnrollmentEvent = { stage: string; message: string; uploaded_bytes?: number; total_bytes?: number };
+
+export async function enrollComputeTarget(
+  request: EnrollComputeRequest,
+  onProgress: (event: EnrollmentEvent) => void,
+): Promise<ComputeRegistryState> {
+  return gatewayEnrollment(request, onProgress);
 }
 
 export async function addComputeDataSource(

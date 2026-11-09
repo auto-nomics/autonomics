@@ -563,7 +563,9 @@ impl App {
         }
 
         // Position cursor only when there's an active agent leaf.
-        if !self.state.sessions.is_empty() {
+        if !self.state.sessions.is_empty()
+            && self.state.active_tab_state().input_mode == crate::state::InputMode::Input
+        {
             if let Some((cx, cy)) = self.state.active_tab_state_mut().input.last_cursor_pos() {
                 frame.set_cursor_position(ratatui::layout::Position { x: cx, y: cy });
             }

@@ -5,10 +5,13 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GatewayHttpError } from "@/gateway";
+import { startEnrollment, useEnrollmentRun } from "./enrollment";
+import { EnrollmentProgressPanel } from "./enrollment-progress";
+import { Field as FormField, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import {
   addComputeDataSource,
   checkComputeTarget,
-  enrollComputeTarget,
   fetchComputeReadiness,
   fetchComputeStatus,
   saveComputeTarget,
@@ -97,14 +100,16 @@ function Field({
 export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) {
   const [status, setStatus] = useState<ComputeStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [localBusy, setBusy] = useState<string | null>(null);
+  const enrollment = useEnrollmentRun();
+  const busy = localBusy ?? (enrollment?.status === "running" ? "enroll" : null);
   const [notice, setNotice] = useState<Status>(null);
   const [checkReport, setCheckReport] = useState<
     Record<string, ReadinessReport>
   >({});
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [draft, setDraft] = useState<TargetDraft | null>(null);
-  const [enroll, setEnroll] = useState({ id: "", name: "", login: "", worker: "", dataAlias: "", dataRoot: "", partition: "", account: "", scratch: "", select: true });
+  const [enroll, setEnroll] = useState({ id: "", name: "", login: "", worker: "", dataAlias: "", dataRoot: "", partition: "", account: "", scratch: "", deploy: "", python: "python3", sshCommand: "", select: true });
   const [showEnroll, setShowEnroll] = useState(false);
   const [sourceDraft, setSourceDraft] = useState({
     id: "",
@@ -187,7 +192,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
   return (
     <div className={embedded ? "" : "min-h-0 flex-1 overflow-auto"}>
       <div className="mx-auto grid max-w-4xl gap-4 p-4 pb-12">
-        <header className="flex items-center justify-between gap-2">
+        <header className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold">计算目标</h2>
             <p className="text-xs text-muted-foreground">
@@ -235,6 +240,8 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
           </div>
         ) : null}
 
+        {enrollment ? <EnrollmentProgressPanel run={enrollment} /> : null}
+
         {readiness ? (
           <section className="rounded-lg border p-3 text-xs">
             <div className="mb-1 flex items-center gap-2">
@@ -266,9 +273,9 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
         ) : null}
 
         <section className="rounded-lg border">
-          <div className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-sm font-medium">目标</span>
-            <Button size="sm" variant="outline" onClick={() => setShowEnroll((value) => !value)}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="shrink-0 text-sm font-medium">目标</span>
+            <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setShowEnroll((value) => !value)}>
               注册 Slurm 集群
             </Button>
             <Button
@@ -389,32 +396,64 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
         {showEnroll ? (
           <section className="rounded-lg border p-3">
             <h3 className="mb-2 text-sm font-medium">注册 Slurm 集群</h3>
-            <p className="mb-3 text-xs text-muted-foreground">通过登录节点检查 worker；填写数据主机和共享目录可同时建立数据挂载。注册分步执行，失败时已完成的步骤会保留。</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {([
-                ["id", "标识", true], ["name", "名称", false],
-                ["login", "登录节点 SSH 别名", true], ["worker", "远端 worker 可执行文件绝对路径", true],
-                ["dataAlias", "数据节点 SSH 别名（与共享目录同时填写）", false], ["dataRoot", "共享目录绝对路径", false],
-                ["partition", "分区（可选）", false], ["account", "账户（可选）", false], ["scratch", "Scratch 绝对路径（可选）", false],
-              ] as const).map(([key, label, required]) => (
-                <Field key={key} label={label}>
-                  <input className={inputClass} required={required} value={enroll[key]} onChange={(event) => setEnroll({ ...enroll, [key]: event.target.value })} />
-                </Field>
-              ))}
-              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enroll.select} onChange={(event) => setEnroll({ ...enroll, select: event.target.checked })} />注册后选择此目标</label>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" disabled={busy !== null || !enroll.id.trim() || !enroll.login.trim() || !enroll.worker.trim() || Boolean(enroll.dataAlias.trim()) !== Boolean(enroll.dataRoot.trim())} onClick={() => void run("enroll", async () => {
+            <p className="mb-3 text-xs text-muted-foreground">
+              检查登录连接、安装或校验 worker，然后保存计算目标。安装过程会在上方实时显示，失败时保留日志。
+            </p>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              if (busy !== null) return;
+              void run("enroll", async () => {
                 try {
-                  await enrollComputeTarget({ expected_revision: revision, id: enroll.id.trim(), login_alias: enroll.login.trim(), worker_executable: enroll.worker.trim(), name: enroll.name.trim() || undefined, data_alias: enroll.dataAlias.trim() || undefined, data_root: enroll.dataRoot.trim() || undefined, partition: enroll.partition.trim() || undefined, account: enroll.account.trim() || undefined, scratch_dir: enroll.scratch.trim() || undefined, select: enroll.select });
+                  await startEnrollment({
+                    expected_revision: revision, id: enroll.id.trim(), login_alias: enroll.login.trim(),
+                    worker_executable: enroll.worker.trim(), name: enroll.name.trim() || undefined,
+                    data_alias: enroll.dataAlias.trim() || undefined, data_root: enroll.dataRoot.trim() || undefined,
+                    partition: enroll.partition.trim() || undefined, account: enroll.account.trim() || undefined,
+                    scratch_dir: enroll.scratch.trim() || undefined, select: enroll.select,
+                    deploy_worker: enroll.deploy.trim() || undefined, python: enroll.python.trim() || undefined,
+                    ssh_command: enroll.sshCommand.trim() || undefined,
+                  });
                   setShowEnroll(false);
-                  setNotice({ kind: "ok", text: "集群已注册。" });
-                } finally {
-                  await reload();
-                }
-              })}>注册</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowEnroll(false)}>取消</Button>
-            </div>
+                  setNotice({ kind: "ok", text: "集群已注册，安装记录已保留。" });
+                } finally { await reload(); }
+              });
+            }}>
+              <fieldset disabled={busy !== null}>
+                <legend className="sr-only">集群连接与安装配置</legend>
+                <FieldGroup className="grid gap-3 sm:grid-cols-2">
+                  {([
+                    ["id", "标识", true, ""], ["name", "名称", false, ""],
+                    ["login", "登录节点 SSH 别名", true, ""],
+                    ["worker", "远端 worker 路径", true, "集群上的可执行文件绝对路径。"],
+                    ["deploy", "安装包路径（可选）", false, "gateway 所在主机上的 autonomics-worker 绝对路径（target/release/autonomics-worker）；留空则校验远端已有 worker。"],
+                    ["python", "远端 Python", false, "上传助手使用的 Python 3.7+；可填写集群上的解释器绝对路径。"],
+                    ["dataAlias", "数据节点 SSH 别名", false, "与共享目录同时填写。"],
+                    ["dataRoot", "共享目录绝对路径", false, ""],
+                    ["partition", "分区（可选）", false, ""], ["account", "账户（可选）", false, ""],
+                    ["scratch", "Scratch 绝对路径（可选）", false, ""],
+                    ["sshCommand", "SSH 程序（可选）", false, "留空使用站点配置。"],
+                  ] as const).map(([key, label, required, hint]) => (
+                    <FormField key={key}>
+                      <FieldLabel htmlFor={`enroll-${key}`}>{label}</FieldLabel>
+                      <Input id={`enroll-${key}`} required={required} value={enroll[key]}
+                        onChange={(event) => setEnroll({ ...enroll, [key]: event.target.value })} />
+                      {hint ? <FieldDescription>{hint}</FieldDescription> : null}
+                    </FormField>
+                  ))}
+                  <FormField orientation="horizontal">
+                    <input id="enroll-select" type="checkbox" checked={enroll.select}
+                      onChange={(event) => setEnroll({ ...enroll, select: event.target.checked })} />
+                    <FieldLabel htmlFor="enroll-select">注册后选择此目标</FieldLabel>
+                  </FormField>
+                </FieldGroup>
+              </fieldset>
+              <div className="mt-3 flex gap-2">
+                <Button type="submit" size="sm" disabled={busy !== null || !enroll.id.trim() || !enroll.login.trim() || !enroll.worker.trim() || Boolean(enroll.dataAlias.trim()) !== Boolean(enroll.dataRoot.trim())}>
+                  {busy === "enroll" ? "安装进行中…" : enroll.deploy.trim() ? "安装并注册" : "校验并注册"}
+                </Button>
+                <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => setShowEnroll(false)}>取消</Button>
+              </div>
+            </form>
           </section>
         ) : null}
 
@@ -447,7 +486,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
         ) : null}
 
         <section className="rounded-lg border">
-          <div className="flex items-center justify-between border-b px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
             <span className="text-sm font-medium">数据源</span>
             <Button
               size="sm"

@@ -9,6 +9,7 @@
     "build:gateway": "npm run build && node scripts/sync-gateway-dist.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420 --strictPort",
     "tauri": "tauri",
+    "test:compute-install": "node tests/compute-install.mjs",
     "test:pdf": "node tests/pdf-reader.mjs",
     "test:login": "node tests/login-flow.mjs",
     "test:wiki": "node tests/wiki-siyuan-modes.mjs",

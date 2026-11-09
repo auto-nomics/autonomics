@@ -21,6 +21,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             gateway::probe,
             gateway::api,
+            gateway::enroll_compute,
             gateway::cancel_api_request,
             gateway::start_events,
             gateway::frontend_ready,

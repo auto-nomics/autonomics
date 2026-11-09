@@ -23,7 +23,7 @@ tempfile = "3"
 container-runtime = { path = "../container-runtime" }
 data-catalog = { path = "../data-catalog" }
 dag-core = { path = "../dag-core" }
-nodes-io = { path = "../node-bundles/nodes-io" }
+nodes-io = { path = "../node-bundles/nodes-io", default-features = false }
 
 [features]
 official-r-reference = []

@@ -258,6 +258,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         status_bar.render(layout[3], buf);
 
         if !show_composer {
+            ts.input.clear_cursor_pos();
             return;
         }
 
@@ -454,6 +455,32 @@ fn preview_line(message: &str, width: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composer_cursor_follows_input_and_browse_mode() {
+        let display = DisplaySettings::default();
+        let widget = AgentLeaf {
+            agent_path: None,
+            active_model: None,
+            context_window: None,
+            reasoning_effort: None,
+            display: &display,
+        };
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buffer = Buffer::empty(area);
+        let mut state = AgentTabState::default();
+        state.input_mode = InputMode::Input;
+        widget.render_ref(area, &mut buffer, &mut state);
+        assert!(state.input.last_cursor_pos().is_some());
+
+        state.input_mode = InputMode::Browse;
+        widget.render_ref(area, &mut buffer, &mut state);
+        assert_eq!(state.input.last_cursor_pos(), None);
+
+        state.input_mode = InputMode::Input;
+        widget.render_ref(area, &mut buffer, &mut state);
+        assert!(state.input.last_cursor_pos().is_some());
+    }
 
     #[test]
     fn visible_line_collector_returns_only_the_viewport() {

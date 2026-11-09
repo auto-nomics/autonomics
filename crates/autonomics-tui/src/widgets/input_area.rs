@@ -176,6 +176,10 @@ impl InputArea {
     pub fn last_cursor_pos(&self) -> Option<(u16, u16)> {
         self.last_cursor_pos
     }
+
+    pub(crate) fn clear_cursor_pos(&mut self) {
+        self.last_cursor_pos = None;
+    }
 }
 
 impl Default for InputArea {
@@ -217,6 +221,8 @@ impl<'a> InputWidget<'a> {
         buf: &mut ratatui::prelude::Buffer,
         state: &mut InputWidgetState<'_>,
     ) {
+        // A zero-sized or non-editable input cannot expose an old cursor.
+        state.input.clear_cursor_pos();
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -243,10 +249,6 @@ impl<'a> InputWidget<'a> {
 
         // The hardware caret only shows when the composer is actively
         // editable (Input mode).
-        if !self.editable {
-            state.input.last_cursor_pos = None;
-        }
-
         // Render placeholder directly when textarea is empty (xAI textarea
         // has no built-in placeholder support). The cursor sits at the
         // start of the editable row so the hardware caret appears over the

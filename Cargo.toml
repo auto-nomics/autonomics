@@ -24,6 +24,7 @@ members = [
   "crates/node-bundles/nodes-genetics",
   "crates/node-bundles/nodes-mice",
   "apps/autonomics",
+  "apps/autonomics-worker",
   "crates/autonomics-tui",
   "apps/gui/src-tauri",
   "crates/opengwas",
@@ -242,3 +243,7 @@ opt-level = 3
 # codegen-units = 1
 opt-level = 3
 # strip = "symbols"
+
+# The node-side artifact is distributed independently.
+[profile.release.package.autonomics-worker]
+strip = "symbols"

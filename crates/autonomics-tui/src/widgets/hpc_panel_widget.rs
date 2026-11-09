@@ -220,9 +220,17 @@ pub struct HpcPanelState {
     pub dashboard_field: usize,
     pub dashboard_pending_id: Option<String>,
     pub dashboard_show_jobs: bool,
+    pub repair_events: Vec<String>,
+    pub repair_show_events: bool,
 }
 
 impl HpcPanelState {
+    pub fn push_repair_event(&mut self, message: String) {
+        if self.repair_events.len() >= 200 { self.repair_events.remove(0); }
+        let mut bounded: String = message.chars().take(8192).collect();
+        if bounded.len() < message.len() { bounded.push_str("… [truncated]"); }
+        self.repair_events.push(bounded);
+    }
     fn dashboard_visible_fields(&self) -> Vec<usize> {
         if self
             .dashboard_fields
@@ -320,6 +328,9 @@ impl HpcPanelState {
         }
     }
     pub fn load_dashboard(&mut self, status: &serde_json::Value) {
+        if self.tab == HpcTab::Config {
+            self.tab = HpcTab::Targets;
+        }
         let registry = &status["state"];
         let old_id = self.dashboard_pending_id.take().or_else(|| {
             self.dashboard_targets
@@ -370,6 +381,8 @@ impl HpcPanelState {
         self.dashboard_editing = false;
         self.dashboard_new = false;
         self.dashboard_confirm_delete = false;
+        self.dashboard_focus_form = self.tab == HpcTab::Jobs;
+        self.dashboard_show_jobs = self.tab == HpcTab::Jobs;
         self.load_dashboard_draft();
     }
 
@@ -696,9 +709,11 @@ pub enum HpcPanelCommand {
     SaveProfile(serde_json::Value),
     SelectTarget(String, u64),
     SaveTarget(serde_json::Value),
+    RepairWorker(serde_json::Value),
     DeleteTarget(String, u64),
     /// Re-fetch the monitor inventory.
-    RefreshJobs,
+    /// Reload gateway registry and monitor records without probing the cluster.
+    RefreshSnapshot,
 }
 
 impl HpcPanelState {
@@ -744,7 +759,7 @@ impl HpcPanelState {
                 };
                 None
             }
-            KeyCode::Char('r') => Some(HpcPanelCommand::RefreshJobs),
+            KeyCode::Char('r') => Some(HpcPanelCommand::RefreshSnapshot),
             KeyCode::Up | KeyCode::Char('k') => {
                 match self.tab {
                     HpcTab::Config => {
@@ -918,6 +933,9 @@ impl HpcPanelState {
             return None;
         }
         match key.code {
+            KeyCode::Esc if self.repair_show_events => {
+                self.repair_show_events = false;
+            }
             KeyCode::Esc if self.dashboard_editing => {
                 self.dashboard_editing = false;
                 self.dashboard_new = false;
@@ -928,18 +946,51 @@ impl HpcPanelState {
                 self.dashboard_move_field(key.code == KeyCode::Tab)
             }
             KeyCode::Tab | KeyCode::BackTab if !self.dashboard_editing => {
-                self.dashboard_focus_form = !self.dashboard_focus_form
+                self.repair_show_events = false;
+                self.tab = if self.tab == HpcTab::Jobs {
+                    HpcTab::Targets
+                } else {
+                    HpcTab::Jobs
+                };
+                self.dashboard_show_jobs = self.tab == HpcTab::Jobs;
+                self.dashboard_focus_form = self.dashboard_show_jobs;
+            }
+            KeyCode::Left | KeyCode::Char('h')
+                if self.tab == HpcTab::Targets && !self.dashboard_editing =>
+            {
+                self.dashboard_focus_form = false
+            }
+            KeyCode::Right | KeyCode::Char('l')
+                if self.tab == HpcTab::Targets && !self.dashboard_editing =>
+            {
+                self.dashboard_focus_form = true
             }
             KeyCode::Char('r') if !self.dashboard_editing => {
-                return Some(HpcPanelCommand::RefreshJobs);
+                return Some(HpcPanelCommand::RefreshSnapshot);
+            }
+            KeyCode::Char('w') if !self.dashboard_editing && self.tab == HpcTab::Targets => {
+                if self.dashboard_targets.get(self.selected_target).and_then(|t| t["backend"]["type"].as_str()) != Some("slurm") {
+                    self.status = Some("Select a Slurm target to repair its worker".into());
+                } else {
+                    let id = self.dashboard_targets[self.selected_target]["id"].as_str().unwrap_or_default();
+                    return Some(HpcPanelCommand::RepairWorker(serde_json::json!({"expected_revision": self.registry_revision, "target_id": id})));
+                }
             }
             KeyCode::Char('J') if !self.dashboard_editing => {
+                self.repair_show_events = false;
                 self.dashboard_show_jobs = !self.dashboard_show_jobs;
+                self.tab = if self.dashboard_show_jobs {
+                    HpcTab::Jobs
+                } else {
+                    HpcTab::Targets
+                };
                 self.dashboard_focus_form = self.dashboard_show_jobs;
             }
             KeyCode::Char('n') if !self.dashboard_editing => {
+                self.repair_show_events = false;
                 self.status = None;
                 self.dashboard_show_jobs = false;
+                self.tab = HpcTab::Targets;
                 self.dashboard_new = true;
                 self.dashboard_editing = true;
                 self.dashboard_focus_form = true;
@@ -956,8 +1007,10 @@ impl HpcPanelState {
                 self.dashboard_field = 0;
             }
             KeyCode::Char('e') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
+                self.repair_show_events = false;
                 self.status = None;
                 self.dashboard_show_jobs = false;
+                self.tab = HpcTab::Targets;
                 self.dashboard_editing = true;
                 self.dashboard_focus_form = true;
                 self.dashboard_field = 1;
@@ -1129,9 +1182,9 @@ impl StatefulWidgetRef for HpcPanelWidget {
         // Keymap hint — the panel's persistent footer.
         footer.push(Line::from(Span::styled(
             if state.tab == HpcTab::Targets {
-                "Enter select target · Tab switch · r refresh · Esc close"
+                "Enter select target · Tab switch · r reload gateway snapshot · Esc close"
             } else {
-                "Tab switch · r refresh · Esc close"
+                "Tab switch · r reload gateway snapshot · Esc close"
             },
             Style::default().fg(theme.text_faint),
         )));
@@ -1166,8 +1219,10 @@ impl HpcPanelWidget {
         let theme = theme::current();
         let hint = if state.dashboard_editing {
             "Tab/↑↓ field · Enter edit/toggle · Ctrl+S save · Esc cancel"
+        } else if state.tab == HpcTab::Jobs {
+            "Tab switch · ↑↓ jobs · r reload gateway snapshot · Esc close"
         } else {
-            "Tab focus · ↑↓ move · n new · e edit · x select · Ctrl+X delete · J jobs · r refresh · Esc close"
+            "Tab switch · ↑↓ move · n new · e edit · w repair worker · x select · Ctrl+X delete · r reload snapshot · Esc close"
         };
         let mut footer = Vec::new();
         if let Some(status) = &state.status {
@@ -1182,10 +1237,48 @@ impl HpcPanelWidget {
             .map(|line| line.width().max(1).div_ceil(width))
             .sum::<usize>()
             .min(usize::from(area.height)) as u16;
-        let rows =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).split(area);
-        let columns = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
-            .split(rows[0]);
+        let rows = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Min(0),
+            Constraint::Length(footer_height),
+        ])
+        .split(area);
+        let tab = |label: &str, active: bool| {
+            Span::styled(
+                format!(" {label} "),
+                if active {
+                    Style::default()
+                        .fg(theme.accent_alt)
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(theme.text_faint)
+                },
+            )
+        };
+        Paragraph::new(vec![
+            Line::from(vec![
+                tab("Targets", state.tab == HpcTab::Targets),
+                tab("Jobs", state.tab == HpcTab::Jobs),
+            ]),
+            Line::from(Span::styled(
+                "─".repeat(usize::from(rows[0].width)),
+                Style::default().fg(theme.text_faint),
+            )),
+        ])
+        .render(rows[0], buf);
+        let empty = Rect {
+            width: 0,
+            height: 0,
+            ..rows[1]
+        };
+        let columns = if state.tab == HpcTab::Targets {
+            let split =
+                Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
+                    .split(rows[1]);
+            [split[0], split[1]]
+        } else {
+            [empty, rows[1]]
+        };
         let left = Block::default()
             .title(" Compute targets ")
             .borders(Borders::ALL)
@@ -1241,7 +1334,9 @@ impl HpcPanelWidget {
             .render(list_area, buf);
 
         let right = Block::default()
-            .title(if state.dashboard_show_jobs {
+            .title(if state.repair_show_events {
+                " Connection recovery events "
+            } else if state.dashboard_show_jobs {
                 " Jobs "
             } else if state.dashboard_new {
                 " New target "
@@ -1259,7 +1354,24 @@ impl HpcPanelWidget {
         let form_area = right.inner(columns[1]);
         right.render(columns[1], buf);
         let mut form: Vec<Line> = Vec::new();
-        if state.dashboard_show_jobs {
+        if state.repair_show_events {
+            for event in &state.repair_events {
+                // Escape controls so remote output cannot affect terminal rendering.
+                let clean: String = event.chars().flat_map(|ch| ch.escape_debug()).collect();
+                let mut line = String::new();
+                let mut width = 0;
+                for ch in clean.chars() {
+                    let size = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if width + size > usize::from(form_area.width.max(1)) && !line.is_empty() {
+                        form.push(Line::from(std::mem::take(&mut line)));
+                        width = 0;
+                    }
+                    line.push(ch);
+                    width += size;
+                }
+                form.push(Line::from(line));
+            }
+        } else if state.dashboard_show_jobs {
             self.render_jobs(&mut form, state, &theme);
         } else if state.dashboard_fields.is_empty() {
             form.push(Line::from("Press n to add a target"));
@@ -1274,7 +1386,7 @@ impl HpcPanelWidget {
                 } else {
                     FIELD_DEFS[i - 4].label
                 };
-                let display = if i == state.dashboard_field && state.edit_buffer.is_some() {
+                let display = if state.dashboard_editing && i == state.dashboard_field && state.edit_buffer.is_some() {
                     let buffer = state.edit_buffer.as_deref().unwrap_or("");
                     let offset = buffer
                         .char_indices()
@@ -1299,7 +1411,7 @@ impl HpcPanelWidget {
                 form.push(Line::from(Span::styled(
                     format!(
                         "{}{}: {}",
-                        if state.dashboard_editing && i == state.dashboard_field {
+                        if state.dashboard_focus_form && i == state.dashboard_field {
                             "> "
                         } else {
                             "  "
@@ -1307,15 +1419,19 @@ impl HpcPanelWidget {
                         label,
                         display
                     ),
-                    Style::default().fg(if state.dashboard_editing && i == state.dashboard_field {
-                        theme.accent_alt
-                    } else {
-                        theme.text
-                    }),
+                    Style::default().fg(
+                        if state.dashboard_focus_form && i == state.dashboard_field {
+                            theme.accent_alt
+                        } else {
+                            theme.text
+                        },
+                    ),
                 )));
             }
         }
-        let scroll = if state.dashboard_show_jobs {
+        let scroll = if state.repair_show_events {
+            form.len().saturating_sub(usize::from(form_area.height)).min(u16::MAX as usize) as u16
+        } else if state.dashboard_show_jobs {
             state
                 .selected_job
                 .saturating_sub(usize::from(form_area.height.saturating_sub(1))) as u16
@@ -1335,7 +1451,8 @@ impl HpcPanelWidget {
         Paragraph::new(footer)
             .style(Style::default().fg(theme.text_faint))
             .wrap(ratatui::widgets::Wrap { trim: false })
-            .render(rows[1], buf);
+            .render(rows[2], buf);
+
     }
     fn render_config(
         &self,
@@ -1532,6 +1649,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_repair_starts_without_configuration() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":7,"policy":{"target_id":"Csu"},"targets":[{"id":"Csu","name":"Csu","revision":1,"enabled":true,"backend":{"type":"slurm","settings":{}}}]}}));
+        match panel.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE)) {
+            Some(HpcPanelCommand::RepairWorker(request)) => {
+                assert_eq!(request, serde_json::json!({"target_id":"Csu", "expected_revision":7}));
+                assert!(!panel.dashboard_editing);
+                assert!(panel.edit_buffer.is_none());
+            }
+            _ => panic!("expected immediate worker repair request"),
+        }
+    }
+
+    #[test]
+    fn repair_events_render_in_dashboard() {
+        let mut panel = HpcPanelState::default();
+        panel.dashboard_ready = true;
+        panel.tab = HpcTab::Targets;
+        panel.repair_show_events = true;
+        panel.push_repair_event("[authenticate] stdout: connected".into());
+        panel.push_repair_event("[upload] 16/32 MiB".into());
+        let area = Rect::new(0, 0, 120, 30);
+        let mut buffer = Buffer::empty(area);
+        HpcPanelWidget.render_ref(area, &mut buffer, &mut panel);
+        let rendered = (0..area.height).map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(rendered.contains("Connection recovery events"));
+        assert!(rendered.contains("stdout: connected"));
+        assert!(rendered.contains("16/32 MiB"));
+    }
+
+    #[test]
     fn dashboard_edits_unicode_at_cursor_and_tabs_between_fields() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
@@ -1622,7 +1771,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_renders_columns_and_bottom_hints() {
+    fn dashboard_renders_tabs_and_bottom_hints() {
         let mut panel = HpcPanelState::default();
         panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
         let area = Rect::new(0, 0, 80, 20);
@@ -1633,10 +1782,36 @@ mod tests {
                 .map(|x| buffer[(x, y)].symbol().to_owned())
                 .collect::<String>()
         };
-        assert!(row(0).contains("Compute targets"));
-        assert!(row(0).contains("Target details"));
-        assert!(row(1).contains("local"));
+        assert!(!row(0).contains("Compute settings"));
+        assert!(row(0).contains("Jobs"));
+        assert!(row(0).contains("Targets"));
+        assert!(row(1).contains('─'));
+        assert!(row(2).contains("Compute targets"));
+        assert!(row(2).contains("Target details"));
+        assert!(row(3).contains("local"));
         assert!(row(19).contains("Esc close"));
+    }
+
+    #[test]
+    fn dashboard_tabs_navigate_and_edit_target_in_place() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(panel.tab, HpcTab::Targets);
+        panel.handle_key(key(KeyCode::Right));
+        assert!(panel.dashboard_focus_form);
+        panel.handle_key(key(KeyCode::Left));
+        assert!(!panel.dashboard_focus_form);
+        panel.handle_key(key(KeyCode::Tab));
+        assert_eq!(panel.tab, HpcTab::Jobs);
+        panel.handle_key(key(KeyCode::Tab));
+        assert_eq!(panel.tab, HpcTab::Targets);
+        panel.handle_key(key(KeyCode::Char('e')));
+        assert_eq!(panel.tab, HpcTab::Targets);
+        assert!(panel.dashboard_editing);
+        panel.handle_key(key(KeyCode::Tab));
+        assert_eq!(panel.tab, HpcTab::Targets);
     }
 
     #[test]

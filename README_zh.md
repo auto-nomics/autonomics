@@ -118,6 +118,8 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 
 ## DAG 调度与容器执行
 
+计算节点使用独立的 `autonomics-worker`。通过 `cargo build --release -p autonomics-worker` 单独构建，并将其绝对路径传给 `compute enroll --deploy`。worker 复用分析引擎，文献与写作节点留在 coordinator 执行。构建、版本校验和安装方式见[独立 worker 部署说明](docs/engineering/analysis-worker.md)。
+
 两套机制让系统在生物医学工作中可信：
 
 - **基于 DAG 的调度。** 科研请求由 Researcher 解析，规划为类型化、经 JSON Schema 校验的节点 DAG，经同一注册表装配。同一个 DAG 可以混合快速的进程内 DataFusion / Arrow 变换与重型外部容器；调度器经可插拔执行器契约（`local`、`process`，以及带 artifact store 的协调端 `remote` 执行器，为将来接入批调度器留好位置）异步分发任务，并保留输出以供快照、diff 与分支操作。

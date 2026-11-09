@@ -40,7 +40,7 @@ nodes-sql = { path = "../node-bundles/nodes-sql", optional = true }
 nodes-regression = { path = "../node-bundles/nodes-regression", optional = true }
 nodes-survival = { path = "../node-bundles/nodes-survival", optional = true }
 nodes-epi = { path = "../node-bundles/nodes-epi", optional = true }
-nodes-io = { path = "../node-bundles/nodes-io", optional = true }
+nodes-io = { path = "../node-bundles/nodes-io", optional = true, default-features = false }
 nodes-opengwas = { path = "../node-bundles/nodes-opengwas", optional = true }
 nodes-causal = { path = "../node-bundles/nodes-causal", optional = true }
 nodes-lcmm = { path = "../node-bundles/nodes-lcmm", optional = true }
@@ -53,7 +53,9 @@ nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
 container-plugin = { path = "../container-plugin" }
 
 [features]
-default = [
+default = ["analysis", "bundle-writing", "bundle-literature"]
+# Shared analysis capability set for the coordinator and independent worker.
+analysis = [
   "bundle-hypothesize",
   "bundle-power",
   "bundle-ml",
@@ -68,7 +70,6 @@ default = [
   "bundle-survey",
   "bundle-genetics",
   "bundle-mice",
-  "bundle-writing",
   "bundle-rd",
   "bundle-dl",
 ]
@@ -80,6 +81,7 @@ bundle-regression = ["dep:nodes-regression"]
 bundle-survival = ["dep:nodes-survival"]
 bundle-epi = ["dep:nodes-epi"]
 bundle-io = ["dep:nodes-io"]
+bundle-literature = ["bundle-io", "nodes-io/literature"]
 bundle-opengwas = ["dep:nodes-opengwas"]
 bundle-causal = ["dep:nodes-causal"]
 bundle-lcmm = ["dep:nodes-lcmm"]

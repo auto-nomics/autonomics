@@ -143,6 +143,83 @@ pub async fn api(
 ) -> Result<ApiOk, String> {
     api_request(&state, method, path, body, request_id).await
 }
+/// Long-lived deployment stream; credentials stay in Rust.
+#[tauri::command]
+pub async fn enroll_compute(
+    state: State<'_, GatewayState>,
+    request: Value,
+    on_progress: tauri::ipc::Channel<Value>,
+) -> Result<Value, String> {
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post(endpoint(&base, "compute/enroll/stream"))
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .json(&request)
+        .send()
+        .await
+        .map_err(|error| format!("{error:?}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let message = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {status}: {message}"));
+    }
+    let mut stream = response.bytes_stream();
+    let mut buffered = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        buffered.extend_from_slice(
+            &chunk.map_err(|error| format!("安装进度连接已断开，后台可能仍在执行：{error}"))?,
+        );
+        loop {
+            let lf = buffered
+                .windows(2)
+                .position(|bytes| bytes == b"\n\n")
+                .map(|index| (index, 2));
+            let crlf = buffered
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .map(|index| (index, 4));
+            let boundary = match (lf, crlf) {
+                (Some(a), Some(b)) => Some(if a.0 < b.0 { a } else { b }),
+                (a, b) => a.or(b),
+            };
+            let Some((index, size)) = boundary else { break };
+            let frame = String::from_utf8(buffered.drain(..index + size).collect())
+                .map_err(|error| error.to_string())?;
+            let data = frame
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("data:")
+                        .map(|data| data.strip_prefix(' ').unwrap_or(data))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if data.is_empty() {
+                continue;
+            }
+            let event: Value = serde_json::from_str(&data).map_err(|error| error.to_string())?;
+            match event["type"].as_str() {
+                Some("progress") => {
+                    let _ = on_progress.send(event);
+                }
+                Some("result") => return Ok(event["state"].clone()),
+                Some("error") => {
+                    return Err(event["message"].as_str().unwrap_or("安装失败").into());
+                }
+                _ => return Err("无法识别的安装进度消息".into()),
+            }
+        }
+        if buffered.len() > 1024 * 1024 {
+            return Err("安装进度消息超过大小限制".into());
+        }
+    }
+    Err("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。".into())
+}
+
 async fn api_request(
     state: &GatewayState,
     method: String,

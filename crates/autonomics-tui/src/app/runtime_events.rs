@@ -373,6 +373,9 @@ impl App {
                 panel.loading = false;
                 match result {
                     Ok(status) => {
+                        if panel.status.as_deref() == Some("Reloading gateway snapshot (no connection test)…") {
+                            panel.status = None;
+                        }
                         panel.load_dashboard(&status);
                         let selected = status["state"]["policy"]["target_id"]
                             .as_str()
@@ -448,6 +451,26 @@ impl App {
                 self.state.hpc_panel.load_jobs(&reply);
                 if let Some(error) = reply.get("error").and_then(serde_json::Value::as_str) {
                     self.state.hpc_panel.status = Some(error.to_string());
+                }
+                self.dirty = true;
+            }
+            crate::app_event::AppEvent::HpcRepairProgress(message) => {
+                self.state.hpc_panel.push_repair_event(message);
+                self.dirty = true;
+            }
+            crate::app_event::AppEvent::HpcRepairFinished(result) => {
+                self.state.hpc_panel.loading = false;
+                match result {
+                    Ok(reply) => {
+                        self.state.hpc_panel.push_repair_event("[ready] 连接恢复完成".into());
+                        self.apply_hpc_save_reply(reply);
+                        self.state.hpc_panel.status = Some("Connection recovery complete · Esc returns to details".into());
+                    }
+                    Err(error) => {
+                        self.state.hpc_panel.push_repair_event(format!("[error] {error}"));
+                        self.state.hpc_panel.dashboard_pending_id = None;
+                        self.state.hpc_panel.status = Some(format!("Connection recovery failed: {error}"));
+                    }
                 }
                 self.dirty = true;
             }

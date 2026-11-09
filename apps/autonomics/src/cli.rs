@@ -84,7 +84,7 @@ pub enum Command {
         args: Vec<String>,
     },
 
-    /// Compute-target management: `enroll <id> --login <alias> …`.
+    /// Compute-target management: `enroll` or `check <id>`.
     Compute {
         /// Words after `compute`, e.g. `enroll hpc-b --login hpc-b-login …`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]

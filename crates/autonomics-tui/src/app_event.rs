@@ -164,6 +164,8 @@ pub(crate) enum AppEvent {
     },
     HpcTargetsLoaded(std::result::Result<serde_json::Value, String>),
     HpcJobsLoaded(serde_json::Value),
+    HpcRepairProgress(String),
+    HpcRepairFinished(std::result::Result<serde_json::Value, String>),
     /// Site profile persisted via `PUT /hpc/config`.
     HpcProfileSaved(std::result::Result<serde_json::Value, String>),
     /// Directory listing from `GET /vfs/list` (cwd + entries).

@@ -1076,6 +1076,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "autonomics-worker"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "container-runtime",
+ "dag-core",
+ "data-engine",
+ "datafusion",
+ "libc",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vfs",
+]
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

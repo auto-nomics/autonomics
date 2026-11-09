@@ -74,6 +74,15 @@ pub(crate) async fn enroll(
         .map_err(compute_error)
 }
 
+pub(crate) async fn repair_worker(
+    State(gateway): State<GatewayState>,
+    Json(request): Json<runtime::compute::RepairWorkerRequest>,
+) -> GatewayResult<Json<ComputeRegistryState>> {
+    let result = registry(&gateway)?.repair_worker(request).await.map_err(compute_error)?;
+    changed(&gateway, &result);
+    Ok(Json(result))
+}
+
 /// Request-scoped SSE progress; the enrollment keeps running if the viewer disconnects.
 pub(crate) async fn enroll_stream(
     State(state): State<GatewayState>,
@@ -88,13 +97,48 @@ pub(crate) async fn enroll_stream(
     let registry = registry(&state)?;
     let (sender, receiver) = tokio::sync::mpsc::channel::<serde_json::Value>(128);
     let updates = sender.clone();
-    let progress = runtime::compute::EnrollProgress::new(move |stage, message| {
+    let progress = runtime::compute::EnrollProgress::with_events(move |event| {
         // Bound memory for a slow reader. The terminal result is sent reliably below.
-        let _ = updates
-            .try_send(serde_json::json!({"type":"progress", "stage":stage, "message":message}));
+        let mut value = serde_json::to_value(event).expect("serialize enrollment progress");
+        value["type"] = serde_json::json!("progress");
+        let _ = updates.try_send(value);
     });
     tokio::spawn(async move {
         let result = match registry.enroll_with_progress(request, progress).await {
+            Ok(result) => {
+                changed(&state, &result);
+                serde_json::json!({"type":"result", "state":result})
+            }
+            Err(error) => serde_json::json!({"type":"error", "message":error}),
+        };
+        let _ = sender.send(result).await;
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(receiver)
+        .map(|value| Ok(Event::default().data(value.to_string())));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+pub(crate) async fn repair_worker_stream(
+    State(state): State<GatewayState>,
+    Json(request): Json<runtime::compute::RepairWorkerRequest>,
+) -> GatewayResult<
+    axum::response::sse::Sse<
+        impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+    >,
+> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures::StreamExt;
+    let registry = registry(&state)?;
+    let (sender, receiver) = tokio::sync::mpsc::channel::<serde_json::Value>(128);
+    let updates = sender.clone();
+    let progress = runtime::compute::EnrollProgress::with_events(move |event| {
+        // Bound memory for a slow reader. The terminal result is sent reliably below.
+        let mut value = serde_json::to_value(event).expect("serialize enrollment progress");
+        value["type"] = serde_json::json!("progress");
+        let _ = updates.try_send(value);
+    });
+    tokio::spawn(async move {
+        let result = match registry.repair_worker_with_progress(request, progress).await {
             Ok(result) => {
                 changed(&state, &result);
                 serde_json::json!({"type":"result", "state":result})

@@ -326,6 +326,59 @@ impl SshTarget {
         )
         .await
     }
+
+    /// One-shot connection command with live, bounded stdout/stderr observations.
+    pub async fn run_script_once_with_output(
+        &self,
+        script: &str,
+        observe: &(dyn Fn(&str, &str) + Send + Sync),
+    ) -> Result<Output, DagError> {
+        async fn collect(
+            mut pipe: impl tokio::io::AsyncRead + Unpin,
+            stream: &str,
+            observe: &(dyn Fn(&str, &str) + Send + Sync),
+        ) -> std::io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let count = pipe.read(&mut chunk).await?;
+                if count == 0 { return Ok(bytes); }
+                if bytes.len() + count > 1024 * 1024 {
+                    return Err(std::io::Error::other("connection output exceeds 1 MiB limit"));
+                }
+                bytes.extend_from_slice(&chunk[..count]);
+                observe(stream, &String::from_utf8_lossy(&chunk[..count]));
+            }
+        }
+        let mut command = self.command()?;
+        command.args(["bash", "-s"]).stdin(Stdio::piped())
+            .stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        let mut child = command.spawn().map_err(|e| DagError::Schedule(format!("cannot start SSH: {e}")))?;
+        let mut stdin = child.stdin.take().expect("piped stdin");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let operation = async {
+            let writer = async {
+                let result = match stdin.write_all(script.as_bytes()).await {
+                    Ok(()) => stdin.shutdown().await,
+                    Err(error) => Err(error),
+                };
+                drop(stdin);
+                // Preserve authentication diagnostics even if SSH closes stdin early.
+                Ok::<_, std::io::Error>(result.err())
+            };
+            let (stdin_error, stdout, stderr, status) = tokio::try_join!(
+                writer, collect(stdout, "stdout", observe), collect(stderr, "stderr", observe), child.wait()
+            )?;
+            if let Some(error) = stdin_error && status.success() {
+                return Err(std::io::Error::other(format!("cannot pipe ssh stdin: {error}; complete payload was not confirmed; stdout: {}; stderr: {}", String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr))));
+            }
+            Ok::<_, std::io::Error>(Output { status, stdout, stderr })
+        };
+        tokio::time::timeout(self.command_timeout, operation).await
+            .map_err(|_| DagError::Schedule("SSH connection command timed out; remote outcome UNKNOWN".into()))?
+            .map_err(|e| DagError::Schedule(format!("SSH connection command failed: {e}")))
+    }
     /// Authenticate the actual submission connection before recording an intent.
     /// Only a harmless printf reaches the remote shell until `before_send`
     /// succeeds. The bootstrap then uses this same stream, without reconnecting
@@ -724,16 +777,21 @@ impl SshTarget {
             // The same deadline covers stdin and output. Only explicitly
             // idempotent callers may retry one empty connection failure.
             let operation = async {
-                if let StdinSource::Bytes(bytes) = &stdin {
+                // An authentication rejection may close stdin before the payload
+                // is written. Still reap SSH and retain its stdout/stderr.
+                let stdin_error = if let StdinSource::Bytes(bytes) = &stdin {
                     if let Some(mut handle) = child.stdin.take() {
-                        handle.write_all(bytes).await.map_err(|error| {
-                            DagError::Schedule(format!("cannot pipe ssh stdin: {error}"))
-                        })?;
-                        handle.shutdown().await.map_err(|error| {
-                            DagError::Schedule(format!("cannot close ssh stdin: {error}"))
-                        })?;
+                        let result = match handle.write_all(bytes).await {
+                            Ok(()) => handle.shutdown().await,
+                            Err(error) => Err(error),
+                        };
+                        result.err()
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
                 let mut observed_file = match &stdin {
                     StdinSource::File(file) => file.try_clone().ok(),
                     _ => None,
@@ -758,9 +816,19 @@ impl SshTarget {
                         }
                     }
                 };
-                result.map_err(|error| {
+                let output = result.map_err(|error| {
                     DagError::Schedule(format!("ssh command `{}` failed: {error}", args.join(" ")))
-                })
+                })?;
+                if let Some(error) = stdin_error
+                    && output.status.success()
+                {
+                    return Err(DagError::Schedule(format!(
+                        "cannot pipe ssh stdin: {error}; remote exited successfully before the complete payload was confirmed; stdout: {}; stderr: {}",
+                        String::from_utf8_lossy(&output.stdout).trim(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    )));
+                }
+                Ok(output)
             };
             let output = tokio::time::timeout(timeout, operation)
                 .await

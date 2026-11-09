@@ -660,6 +660,18 @@ impl GatewayClient {
         self.get("/compute").await
     }
 
+    pub async fn repair_compute_worker(&self, request: &serde_json::Value) -> Result<runtime::compute::ComputeRegistryState> {
+        self.repair_compute_worker_with_progress(request, |_, _| {}).await
+    }
+
+    pub async fn repair_compute_worker_with_progress(
+        &self,
+        request: &serde_json::Value,
+        progress: impl FnMut(&str, &str),
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.compute_operation_with_progress("/compute/repair-worker/stream", request, progress).await
+    }
+
     /// One-shot composite enrollment from minimal operator input: probes
     /// the worker binary, generates and pins its profile, creates the
     /// data-domain mount, saves the target and optionally selects it.
@@ -674,11 +686,20 @@ impl GatewayClient {
     pub async fn compute_enroll_with_progress(
         &self,
         request: &runtime::compute::EnrollRequest,
+        progress: impl FnMut(&str, &str),
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.compute_operation_with_progress("/compute/enroll/stream", request, progress).await
+    }
+
+    async fn compute_operation_with_progress(
+        &self,
+        path: &str,
+        request: &impl serde::Serialize,
         mut progress: impl FnMut(&str, &str),
     ) -> Result<runtime::compute::ComputeRegistryState> {
         let response = self
             .sse_http
-            .post(format!("{}/compute/enroll/stream", self.base))
+            .post(self.url(path))
             .json(request)
             .send()
             .await?;
@@ -712,11 +733,11 @@ impl GatewayClient {
                             .into(),
                     });
                 }
-                _ => return Err(ClientError::Protocol("unknown enrollment event".into())),
+                _ => return Err(ClientError::Protocol("unknown compute operation event".into())),
             }
         }
         Err(ClientError::Transport(
-            "enrollment progress connection closed before a result; check registry before retrying"
+            "compute operation connection closed before a result; check registry before retrying"
                 .into(),
         ))
     }
@@ -1114,6 +1135,62 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("authentication refused")
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_stream_delivers_output_before_completion() {
+        use axum::{
+            Router,
+            response::sse::{Event, Sse},
+            routing::post,
+        };
+        let progress_seen = std::sync::Arc::new(tokio::sync::Notify::new());
+        let signal = progress_seen.clone();
+        let app = Router::new().route("/api/v1/compute/repair-worker/stream", post(move || {
+            let signal = signal.clone();
+            async move {
+                let stream = futures::stream::unfold(0, move |step| {
+                    let signal = signal.clone();
+                    async move {
+                        let value = match step {
+                            0 => serde_json::json!({"type":"progress","stage":"authenticate","message":"stdout: connected"}),
+                            1 => {
+                                signal.notified().await;
+                                serde_json::json!({"type":"error","message":"worker unavailable"})
+                            }
+                            _ => return None,
+                        };
+                        Some((Ok::<_, std::convert::Infallible>(Event::default().data(value.to_string())), step + 1))
+                    }
+                });
+                Sse::new(stream)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = GatewayClient::new(&addr.to_string(), None).unwrap();
+        let request = serde_json::json!({"expected_revision":0,"target_id":"test"});
+        let mut stages = Vec::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.repair_compute_worker_with_progress(&request, |stage, _| {
+                stages.push(stage.to_owned());
+                progress_seen.notify_one();
+            }),
+        )
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(stages, ["authenticate"]);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("worker unavailable")
         );
     }
 

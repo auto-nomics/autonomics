@@ -59,7 +59,12 @@ impl ClusterConnection {
         self.progress.report(stage, label);
         let started = std::time::Instant::now();
         tracing::info!(target = %self.id, alias = %self.alias, stage, "cluster step started");
-        let output = self.ssh.run_script_once(script).await.map_err(|error| {
+        let observe = |stream: &str, text: &str| {
+            for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                self.progress.report(stage, &format!("{stream}: {line}"));
+            }
+        };
+        let output = self.ssh.run_script_once_with_output(script, &observe).await.map_err(|error| {
             tracing::error!(target = %self.id, alias = %self.alias, stage, %error, "cluster step failed");
             format!("cluster {} step {stage}: {error}", self.alias)
         })?;
@@ -77,12 +82,6 @@ impl ClusterConnection {
                 stdout.trim(),
                 stderr.trim()
             ));
-        }
-        for (stream, bytes) in [("stdout", &output.stdout), ("stderr", &output.stderr)] {
-            let text = String::from_utf8_lossy(bytes);
-            for line in text.lines().filter(|line| !line.trim().is_empty()).take(32) {
-                self.progress.report(stage, &format!("{stream}: {line}"));
-            }
         }
         self.progress.report(
             stage,
@@ -113,6 +112,31 @@ impl ClusterConnection {
             return Err("worker probe returned an unparsable digest".into());
         }
         Ok(digest)
+    }
+
+    pub async fn verify_worker_identity(&self, path: &str, sha256: &str) -> Result<(), String> {
+        self.progress
+            .report("probe_worker", "正在验证独立 worker 协议和源码版本");
+        let output = self
+            .run("probe_worker", &format!("{} identity", shq(path)))
+            .await.map_err(|error| format!(
+                "{error}; deploy the standalone target/release/autonomics-worker, built from the same source revision as the gateway"
+            ))?;
+        let identity: dag_core::dag::execution::typed_worker::WorkerIdentity =
+            serde_json::from_slice(&output.stdout).map_err(|error| format!(
+                "invalid worker identity: {error}; deploy target/release/autonomics-worker, built from the same source revision as the gateway"
+            ))?;
+        identity
+            .validate(sha256)
+            .map_err(|error| error.to_string())?;
+        self.progress.report(
+            "probe_worker",
+            &format!(
+                "独立 worker 已就绪；协议={}；源码={}",
+                identity.protocol, identity.source_revision
+            ),
+        );
+        Ok(())
     }
 
     pub async fn deploy_worker(&self, local: &str, destination: &str) -> Result<(), String> {
@@ -162,9 +186,10 @@ impl ClusterConnection {
                 .map_err(|error| format!("worker deploy channel: {error}"))?;
         let object_path = file_name;
         tracing::info!(target = %self.id, alias = %self.alias, stage = "upload", bytes = metadata.len(), "cluster step started");
-        self.progress.report(
-            "upload",
+        self.progress.upload(
             &format!("正在上传 worker，共 {} 字节", metadata.len()),
+            0,
+            metadata.len(),
         );
         let mut writer = operator
             .writer(&object_path)
@@ -194,14 +219,17 @@ impl ClusterConnection {
             uploaded += read as u64;
             if uploaded / (16 * 1024 * 1024) > progress {
                 progress = uploaded / (16 * 1024 * 1024);
-                self.progress.report(
-                    "upload",
+                self.progress.upload(
                     &format!("已上传 {uploaded}/{} 字节", metadata.len()),
+                    uploaded,
+                    metadata.len(),
                 );
                 tracing::info!(target = %self.id, stage = "upload", uploaded, total = metadata.len(), "cluster upload progress");
             }
         }
         tracing::info!(target = %self.id, stage = "commit_upload", uploaded, "cluster step started");
+        self.progress
+            .upload("上传完成，正在提交", uploaded, metadata.len());
         self.progress
             .report("commit_upload", "正在提交上传文件（原子替换）");
         opendal::Writer::close(&mut writer)
@@ -228,6 +256,24 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[tokio::test]
+    async fn connection_output_is_observed_before_command_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let release = dir.path().join("release");
+        let program = dir.path().join("ssh");
+        std::fs::write(&program, format!("#!/bin/bash\nprintf 'connected-live\\n'\nwhile ! test -e {}; do sleep 0.01; done\nexec bash -s\n", shq(release.to_str().unwrap()))).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let release_signal = release.clone();
+        let connection = ClusterConnection::new("test", "cluster", program.to_str().unwrap(), "python3")
+            .with_progress(EnrollProgress::new(move |_, message| {
+                if message.contains("stdout: connected-live") {
+                    std::fs::write(&release_signal, b"observed").unwrap();
+                }
+            }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), connection.authenticate()).await.unwrap().unwrap();
+        assert!(release.exists());
+    }
+
+    #[tokio::test]
     async fn deployment_uses_same_custom_transport_for_commands_and_upload() {
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("ssh");
@@ -240,8 +286,8 @@ mod tests {
         let reported = stages.clone();
         let connection =
             ClusterConnection::new("test", "cluster", program.to_str().unwrap(), "python3")
-                .with_progress(EnrollProgress::new(move |stage, _| {
-                    reported.lock().unwrap().push(stage.to_owned());
+                .with_progress(EnrollProgress::with_events(move |event| {
+                    reported.lock().unwrap().push(event.clone());
                 }));
         connection.authenticate().await.unwrap();
         connection
@@ -265,7 +311,15 @@ mod tests {
                 .len(),
             64
         );
-        let mut stages = stages.lock().unwrap().clone();
+        let events = stages.lock().unwrap().clone();
+        let upload: Vec<_> = events
+            .iter()
+            .filter(|event| event.stage == "upload")
+            .collect();
+        assert_eq!(upload.first().unwrap().uploaded_bytes, Some(0));
+        assert_eq!(upload.last().unwrap().uploaded_bytes, Some(12));
+        assert!(upload.iter().all(|event| event.total_bytes == Some(12)));
+        let mut stages: Vec<_> = events.iter().map(|event| event.stage.as_str()).collect();
         stages.dedup();
         assert_eq!(
             stages,
@@ -295,5 +349,39 @@ mod tests {
         assert!(error.contains("cluster banner"));
         assert!(error.contains("authentication refused"));
         assert!(error.contains("255"));
+    }
+    #[tokio::test]
+    async fn closed_stdin_preserves_remote_diagnostics_without_retry_or_false_success() {
+        for status in [255, 0] {
+            let root = tempfile::tempdir().unwrap();
+            let program = root.path().join("ssh");
+            let attempts = root.path().join("attempts");
+            std::fs::write(&program, format!(
+                "#!/bin/sh\nprintf 'attempt\\n' >> '{}'\nprintf 'cluster banner\\n'\nprintf 'authentication refused\\n' >&2\nexit {status}\n",
+                attempts.display()
+            )).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            // More than a pipe can buffer: SSH exits without consuming any payload.
+            let script = "true\n".repeat(65536);
+            let target = dag_core::SshTarget::new(program.to_str().unwrap(), "cluster");
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                target.run_script_once(&script),
+            )
+            .await
+            .unwrap();
+            if status == 255 {
+                let output = result.unwrap();
+                assert_eq!(output.status.code(), Some(255));
+                assert_eq!(output.stdout, b"cluster banner\n");
+                assert_eq!(output.stderr, b"authentication refused\n");
+            } else {
+                let error = result.unwrap_err().to_string();
+                assert!(error.contains("cannot pipe ssh stdin"), "{error}");
+                assert!(error.contains("cluster banner"), "{error}");
+                assert!(error.contains("authentication refused"), "{error}");
+            }
+            assert_eq!(std::fs::read_to_string(attempts).unwrap(), "attempt\n");
+        }
     }
 }

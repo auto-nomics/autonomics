@@ -419,3 +419,40 @@ export function watchBibCollections(onChange: () => void): () => void {
   })();
   return () => { stopped = true; };
 }
+
+/** One enrollment request; never replay a deployment after a dropped stream. */
+export async function gatewayEnrollment<T>(
+  request: unknown,
+  onProgress: (event: { stage: string; message: string; uploaded_bytes?: number; total_bytes?: number }) => void,
+): Promise<T> {
+  if (isTauri) {
+    const { Channel } = await import("@tauri-apps/api/core");
+    const channel = new Channel<Parameters<typeof onProgress>[0]>();
+    channel.onmessage = onProgress;
+    return tauriInvoke<T>("enroll_compute", { request, onProgress: channel });
+  }
+  const response = await fetch(webApiPath("/compute/enroll/stream"), {
+    method: "POST", credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new GatewayHttpError(response.status, payload?.error ?? `注册请求失败（HTTP ${response.status}）`);
+  }
+  if (!response.body) throw new Error("无法读取安装进度，请刷新计算目标状态后再重试。");
+  const { readSseJson } = await import("./gateway-stream");
+  try {
+  for await (const raw of readSseJson(response.body)) {
+    const event = raw as { type: string; stage: string; message: string; state: T; uploaded_bytes?: number; total_bytes?: number };
+    if (event.type === "progress") onProgress(event);
+    else if (event.type === "result") return event.state;
+    else if (event.type === "error") throw new GatewayHttpError(400, event.message);
+    else throw new Error("收到无法识别的安装进度消息");
+  }
+  } catch (error) {
+    if (error instanceof GatewayHttpError) throw error;
+    throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
+  }
+  throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
+}

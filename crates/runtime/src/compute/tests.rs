@@ -2068,7 +2068,10 @@ async fn enroll_from_minimal_input_derives_everything() {
     let cluster = f.config.state_dir.join("cluster-root");
     fs::create_dir_all(&cluster).unwrap();
     let worker = cluster.join("autonomics-worker");
-    fs::write(&worker, b"worker bytes").unwrap();
+    fs::write(&worker, format!(r#"#!/bin/sh
+hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
+printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
+"#, dag_core::source_revision())).unwrap();
     fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
 
     let catalog = f
@@ -2110,6 +2113,24 @@ async fn enroll_from_minimal_input_derives_everything() {
         format!("{}/scratch", cluster.display())
     );
     assert!(backend.typed_worker_config.is_some());
+    let profile: serde_json::Value =
+        serde_json::from_slice(&fs::read(backend.typed_worker_config.as_ref().unwrap()).unwrap())
+            .unwrap();
+    for kind in [
+        "source_literature",
+        "bib_save",
+        "evidence_export",
+        "table_from_df",
+        "figure_embed",
+    ] {
+        assert!(
+            profile["local_kinds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == kind)
+        );
+    }
 
     // The domain mount: read-only, domain-tagged, at the derived prefix.
     let source = catalog
@@ -2120,6 +2141,14 @@ async fn enroll_from_minimal_input_derives_everything() {
     assert!(source.read_only);
     assert_eq!(source.domain.as_deref(), Some("hpc-b"));
     assert_eq!(source.mount_path(), "/data/hpc-b");
+
+    // One-key repair reconnects and verifies a healthy worker without a package
+    // path, configuration changes, or an unnecessary target revision.
+    let repaired = f.registry.repair_worker(super::RepairWorkerRequest {
+        expected_revision: catalog.revision,
+        target_id: "hpc-b".into(),
+    }).await.unwrap();
+    assert_eq!(serde_json::to_value(&repaired).unwrap(), serde_json::to_value(&catalog).unwrap());
 }
 
 #[tokio::test]

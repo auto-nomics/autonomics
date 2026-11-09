@@ -142,14 +142,14 @@ fn main() -> color_eyre::Result<()> {
             std::process::exit(vfs::cli::vault_main(&vault, &args))
         }
         Some(Command::Compute { args }) => {
-            if args.first().map(String::as_str) != Some("enroll") {
-                eprintln!("usage: autonomics compute enroll <id> --login <alias> …");
-                std::process::exit(2);
-            }
-            let rest: Vec<String> = args[1..].to_vec();
             let runtime = tokio::runtime::Runtime::new()
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
-            std::process::exit(runtime.block_on(gateway::cli::compute_enroll_main(&rest)));
+            let code = match args.first().map(String::as_str) {
+                Some("enroll") => runtime.block_on(gateway::cli::compute_enroll_main(&args[1..])),
+                Some("check") => runtime.block_on(gateway::cli::compute_check_main(&args[1..])),
+                _ => { eprintln!("usage: autonomics compute <enroll|check> …"); 2 }
+            };
+            std::process::exit(code);
         }
         Some(Command::Askpass { .. }) => std::process::exit(vfs::cli::askpass_main()),
         Some(Command::Run(args)) => commands::run::run_headless(args),

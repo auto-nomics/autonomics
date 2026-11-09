@@ -26,6 +26,46 @@ fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Read-only deployment handshake, shared by the coordinator and node binary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerIdentity {
+    pub artifact: String,
+    pub protocol: u32,
+    pub source_revision: String,
+    pub executable_sha256: String,
+    pub capabilities: Vec<String>,
+}
+
+impl WorkerIdentity {
+    pub fn validate(&self, executable_sha256: &str) -> Result<(), DagError> {
+        if self.artifact != "autonomics-worker"
+            || self.protocol != 1
+            || !self.capabilities.iter().any(|entry| entry == "task-worker")
+        {
+            return Err(failure(
+                "deploy an autonomics-worker binary with task-worker protocol 1",
+            ));
+        }
+        if self.source_revision != crate::source_revision() {
+            return Err(failure(format!(
+                "worker source revision {} differs from coordinator {}; build both from the same revision",
+                self.source_revision,
+                crate::source_revision()
+            )));
+        }
+        if !valid_sha256(&self.executable_sha256)
+            || !self
+                .executable_sha256
+                .eq_ignore_ascii_case(executable_sha256)
+        {
+            return Err(failure(
+                "worker identity executable SHA256 differs from the probed file",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Explicit private Podman backend for an ordinary worker. No daemon/formal
 /// backend is selected by this record and no host image store is reused.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]

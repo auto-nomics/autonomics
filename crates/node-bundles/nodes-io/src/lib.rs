@@ -32,28 +32,36 @@ pub use allen_brain::nodes::{
     AllenBrainTypesNodeFactory, AllenBrainTypesSpec,
 };
 pub use alphafold::nodes::prediction::{AlphaFoldPredictionNode, AlphaFoldPredictionNodeFactory};
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::bib_save::{
     BibSaveCollectionSpec, BibSaveNode, BibSaveNodeFactory, BibSaveSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::evidence_export::{
     EvidenceExportFormat, EvidenceExportNode, EvidenceExportNodeFactory, EvidenceExportSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::evidence_merge::{
     EvidenceMergeNode, EvidenceMergeNodeFactory, EvidenceMergeSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::literature_citations::{
     CitationDirection, LiteratureCitationsNode, LiteratureCitationsNodeFactory,
     LiteratureCitationsSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::literature_fetch::{
     LiteratureFetchNode, LiteratureFetchNodeFactory, LiteratureFetchSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::literature_fulltext::{
     LiteratureFulltextNode, LiteratureFulltextNodeFactory, LiteratureFulltextSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::literature_search::{
     LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
 };
+#[cfg(feature = "literature")]
 pub use bib_base::nodes::s2_recommendations::{
     S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
 };
@@ -307,6 +315,7 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeMappingNodeFactory {}));
         registry.register(Box::new(ReactomeAnalysisNodeFactory {}));
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
         registry.register(Box::new(GeoEInfoNodeFactory));
         registry.register(Box::new(GeoESearchNodeFactory));
@@ -356,12 +365,19 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(KpmpParticipantNodeFactory));
         registry.register(Box::new(KpmpParticipantDatasetsNodeFactory));
         registry.register(Box::new(KpmpParticipantRepositoryNodeFactory));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(LiteratureFetchNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(BibSaveNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(LiteratureFulltextNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(LiteratureCitationsNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(S2RecommendationsNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(EvidenceMergeNodeFactory {}));
+        #[cfg(feature = "literature")]
         registry.register(Box::new(EvidenceExportNodeFactory {}));
         registry.register_plugin(&StringPlugin);
         registry.register_plugin(&EnrichrPlugin);
@@ -790,6 +806,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "literature")]
     #[test]
     fn plugin_registers_evidence_channel_nodes() {
         let ctx = dag_core::registry::NodeCtx::new(
