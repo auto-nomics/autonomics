@@ -1,4 +1,5 @@
 //! Operator-owned compute selection. Storage namespaces have an independent lifetime.
+mod cluster_connection;
 mod enroll;
 mod readiness;
 mod routing;
@@ -7,7 +8,7 @@ pub use readiness::ReadinessRequest;
 mod tests;
 pub mod tools;
 
-pub use enroll::EnrollRequest;
+pub use enroll::{EnrollProgress, EnrollRequest};
 
 use crate::{RuntimeConfig, config::SlurmConfig};
 use container_runtime::{ContainerExecutionInfra, PodmanConnection};

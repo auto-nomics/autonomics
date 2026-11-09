@@ -188,7 +188,7 @@ impl HpcClient {
         command.args([
             "-T",
             "-o",
-            "BatchMode=yes",
+            vfs::ssh_channel::batch_mode_option(),
             "-o",
             "StrictHostKeyChecking=yes",
             "-o",

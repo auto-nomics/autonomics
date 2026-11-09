@@ -91,6 +91,7 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
             return 1;
         }
     };
+    eprintln!("[gateway] 正在读取计算目标配置…");
     let status = match client.compute_status().await {
         Ok(status) => status,
         Err(error) => {
@@ -114,7 +115,30 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
         scratch_dir: scratch,
         select,
     };
-    match client.compute_enroll(&request).await {
+    eprintln!(
+        "[enroll] 开始注册 {}（{}）",
+        request.id, request.login_alias
+    );
+    let started = std::time::Instant::now();
+    let last_stage = std::cell::RefCell::new(String::from("gateway"));
+    let operation = client.compute_enroll_with_progress(&request, |stage, message| {
+        *last_stage.borrow_mut() = stage.to_owned();
+        eprintln!(
+            "[{:>4}s] [{stage}] {}",
+            started.elapsed().as_secs(),
+            message.escape_debug()
+        );
+    });
+    tokio::pin!(operation);
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(15));
+    heartbeat.tick().await;
+    let result = loop {
+        tokio::select! {
+            result = &mut operation => break result,
+            _ = heartbeat.tick() => eprintln!("[{:>4}s] [{}] 仍在等待响应…", started.elapsed().as_secs(), last_stage.borrow()),
+        }
+    };
+    match result {
         Ok(state) => {
             let selected = if select { " (selected)" } else { "" };
             println!(

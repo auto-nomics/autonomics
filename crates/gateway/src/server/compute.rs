@@ -74,6 +74,40 @@ pub(crate) async fn enroll(
         .map_err(compute_error)
 }
 
+/// Request-scoped SSE progress; the enrollment keeps running if the viewer disconnects.
+pub(crate) async fn enroll_stream(
+    State(state): State<GatewayState>,
+    Json(request): Json<EnrollRequest>,
+) -> GatewayResult<
+    axum::response::sse::Sse<
+        impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+    >,
+> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use futures::StreamExt;
+    let registry = registry(&state)?;
+    let (sender, receiver) = tokio::sync::mpsc::channel::<serde_json::Value>(128);
+    let updates = sender.clone();
+    let progress = runtime::compute::EnrollProgress::new(move |stage, message| {
+        // Bound memory for a slow reader. The terminal result is sent reliably below.
+        let _ = updates
+            .try_send(serde_json::json!({"type":"progress", "stage":stage, "message":message}));
+    });
+    tokio::spawn(async move {
+        let result = match registry.enroll_with_progress(request, progress).await {
+            Ok(result) => {
+                changed(&state, &result);
+                serde_json::json!({"type":"result", "state":result})
+            }
+            Err(error) => serde_json::json!({"type":"error", "message":error}),
+        };
+        let _ = sender.send(result).await;
+    });
+    let stream = tokio_stream::wrappers::ReceiverStream::new(receiver)
+        .map(|value| Ok(Event::default().data(value.to_string())));
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
 #[utoipa::path(put,path="/api/v1/compute/targets",tag="compute",request_body=Object,responses((status=200,body=Object)))]
 pub(crate) async fn target(
     State(gateway): State<GatewayState>,

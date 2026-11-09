@@ -195,7 +195,7 @@ impl SshTarget {
             command.args(endpoint.options());
         }
         let mut options: Vec<String> = vec![
-            "BatchMode=yes".into(),
+            vfs::ssh_channel::batch_mode_option().into(),
             "LogLevel=ERROR".into(),
             "StrictHostKeyChecking=yes".into(),
             connect,

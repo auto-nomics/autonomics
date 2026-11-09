@@ -41,6 +41,7 @@ pub struct SshLocation {
 
 #[derive(Debug, Clone)]
 struct SshAccess {
+    program: String,
     endpoint: Option<crate::SshEndpoint>,
     alias: String,
     root: String,
@@ -69,7 +70,20 @@ pub fn build_ssh_operator(
     python: &str,
     endpoint: Option<crate::SshEndpoint>,
 ) -> Result<Operator> {
+    build_ssh_operator_with_program(alias, root, python, endpoint, "ssh")
+}
+
+/// Build the file channel with the same SSH executable as command execution.
+/// `program` is an executable path/name, not a shell command line.
+pub fn build_ssh_operator_with_program(
+    alias: &str,
+    root: &str,
+    python: &str,
+    endpoint: Option<crate::SshEndpoint>,
+    program: &str,
+) -> Result<Operator> {
     let mut access = build_access(alias, root, python)?;
+    access.program = program.into();
     if let Some(endpoint) = &endpoint {
         endpoint
             .validate()
@@ -136,6 +150,7 @@ fn build_access(alias: &str, root: &str, python: &str) -> Result<SshAccess> {
             ..Default::default()
         });
     Ok(SshAccess {
+        program: "ssh".into(),
         endpoint: None,
         alias: alias.into(),
         root,
@@ -152,13 +167,13 @@ impl SshAccess {
     /// shell metacharacters are never expanded.
     fn command(&self, script: &str) -> tokio::process::Command {
         let command = format!("{} -I -c {}", quote(&self.python), quote(script));
-        let mut executable = tokio::process::Command::new("ssh");
+        let mut executable = tokio::process::Command::new(&self.program);
         if let Some(endpoint) = &self.endpoint {
             executable.args(endpoint.options());
         }
         executable.args([
             "-T",
-            "-oBatchMode=yes",
+            &format!("-o{}", crate::ssh_channel::batch_mode_option()),
             "-oStrictHostKeyChecking=yes",
             "-oConnectTimeout=15",
             "-oServerAliveInterval=15",

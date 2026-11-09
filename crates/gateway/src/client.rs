@@ -59,7 +59,19 @@ pub enum ClientError {
 
 impl From<reqwest::Error> for ClientError {
     fn from(error: reqwest::Error) -> Self {
-        ClientError::Transport(error.to_string())
+        use std::error::Error;
+        let mut message = error.to_string();
+        if error.is_timeout() {
+            message.push_str(" (request timed out)");
+        } else if error.is_connect() {
+            message.push_str(" (connection failed)");
+        }
+        let mut source = error.source();
+        while let Some(cause) = source {
+            message.push_str(&format!("; caused by: {cause}"));
+            source = cause.source();
+        }
+        ClientError::Transport(message)
     }
 }
 
@@ -655,8 +667,58 @@ impl GatewayClient {
         &self,
         request: &runtime::compute::EnrollRequest,
     ) -> Result<runtime::compute::ComputeRegistryState> {
-        self.request(reqwest::Method::POST, "/compute/enroll", Some(request))
-            .await
+        self.compute_enroll_with_progress(request, |_, _| {}).await
+    }
+
+    /// Enroll once and consume request-scoped progress without reconnecting/replaying.
+    pub async fn compute_enroll_with_progress(
+        &self,
+        request: &runtime::compute::EnrollRequest,
+        mut progress: impl FnMut(&str, &str),
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        let response = self
+            .sse_http
+            .post(format!("{}/compute/enroll/stream", self.base))
+            .json(request)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            return Err(ClientError::Api {
+                status,
+                message: response.text().await?,
+            });
+        }
+        let mut stream = response.bytes_stream().eventsource();
+        while let Some(event) = stream.next().await {
+            let event = event.map_err(|error| ClientError::Transport(error.to_string()))?;
+            let value: serde_json::Value = serde_json::from_str(&event.data)
+                .map_err(|error| ClientError::Protocol(error.to_string()))?;
+            match value["type"].as_str() {
+                Some("progress") => progress(
+                    value["stage"].as_str().unwrap_or("connection"),
+                    value["message"].as_str().unwrap_or(""),
+                ),
+                Some("result") => {
+                    return serde_json::from_value(value["state"].clone())
+                        .map_err(|error| ClientError::Protocol(error.to_string()));
+                }
+                Some("error") => {
+                    return Err(ClientError::Api {
+                        status: 400,
+                        message: value["message"]
+                            .as_str()
+                            .unwrap_or("enrollment failed")
+                            .into(),
+                    });
+                }
+                _ => return Err(ClientError::Protocol("unknown enrollment event".into())),
+            }
+        }
+        Err(ClientError::Transport(
+            "enrollment progress connection closed before a result; check registry before retrying"
+                .into(),
+        ))
     }
 
     /// Read-only readiness blockers for an explicit workflow requirement set.
@@ -995,6 +1057,65 @@ impl EventPump {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn enrollment_stream_delivers_progress_before_remote_failure() {
+        use axum::{
+            Router,
+            response::sse::{Event, Sse},
+            routing::post,
+        };
+        let progress_seen = std::sync::Arc::new(tokio::sync::Notify::new());
+        let signal = progress_seen.clone();
+        let app = Router::new().route("/api/v1/compute/enroll/stream", post(move || {
+            let signal = signal.clone();
+            async move {
+                let stream = futures::stream::unfold(0, move |step| {
+                    let signal = signal.clone();
+                    async move {
+                        let value = match step {
+                            0 => serde_json::json!({"type":"progress","stage":"authenticate","message":"connecting"}),
+                            1 => {
+                                signal.notified().await;
+                                serde_json::json!({"type":"error","message":"authentication refused"})
+                            }
+                            _ => return None,
+                        };
+                        Some((Ok::<_, std::convert::Infallible>(Event::default().data(value.to_string())), step + 1))
+                    }
+                });
+                Sse::new(stream)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = GatewayClient::new(&addr.to_string(), None).unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "expected_revision":0,"id":"test","login_alias":"test","worker_executable":"/bin/worker"
+        }))
+        .unwrap();
+        let mut stages = Vec::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.compute_enroll_with_progress(&request, |stage, _| {
+                stages.push(stage.to_owned());
+                progress_seen.notify_one();
+            }),
+        )
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(stages, ["authenticate"]);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("authentication refused")
+        );
+    }
 
     #[test]
     fn agent_paths_survive_segment_encoding() {

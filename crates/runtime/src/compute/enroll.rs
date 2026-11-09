@@ -12,6 +12,22 @@
 
 use super::*;
 
+/// Per-request progress sink, independent of daemon tracing subscribers.
+#[derive(Clone, Default)]
+pub struct EnrollProgress(Option<std::sync::Arc<dyn Fn(&str, &str) + Send + Sync>>);
+
+impl EnrollProgress {
+    pub fn new(callback: impl Fn(&str, &str) + Send + Sync + 'static) -> Self {
+        Self(Some(std::sync::Arc::new(callback)))
+    }
+
+    pub(super) fn report(&self, stage: &str, message: &str) {
+        if let Some(callback) = &self.0 {
+            callback(stage, message);
+        }
+    }
+}
+
 /// Minimal operator input for one-shot enrollment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,11 +87,11 @@ fn valid_alias(alias: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.@:-".contains(&b))
 }
 
-fn shq(value: &str) -> String {
+pub(super) fn shq(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn valid_sha256(value: &str) -> bool {
+pub(super) fn valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -85,7 +101,20 @@ impl ComputeRegistry {
     /// mount → target with derived domain → optional policy switch.
     /// Failures name the failing step; already-applied steps stay
     /// applied and re-running the same request is idempotent.
+    #[tracing::instrument(skip_all, fields(cluster_id = %request.id, alias = %request.login_alias))]
     pub async fn enroll(&self, request: EnrollRequest) -> Result<ComputeRegistryState, String> {
+        self.enroll_with_progress(request, EnrollProgress::default())
+            .await
+    }
+
+    #[tracing::instrument(skip_all, fields(cluster_id = %request.id, alias = %request.login_alias))]
+    pub async fn enroll_with_progress(
+        &self,
+        request: EnrollRequest,
+        progress: EnrollProgress,
+    ) -> Result<ComputeRegistryState, String> {
+        progress.report("validate", "正在检查注册参数");
+        tracing::info!(stage = "validate", "cluster enrollment started");
         identifier(&request.id)?;
         if !valid_alias(&request.login_alias) {
             return Err("login_alias must be a configured ssh host alias".into());
@@ -123,48 +152,28 @@ impl ComputeRegistry {
             );
         }
 
-        // 0. Deploy the worker binary when a local one is supplied.
-        if let Some(local) = &request.deploy_worker {
-            deploy_worker_binary(local, &request.worker_executable, &request).await?;
-        }
-
-        // 1. Probe the worker binary on the login node.
         let ssh_command = request
             .ssh_command
             .clone()
             .unwrap_or_else(|| self.config.slurm.ssh_command.clone());
-        let ssh = dag_core::SshTarget::new(ssh_command.clone(), &request.login_alias);
-        let probe = format!(
-            "test -x {path} && sha256sum {path}",
-            path = shq(&request.worker_executable)
-        );
-        let output = ssh.run_script_once(&probe).await.map_err(|error| {
-            format!(
-                "worker probe could not reach `{}`: {error}",
-                request.login_alias
-            )
-        })?;
-        if !output.status.success() {
-            return Err(format!(
-                "worker probe failed for `{}` on `{}` ({}); stdout: {}; stderr: {}",
-                request.worker_executable,
-                request.login_alias,
-                output.status,
-                String::from_utf8_lossy(&output.stdout).trim(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
+        let connection = super::cluster_connection::ClusterConnection::new(
+            &request.id,
+            &request.login_alias,
+            &ssh_command,
+            request.python.as_deref().unwrap_or("python3"),
+        )
+        .with_progress(progress.clone());
+        connection.authenticate().await?;
+        if let Some(local) = &request.deploy_worker {
+            connection
+                .deploy_worker(local, &request.worker_executable)
+                .await?;
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let sha256 = stdout
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if !valid_sha256(&sha256) {
-            return Err("worker probe returned an unparsable digest".into());
-        }
+        let sha256 = connection.probe_worker(&request.worker_executable).await?;
 
         // 2. Generate the worker profile where the freezer expects it.
+        progress.report("worker_profile", "正在生成 worker 配置");
+        tracing::info!(stage = "worker_profile", "cluster enrollment step started");
         let staging = self.root.join("targets").join(format!(
             "{}-enroll-{}",
             request.id,
@@ -212,6 +221,13 @@ impl ComputeRegistry {
         //    domain validation runs, so the data source goes first.
         let mut revision = request.expected_revision;
         if let Some((alias, root)) = &data {
+            progress.report("data_source", "正在注册集群数据源");
+            tracing::info!(
+                stage = "data_source",
+                alias,
+                root,
+                "cluster enrollment step started"
+            );
             let source = DataSource {
                 id: request.id.clone(),
                 name: format!("{} shared filesystem", request.id),
@@ -236,6 +252,8 @@ impl ComputeRegistry {
         }
 
         // 5. The target, with every derived field filled in.
+        progress.report("save_target", "正在保存计算目标");
+        tracing::info!(stage = "save_target", "cluster enrollment step started");
         let data_domains = data
             .map(|(alias, root)| {
                 vec![DataDomain {
@@ -261,6 +279,8 @@ impl ComputeRegistry {
 
         // 6. Optional policy switch.
         if request.select {
+            progress.report("select_target", "正在选择计算目标");
+            tracing::info!(stage = "select_target", "cluster enrollment step started");
             state = self
                 .select(SelectTarget {
                     expected_revision: state.revision,
@@ -268,113 +288,7 @@ impl ComputeRegistry {
                 })
                 .map_err(|error| format!("policy switch failed: {error}"))?;
         }
+        tracing::info!(revision = state.revision, "cluster enrollment finished");
         Ok(state)
     }
-}
-
-/// Stream the local worker binary to its cluster path through the login
-/// alias: framed staged writes (atomic same-directory rename — an aborted
-/// transfer never leaves a torn binary) followed by `chmod +x`. The
-/// destination's parent directory is created on demand.
-async fn deploy_worker_binary(
-    local: &str,
-    destination: &str,
-    request: &EnrollRequest,
-) -> Result<(), String> {
-    let local = std::path::Path::new(local);
-    let metadata = std::fs::metadata(local)
-        .map_err(|error| format!("deploy_worker `{}`: {error}", local.display()))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "deploy_worker `{}` is not a regular file",
-            local.display()
-        ));
-    }
-    let ssh_command = request.ssh_command.clone().unwrap_or_else(|| "ssh".into());
-    let python = request.python.as_deref().unwrap_or("python3");
-
-    // Ensure the destination directory exists, then stream the binary.
-    let ssh = dag_core::SshTarget::new(ssh_command.clone(), &request.login_alias);
-    let parent = std::path::Path::new(destination)
-        .parent()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "/".into());
-    let mkdir = format!("mkdir -p {}", shq(&parent));
-    let output = ssh
-        .run_script_once(&mkdir)
-        .await
-        .map_err(|error| format!("worker deploy mkdir failed: {error}"))?;
-    check_deploy_output(&output, "mkdir")?;
-
-    // The ssh backend refuses a root of `/`, so the operator is rooted at
-    // the destination's parent directory and the file name is the object.
-    let destination_path = std::path::Path::new(destination);
-    let (root, file_name) = (
-        destination_path
-            .parent()
-            .map(|parent| parent.display().to_string())
-            .unwrap_or_else(|| "/public".into()),
-        destination_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or("worker deploy destination must end in a file name")?
-            .to_string(),
-    );
-    if root == "/" || file_name.is_empty() {
-        return Err("worker deploy destination must be a file inside a directory".into());
-    }
-    let operator = vfs::build_ssh_operator(&request.login_alias, &root, python, None)
-        .map_err(|error| format!("worker deploy channel: {error}"))?;
-    let object_path = file_name;
-    let mut writer = operator
-        .writer(&object_path)
-        .await
-        .map_err(|error| format!("worker deploy open failed: {error}"))?;
-    let file = tokio::fs::File::open(local)
-        .await
-        .map_err(|error| format!("deploy_worker `{}`: {error}", local.display()))?;
-    let mut reader = tokio::io::BufReader::with_capacity(1024 * 1024, file);
-    let mut chunk = vec![0u8; 1024 * 1024];
-    loop {
-        let read = tokio::io::AsyncReadExt::read(&mut reader, &mut chunk)
-            .await
-            .map_err(|error| format!("worker deploy read failed: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        let buffer = opendal::Buffer::from(chunk[..read].to_vec());
-        opendal::Writer::write(&mut writer, buffer)
-            .await
-            .map_err(|error| format!("worker deploy upload failed: {error}"))?;
-    }
-    opendal::Writer::close(&mut writer)
-        .await
-        .map_err(|error| format!("worker deploy commit failed: {error}"))?;
-    let chmod = format!("chmod +x {}", shq(destination));
-    let output = ssh
-        .run_script_once(&chmod)
-        .await
-        .map_err(|error| format!("worker deploy chmod failed: {error}"))?;
-    check_deploy_output(&output, "chmod")?;
-    tracing::info!(
-        destination,
-        bytes = metadata.len(),
-        "deployed worker binary"
-    );
-    Ok(())
-}
-
-fn check_deploy_output(output: &std::process::Output, stage: &str) -> Result<(), String> {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    tracing::info!(stage, status = %output.status, stdout = %stdout.trim(), stderr = %stderr.trim(), "worker deployment remote response");
-    if !output.status.success() {
-        return Err(format!(
-            "worker deploy {stage} failed ({}); stdout: {}; stderr: {}",
-            output.status,
-            stdout.trim(),
-            stderr.trim()
-        ));
-    }
-    Ok(())
 }

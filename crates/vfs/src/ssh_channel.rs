@@ -173,6 +173,17 @@ pub const VAULT_SOCK_ENV: &str = "AUTONOMICS_VAULT_SOCK";
 /// The env var tagging the host alias for the askpass helper.
 pub const VAULT_ALIAS_ENV: &str = "AUTONOMICS_VAULT_ALIAS";
 
+/// Password prompts are allowed only when a vault-backed responder is available.
+pub fn batch_mode_option() -> &'static str {
+    if VAULT_SOCKET.read().expect("ssh channel lock poisoned").is_some()
+        && askpass_executable().is_some()
+    {
+        "BatchMode=no"
+    } else {
+        "BatchMode=yes"
+    }
+}
+
 /// Advertise the vault agent socket so every spawned SSH channel can
 /// answer password and OTP prompts through `autonomics-askpass`.
 pub fn configure_vault_agent(socket_path: &Path) {

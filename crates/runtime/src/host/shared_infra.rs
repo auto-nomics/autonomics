@@ -214,16 +214,6 @@ impl SharedInfra {
         let resolved_config = crate::compute::startup_config(config).map_err(Error::Other)?;
         let config = &resolved_config;
 
-        // Process-wide SSH channel multiplexing: paid once at startup, used
-        // by every transport (execution, file access, scheduler tools).
-        if config.ssh_multiplex && !vfs::ssh_channel::is_configured() {
-            vfs::ssh_channel::configure(
-                &config.state_dir.join("ssh-control"),
-                &config.ssh_control_persist,
-            )
-            .map_err(|error| Error::Other(format!("ssh multiplexing setup: {error}")))?;
-        }
-
         // Sealed SSH credential vault for password/OTP-only clusters: unlock
         // once and serve askpass answers over a same-user unix socket. The
         // passphrase is deliberately never persisted. A configured vault
@@ -242,6 +232,27 @@ impl SharedInfra {
             .clone()
             .unwrap_or_else(|| fixed_vault.clone());
         let vault_explicit = config.ssh_credential_vault.is_some() || fixed_vault.is_file();
+        // Process-wide SSH channel multiplexing: paid once at startup, used
+        // by every transport (execution, file access, scheduler tools).
+        // Include auto-discovered vaults as well as explicitly configured ones.
+        // Vault-backed OTP authentication must reuse the authenticated master:
+        // a second connection may otherwise replay a just-consumed TOTP code.
+        if (config.ssh_multiplex || vault_explicit)
+            && !vfs::ssh_channel::is_configured()
+        {
+            vfs::ssh_channel::configure(
+                &config.state_dir.join("ssh-control"),
+                &config.ssh_control_persist,
+            )
+            .map_err(|error| Error::Other(format!("ssh multiplexing setup: {error}")))?;
+            tracing::info!(
+                vault_detected = vault_explicit,
+                control_dir = %config.state_dir.join("ssh-control").display(),
+                persist = %config.ssh_control_persist,
+                "SSH connection multiplexing enabled"
+            );
+        }
+
         if vault_explicit {
             let vault_path = &vault_path;
             let unlocked = match std::fs::read(vault_path) {

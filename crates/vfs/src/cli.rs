@@ -9,6 +9,7 @@
 //! autonomics vault set <alias> [--password] [--otp] [--digits N] [--period S]
 //! autonomics vault list
 //! autonomics vault check
+//! autonomics vault get <alias> [--password] [--otp]
 //! autonomics askpass <prompt>        # invoked by OpenSSH via SSH_ASKPASS
 //! ```
 //!
@@ -77,6 +78,7 @@ pub fn vault_main(vault_path: &Path, args: &[String]) -> i32 {
         },
         "list" => vault_list(vault_path),
         "check" => vault_check(vault_path),
+        "get" if args.len() >= 2 => vault_get(vault_path, &args[1], &args[2..]),
         _ => {
             vault_usage();
             2
@@ -88,6 +90,81 @@ fn vault_usage() {
     eprintln!("usage: autonomics vault set <alias> [--password] [--otp] [--digits N] [--period S]");
     eprintln!("       autonomics vault list");
     eprintln!("       autonomics vault check");
+    eprintln!("       autonomics vault get <alias> [--password] [--otp]");
+}
+
+fn vault_get(path: &Path, alias: &str, args: &[String]) -> i32 {
+    if args.iter().any(|arg| arg != "--password" && arg != "--otp") {
+        vault_usage();
+        return 2;
+    }
+    let sealed = match std::fs::read(path) {
+        Ok(sealed) => sealed,
+        Err(error) => {
+            eprintln!("cannot read vault: {error}");
+            return 1;
+        }
+    };
+    let passphrase = prompt_secret("vault passphrase (unlocks the file)");
+    let vault = match CredentialVault::open(&sealed, &passphrase) {
+        Ok(vault) => vault,
+        Err(error) => {
+            eprintln!("unlock failed: {error}");
+            return 1;
+        }
+    };
+    let Some((name, entry)) = vault
+        .entries
+        .iter()
+        .find(|(name, _)| name.as_str() == alias)
+        .or_else(|| {
+            vault
+                .entries
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(alias))
+        })
+    else {
+        eprintln!("vault entry `{alias}` not found");
+        return 1;
+    };
+    println!("entry: {name}");
+    if args.is_empty() || args.iter().any(|arg| arg == "--password") {
+        println!(
+            "password: {}",
+            entry.password.as_deref().unwrap_or("(not configured)")
+        );
+    }
+    if args.is_empty() || args.iter().any(|arg| arg == "--otp") {
+        match entry.totp_secret.as_deref() {
+            Some(secret) => {
+                let now = std::time::SystemTime::now();
+                match crate::credential::totp_code(
+                    secret,
+                    entry.totp_digits,
+                    entry.totp_period,
+                    now,
+                ) {
+                    Ok(code) => {
+                        println!("otp: {code}");
+                        let seconds = now
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        println!(
+                            "otp valid for: {}s",
+                            entry.totp_period - seconds % entry.totp_period
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("cannot generate OTP: {error}");
+                        return 1;
+                    }
+                }
+            }
+            None => println!("otp: (not configured)"),
+        }
+    }
+    0
 }
 
 fn prompt_secret(label: &str) -> String {
