@@ -56,6 +56,17 @@ const ENTRY = {
     '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
     '\\]',
     '',
+    '\\[',
+    '\\Delta\\widehat m',
+    '=',
+    '\\widehat m_{\\text{Alt}}',
+    '-',
+    '\\widehat m_{\\text{Ref}}',
+    '\\]',
+    '',
+    'Setext heading',
+    '---',
+    '',
   ].join('\n'),
 };
 const summary = ({ content: _content, ...rest }) => rest;
@@ -238,13 +249,20 @@ try {
     'display math is block-level MathML',
   );
   // Two inline ($…$) + one $$ + one \(…\) + one \[…\] → 5 math spans.
-  assert.equal(await wiki.locator('.md-math').count(), 5, 'all five formulas render');
+  assert.equal(await wiki.locator('.md-math').count(), 6, 'all formulas render');
   const bracket = wiki.locator('.md-math--display').nth(1);
   assert.equal(
     await bracket.locator('annotation[encoding="application/x-tex"]').textContent(),
     '\\int_0^1 x^2 \\, dx = \\frac{1}{3}',
     'LaTeX bracket block keeps its TeX source',
   );
+  assert.equal(
+    await wiki.locator('.md-math--display').nth(2).locator('annotation').textContent(),
+    '\\Delta\\widehat m\n=\n\\widehat m_{\\text{Alt}}\n-\n\\widehat m_{\\text{Ref}}',
+    'operators on separate lines remain inside display math',
+  );
+  assert.equal(await wiki.getByRole('heading', { name: 'Setext heading' }).count(), 1);
+  assert.equal(await wiki.locator('.wiki-md h1, .wiki-md h2').count(), 3);
 
   // ── 标题左侧大纲级别标记(纯 CSS ::before)+ GitHub 深色标题绿 ──
   const gutterLevel = (locator) => locator.evaluate((el) => getComputedStyle(el, '::before').content);

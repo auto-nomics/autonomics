@@ -81,6 +81,26 @@ function mathRenderer(token: Tokens.Generic): string {
 }
 
 const mathExtensions = [
+  // Display math must be recognized during block lexing, before Setext
+  // headings can consume lines containing only `=` or `-` inside the TeX.
+  ...([
+    ["math-display-block", MATH_DISPLAY_TOKEN_RE, "$$"],
+    ["math-display-bracket-block", MATH_DISPLAY_BRACKET_RE, "\\["],
+  ] as const).map(([name, pattern, delimiter]) => ({
+    name,
+    level: "block" as const,
+    start(src: string) {
+      const match = (delimiter === "$$" ? /(?:^|\n) {0,3}\$\$/ : /(?:^|\n) {0,3}\\\[/).exec(src);
+      return match ? match.index + (match[0].startsWith("\n") ? 1 : 0) : undefined;
+    },
+    tokenizer(src: string) {
+      const indent = /^ {0,3}/.exec(src)![0];
+      const token = mathTokenizer(src.slice(indent.length), pattern, name, true);
+      if (!token) return undefined;
+      return { ...token, raw: indent + token.raw };
+    },
+    renderer: mathRenderer,
+  })),
   {
     name: "math-display",
     level: "inline" as const,

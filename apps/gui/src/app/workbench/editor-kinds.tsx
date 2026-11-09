@@ -268,6 +268,11 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "wiki-entry",
+    agentContext: (editor) => {
+      const state = stateOf(editor);
+      const current = state.stack[state.cursor];
+      return { entryId: current?.entryId ?? String(editor.params.entryId ?? ""), title: current?.title || state.title, mode: state.mode };
+    },
     title: (editor) => {
       const state = editor.state as WikiEntryEditorState | null;
       const current = state?.stack[state.cursor];
@@ -290,6 +295,7 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "deck",
+    agentContext: (editor) => ({ deckId: String(editor.params.deckId ?? ""), title: (editor.state as DeckEditorState | null)?.title ?? "", slideNo: (editor.state as DeckEditorState | null)?.slideNo ?? null }),
     title: (editor) => {
       const state = editor.state as DeckEditorState | null;
       return state?.title || "未命名 deck";

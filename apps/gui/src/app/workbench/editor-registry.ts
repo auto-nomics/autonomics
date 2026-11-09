@@ -24,6 +24,8 @@ export type EditorKind = {
   name?(editor: EditorRef): string;
   icon?(editor: EditorRef): LucideIcon | undefined;
   body: ComponentType<EditorContext>;
+  /** Explicit, bounded data safe to share with the agent at message time. */
+  agentContext?(editor: EditorRef): Record<string, string | number | boolean | null> | null;
   /** keep-alive: body stays mounted (hidden) while its tab exists.
    *  ephemeral: body mounts only while the tab is the group's active tab;
    *  a placeholder shows otherwise (readers persist their own state). */
