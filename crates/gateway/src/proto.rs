@@ -68,10 +68,7 @@ pub enum HostEventView {
     },
     /// An identity was deleted from storage. Views over it have nothing
     /// left to show.
-    IdentityDeleted {
-        agent_id: uuid::Uuid,
-        path: String,
-    },
+    IdentityDeleted { agent_id: uuid::Uuid, path: String },
 }
 
 /// Wire mirror of [`runtime::host::ActivationCause`].
@@ -172,12 +169,12 @@ impl From<runtime::HostEvent> for HostEventView {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GatewayNotice {
-    /// The operator changed the ordinary compute catalog — a target/data
+    /// The operator changed the ordinary compute registry — a target/data
     /// source was saved or the selection policy moved. Live agents receive
     /// the refreshed policy through the compute context provider; runs in
     /// flight keep their original pinned target.
     ComputeChanged {
-        catalog_revision: u64,
+        registry_revision: u64,
         target_id: String,
         target_revision: u64,
     },

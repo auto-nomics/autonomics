@@ -209,22 +209,42 @@ impl App {
             CommandAction::SplitVertical | CommandAction::SplitHorizontal => {
                 let count = self.state.sessions.len();
                 if count < 2 {
-                    self.state.toasts.info("Split", Some("Open another agent first".into()));
+                    self.state
+                        .toasts
+                        .info("Split", Some("Open another agent first".into()));
                 } else {
                     let current = self.state.active_agent_idx;
                     let other = (current + 1) % count;
-                    self.split_leaf = Some((self.state.sessions[current].name.clone(), self.state.sessions[other].name.clone(), matches!(action, CommandAction::SplitVertical)));
+                    self.split_leaf = Some((
+                        self.state.sessions[current].name.clone(),
+                        self.state.sessions[other].name.clone(),
+                        matches!(action, CommandAction::SplitVertical),
+                    ));
                     self.dirty = true;
                 }
             }
             CommandAction::FocusOtherSplit => {
                 if let Some((first, second, _)) = &self.split_leaf {
-                    let active = self.state.sessions.get(self.state.active_agent_idx).map(|s| s.name.as_str());
-                    let target = if active == Some(first.as_str()) { second } else { first };
-                    if let Some(index) = self.state.sessions.iter().position(|s| &s.name == target) { self.state.active_agent_idx = index; }
+                    let active = self
+                        .state
+                        .sessions
+                        .get(self.state.active_agent_idx)
+                        .map(|s| s.name.as_str());
+                    let target = if active == Some(first.as_str()) {
+                        second
+                    } else {
+                        first
+                    };
+                    if let Some(index) = self.state.sessions.iter().position(|s| &s.name == target)
+                    {
+                        self.state.active_agent_idx = index;
+                    }
                 }
             }
-            CommandAction::CloseSplit => { self.split_leaf = None; self.dirty = true; }
+            CommandAction::CloseSplit => {
+                self.split_leaf = None;
+                self.dirty = true;
+            }
         }
     }
 }

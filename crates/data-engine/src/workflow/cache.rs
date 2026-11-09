@@ -24,12 +24,12 @@
 
 use std::collections::BTreeMap;
 
-use dag_core::dag::graph::PortOutputs;
+use dag_core::dag::PortOutputs;
 use dag_core::value::{FileRef, NodeValue};
 use vfs::OpendalFileStorage;
 
-use crate::instance::{InstanceId, UpstreamBinding, instance_fingerprint_of};
-use crate::plan::ExecutionPlan;
+use crate::workflow::instance::{InstanceId, UpstreamBinding, instance_fingerprint_of};
+use crate::workflow::plan::ExecutionPlan;
 
 /// One cached output port. Equality is structural on paths (FileRef does
 /// not implement `PartialEq`), which is what cache tests need to assert.
@@ -228,6 +228,7 @@ mod tests {
 
     fn file(path: &str, size: u64) -> FileRef {
         FileRef {
+            domain: Default::default(),
             path: path.into(),
             format: None,
             fingerprint: Some(dag_core::value::FileFingerprint {

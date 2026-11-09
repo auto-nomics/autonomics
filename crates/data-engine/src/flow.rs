@@ -1,6 +1,6 @@
 //! Stage-model flow execution hosted by the [`DataEngine`].
 //!
-//! [`FlowRunner`] assembles the new [`dag_engine`] process-model scheduler
+//! [`FlowRunner`] assembles the new [`crate::workflow`] process-model scheduler
 //! from the same ingredients the legacy DAG path uses — the node registry
 //! (every registered kind, including containerized ones, works unchanged),
 //! the engine-wide [`NodeCtx`], the VFS storage view, and the executor stack
@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use dag_engine::{
+use crate::workflow::{
     FlowGraph, FlowRunConfig, FlowRunReport, FlowScheduler, InstanceCache, NodeBuilder,
     stream_sources_with_functions,
 };
@@ -50,7 +50,7 @@ pub struct FlowRunReportSummary {
     pub ok: bool,
     #[serde(default)]
     pub cancelled: bool,
-    pub processes: std::collections::BTreeMap<String, dag_engine::ProcessRunSummary>,
+    pub processes: std::collections::BTreeMap<String, crate::workflow::ProcessRunSummary>,
 }
 
 impl From<&FlowRunReport> for FlowRunReportSummary {
@@ -72,7 +72,7 @@ impl From<&FlowRunReport> for FlowRunReportSummary {
 pub struct FlowRunner {
     scheduler: FlowScheduler,
     storage: Option<Arc<OpendalFileStorage>>,
-    source_function: dag_engine::ChannelFunction,
+    registry: Arc<crate::node_registry::NodeRegistry>,
     /// Cross-run instance results, shared with every other runner this
     /// session assembles. Each isolated agent has its own cache.
     cache: Arc<tokio::sync::Mutex<InstanceCache>>,
@@ -83,49 +83,25 @@ impl DataEngine {
     /// and executor stack. The authored flow graph is supplied per run, so
     /// the engine's own (legacy) DAG state is never consulted or mutated.
     pub fn flow_runner(&self) -> FlowRunner {
-        let function_registry = Arc::clone(&self.node_registry);
-        let function_snapshot = crate::dag_shell::DagShellSnapshot::from_dag(&self.dag);
-        let binary_registry = Arc::clone(&function_registry);
-        let binary_snapshot = function_snapshot.clone();
-        let channel_binary_function: dag_engine::ChannelBinaryFunction =
-            Arc::new(move |function, first, second| {
-                crate::dag_shell::run_channel_function_with_inputs(
-                    function,
-                    Some(first),
-                    Some(second),
-                    &binary_snapshot,
-                    &binary_registry,
-                )
-            });
-        let channel_function: dag_engine::ChannelFunction = Arc::new(move |function, input| {
-            crate::dag_shell::run_channel_function(
-                function,
-                input,
-                &function_snapshot,
-                &function_registry,
-            )
-        });
         let registry = Arc::clone(&self.node_registry);
         let node_builder: NodeBuilder = Arc::new(move |kind, spec| {
             if kind == "channel" {
                 return dag_core::dag::ChannelNode::from_spec(&spec)
                     .map(|node| Box::new(node) as Box<dyn dag_core::node::DagNode>)
-                    .map_err(|error| dag_engine::Error::Execution(error.to_string()));
+                    .map_err(|error| crate::workflow::Error::Execution(error.to_string()));
             }
             registry.build_node(kind, spec).map_err(|error| {
-                dag_engine::Error::Execution(format!("cannot build node `{kind}`: {error}"))
+                crate::workflow::Error::Execution(format!("cannot build node `{kind}`: {error}"))
             })
         });
         FlowRunner {
             scheduler: FlowScheduler::new(
-                self.dag.task_executor(),
+                Arc::clone(&self.task_executor),
                 node_builder,
                 Arc::new(self.engine_ctx.clone()),
-            )
-            .with_channel_function(channel_function.clone())
-            .with_channel_binary_function(channel_binary_function),
+            ),
             storage: self.engine_ctx.opendal.clone(),
-            source_function: channel_function,
+            registry: Arc::clone(&self.node_registry),
             cache: Arc::clone(&self.flow_cache),
         }
     }
@@ -133,23 +109,73 @@ impl DataEngine {
 
 /// Build the process-level projection for the currently executing flow.
 pub(crate) fn flow_snapshot(flow: &FlowGraph) -> dag_core::dag::view::DagTuiSnapshot {
-    use dag_core::dag::{runtime::RuntimeStatus, view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot}};
+    use dag_core::dag::{
+        runtime::RuntimeStatus,
+        view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot},
+    };
     let mut nodes = Vec::new();
-    for (id, kind) in flow.sources().iter().map(|s| (s.id.clone(), "source".to_string()))
-        .chain(flow.processes().iter().map(|p| (p.id.clone(), p.kind.clone()))) {
+    for (id, kind) in flow
+        .sources()
+        .iter()
+        .map(|s| (s.id.clone(), "source".to_string()))
+        .chain(
+            flow.processes()
+                .iter()
+                .map(|p| (p.id.clone(), p.kind.clone())),
+        )
+    {
         let ports = |input: bool| {
-            let mut indices: Vec<u8> = flow.wires().iter().filter_map(|w| {
-                if input && w.to == id { Some(w.to_port) }
-                else if !input && w.from == id { Some(w.from_port) }
-                else { None }
-            }).collect();
-            indices.sort_unstable(); indices.dedup();
-            indices.into_iter().map(|index| DagPortView { index, label: None, data_type: "channel".into() }).collect()
+            let mut indices: Vec<u8> = flow
+                .wires()
+                .iter()
+                .filter_map(|w| {
+                    if input && w.to == id {
+                        Some(w.to_port)
+                    } else if !input && w.from == id {
+                        Some(w.from_port)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            indices.sort_unstable();
+            indices.dedup();
+            indices
+                .into_iter()
+                .map(|index| DagPortView {
+                    index,
+                    label: None,
+                    data_type: "channel".into(),
+                })
+                .collect()
         };
-        nodes.push(DagNodeView { inputs: ports(true), outputs: ports(false), id, kind, status: RuntimeStatus::Pending, dirty: false, execution: None });
+        nodes.push(DagNodeView {
+            inputs: ports(true),
+            outputs: ports(false),
+            id,
+            kind,
+            status: RuntimeStatus::Pending,
+            dirty: false,
+            execution: None,
+        });
     }
-    let edges = flow.wires().iter().map(|w| DagEdgeView { from: w.from.clone(), from_port: w.from_port, to: w.to.clone(), to_port: w.to_port }).collect();
-    DagTuiSnapshot { nodes, edges, running: false, run_id: Some(uuid::Uuid::new_v4().to_string()), observed_at_ms: 0 }
+    let edges = flow
+        .wires()
+        .iter()
+        .map(|w| DagEdgeView {
+            from: w.from.clone(),
+            from_port: w.from_port,
+            to: w.to.clone(),
+            to_port: w.to_port,
+        })
+        .collect();
+    DagTuiSnapshot {
+        nodes,
+        edges,
+        running: false,
+        run_id: Some(uuid::Uuid::new_v4().to_string()),
+        observed_at_ms: 0,
+    }
 }
 
 impl FlowRunner {
@@ -179,11 +205,34 @@ impl FlowRunner {
         flow: &FlowGraph,
         options: &FlowOptions,
         cancel: Option<CancellationToken>,
-    ) -> Result<FlowRunReport, dag_engine::Error> {
+    ) -> Result<FlowRunReport, crate::workflow::Error> {
+        let snapshot = crate::dag_shell::DagShellSnapshot::from_flow(flow);
+        let unary_registry = Arc::clone(&self.registry);
+        let unary_snapshot = snapshot.clone();
+        let channel_function: crate::workflow::ChannelFunction =
+            Arc::new(move |function, input| {
+                crate::dag_shell::run_channel_function(
+                    function,
+                    input,
+                    &unary_snapshot,
+                    &unary_registry,
+                )
+            });
+        let binary_registry = Arc::clone(&self.registry);
+        let binary_function: crate::workflow::ChannelBinaryFunction =
+            Arc::new(move |function, first, second| {
+                crate::dag_shell::run_channel_function_with_inputs(
+                    function,
+                    Some(first),
+                    Some(second),
+                    &snapshot,
+                    &binary_registry,
+                )
+            });
         let streams = stream_sources_with_functions(
             flow,
             self.storage.clone(),
-            Some(self.source_function.clone()),
+            Some(channel_function.clone()),
         )?;
         let config = FlowRunConfig {
             max_concurrency: options
@@ -193,6 +242,9 @@ impl FlowRunner {
         };
         let mut cache = self.cache.lock().await;
         self.scheduler
+            .clone()
+            .with_channel_function(channel_function)
+            .with_channel_binary_function(binary_function)
             .run_dataflow_streamed_cached(flow, streams, &config, Some(&mut cache), cancel)
             .await
     }
@@ -201,7 +253,7 @@ impl FlowRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dag_engine::model::{Process, Source, Wire, WireOp};
+    use crate::workflow::model::{Process, Source, Wire, WireOp};
 
     fn engine() -> DataEngine {
         DataEngine::builder().build()

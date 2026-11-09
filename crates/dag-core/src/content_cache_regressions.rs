@@ -68,6 +68,7 @@ async fn virtual_shadow_cannot_hide_host_content_tampering() {
         format!("file://{}", path.display()),
     ] {
         let file = FileRef {
+            domain: Default::default(),
             path: spelling,
             format: None,
             fingerprint: Some(fingerprint.clone()),
@@ -180,6 +181,7 @@ async fn changed_same_size_preserved_mtime_must_not_override_sha256() {
     assert_eq!(current.mtime_ns, expected.mtime_ns);
     println!("MATCHING_METADATA_TAMPER_CONTROL_READY");
     let file = FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(expected),
@@ -198,6 +200,7 @@ async fn incorrect_recorded_hash_is_not_ignored_when_metadata_matches() {
         hex_lower(&Sha256::digest(b"tampered"))
     ));
     let file = FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(expected),
@@ -213,6 +216,7 @@ async fn unsupported_content_hash_is_not_downgraded_to_metadata_success() {
     let mut expected = FileFingerprint::from_path(&path).unwrap();
     expected.content_hash = Some("unknown:identity".into());
     let file = FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(expected),
@@ -231,6 +235,7 @@ async fn unchanged_content_with_matching_metadata_and_hash_remains_clean() {
         hex_lower(&Sha256::digest(b"original"))
     ));
     let file = FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(expected),
@@ -247,6 +252,7 @@ async fn bare_checkpoint_sha256_reuses_identical_bytes_and_detects_metadata_pres
     let mut expected = FileFingerprint::from_path(&path).unwrap();
     expected.content_hash = Some(hex_lower(&Sha256::digest(b"original")));
     let file = FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(expected),
@@ -281,6 +287,7 @@ async fn malformed_or_other_hash_dialects_never_reuse_matching_metadata() {
         let mut expected = FileFingerprint::from_path(&path).unwrap();
         expected.content_hash = Some(hash.clone());
         let file = FileRef {
+            domain: Default::default(),
             path: path.to_string_lossy().into_owned(),
             format: None,
             fingerprint: Some(expected),

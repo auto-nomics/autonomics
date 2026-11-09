@@ -52,7 +52,8 @@ pub use defaults::{
     ENV_APP_DB, ENV_BIB_DB, ENV_BROWSER_DOWNLOAD_DIR, ENV_DATA_DIR, ENV_GENERATE_MEMORY,
     ENV_HTTP_CONNECT_TIMEOUT_SECS, ENV_HTTP_PROXY, ENV_HTTP_REQUEST_TIMEOUT_SECS,
     ENV_HTTP_USER_AGENT, ENV_KMS_DB, ENV_KNOWLEDGE_DB, ENV_OPENGWAS_CACHE_DIR, ENV_OPENGWAS_TOKEN,
-    ENV_STATE_DIR, ENV_USE_MEMORY, ENV_WIKI_DB, ENV_WRITING_DB,
+    ENV_STATE_DIR, ENV_USE_MEMORY, ENV_WIKI_DB, ENV_WRITING_DB, SSH_VAULT_FILE,
+    fixed_ssh_vault_path,
 };
 pub use prompt::{PromptCapabilities, build_system_prompt, default_system_prompt};
 pub use rsi::{EnvironmentDevConfig, PluginRsiConfig};

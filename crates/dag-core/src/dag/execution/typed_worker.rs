@@ -889,7 +889,7 @@ pub(super) async fn execute_typed_worker_core(
     input_paths: BTreeMap<String, Vec<PathBuf>>,
     workspace: &Path,
     private_projection: bool,
-) -> Result<crate::dag::graph::PortOutputs, DagError> {
+) -> Result<crate::dag::PortOutputs, DagError> {
     let mut rebound_task = envelope.task.clone();
     for (pointer, name) in &envelope.spec_files {
         let paths = input_paths
@@ -926,7 +926,7 @@ pub(super) async fn execute_typed_worker_core(
         let value = rebound_task
             .spec
             .pointer_mut(pointer)
-            .filter(|value| value.as_str().is_some_and(|path| vfs::uri::is_uri(path)))
+            .filter(|value| value.as_str().is_some_and(vfs::uri::is_uri))
             .ok_or_else(|| failure("directory publication requires an original VFS target"))?;
         *value = serde_json::json!(format!(
             "file://{}",

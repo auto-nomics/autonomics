@@ -363,8 +363,9 @@ fn default_commands() -> Vec<Command> {
         },
         Command {
             title: "VFS browser".into(),
-            keywords: "vfs files browse mounts container outputs upload downloads rename delete mkdir"
-                .into(),
+            keywords:
+                "vfs files browse mounts container outputs upload downloads rename delete mkdir"
+                    .into(),
             category: "system".into(),
             action: CommandAction::VfsBrowser,
         },

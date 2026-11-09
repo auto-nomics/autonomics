@@ -372,6 +372,81 @@ impl App {
                 Ok(reply) => self.apply_hpc_config_reply(reply),
                 Err(error) => self.apply_hpc_config_failed(error),
             },
+            crate::app_event::AppEvent::HpcTargetsLoaded(result) => {
+                let panel = &mut self.state.hpc_panel;
+                panel.loading = false;
+                match result {
+                    Ok(status) => {
+                        let selected = status["state"]["policy"]["target_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string();
+                        let mut rows = Vec::new();
+                        if let Some(targets) = status["state"]["targets"].as_array() {
+                            for target in targets {
+                                let backend = match target["backend"]["type"].as_str() {
+                                    Some("slurm") => "slurm",
+                                    Some("ssh") => "ssh",
+                                    _ => "local",
+                                };
+                                let mut endpoints = Vec::new();
+                                if let Some(map) = target["endpoints"].as_object() {
+                                    for (alias, endpoint) in map {
+                                        endpoints.push((
+                                            alias.clone(),
+                                            endpoint["hostname"]
+                                                .as_str()
+                                                .unwrap_or("?")
+                                                .to_string(),
+                                            endpoint["port"].as_u64().unwrap_or_default() as u16,
+                                        ));
+                                    }
+                                }
+                                let domains = target["data_domains"]
+                                    .as_array()
+                                    .map(|list| {
+                                        list.iter()
+                                            .filter_map(|domain| {
+                                                let id = domain["id"].as_str()?;
+                                                let prefix = domain["vfs_prefix"].as_str()?;
+                                                let root = domain["remote_root"].as_str()?;
+                                                Some(format!("{id} → {prefix} ({root})"))
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                rows.push(crate::widgets::hpc_panel_widget::HpcTargetRow {
+                                    id: target["id"].as_str().unwrap_or("?").to_string(),
+                                    revision: target["revision"].as_u64().unwrap_or_default(),
+                                    selected: target["id"].as_str() == Some(selected.as_str()),
+                                    enabled: target["enabled"].as_bool().unwrap_or(false),
+                                    backend: backend.to_string(),
+                                    endpoints,
+                                    domains,
+                                });
+                            }
+                        }
+                        panel.targets = rows;
+                        let mut mounts = Vec::new();
+                        if let Some(list) = status["mounts"].as_array() {
+                            for mount in list {
+                                mounts.push(crate::widgets::hpc_panel_widget::HpcMountRow {
+                                    path: mount["path"].as_str().unwrap_or("?").into(),
+                                    backend: mount["backend"].as_str().unwrap_or("?").into(),
+                                    read_only: mount["read_only"].as_bool().unwrap_or(false),
+                                    domain: mount["domain"].as_str().map(str::to_string),
+                                });
+                            }
+                        }
+                        panel.mounts = mounts;
+                        self.dirty = true;
+                    }
+                    Err(error) => {
+                        panel.status = Some(format!("targets: {error}"));
+                        self.dirty = true;
+                    }
+                }
+            }
             crate::app_event::AppEvent::HpcJobsLoaded(reply) => {
                 self.apply_hpc_jobs_reply(reply);
             }
@@ -1063,9 +1138,6 @@ mod tests {
         assert_eq!(sessions[0].name, "/root/beta");
 
         // No-op rename (already current) doesn't churn state.
-        assert_eq!(
-            rebind_leaf_name(&mut sessions, id, "/root/beta"),
-            None
-        );
+        assert_eq!(rebind_leaf_name(&mut sessions, id, "/root/beta"), None);
     }
 }

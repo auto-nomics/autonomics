@@ -5,8 +5,9 @@ edition = "2024"
 
 [dependencies]
 parking_lot = "0.12"
+glob = "0.3"
+regex = "1"
 dag-core = { path = "../dag-core" }
-dag-engine = { path = "../dag-engine" }
 sha2 = "0.10"
 container-runtime = { path = "../container-runtime" }
 thiserror.workspace = true

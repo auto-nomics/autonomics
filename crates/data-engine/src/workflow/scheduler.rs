@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use dag_core::dag::execution::{TaskExecution, TaskExecutor, TaskSubmission};
-use dag_core::dag::graph::PortOutputs;
+use dag_core::dag::PortOutputs;
 use dag_core::dag::node_event::{JobResult, NodeEvent, NodeReporter};
 use dag_core::dag::{DagError, NodeInput, RuntimeStatus};
 use dag_core::node::DagNode;
@@ -32,11 +32,11 @@ use futures::FutureExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::cache::{InstanceCache, plan_fingerprint};
-use crate::error::Error;
-use crate::instance::InstanceId;
-use crate::model::{ErrorMode, ProcessName, WireOp};
-use crate::plan::ExecutionPlan;
+use crate::workflow::cache::{InstanceCache, plan_fingerprint};
+use crate::workflow::error::Error;
+use crate::workflow::instance::InstanceId;
+use crate::workflow::model::{ErrorMode, ProcessName, WireOp};
+use crate::workflow::plan::ExecutionPlan;
 
 /// Builds the executable node payload for one instance from its process kind
 /// and rendered spec. Production wiring closes over dag-core's `NodeRegistry`
@@ -156,6 +156,7 @@ pub struct FlowRunReport {
 
 /// One flow scheduler: executor stack + node builder + engine context. Cheap
 /// to construct; holds no mutable graph state.
+#[derive(Clone)]
 pub struct FlowScheduler {
     pub(crate) executor: Arc<dyn TaskExecutor>,
     pub(crate) node_builder: NodeBuilder,
@@ -863,7 +864,7 @@ use std::panic::AssertUnwindSafe;
 
 impl InstanceId {
     fn adopt(id: String) -> Self {
-        debug_assert!(id.contains(crate::instance::INSTANCE_ID_SEPARATOR));
+        debug_assert!(id.contains(crate::workflow::instance::INSTANCE_ID_SEPARATOR));
         Self(id)
     }
 }
@@ -1118,8 +1119,8 @@ impl InstanceRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{FlowGraph, FlowGraphBuilder, Process, Source, Wire};
-    use crate::plan::{SourceResolution, build_plan};
+    use crate::workflow::model::{FlowGraph, FlowGraphBuilder, Process, Source, Wire};
+    use crate::workflow::plan::{SourceResolution, build_plan};
 
     /// Echo node writing REAL files (the cache validates size/mtime, so
     /// fake paths would always miss). Output path derives from the tag plus
@@ -1685,7 +1686,7 @@ mod tests {
 
     fn flow_with_strategy(
         fail_first_item: bool,
-        qc_strategy: crate::model::ErrorStrategy,
+        qc_strategy: crate::workflow::model::ErrorStrategy,
     ) -> FlowGraphBuilder {
         let qc_tag = unique_tag("qc");
         let mut qc = Process::new(
@@ -1723,14 +1724,14 @@ mod tests {
         let mut resolution = SourceResolution::new();
         for source in graph.sources() {
             match &source.spec {
-                crate::model::SourceSpec::Items { values } => {
+                crate::workflow::model::SourceSpec::Items { values } => {
                     resolution.resolve(source.id.clone(), values.clone())
                 }
-                crate::model::SourceSpec::Value { value } => {
+                crate::workflow::model::SourceSpec::Value { value } => {
                     resolution.resolve(source.id.clone(), vec![value.clone()])
                 }
-                crate::model::SourceSpec::Glob { .. }
-                | crate::model::SourceSpec::FilePairs { .. } => {}
+                crate::workflow::model::SourceSpec::Glob { .. }
+                | crate::workflow::model::SourceSpec::FilePairs { .. } => {}
             }
         }
         resolution
@@ -1869,7 +1870,7 @@ mod tests {
         let broken = FlowScheduler::new(
             Arc::new(InlineExecutor),
             Arc::new(|kind, _| {
-                Err(crate::model::Error::Invalid(format!("unknown kind `{kind}`")).into())
+                Err(crate::workflow::model::Error::Invalid(format!("unknown kind `{kind}`")).into())
             }),
             engine_ctx(),
         );
@@ -2039,7 +2040,7 @@ mod tests {
 
     #[tokio::test]
     async fn ignore_tolerates_item_failures_and_collects_survivors() {
-        let graph = flow_with_strategy(true, crate::model::ErrorStrategy::ignore())
+        let graph = flow_with_strategy(true, crate::workflow::model::ErrorStrategy::ignore())
             .build()
             .unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
@@ -2074,7 +2075,7 @@ mod tests {
 
     #[tokio::test]
     async fn retry_exhaustion_degrades_to_fail_closed() {
-        let graph = flow_with_strategy(true, crate::model::ErrorStrategy::retry(2, 0))
+        let graph = flow_with_strategy(true, crate::workflow::model::ErrorStrategy::retry(2, 0))
             .build()
             .unwrap();
         let plan = build_plan(&graph, &resolved(&graph)).unwrap();
@@ -2109,7 +2110,7 @@ mod tests {
             "echo",
             serde_json::json!({ "tag": format!("{}:{{{{item}}}}", qc_tag), "fail_times": 1 }),
         );
-        qc.error_strategy = crate::model::ErrorStrategy::retry(2, 0);
+        qc.error_strategy = crate::workflow::model::ErrorStrategy::retry(2, 0);
         let graph = FlowGraphBuilder::default()
             .source(Source::items(
                 "reads",
@@ -2164,7 +2165,7 @@ mod tests {
             "echo",
             serde_json::json!({ "tag": qc_tag, "fail_times": 1 }),
         );
-        qc.error_strategy = crate::model::ErrorStrategy::retry(1, 20);
+        qc.error_strategy = crate::workflow::model::ErrorStrategy::retry(1, 20);
         let graph = FlowGraphBuilder::default()
             .source(Source::items("reads", vec![serde_json::json!("a")]))
             .process(qc)
@@ -2479,7 +2480,7 @@ mod tests {
         let (sender, reader) = tokio::sync::mpsc::channel(2);
         sender.send(Ok(serde_json::json!(1))).await.unwrap();
         sender.send(Ok(serde_json::json!(2))).await.unwrap();
-        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", reader);
         let builder: NodeBuilder = Arc::new(|_, _| panic!("channel-only graph"));
         let evaluator: ChannelFunction = Arc::new(|_, item| {
             Ok(channel_value(serde_json::json!(
@@ -2516,7 +2517,7 @@ mod tests {
         for n in 1..=3 {
             sender.send(Ok(serde_json::json!(n))).await.unwrap();
         }
-        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", reader);
         let builder: NodeBuilder = Arc::new(|_, _| {
             Ok(Box::new(ListInspectNode {
                 ports: dag_core::NodePorts::new()
@@ -2564,7 +2565,7 @@ mod tests {
         let (sender, reader) = tokio::sync::mpsc::channel(2);
         sender.send(Ok(serde_json::json!(1))).await.unwrap();
         sender.send(Ok(serde_json::json!(2))).await.unwrap();
-        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", reader);
         let builder: NodeBuilder = Arc::new(|_, _| panic!("first is a channel operator"));
         let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
         let report = tokio::time::timeout(
@@ -2604,11 +2605,11 @@ mod tests {
             .unwrap();
         let (sender, reader) = tokio::sync::mpsc::channel(1);
         sender.send(Ok(serde_json::json!("first"))).await.unwrap();
-        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", reader);
         let builder: NodeBuilder = Arc::new(|_, spec| {
             dag_core::ChannelNode::from_spec(&spec)
                 .map(|node| Box::new(node) as Box<dyn DagNode>)
-                .map_err(|error| crate::Error::Execution(error.to_string()))
+                .map_err(|error| crate::workflow::Error::Execution(error.to_string()))
         });
         let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
         let report = tokio::time::timeout(
@@ -2654,7 +2655,7 @@ mod tests {
             ])))
             .await
             .unwrap();
-        let streams = crate::source::SourceStreams::from_test_reader("s", reader);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", reader);
         let builder: NodeBuilder = Arc::new(|_, _| panic!("all stages are channel operators"));
         let scheduler = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
         let config = FlowRunConfig {
@@ -3106,7 +3107,7 @@ mod tests {
             }))
         });
         let sched = FlowScheduler::new(Arc::new(InlineExecutor), builder, engine_ctx());
-        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", rx);
         let report = sched
             .run_dataflow_streamed_cached(&graph, streams, &FlowRunConfig::default(), None, None)
             .await
@@ -3125,11 +3126,13 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        tx.send(Err(crate::Error::Execution("source failed".into())))
-            .await
-            .unwrap();
+        tx.send(Err(crate::workflow::Error::Execution(
+            "source failed".into(),
+        )))
+        .await
+        .unwrap();
         drop(tx);
-        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", rx);
         let error = scheduler()
             .run_dataflow_streamed_cached(&graph, streams, &FlowRunConfig::default(), None, None)
             .await
@@ -3167,8 +3170,8 @@ mod tests {
     #[tokio::test]
     async fn unconfirmed_remote_stop_is_never_retried_or_ignored() {
         for strategy in [
-            crate::model::ErrorStrategy::retry(2, 0),
-            crate::model::ErrorStrategy::ignore(),
+            crate::workflow::model::ErrorStrategy::retry(2, 0),
+            crate::workflow::model::ErrorStrategy::ignore(),
         ] {
             for reactive in [false, true] {
                 let mut process = Process::new("worker", "echo", serde_json::json!({}));
@@ -3343,7 +3346,7 @@ mod tests {
             .build()
             .unwrap();
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let streams = crate::source::SourceStreams::from_test_reader("s", rx);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", rx);
         let started = Arc::new(tokio::sync::Notify::new());
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let executor = CancellationObservingExecutor {
@@ -3369,9 +3372,11 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
             .await
             .unwrap();
-        tx.send(Err(crate::Error::Execution("source failed".into())))
-            .await
-            .unwrap();
+        tx.send(Err(crate::workflow::Error::Execution(
+            "source failed".into(),
+        )))
+        .await
+        .unwrap();
         let error = tokio::time::timeout(std::time::Duration::from_secs(3), run)
             .await
             .unwrap()
@@ -3510,7 +3515,7 @@ mod tests {
             .build()
             .unwrap();
         let (_sender, receiver) = tokio::sync::mpsc::channel(1);
-        let streams = crate::source::SourceStreams::from_test_reader("s", receiver);
+        let streams = crate::workflow::source::SourceStreams::from_test_reader("s", receiver);
         let token = CancellationToken::new();
         let cancel = token.clone();
         tokio::spawn(async move {
@@ -3569,7 +3574,7 @@ mod tests {
     #[tokio::test]
     async fn dataflow_does_not_retry_after_stream_delivery() {
         let mut producer = Process::new("producer", "failing_stream", serde_json::json!({}));
-        producer.error_strategy = crate::model::ErrorStrategy::retry(3, 0);
+        producer.error_strategy = crate::workflow::model::ErrorStrategy::retry(3, 0);
         let graph = FlowGraphBuilder::default()
             .process(producer)
             .build()

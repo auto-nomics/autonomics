@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 
 use super::typed_worker::TypedWorkerEnvelope;
 use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::{FileRef, NodeCtx, NodeValue};
 
 const MANIFEST_NAME: &str = "zz-publication.json";

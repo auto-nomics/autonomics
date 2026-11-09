@@ -172,7 +172,7 @@ impl BackendConfig {
                 root,
                 python,
                 endpoint,
-            } => crate::ssh::build_pinned(alias, root, python, endpoint.clone()),
+            } => crate::ssh::build_ssh_operator(alias, root, python, endpoint.clone()),
             Self::Local { root } => {
                 opendal::Operator::new(opendal::services::Fs::default().root(root))
                     .map(|op| op.finish())

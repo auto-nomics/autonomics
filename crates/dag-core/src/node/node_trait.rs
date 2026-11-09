@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use super::input::NodeInput;
 use super::layout::NodePorts;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::{DagError, node_event::NodeReporter};
 
 /// A single unit of work in the DAG.

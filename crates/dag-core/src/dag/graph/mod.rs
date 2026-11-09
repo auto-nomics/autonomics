@@ -14,7 +14,6 @@
 
 mod manifest;
 mod mutation;
-mod port_outputs;
 #[cfg(test)]
 mod reports;
 mod topology;
@@ -23,7 +22,7 @@ mod validation;
 #[cfg(test)]
 mod tests;
 
-pub use port_outputs::PortOutputs;
+pub use super::port_outputs::PortOutputs;
 
 use std::sync::Arc;
 

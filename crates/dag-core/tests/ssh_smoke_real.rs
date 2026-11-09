@@ -64,7 +64,6 @@ fn process_submission(task_id: &str, input: &FileRef, process: &ProcessTaskSpec)
             logical_node: Some("process".into()),
             kind: "process".into(),
             spec: serde_json::to_value(process).unwrap(),
-            axis: None,
             item_key: None,
             item: None,
             inputs: vec![TaskInputBinding {
@@ -134,6 +133,7 @@ async fn real_host_runs_process_task_end_to_end() {
         command: Vec::new(),
         env: Default::default(),
         outputs: vec![ProcessTaskOutput {
+            optional: false,
             port: 0,
             pattern: "out-*.txt".into(),
         }],
@@ -183,6 +183,7 @@ async fn real_host_reports_failure_without_outputs() {
             command: Vec::new(),
             env: Default::default(),
             outputs: vec![ProcessTaskOutput {
+                optional: false,
                 port: 0,
                 pattern: "out-*.txt".into(),
             }],
@@ -226,6 +227,7 @@ async fn real_host_cancel_stops_a_running_task() {
             command: Vec::new(),
             env: Default::default(),
             outputs: vec![ProcessTaskOutput {
+                optional: false,
                 port: 0,
                 pattern: "out-*.txt".into(),
             }],

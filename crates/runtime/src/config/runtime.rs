@@ -210,6 +210,11 @@ fn default_ssh_control_persist() -> String {
     "10m".into()
 }
 
+/// Enable SSH connection multiplexing (mandatory for OTP clusters: a
+/// one-time password authenticates exactly one connection, so every
+/// operation must reuse a single master).
+pub const ENV_SSH_MULTIPLEX: &str = "AUTONOMICS_SSH_MULTIPLEX";
+
 fn default_ssh_credential_vault() -> Option<std::path::PathBuf> {
     std::env::var_os("AUTONOMICS_SSH_VAULT").map(std::path::PathBuf::from)
 }
@@ -442,13 +447,15 @@ impl RuntimeConfig {
             plugin_rsi: base.and_then(|b| b.plugin_rsi.clone()).unwrap_or_default(),
             downloader: base.and_then(|b| b.downloader.clone()).unwrap_or_default(),
             slurm: base.and_then(|b| b.slurm.clone()).unwrap_or_default(),
-            ssh_multiplex: resolve_flag(base, |b| b.ssh_multiplex, false),
+            ssh_multiplex: resolve_flag(base, |b| b.ssh_multiplex, false)
+                || std::env::var(ENV_SSH_MULTIPLEX)
+                    .is_ok_and(|value| value != "0" && value != "false"),
             ssh_control_persist: base
                 .and_then(|b| b.ssh_control_persist.clone())
                 .unwrap_or_else(default_ssh_control_persist),
             ssh_credential_vault: base
                 .and_then(|b| b.ssh_credential_vault.clone())
-                .or_else(|| default_ssh_credential_vault()),
+                .or_else(default_ssh_credential_vault),
         }
     }
 }

@@ -25,8 +25,6 @@ use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-
-
 use super::plugins;
 use super::state::GatewayState;
 
@@ -51,23 +49,23 @@ pub(crate) async fn terminal(
     // Refuse unknown projects before the upgrade: a 404 response beats
     // an upgrade followed by an immediate close.
     plugins::project_workspace(&state, &name)?;
-    let manager = state
-        .infra
-        .rsi
-        .dev_sessions()
-        .map_err(|error| super::error::GatewayError::Status(
+    let manager = state.infra.rsi.dev_sessions().map_err(|error| {
+        super::error::GatewayError::Status(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             error.to_string(),
-        ))?;
+        )
+    })?;
     let cols = query.cols.unwrap_or(80).clamp(10, 500);
     let rows = query.rows.unwrap_or(24).clamp(4, 200);
     let stream = manager
         .exec(&name, true, cols, rows)
         .await
-        .map_err(|error| super::error::GatewayError::Status(
-            axum::http::StatusCode::BAD_GATEWAY,
-            error.to_string(),
-        ))?;
+        .map_err(|error| {
+            super::error::GatewayError::Status(
+                axum::http::StatusCode::BAD_GATEWAY,
+                error.to_string(),
+            )
+        })?;
     Ok(ws.on_upgrade(move |socket| bridge(socket, stream)))
 }
 
@@ -165,7 +163,9 @@ pub(crate) async fn pump_read_to_channel<R: AsyncRead + Unpin>(
             return Ok(());
         }
         if tx
-            .send(Message::Binary(axum::body::Bytes::copy_from_slice(&buffer[..read])))
+            .send(Message::Binary(axum::body::Bytes::copy_from_slice(
+                &buffer[..read],
+            )))
             .await
             .is_err()
         {

@@ -766,8 +766,8 @@ pub async fn cached_file_changed_observed(
 
 #[cfg(test)]
 #[path = "content_cache_regressions.rs"]
-#[cfg(test)]
-#[path = "cache_dependency_tests.rs"]
+mod content_cache_regressions;
+
 #[cfg(test)]
 mod tests {
     use super::*;

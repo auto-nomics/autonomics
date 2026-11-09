@@ -122,3 +122,19 @@ pub(crate) fn env_path(var: &str) -> Option<PathBuf> {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
 }
+
+/// The system-fixed SSH credential-vault file name inside the state dir.
+pub const SSH_VAULT_FILE: &str = "ssh-vault";
+
+/// The system-fixed credential-vault location used by the CLI: resolves
+/// the state directory exactly like the daemon (`AUTONOMICS_STATE_DIR`
+/// override, else `~/.autonomics`) and appends [`SSH_VAULT_FILE`].
+pub fn fixed_ssh_vault_path() -> Option<std::path::PathBuf> {
+    let state_dir = std::env::var_os(ENV_STATE_DIR)
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(DEFAULT_STATE_DIR))
+        })?;
+    Some(state_dir.join(SSH_VAULT_FILE))
+}

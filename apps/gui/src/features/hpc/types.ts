@@ -71,7 +71,7 @@ export type ComputePolicy = {
   target_revision: number;
 };
 
-export type ComputeCatalog = {
+export type ComputeRegistryState = {
   version: number;
   revision: number;
   policy: ComputePolicy;
@@ -96,7 +96,7 @@ export type MountDefinition = {
 
 export type ComputeStatus = {
   deployment: Record<string, unknown> & { source_compatible?: boolean };
-  catalog: ComputeCatalog;
+  state: ComputeRegistryState;
   mounts: MountDefinition[];
   runs: ExecutionBinding[];
 };

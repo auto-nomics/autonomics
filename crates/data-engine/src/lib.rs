@@ -18,12 +18,13 @@ pub use dag_core::registry as node_registry;
 pub use dag_core::value;
 
 pub mod dag_shell;
-pub mod flow;
 pub mod data_bundles;
 pub mod data_engine;
 pub mod default_registry;
+pub mod flow;
 pub mod nodes;
 pub mod runtime;
+pub mod workflow;
 
 // Convenience re-exports (backward compat with existing `use data_engine::*`).
 pub use dag_core::{

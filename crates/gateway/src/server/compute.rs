@@ -8,7 +8,9 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use runtime::compute::{ComputeCatalog, ComputeStatus, SaveDataSource, SaveTarget, SelectTarget};
+use runtime::compute::{
+    ComputeRegistryState, ComputeStatus, EnrollRequest, SaveDataSource, SaveTarget, SelectTarget,
+};
 use std::sync::Arc;
 
 fn registry(state: &GatewayState) -> GatewayResult<Arc<runtime::compute::ComputeRegistry>> {
@@ -59,43 +61,56 @@ pub(crate) async fn status(
 ) -> GatewayResult<Json<ComputeStatus>> {
     registry(&state)?.status().map(Json).map_err(compute_error)
 }
+/// One-shot composite enrollment from minimal operator input.
+#[utoipa::path(post,path="/api/v1/compute/enroll",tag="compute",request_body=Object,responses((status=200,body=Object),(status=409,description="enrollment step failed")))]
+pub(crate) async fn enroll(
+    State(state): State<GatewayState>,
+    Json(request): Json<EnrollRequest>,
+) -> GatewayResult<Json<ComputeRegistryState>> {
+    registry(&state)?
+        .enroll(request)
+        .await
+        .map(Json)
+        .map_err(compute_error)
+}
+
 #[utoipa::path(put,path="/api/v1/compute/targets",tag="compute",request_body=Object,responses((status=200,body=Object)))]
 pub(crate) async fn target(
-    State(state): State<GatewayState>,
+    State(gateway): State<GatewayState>,
     Json(request): Json<SaveTarget>,
-) -> GatewayResult<Json<ComputeCatalog>> {
+) -> GatewayResult<Json<ComputeRegistryState>> {
     registry(&state)?
         .save_target(request)
-        .map(|catalog| {
-            changed(&state, &catalog);
-            Json(catalog)
+        .map(|registry_state| {
+            changed(&gateway, &registry_state);
+            Json(registry_state)
         })
         .map_err(compute_error)
 }
 #[utoipa::path(put,path="/api/v1/compute/policy",tag="compute",request_body=Object,responses((status=200,body=Object)))]
 pub(crate) async fn select(
-    State(state): State<GatewayState>,
+    State(gateway): State<GatewayState>,
     Json(request): Json<SelectTarget>,
-) -> GatewayResult<Json<ComputeCatalog>> {
+) -> GatewayResult<Json<ComputeRegistryState>> {
     registry(&state)?
         .select(request)
-        .map(|catalog| {
-            changed(&state, &catalog);
-            Json(catalog)
+        .map(|registry_state| {
+            changed(&gateway, &registry_state);
+            Json(registry_state)
         })
         .map_err(compute_error)
 }
 #[utoipa::path(post,path="/api/v1/compute/data-sources",tag="compute",request_body=Object,responses((status=200,body=Object)))]
 pub(crate) async fn source(
-    State(state): State<GatewayState>,
+    State(gateway): State<GatewayState>,
     Json(request): Json<SaveDataSource>,
-) -> GatewayResult<Json<ComputeCatalog>> {
+) -> GatewayResult<Json<ComputeRegistryState>> {
     registry(&state)?
         .add_source(request)
         .await
-        .map(|catalog| {
-            changed(&state, &catalog);
-            Json(catalog)
+        .map(|registry_state| {
+            changed(&gateway, &registry_state);
+            Json(registry_state)
         })
         .map_err(compute_error)
 }
@@ -111,12 +126,12 @@ pub(crate) async fn check(
         .map_err(compute_error)
 }
 
-fn changed(state: &GatewayState, catalog: &ComputeCatalog) {
-    state.hub.publish(crate::hub::EventKind::Notice(
+fn changed(gateway: &GatewayState, state: &ComputeRegistryState) {
+    gateway.hub.publish(crate::hub::EventKind::Notice(
         crate::proto::GatewayNotice::ComputeChanged {
-            catalog_revision: catalog.revision,
-            target_id: catalog.policy.target_id.clone(),
-            target_revision: catalog.policy.target_revision,
+            registry_revision: state.revision,
+            target_id: state.policy.target_id.clone(),
+            target_revision: state.policy.target_revision,
         },
     ));
 }

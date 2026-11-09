@@ -18,7 +18,9 @@ pub mod live;
 pub mod logical;
 pub mod node_event;
 pub mod physical;
+pub mod port_outputs;
 pub mod runtime;
+pub mod status;
 pub mod utils;
 pub mod view;
 
@@ -44,6 +46,7 @@ pub use execution::{
 };
 pub use export::{ExportFile, ExportFormat, ExportSummary, SkippedFile};
 pub use graph::{DAG, DynamicNodeBuilder};
+pub use port_outputs::PortOutputs;
 pub use history::{DagHistory, DagManifest, RunRecord, Snapshot};
 pub use logical::{
     LogicalEdge, LogicalExecutionStrategy, LogicalGraph, LogicalNode, LogicalNodeDefinition,
@@ -51,6 +54,7 @@ pub use logical::{
 pub use physical::{DynamicFanoutNode, GatherNode, PhysicalJobRef};
 pub use runtime::{
     InputBinding, InputHashing, LogicalJobError, LogicalRunSummary, NodeRunDetails, RunReport,
-    RuntimeStatus, SchedulerConfig, WaveRunSummary,
+    SchedulerConfig, WaveRunSummary,
 };
+pub use status::RuntimeStatus;
 pub use view::{DagEdgeView, DagNodeView, DagPortView, DagTuiSnapshot};

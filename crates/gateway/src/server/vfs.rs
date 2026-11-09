@@ -14,8 +14,8 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use vfs::browse::{self, BrowseError};
 use vfs::OpendalFileStorage;
+use vfs::browse::{self, BrowseError};
 
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
@@ -32,8 +32,7 @@ pub(crate) const VFS_MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 /// Map a typed browse error onto the gateway error convention
 /// (`{"error": message}` with the suggested status code).
 fn vfs_error(error: BrowseError) -> GatewayError {
-    let status = StatusCode::from_u16(error.status())
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(error.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     GatewayError::Status(status, error.message().to_string())
 }
 
@@ -94,7 +93,9 @@ pub(crate) async fn stat(
     Query(query): Query<PathQuery>,
 ) -> GatewayResult<Json<serde_json::Value>> {
     let storage = &state.infra.file_storage;
-    let entry = browse::stat(storage, &query.path).await.map_err(vfs_error)?;
+    let entry = browse::stat(storage, &query.path)
+        .await
+        .map_err(vfs_error)?;
     let mount = browse::covering_mount(storage, &query.path);
     Ok(Json(serde_json::json!({
         "path": entry.path,
@@ -115,9 +116,7 @@ pub(crate) async fn stat(
 /// `GET /vfs/mounts` — the declarative mount table.
 #[utoipa::path(get, path = "/api/v1/vfs/mounts", tag = "vfs",
     responses((status = 200, description = "Every mount (path / backend / source / read_only)")))]
-pub(crate) async fn mounts(
-    State(state): State<GatewayState>,
-) -> Json<serde_json::Value> {
+pub(crate) async fn mounts(State(state): State<GatewayState>) -> Json<serde_json::Value> {
     let mounts: Vec<serde_json::Value> = browse::mounts(&state.infra.file_storage)
         .into_iter()
         .map(|m| {
@@ -224,7 +223,10 @@ pub(crate) async fn file(
             ))
             .unwrap(),
         );
-        headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+        headers.insert(
+            header::ACCEPT_RANGES,
+            header::HeaderValue::from_static("bytes"),
+        );
         return Ok(response);
     }
 
@@ -242,7 +244,10 @@ pub(crate) async fn file(
         header::CONTENT_LENGTH,
         header::HeaderValue::from_str(&size.to_string()).unwrap(),
     );
-    headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+    headers.insert(
+        header::ACCEPT_RANGES,
+        header::HeaderValue::from_static("bytes"),
+    );
     Ok(response)
 }
 
@@ -288,7 +293,11 @@ fn attachment_disposition(path: &str) -> header::HeaderValue {
         .chars()
         .filter(|c| !matches!(c, '"' | '\\' | '\r' | '\n'))
         .collect::<String>();
-    let name = if name.is_empty() { "file".to_string() } else { name };
+    let name = if name.is_empty() {
+        "file".to_string()
+    } else {
+        name
+    };
     header::HeaderValue::from_str(&format!("attachment; filename=\"{name}\""))
         .unwrap_or_else(|_| header::HeaderValue::from_static("attachment"))
 }
@@ -418,7 +427,9 @@ pub(crate) async fn move_path(
     let (src, dst) = browse::move_entry(&state.infra.file_storage, &request.src, &request.dst)
         .await
         .map_err(vfs_error)?;
-    Ok(Json(serde_json::json!({ "src": src, "dst": dst, "moved": true })))
+    Ok(Json(
+        serde_json::json!({ "src": src, "dst": dst, "moved": true }),
+    ))
 }
 
 /// `POST /vfs/copy` — copy a file (or same-backend subtree).
@@ -435,7 +446,9 @@ pub(crate) async fn copy(
     let (src, dst) = browse::copy(&state.infra.file_storage, &request.src, &request.dst)
         .await
         .map_err(vfs_error)?;
-    Ok(Json(serde_json::json!({ "src": src, "dst": dst, "copied": true })))
+    Ok(Json(
+        serde_json::json!({ "src": src, "dst": dst, "copied": true }),
+    ))
 }
 
 /// `PUT /vfs/file?path=` — raw byte upload (binary or large files).
@@ -461,7 +474,9 @@ pub(crate) async fn upload(
         .await
         .map_err(BrowseError::from)
         .map_err(vfs_error)?;
-    Ok(Json(serde_json::json!({ "path": query.path, "size": size, "written": true })))
+    Ok(Json(
+        serde_json::json!({ "path": query.path, "size": size, "written": true }),
+    ))
 }
 
 /// `PUT /vfs/text` — conflict-checked text save from the editor.
@@ -498,5 +513,7 @@ pub(crate) async fn save_text(
         .await
         .map_err(BrowseError::from)
         .map_err(vfs_error)?;
-    Ok(Json(serde_json::json!({ "path": request.path, "size": size, "written": true })))
+    Ok(Json(
+        serde_json::json!({ "path": request.path, "size": size, "written": true }),
+    ))
 }

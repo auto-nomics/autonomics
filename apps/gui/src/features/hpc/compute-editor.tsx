@@ -1,5 +1,5 @@
 /**
- * 计算目标编辑器:管理 compute catalog(目标/策略/数据源)、检查目标、
+ * 计算目标编辑器:管理 compute registry state(目标/策略/数据源)、检查目标、
  * 查看部署就绪与运行绑定。操作员级操作,经网关 HTTP 完成;目录修订采用
  * 乐观并发(expected_revision),409 冲突时提示并自动重载。
  */
@@ -134,9 +134,9 @@ export function ComputeEditorView() {
       window.removeEventListener("autonomics:compute-changed", onComputeChanged);
   }, [reload]);
 
-  const catalog = status?.catalog ?? null;
-  const revision = catalog?.revision ?? 0;
-  const selectedId = catalog?.policy.target_id ?? "";
+  const state = status?.state ?? null;
+  const revision = state?.revision ?? 0;
+  const selectedId = state?.policy.target_id ?? "";
 
   const run = useCallback(
     async (key: string, action: () => Promise<void>) => {
@@ -161,8 +161,8 @@ export function ComputeEditorView() {
     [reload],
   );
 
-  const targets = useMemo(() => catalog?.targets ?? [], [catalog]);
-  const sources = useMemo(() => catalog?.data_sources ?? [], [catalog]);
+  const targets = useMemo(() => state?.targets ?? [], [state]);
+  const sources = useMemo(() => state?.data_sources ?? [], [state]);
   const runs = useMemo(() => status?.runs ?? [], [status]);
 
   if (loadError && !status) {
@@ -175,7 +175,7 @@ export function ComputeEditorView() {
       </div>
     );
   }
-  if (!status || !catalog) {
+  if (!status || !state) {
     return <div className="p-4 text-sm text-muted-foreground">加载中…</div>;
   }
 
@@ -187,7 +187,7 @@ export function ComputeEditorView() {
             <h2 className="text-base font-semibold">计算目标</h2>
             <p className="text-xs text-muted-foreground">
               目录修订 r{revision} · 当前策略:{selectedId} r
-              {catalog.policy.target_revision}(policy r{catalog.policy.revision})
+              {state.policy.target_revision}(policy r{state.policy.revision})
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -296,7 +296,7 @@ export function ComputeEditorView() {
             {targets.map((target) => {
               const selected =
                 target.id === selectedId &&
-                target.revision === catalog.policy.target_revision;
+                target.revision === state.policy.target_revision;
               return (
                 <li
                   key={`${target.id}-r${target.revision}`}

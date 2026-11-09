@@ -35,13 +35,37 @@ impl LeaderNode {
 /// The root menu. `<Space><Space>` opens the palette, mirroring LazyVim's
 /// `<leader><leader>` smart-find slot; groups cluster the rest.
 pub(super) const LEADER_ROOT: &[LeaderNode] = &[
-    LeaderNode::Leaf { key: '|', label: "Split right", action: CommandAction::SplitVertical },
-    LeaderNode::Group { key: 'w', label: "window", children: &[
-        LeaderNode::Leaf { key: 'v', label: "Split right", action: CommandAction::SplitVertical },
-        LeaderNode::Leaf { key: 's', label: "Split below", action: CommandAction::SplitHorizontal },
-        LeaderNode::Leaf { key: 'w', label: "Focus other", action: CommandAction::FocusOtherSplit },
-        LeaderNode::Leaf { key: 'd', label: "Close split", action: CommandAction::CloseSplit },
-    ] },
+    LeaderNode::Leaf {
+        key: '|',
+        label: "Split right",
+        action: CommandAction::SplitVertical,
+    },
+    LeaderNode::Group {
+        key: 'w',
+        label: "window",
+        children: &[
+            LeaderNode::Leaf {
+                key: 'v',
+                label: "Split right",
+                action: CommandAction::SplitVertical,
+            },
+            LeaderNode::Leaf {
+                key: 's',
+                label: "Split below",
+                action: CommandAction::SplitHorizontal,
+            },
+            LeaderNode::Leaf {
+                key: 'w',
+                label: "Focus other",
+                action: CommandAction::FocusOtherSplit,
+            },
+            LeaderNode::Leaf {
+                key: 'd',
+                label: "Close split",
+                action: CommandAction::CloseSplit,
+            },
+        ],
+    },
     LeaderNode::Leaf {
         key: ' ',
         label: "Command palette",

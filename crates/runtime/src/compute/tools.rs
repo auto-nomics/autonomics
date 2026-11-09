@@ -35,29 +35,22 @@ impl ComputeContext {
 #[async_trait]
 impl agentik_core::context::ContextProvider for ComputeContext {
     async fn poll(&self) -> Option<String> {
-        let catalog = self.registry.catalog();
+        let state = self.registry.state();
         if self
             .revision
-            .swap(catalog.revision, std::sync::atomic::Ordering::AcqRel)
-            == catalog.revision
+            .swap(state.revision, std::sync::atomic::Ordering::AcqRel)
+            == state.revision
         {
             return None;
         }
-        let sources: Vec<_> = catalog
-            .data_sources
-            .iter()
-            .map(|s| s.mount_path())
-            .collect();
+        let sources: Vec<_> = state.data_sources.iter().map(|s| s.mount_path()).collect();
         let deployment = self
             .registry
-            .target(
-                &catalog.policy.target_id,
-                Some(catalog.policy.target_revision),
-            )
+            .target(&state.policy.target_id, Some(state.policy.target_revision))
             .ok()?
             .deployment();
         let status = serde_json::to_string(&json!({
-            "policy":catalog.policy,"data_sources":sources,"deployment":deployment
+            "policy":state.policy,"data_sources":sources,"deployment":deployment
         }))
         .ok()?;
         Some(format!(
@@ -238,8 +231,8 @@ pub(crate) fn hpc_registrations(
     storage: Arc<dyn AgentStorage>,
 ) -> Vec<ToolRegistration> {
     // Definitions need no live connection or state-directory creation.
-    let catalog = registry.catalog();
-    let candidate = catalog.targets.iter().find_map(|t| {
+    let state = registry.state();
+    let candidate = state.targets.iter().find_map(|t| {
         registry
             .target(&t.id, Some(t.revision))
             .ok()
@@ -392,10 +385,10 @@ impl RoutedTool {
             );
             selected
         } else if let Some(id) = id {
-            let catalog = self.registry.catalog();
+            let state = self.registry.state();
             if revision.is_none()
                 && name == "hpc_jobs"
-                && catalog.targets.iter().filter(|t| t.id == id).count() > 1
+                && state.targets.iter().filter(|t| t.id == id).count() > 1
             {
                 return Err(error(
                     "existing job management requires its original target_revision",
@@ -403,8 +396,8 @@ impl RoutedTool {
             }
             self.registry.target(&id, revision).map_err(error)?
         } else {
-            let catalog = self.registry.catalog();
-            let remote: Vec<_> = catalog
+            let state = self.registry.state();
+            let remote: Vec<_> = state
                 .targets
                 .iter()
                 .filter(|t| {

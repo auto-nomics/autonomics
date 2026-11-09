@@ -3,8 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::channel::{AnyFiring, ChannelKind, Collect, Firing, InputSet};
-use crate::model::{FlowGraph, WireOp};
+use crate::workflow::channel::{AnyFiring, ChannelKind, Collect, Firing, InputSet};
+use crate::workflow::model::{FlowGraph, WireOp};
 
 /// A direct input carries one value; collect carries the values seen before
 /// upstream closure. The executor adapter converts these into typed node inputs.
@@ -199,7 +199,7 @@ pub fn channel_operator_schema() -> serde_json::Value {
 }
 
 fn validate_channel_spec(
-    process: &crate::model::Process,
+    process: &crate::workflow::model::Process,
     ports: &BTreeSet<u8>,
 ) -> Result<(), String> {
     let op = process
@@ -585,10 +585,10 @@ fn validate_channel_spec(
             {
                 return Err("group_tuple sort supports natural ordering only".into());
             }
-            if let Some(size) = process.spec.get("size").filter(|v| !v.is_null()) {
-                if size.as_u64().is_none_or(|n| n == 0) {
-                    return Err("group_tuple size must be positive".into());
-                }
+            if let Some(size) = process.spec.get("size").filter(|v| !v.is_null())
+                && size.as_u64().is_none_or(|n| n == 0)
+            {
+                return Err("group_tuple size must be positive".into());
             }
         }
         _ => {
@@ -629,7 +629,7 @@ impl<T: Clone> Dataflow<T> {
                 (
                     source.id.clone(),
                     match &source.spec {
-                        crate::model::SourceSpec::Value { .. } => ChannelKind::Value,
+                        crate::workflow::model::SourceSpec::Value { .. } => ChannelKind::Value,
                         _ => ChannelKind::Queue,
                     },
                 )
@@ -905,13 +905,13 @@ impl<T: Clone> Dataflow<T> {
             .filter(|c| c.from == producer && !c.closed && !c.abandoned)
         {
             let target = self.processes.get_mut(&c.to).expect("validated target");
-            if let Some(collect) = &mut c.collect {
-                if let Some(values) = collect.close() {
-                    target
-                        .inputs
-                        .send(c.input, Delivery::Collected(values))
-                        .map_err(|e| format!("{e:?}"))?;
-                }
+            if let Some(collect) = &mut c.collect
+                && let Some(values) = collect.close()
+            {
+                target
+                    .inputs
+                    .send(c.input, Delivery::Collected(values))
+                    .map_err(|e| format!("{e:?}"))?;
             }
             target.inputs.close(c.input).map_err(|e| format!("{e:?}"))?;
             c.closed = true;
@@ -1107,7 +1107,7 @@ impl<T: Clone> Dataflow<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{FlowGraphBuilder, Process, Source, Wire};
+    use crate::workflow::model::{FlowGraphBuilder, Process, Source, Wire};
     use serde_json::json;
 
     #[test]

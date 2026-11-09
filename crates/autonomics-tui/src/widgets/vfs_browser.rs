@@ -10,7 +10,10 @@ use ratatui::{
     prelude::Buffer,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, StatefulWidgetRef, Widget, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, StatefulWidgetRef,
+        Widget, Wrap,
+    },
 };
 use vfs::browse::{TextRead, VfsEntry};
 
@@ -33,9 +36,15 @@ pub enum VfsBrowserCommand {
     /// Create an empty text file.
     NewFile(String),
     /// Rename/move within the current directory's parent.
-    Rename { src: String, dst: String },
+    Rename {
+        src: String,
+        dst: String,
+    },
     /// Delete a file or (recursively) a directory.
-    Remove { path: String, recursive: bool },
+    Remove {
+        path: String,
+        recursive: bool,
+    },
 }
 
 /// A pending inline name input (mkdir / new file / rename).
@@ -91,7 +100,10 @@ impl VfsBrowserState {
     pub fn read_only_cwd(&self) -> bool {
         self.mounts.iter().any(|(mount, read_only)| {
             *read_only
-                && (self.cwd == *mount || self.cwd.starts_with(&format!("{}/", mount.trim_end_matches('/'))))
+                && (self.cwd == *mount
+                    || self
+                        .cwd
+                        .starts_with(&format!("{}/", mount.trim_end_matches('/'))))
         })
     }
 
@@ -122,7 +134,11 @@ impl VfsBrowserState {
         self.cwd = cwd;
         self.entries = entries;
         self.loading = false;
-        let selected = self.list_state.selected().unwrap_or(0).min(self.entries.len().saturating_sub(1));
+        let selected = self
+            .list_state
+            .selected()
+            .unwrap_or(0)
+            .min(self.entries.len().saturating_sub(1));
         self.list_state.select(Some(selected));
     }
 
@@ -138,9 +154,13 @@ impl VfsBrowserState {
                     if value.is_empty() {
                         return None;
                     }
-                    return match kind {
-                        VfsInputKind::Mkdir => Some(VfsBrowserCommand::Mkdir(Self::child_path(&self.cwd, &value))),
-                        VfsInputKind::NewFile => Some(VfsBrowserCommand::NewFile(Self::child_path(&self.cwd, &value))),
+                    match kind {
+                        VfsInputKind::Mkdir => Some(VfsBrowserCommand::Mkdir(Self::child_path(
+                            &self.cwd, &value,
+                        ))),
+                        VfsInputKind::NewFile => Some(VfsBrowserCommand::NewFile(
+                            Self::child_path(&self.cwd, &value),
+                        )),
                         VfsInputKind::Rename { src } => {
                             let parent = Self::parent_of(&src);
                             Some(VfsBrowserCommand::Rename {
@@ -148,7 +168,7 @@ impl VfsBrowserState {
                                 dst: Self::child_path(&parent, &value),
                             })
                         }
-                    };
+                    }
                 }
                 KeyCode::Esc => {
                     self.input = None;
@@ -165,7 +185,10 @@ impl VfsBrowserState {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     self.confirm_delete = None;
-                    Some(VfsBrowserCommand::Remove { path: target, recursive: is_dir })
+                    Some(VfsBrowserCommand::Remove {
+                        path: target,
+                        recursive: is_dir,
+                    })
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                     self.confirm_delete = None;
@@ -198,7 +221,9 @@ impl VfsBrowserState {
             KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
                 let selected = self.selected().cloned();
                 match selected {
-                    Some(entry) if entry.is_dir => Some(VfsBrowserCommand::LoadDir(entry.path.clone())),
+                    Some(entry) if entry.is_dir => {
+                        Some(VfsBrowserCommand::LoadDir(entry.path.clone()))
+                    }
                     Some(entry) => Some(VfsBrowserCommand::LoadText(entry.path.clone())),
                     None => None,
                 }
@@ -219,7 +244,9 @@ impl VfsBrowserState {
                 textarea.set_text(&selected.name);
                 textarea.set_cursor(selected.name.len());
                 self.input = Some(VfsInput {
-                    kind: VfsInputKind::Rename { src: selected.path.clone() },
+                    kind: VfsInputKind::Rename {
+                        src: selected.path.clone(),
+                    },
                     textarea,
                     textarea_state: TextAreaState::default(),
                 });
@@ -303,19 +330,31 @@ pub fn render_vfs_browser(area: Rect, buf: &mut Buffer, state: &mut VfsBrowserSt
 
     let body = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     let (header, panes, status_line, footer_line) = (body[0], body[1], body[2], body[3]);
 
     // Header: cwd + read-only badge + pending status.
-    let mut header_spans = vec![
-        Span::styled(state.cwd.clone(), Style::default().add_modifier(Modifier::BOLD)),
-    ];
+    let mut header_spans = vec![Span::styled(
+        state.cwd.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )];
     if read_only {
-        header_spans.push(Span::styled("  [只读挂载]", Style::default().fg(theme::current().text_dim)));
+        header_spans.push(Span::styled(
+            "  [只读挂载]",
+            Style::default().fg(theme::current().text_dim),
+        ));
     }
     if state.loading {
-        header_spans.push(Span::styled("  加载中…", Style::default().fg(theme::current().text_dim)));
+        header_spans.push(Span::styled(
+            "  加载中…",
+            Style::default().fg(theme::current().text_dim),
+        ));
     }
     Paragraph::new(Line::from(header_spans)).render(header, buf);
 
@@ -369,9 +408,15 @@ pub fn render_vfs_browser(area: Rect, buf: &mut Buffer, state: &mut VfsBrowserSt
 
     // Status line: error, pending input, or delete confirmation.
     let status_text = if let Some(error) = &state.error {
-        Line::from(Span::styled(error.clone(), Style::default().fg(theme::current().error)))
+        Line::from(Span::styled(
+            error.clone(),
+            Style::default().fg(theme::current().error),
+        ))
     } else if let Some((target, _)) = &state.confirm_delete {
-        Line::from(Span::styled(format!("删除 {target}? [y/n]"), Style::default().fg(theme::current().error)))
+        Line::from(Span::styled(
+            format!("删除 {target}? [y/n]"),
+            Style::default().fg(theme::current().error),
+        ))
     } else if let Some(input) = &state.input {
         let label = match &input.kind {
             VfsInputKind::Mkdir => "新建目录名:",
@@ -380,15 +425,25 @@ pub fn render_vfs_browser(area: Rect, buf: &mut Buffer, state: &mut VfsBrowserSt
         };
         Line::from(vec![
             Span::raw(label.to_string()),
-            Span::styled(input.textarea.text().to_string(), Style::default().add_modifier(Modifier::UNDERLINED)),
+            Span::styled(
+                input.textarea.text().to_string(),
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            ),
         ])
     } else if let Some(status) = &state.status {
-        Line::from(Span::styled(status.clone(), Style::default().fg(theme::current().text_dim)))
+        Line::from(Span::styled(
+            status.clone(),
+            Style::default().fg(theme::current().text_dim),
+        ))
     } else {
         Line::from("")
     };
     Paragraph::new(status_text).render(status_line, buf);
-    Paragraph::new(Line::from(Span::styled(footer, Style::default().fg(theme::current().text_dim)))).render(footer_line, buf);
+    Paragraph::new(Line::from(Span::styled(
+        footer,
+        Style::default().fg(theme::current().text_dim),
+    )))
+    .render(footer_line, buf);
 
     // Inline input editor: render the single-line textarea over the
     // status line so editing is visible with a cursor.

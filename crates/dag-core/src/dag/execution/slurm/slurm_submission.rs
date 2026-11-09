@@ -1,12 +1,32 @@
 //! Durable pre-submission metadata. This contains no command/environment bytes.
 //! Reading it is not authorization to cancel, resubmit or accept a result.
-use super::*;
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::super::contract::{TaskAttemptReceipt, TaskDispatch, TaskExecution};
+use super::super::process::{
+    ProcessTaskSpec, parse_process_task, process_task_environment, render_process_script,
+    sanitize_path_component,
+};
+use super::super::traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
+use super::settings::SlurmSettings;
+use super::ssh::{hex_encode, sh_single_quote, slurm_job_name, ssh_stdout_text};
+use super::transport::{SlurmTaskTransport, resolve_remote_prefix};
+use crate::dag::DagError;
+use crate::dag::node_event::JobResult;
+use crate::value::{DomainId, FileFingerprint, FileRef};
 use std::io::{Read, Write};
-#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 const SCHEMA: &str = "SLURM_SUBMISSION_INTENT_V1";
-
 /// Trusted host integration, called synchronously after the private intent is
 /// durable and before SSH can submit anything. An error forbids submission.
 /// Ordinary transports do not install this hook.
@@ -17,13 +37,11 @@ pub trait SlurmSubmissionRecorder: std::fmt::Debug + Send + Sync {
     fn ensure_ready(&self) -> Result<(), DagError> {
         Ok(())
     }
-
     fn before_submit(
         &self,
         intent: &SlurmSubmissionIntent,
     ) -> Result<std::sync::Arc<dyn SlurmRecordedSubmission>, DagError>;
 }
-
 /// Owns the submission's journal/lease scope. Stop facts are raw scheduler
 /// observations; the trusted consumer must independently validate them.
 pub trait SlurmRecordedSubmission: std::fmt::Debug + Send + Sync {
@@ -32,7 +50,6 @@ pub trait SlurmRecordedSubmission: std::fmt::Debug + Send + Sync {
     /// futures. It never clears the durable outstanding obligation.
     fn unresolved(&self);
 }
-
 /// Do not keep a failed or dropped future looking like a live coordinator.
 pub(super) struct SubmissionScope {
     record: Option<std::sync::Arc<dyn SlurmRecordedSubmission>>,
@@ -58,7 +75,6 @@ impl Drop for SubmissionScope {
         }
     }
 }
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlurmSubmissionIntent {
@@ -74,11 +90,9 @@ pub struct SlurmSubmissionIntent {
     pub transport_binding: String,
     pub attempted_at_unix_ms: u128,
 }
-
 fn invalid(message: &str) -> DagError {
     DagError::Schedule(message.into())
 }
-
 pub(super) fn identity(directory: &str, manifest: &str) -> String {
     hex_encode(
         &Sha256::new()
@@ -88,7 +102,6 @@ pub(super) fn identity(directory: &str, manifest: &str) -> String {
             .finalize(),
     )
 }
-
 /// Only non-secret, configured transport choices. A recovery caller must also
 /// retain its operator-pinned SSH endpoint/target revision; an alias alone is
 /// not a physical endpoint identity.
@@ -119,7 +132,6 @@ pub(super) fn transport_binding(settings: &SlurmSettings) -> Result<String, DagE
         .map_err(|_| invalid("cannot encode configured Slurm binding"))?;
     Ok(hex_encode(&Sha256::digest(raw)))
 }
-
 impl SlurmSubmissionIntent {
     pub(super) fn new(
         settings: &SlurmSettings,
@@ -153,7 +165,6 @@ impl SlurmSubmissionIntent {
         v.validate()?;
         Ok(v)
     }
-
     pub fn validate(&self) -> Result<(), DagError> {
         let hex = |s: &str, n| {
             s.len() == n
@@ -191,7 +202,6 @@ impl SlurmSubmissionIntent {
         }
         Ok(())
     }
-
     /// Read a complete owned record without following a final symlink or FIFO.
     /// Legacy records without content/placement binding remain unsupported.
     #[cfg(unix)]
@@ -239,14 +249,12 @@ impl SlurmSubmissionIntent {
         }
         Ok(value)
     }
-
     #[cfg(not(unix))]
     pub fn read(_path: &Path) -> Result<Self, DagError> {
         Err(invalid(
             "secure Slurm intent recovery is unsupported on this platform",
         ))
     }
-
     pub(super) fn persist(&self, root: &Path) -> Result<PathBuf, DagError> {
         self.validate()?;
         let dir = root.join(sanitize_path_component(&self.task_id));
@@ -273,7 +281,6 @@ impl SlurmSubmissionIntent {
             })?;
         Ok(path)
     }
-
     /// Preserve the first transport outcome before reconciliation can obscure
     /// it. Private diagnostics are evidence only, never replay authorization.
     pub(super) fn persist_response(
@@ -321,7 +328,6 @@ impl SlurmSubmissionIntent {
         Ok(path)
     }
 }
-
 #[cfg(unix)]
 fn durable_directory(path: &Path) -> Result<(), DagError> {
     let absolute = if path.is_absolute() {
@@ -369,14 +375,12 @@ fn durable_directory(path: &Path) -> Result<(), DagError> {
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn durable_directory(_path: &Path) -> Result<(), DagError> {
     Err(invalid(
         "durable Slurm intent publication is unsupported on this platform",
     ))
 }
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlurmSubmissionObservation {
@@ -391,14 +395,12 @@ pub struct SlurmSubmissionObservation {
     /// Observation never grants retry, cancellation, result acceptance or G0.
     pub resubmission_authorized: bool,
 }
-
 impl SlurmTaskTransport {
     /// Non-secret configured binding for preparation of an operator-approved
     /// formal target. It grants no execution authority and submits no work.
     pub fn configured_submission_binding(&self) -> Result<String, DagError> {
         transport_binding(&self.settings)
     }
-
     /// Request only the original, freshly re-observed owned job's cancellation.
     /// No retry of the command and no interpretation of its exit as stop proof.
     pub async fn request_submission_cancellation(
@@ -427,7 +429,6 @@ impl SlurmTaskTransport {
             "exit":output.status.code(),"stdout":String::from_utf8_lossy(&output.stdout),
             "stderr":String::from_utf8_lossy(&output.stderr)}))
     }
-
     /// Read-only reconciliation. This does not run sbatch or recreate pending
     /// in-memory state, and missing records never become retry permission.
     pub async fn inspect_submission_intent(
@@ -496,7 +497,6 @@ impl SlurmTaskTransport {
         }
         Ok(raw)
     }
-
     /// Collect raw, identity-bound terminal evidence. The returned object is
     /// not a stop verdict: the trusted Store validates every scheduler fact.
     pub async fn collect_submission_stop_evidence(
@@ -518,12 +518,11 @@ impl SlurmTaskTransport {
         Ok(value)
     }
 }
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use super::super::SshTarget;
     use std::os::unix::fs::PermissionsExt;
-
     #[test]
     fn dropped_observation_scope_marks_unknown_but_transferred_scope_does_not() {
         #[derive(Debug)]
@@ -548,7 +547,6 @@ mod tests {
         drop(SubmissionScope::new(Some(record)));
         assert_eq!(unknown.load(Ordering::SeqCst), 1);
     }
-
     fn intent() -> SlurmSubmissionIntent {
         let settings = SlurmSettings {
             apptainer: None,
@@ -574,7 +572,6 @@ mod tests {
         )
         .unwrap()
     }
-
     #[test]
     fn durable_intent_reopens_exact_bindings_without_copying_environment() {
         let temp = tempfile::tempdir().unwrap();
@@ -604,7 +601,6 @@ mod tests {
             "28ccdf5b722b45ee2e23764e0c4efdc0e230fcc30eedcc7df1f6db117358603e"
         );
     }
-
     #[test]
     fn concurrent_intent_publication_has_one_winner_and_preserves_foreign_bytes() {
         let temp = tempfile::tempdir().unwrap();
@@ -632,7 +628,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn legacy_ambiguous_world_readable_and_symlink_intents_are_not_recovered() {
         let temp = tempfile::tempdir().unwrap();
@@ -658,7 +653,6 @@ mod tests {
         assert!(SlurmSubmissionIntent::read(&path).is_err());
         assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
     }
-
     #[test]
     fn existing_task_directory_beneath_a_symlink_cannot_publish_an_intent() {
         let temp = tempfile::tempdir().unwrap();

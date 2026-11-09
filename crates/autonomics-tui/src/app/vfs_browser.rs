@@ -33,7 +33,7 @@ impl App {
                         .collect::<Vec<_>>()
                 })
                 .map_err(|error| error.to_string());
-            let _ = event_tx.send(crate::app_event::AppEvent::VfsMountsLoaded(result));
+            event_tx.send(crate::app_event::AppEvent::VfsMountsLoaded(result));
         });
     }
 
@@ -45,7 +45,7 @@ impl App {
             // Follow pagination so the pane shows the whole directory.
             let mut entries: Vec<vfs::browse::VfsEntry> = Vec::new();
             let mut offset: usize = 0;
-            let mut cwd = path.clone();
+            let mut cwd: String;
             loop {
                 match client.vfs_list(&path, 500, offset as u32).await {
                     Ok(page) => {
@@ -58,14 +58,14 @@ impl App {
                         offset = page.next_offset.unwrap_or(offset + 500);
                     }
                     Err(error) => {
-                        let _ = event_tx.send(crate::app_event::AppEvent::VfsListingLoaded(
-                            Err(error.to_string()),
-                        ));
+                        event_tx.send(crate::app_event::AppEvent::VfsListingLoaded(Err(
+                            error.to_string()
+                        )));
                         return;
                     }
                 }
             }
-            let _ = event_tx.send(crate::app_event::AppEvent::VfsListingLoaded(Ok((
+            event_tx.send(crate::app_event::AppEvent::VfsListingLoaded(Ok((
                 cwd, entries,
             ))));
         });
@@ -76,7 +76,7 @@ impl App {
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("vfs_text_fetch", move || async move {
             let result = client.vfs_read_text(&path).await.map_err(|e| e.to_string());
-            let _ = event_tx.send(crate::app_event::AppEvent::VfsTextLoaded(result));
+            event_tx.send(crate::app_event::AppEvent::VfsTextLoaded(result));
         });
     }
 
@@ -84,18 +84,20 @@ impl App {
         &mut self,
         label: String,
         run: impl FnOnce(
-                gateway::GatewayClient,
-            )
-                -> std::pin::Pin<
-                    Box<dyn std::future::Future<Output = std::result::Result<serde_json::Value, String>> + Send>,
-                > + Send
-            + 'static,
+            gateway::GatewayClient,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = std::result::Result<serde_json::Value, String>>
+                    + Send,
+            >,
+        > + Send
+        + 'static,
     ) {
         let client = self.client.clone();
         let event_tx = self.app_event_tx.clone();
         self.spawn_client_task("vfs_mutation", move || async move {
             let result = run(client).await;
-            let _ = event_tx.send(crate::app_event::AppEvent::VfsMutationDone(
+            event_tx.send(crate::app_event::AppEvent::VfsMutationDone(
                 result.map(move |_| label),
             ));
         });
@@ -127,9 +129,9 @@ impl App {
             Some(VfsBrowserCommand::Mkdir(path)) => {
                 self.state.vfs_browser.status = Some("创建目录…".into());
                 self.run_vfs_mutation(format!("已创建 {path}"), move |client| {
-                    Box::pin(async move {
-                        client.vfs_mkdir(&path).await.map_err(|e| e.to_string())
-                    })
+                    Box::pin(
+                        async move { client.vfs_mkdir(&path).await.map_err(|e| e.to_string()) },
+                    )
                 });
             }
             Some(VfsBrowserCommand::NewFile(path)) => {
@@ -147,16 +149,19 @@ impl App {
             Some(VfsBrowserCommand::Rename { src, dst }) => {
                 self.state.vfs_browser.status = Some("重命名…".into());
                 self.run_vfs_mutation(format!("已重命名为 {dst}"), move |client| {
-                    Box::pin(async move {
-                        client.vfs_move(&src, &dst).await.map_err(|e| e.to_string())
-                    })
+                    Box::pin(
+                        async move { client.vfs_move(&src, &dst).await.map_err(|e| e.to_string()) },
+                    )
                 });
             }
             Some(VfsBrowserCommand::Remove { path, recursive }) => {
                 self.state.vfs_browser.status = Some("删除…".into());
                 self.run_vfs_mutation(format!("已删除 {path}"), move |client| {
                     Box::pin(async move {
-                        client.vfs_delete(&path, recursive).await.map_err(|e| e.to_string())
+                        client
+                            .vfs_delete(&path, recursive)
+                            .await
+                            .map_err(|e| e.to_string())
                     })
                 });
             }
@@ -180,7 +185,10 @@ impl App {
         self.dirty = true;
     }
 
-    pub(super) fn apply_vfs_text(&mut self, reply: std::result::Result<vfs::browse::TextRead, String>) {
+    pub(super) fn apply_vfs_text(
+        &mut self,
+        reply: std::result::Result<vfs::browse::TextRead, String>,
+    ) {
         match reply {
             Ok(text) => {
                 self.state.vfs_browser.preview = Some(text);
@@ -240,8 +248,20 @@ mod tests {
         state.apply_listing(
             "/".into(),
             vec![
-                vfs::browse::VfsEntry { path: "/data".into(), name: "data".into(), is_dir: true, size: 0, last_modified: None },
-                vfs::browse::VfsEntry { path: "/notes.md".into(), name: "notes.md".into(), is_dir: false, size: 12, last_modified: None },
+                vfs::browse::VfsEntry {
+                    path: "/data".into(),
+                    name: "data".into(),
+                    is_dir: true,
+                    size: 0,
+                    last_modified: None,
+                },
+                vfs::browse::VfsEntry {
+                    path: "/notes.md".into(),
+                    name: "notes.md".into(),
+                    is_dir: false,
+                    size: 12,
+                    last_modified: None,
+                },
             ],
         );
         state
@@ -281,7 +301,10 @@ mod tests {
         state.handle_key(key(KeyCode::Char('d')));
         assert_eq!(
             state.handle_key(key(KeyCode::Char('y'))),
-            Some(VfsBrowserCommand::Remove { path: "/notes.md".into(), recursive: false })
+            Some(VfsBrowserCommand::Remove {
+                path: "/notes.md".into(),
+                recursive: false
+            })
         );
     }
 
@@ -305,7 +328,13 @@ mod tests {
         let mut state = state_with_entries();
         state.apply_listing(
             "/data".into(),
-            vec![vfs::browse::VfsEntry { path: "/data/panel.parquet".into(), name: "panel.parquet".into(), is_dir: false, size: 5, last_modified: None }],
+            vec![vfs::browse::VfsEntry {
+                path: "/data/panel.parquet".into(),
+                name: "panel.parquet".into(),
+                is_dir: false,
+                size: 5,
+                last_modified: None,
+            }],
         );
         state.handle_key(key(KeyCode::Char('R')));
         let input = state.input.as_mut().unwrap();
@@ -325,7 +354,10 @@ mod tests {
         let mut state = state_with_entries();
         state.mounts = vec![("/".into(), true)];
         state.handle_key(key(KeyCode::Char('m')));
-        assert!(state.input.is_none(), "mkdir input must not open on a read-only mount");
+        assert!(
+            state.input.is_none(),
+            "mkdir input must not open on a read-only mount"
+        );
         assert!(state.error.is_some());
     }
 }

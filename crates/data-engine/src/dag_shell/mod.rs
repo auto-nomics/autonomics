@@ -233,7 +233,7 @@ impl DagShellSnapshot {
         }
     }
 
-    pub(crate) fn from_flow(flow: &dag_engine::FlowGraph) -> Self {
+    pub(crate) fn from_flow(flow: &crate::workflow::FlowGraph) -> Self {
         let mut nodes = BTreeMap::new();
         for p in flow.processes() {
             nodes.insert(

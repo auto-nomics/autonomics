@@ -49,10 +49,22 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             let half = i32::from(ts.chat_viewport_height).max(2) / 2;
             match key.code {
-                KeyCode::Char('d') => { ts.scroll_by(half); return; }
-                KeyCode::Char('u') => { ts.scroll_by(-half); return; }
-                KeyCode::Char('f') => { ts.scroll_by(half * 2); return; }
-                KeyCode::Char('b') => { ts.scroll_by(-half * 2); return; }
+                KeyCode::Char('d') => {
+                    ts.scroll_by(half);
+                    return;
+                }
+                KeyCode::Char('u') => {
+                    ts.scroll_by(-half);
+                    return;
+                }
+                KeyCode::Char('f') => {
+                    ts.scroll_by(half * 2);
+                    return;
+                }
+                KeyCode::Char('b') => {
+                    ts.scroll_by(-half * 2);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -69,7 +81,10 @@ impl App {
             // End: jump to bottom, re-enable auto-scroll
             KeyCode::End | KeyCode::Char('G') => {
                 ts.auto_scroll = false;
-                ts.scroll_target = Some(ts.content_line_count.saturating_sub(ts.chat_viewport_height as usize));
+                ts.scroll_target = Some(
+                    ts.content_line_count
+                        .saturating_sub(ts.chat_viewport_height as usize),
+                );
             }
             // Home: jump to top
             KeyCode::Home | KeyCode::Char('g') => {

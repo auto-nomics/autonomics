@@ -7,7 +7,7 @@ use super::typed_worker::{
 };
 use super::{TaskDispatch, TaskExecution, TaskResources};
 use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::runtime::NodeRunDetails;
 use crate::registry::NodeRegistry;
 use crate::runtime_output::RuntimeOutputProjection;

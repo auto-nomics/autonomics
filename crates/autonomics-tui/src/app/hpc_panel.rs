@@ -15,6 +15,7 @@ impl App {
         self.state.hpc_panel.status = None;
         self.fetch_hpc_config();
         self.fetch_hpc_jobs();
+        self.fetch_hpc_targets();
         self.dirty = true;
     }
 
@@ -24,6 +25,20 @@ impl App {
         self.spawn_client_task("hpc_config_fetch", move || async move {
             let result = client.hpc_config().await.map_err(|error| error.to_string());
             event_tx.send(crate::app_event::AppEvent::HpcConfigLoaded(result));
+        });
+    }
+
+    fn fetch_hpc_targets(&mut self) {
+        self.state.hpc_panel.loading = true;
+        let client = self.client.clone();
+        let event_tx = self.app_event_tx.clone();
+        self.spawn_client_task("hpc_targets_fetch", move || async move {
+            let result = client
+                .compute_status()
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|status| serde_json::to_value(status).map_err(|error| error.to_string()));
+            event_tx.send(crate::app_event::AppEvent::HpcTargetsLoaded(result));
         });
     }
 
@@ -71,6 +86,7 @@ impl App {
                 self.state.hpc_panel.status = Some("Refreshing…".into());
                 self.fetch_hpc_config();
                 self.fetch_hpc_jobs();
+                self.fetch_hpc_targets();
             }
             None => {}
         }

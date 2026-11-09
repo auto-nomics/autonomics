@@ -31,7 +31,7 @@ pub const DEV_SESSION_CPUS: f64 = 4.0;
 pub const DEV_SESSION_MEMORY: &str = "2Gi";
 pub const DEV_SESSION_PIDS_LIMIT: u64 = 512;
 /// Cap for one-shot commands inside a session (`exec_once`).
-pub const EXEC_ONCE_DEFAULT_TIMEOUT_SECS: u64 = 120;
+pub(crate) const _EXEC_ONCE_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// API-facing session snapshot. `unknown` means the runtime probe
 /// itself failed (e.g. no podman available) — `detail` carries why, and

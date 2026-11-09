@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use super::error::DagError;
 use super::logical::render_spec;
 use super::{DagNode, NodeInput, NodePorts};
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::node_event::NodeReporter;
 use crate::value::{ChannelValue, FileRef, NodeValue, PortType};
 
@@ -717,7 +717,7 @@ mod tests {
     async fn execute_node(
         mut node: ChannelNode,
         inputs: Vec<NodeInput>,
-    ) -> crate::dag::graph::PortOutputs {
+    ) -> crate::dag::PortOutputs {
         let context = crate::registry::NodeCtx::new(
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,

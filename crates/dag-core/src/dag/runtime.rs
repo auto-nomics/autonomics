@@ -99,21 +99,7 @@ fn truncate_schema_column_name(name: &str) -> String {
     format!("{prefix}…(len={char_count})")
 }
 
-/// Per-node runtime lifecycle state tracked by the scheduler.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeStatus {
-    #[default]
-    Pending,
-    Ready,
-    Running,
-    Success,
-    Failed,
-    /// Not run because an upstream predecessor failed.
-    Skipped,
-    /// Interrupted by a run-level guard (currently the memory watermark).
-    Cancelled,
-}
+pub use super::status::RuntimeStatus;
 
 /// How input values contribute their identity to a node's execution
 /// fingerprint.
@@ -142,9 +128,9 @@ pub type CompletionPublisher = std::sync::Arc<
     dyn Fn(
             &str,
             &str,
-            super::graph::PortOutputs,
+            super::PortOutputs,
             Option<&NodeRunDetails>,
-        ) -> Result<super::graph::PortOutputs, DagError>
+        ) -> Result<super::PortOutputs, DagError>
         + Send
         + Sync,
 >;
@@ -153,7 +139,7 @@ pub type CompletionPublisher = std::sync::Arc<
 /// This is a byte/provenance check, not research authorization. A false result
 /// recomputes the node; an error aborts rather than consuming altered evidence.
 pub type CheckpointReuseValidator = std::sync::Arc<
-    dyn Fn(&str, &str, &super::graph::PortOutputs) -> Result<bool, DagError> + Send + Sync,
+    dyn Fn(&str, &str, &super::PortOutputs) -> Result<bool, DagError> + Send + Sync,
 >;
 
 /// Scheduler tuning knobs.

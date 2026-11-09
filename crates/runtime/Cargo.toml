@@ -34,6 +34,8 @@ anyhow = "1"
 libc = "0.2"
 datafusion.workspace = true
 vfs = { path = "../vfs" }
+rpassword.workspace = true
+opendal.workspace = true
 hpc-tools = { path = "../hpc-tools" }
 sha2.workspace = true
 text-embedding = { path = "../text-embedding" }
@@ -62,7 +64,6 @@ schemars.workspace = true
 workspace = true
 
 [dev-dependencies]
-dag-engine = { path = "../dag-engine" }
 chrono = { version = "0.4", features = ["serde"] }
 data-catalog = { path = "../data-catalog", features = ["test-util"] }
 tempfile = "3"

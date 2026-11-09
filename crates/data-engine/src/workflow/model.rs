@@ -3,7 +3,7 @@
 //! This is the **only** editable, persisted, snapshotted representation of a
 //! workflow (see the crate-level invariant). One [`Process`] corresponds to one
 //! workflow process — never to one item. Item instances are run-scoped and live
-//! in [`crate::instance`] / [`crate::plan`].
+//! in [`crate::workflow::instance`] / [`crate::workflow::plan`].
 //!
 //! Serialization: [`FlowGraph`] round-trips through JSON so snapshots, refs,
 //! and history can store authored state at process granularity regardless of
@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 /// Identifier of a process. Plain string: instance ids are derived from it as
-/// `"{process}#{item_key}"`, matching the stability rules in [`crate::instance`].
+/// `"{process}#{item_key}"`, matching the stability rules in [`crate::workflow::instance`].
 pub type ProcessName = String;
 
 /// Port index within a process, shared with dag-core's port numbering.
@@ -244,11 +244,11 @@ impl ErrorStrategy {
 /// One workflow process: the authored unit of work. `kind` names a node kind in
 /// the (reused) dag-core node registry; `spec` is the raw template — `{{item}}`
 /// / `{{item.field}}` placeholders are rendered per instance at
-/// materialization time ([`crate::instance`]), never here.
+/// materialization time ([`crate::workflow::instance`]), never here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A process declares WHAT runs, never HOW MANY times — Nextflow semantics:
 /// the instance count is derived from the deliveries on its input channels
-/// (see [`crate::plan`]).
+/// (see [`crate::workflow::plan`]).
 pub struct Process {
     pub id: ProcessName,
     pub kind: String,
@@ -273,7 +273,7 @@ impl Process {
     }
 }
 
-/// Edge operator. Routing semantics are resolved by [`crate::plan`]; the
+/// Edge operator. Routing semantics are resolved by [`crate::workflow::plan`]; the
 /// model only records intent and enforces the structural rules below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -431,13 +431,12 @@ impl FlowGraph {
             claim(&source.id)?;
             if let SourceSpec::Glob { pattern, .. } | SourceSpec::FilePairs { pattern, .. } =
                 &source.spec
+                && pattern.is_missing()
             {
-                if pattern.is_missing() {
-                    return Err(Error::Invalid(format!(
-                        "source `{}` requires a path pattern",
-                        source.id
-                    )));
-                }
+                return Err(Error::Invalid(format!(
+                    "source `{}` requires a path pattern",
+                    source.id
+                )));
             }
             if let SourceSpec::FilePairs {
                 grouping: Some(function),

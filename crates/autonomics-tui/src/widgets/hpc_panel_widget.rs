@@ -153,6 +153,31 @@ pub enum HpcTab {
     #[default]
     Config,
     Jobs,
+    Targets,
+}
+
+/// One enrolled compute target from `GET /compute`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HpcTargetRow {
+    pub id: String,
+    pub revision: u64,
+    pub selected: bool,
+    pub enabled: bool,
+    /// `local` / `slurm` / `ssh`.
+    pub backend: String,
+    /// Frozen endpoint identities: (alias, hostname, port).
+    pub endpoints: Vec<(String, String, u16)>,
+    /// Declared data domains: `id → vfs_prefix (remote_root)`.
+    pub domains: Vec<String>,
+}
+
+/// One VFS mount partition from `GET /compute`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HpcMountRow {
+    pub path: String,
+    pub backend: String,
+    pub read_only: bool,
+    pub domain: Option<String>,
 }
 
 /// One monitor row from `GET /hpc/jobs`.
@@ -177,6 +202,11 @@ pub struct HpcPanelState {
     pub selected_field: usize,
     pub jobs: Vec<HpcJobRow>,
     pub selected_job: usize,
+    /// Enrolled compute targets with their frozen endpoints.
+    pub targets: Vec<HpcTargetRow>,
+    /// VFS mount partitions (explicit domain separations).
+    pub mounts: Vec<HpcMountRow>,
+    pub selected_target: usize,
     /// Inline edit buffer — `Some` while a text/number field is being edited.
     pub edit_buffer: Option<String>,
     /// One-line operator feedback (save result, refresh errors).
@@ -361,7 +391,8 @@ impl HpcPanelState {
             KeyCode::Tab => {
                 self.tab = match self.tab {
                     HpcTab::Config => HpcTab::Jobs,
-                    HpcTab::Jobs => HpcTab::Config,
+                    HpcTab::Jobs => HpcTab::Targets,
+                    HpcTab::Targets => HpcTab::Config,
                 };
                 None
             }
@@ -373,6 +404,9 @@ impl HpcPanelState {
                     }
                     HpcTab::Jobs => {
                         self.selected_job = self.selected_job.saturating_sub(1);
+                    }
+                    HpcTab::Targets => {
+                        self.selected_target = self.selected_target.saturating_sub(1);
                     }
                 }
                 None
@@ -387,6 +421,11 @@ impl HpcPanelState {
                     HpcTab::Jobs => {
                         if self.selected_job + 1 < self.jobs.len() {
                             self.selected_job += 1;
+                        }
+                    }
+                    HpcTab::Targets => {
+                        if self.selected_target + 1 < self.targets.len() {
+                            self.selected_target += 1;
                         }
                     }
                 }
@@ -417,7 +456,7 @@ impl HpcPanelState {
                         }
                     }
                 }
-                HpcTab::Jobs => None,
+                HpcTab::Jobs | HpcTab::Targets => None,
             },
             KeyCode::Char('s') if self.tab == HpcTab::Config => match self.build_profile() {
                 Ok(profile) => Some(HpcPanelCommand::SaveProfile(profile)),
@@ -475,10 +514,6 @@ impl StatefulWidgetRef for HpcPanelWidget {
         lines.push(Line::from(vec![
             tab("Site config", state.tab == HpcTab::Config),
             tab("Jobs", state.tab == HpcTab::Jobs),
-            Span::styled(
-                "  Tab switch · r refresh · Esc close",
-                Style::default().fg(theme.text_faint),
-            ),
         ]));
         lines.push(Line::from(""));
 
@@ -491,6 +526,7 @@ impl StatefulWidgetRef for HpcPanelWidget {
             match state.tab {
                 HpcTab::Config => self.render_config(&mut lines, state, &theme),
                 HpcTab::Jobs => self.render_jobs(&mut lines, state, &theme),
+                HpcTab::Targets => self.render_targets(&mut lines, state, &theme),
             }
         }
 
@@ -507,6 +543,11 @@ impl StatefulWidgetRef for HpcPanelWidget {
                 Style::default().fg(theme.text_faint),
             )));
         }
+        // Keymap hint — the panel's persistent footer.
+        lines.push(Line::from(Span::styled(
+            "Tab switch · r refresh · Esc close",
+            Style::default().fg(theme.text_faint),
+        )));
 
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
@@ -632,6 +673,86 @@ impl HpcPanelWidget {
                         Style::default().fg(theme.error),
                     )));
                 }
+            }
+        }
+    }
+
+    fn render_targets(
+        &self,
+        lines: &mut Vec<Line<'static>>,
+        state: &HpcPanelState,
+        theme: &crate::theme::Theme,
+    ) {
+        if state.targets.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No enrolled compute targets.",
+                Style::default().fg(theme.text_faint),
+            )));
+            return;
+        }
+        for (index, target) in state.targets.iter().enumerate() {
+            let selected_row = index == state.selected_target;
+            let marker = if selected_row { "> " } else { "  " };
+            let header_style = if target.selected {
+                Style::default().fg(theme.accent)
+            } else if selected_row {
+                Style::default().fg(theme.accent_alt)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            let state_tag = if target.selected {
+                " · SELECTED"
+            } else if !target.enabled {
+                " · disabled"
+            } else {
+                ""
+            };
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "{marker}{} r{} [{}]{}",
+                    target.id, target.revision, target.backend, state_tag
+                ),
+                header_style,
+            )));
+            if selected_row {
+                if target.endpoints.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        "    endpoints: (local, none frozen)".to_string(),
+                        Style::default().fg(theme.text_faint),
+                    )));
+                }
+                for (alias, hostname, port) in &target.endpoints {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {alias:<10} → {hostname}:{port}  [frozen]"),
+                        Style::default().fg(theme.text),
+                    )));
+                }
+                for domain in &target.domains {
+                    lines.push(Line::from(Span::styled(
+                        format!("    domain     {domain}"),
+                        Style::default().fg(theme.text),
+                    )));
+                }
+            }
+        }
+        if !state.mounts.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "VFS mount partitions:".to_string(),
+                Style::default().fg(theme.text_faint),
+            )));
+            for mount in &state.mounts {
+                let domain = mount.domain.as_deref().unwrap_or("—");
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "  {:<18} {:<8} {} {}",
+                        mount.path,
+                        if mount.read_only { "ro" } else { "rw" },
+                        mount.backend,
+                        domain
+                    ),
+                    Style::default().fg(theme.text_faint),
+                )));
             }
         }
     }

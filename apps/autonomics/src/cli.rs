@@ -75,6 +75,30 @@ pub enum Command {
     /// Run the resident backend gateway daemon (agents keep running
     /// after frontends disconnect). See `status` / `stop` actions.
     Serve(ServeArgs),
+
+    /// Manage the sealed SSH credential vault (passwords and OTP secrets
+    /// for clusters that forbid key auth): `set` / `list` / `check`.
+    Vault {
+        /// Words after `vault`, e.g. `set ~/.autonomics/ssh-vault host --otp`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Compute-target management: `enroll <id> --login <alias> …`.
+    Compute {
+        /// Words after `compute`, e.g. `enroll hpc-b --login hpc-b-login …`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Internal: OpenSSH askpass bridge, invoked via SSH_ASKPASS with the
+    /// prompt text as the trailing argument.
+    #[command(hide = true)]
+    Askpass {
+        /// The prompt text OpenSSH shows (`argv[1]` of the askpass call).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[cfg(test)]

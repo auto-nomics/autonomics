@@ -4,8 +4,8 @@
 mod agents;
 mod auth;
 mod compute;
-mod dev_terminal;
 mod context;
+mod dev_terminal;
 pub(crate) mod devcontainer;
 mod devcontainer_config;
 mod devlsp;

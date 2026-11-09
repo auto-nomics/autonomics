@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use sha2::{Digest, Sha256};
 
-use crate::instance::{Instance, InstanceId};
-use crate::model::{Error, FlowGraph, PortIndex, ProcessName, WireOp};
+use crate::workflow::instance::{Instance, InstanceId};
+use crate::workflow::model::{Error, FlowGraph, PortIndex, ProcessName, WireOp};
 
 /// Item sets for every source, enumerated by the scheduler at run start.
 /// Must contain an entry for **every** source and nothing else.
@@ -96,7 +96,7 @@ pub struct ProcessPlan {
     /// the rendered spec — mirroring Nextflow's script-source hashing.
     pub spec: serde_json::Value,
     /// Failure posture carried from the authored process.
-    pub error_strategy: crate::model::ErrorStrategy,
+    pub error_strategy: crate::workflow::model::ErrorStrategy,
     /// Item keys this process runs once per each of — derived from its
     /// driving channel, propagated from the originating source. Empty when
     /// the process has no driving channel ([`Self::driven`] is false) or the
@@ -294,7 +294,10 @@ pub fn build_plan(
         let driving_channel = driving.get(process.id.as_str()).cloned().flatten();
         let driven = driving_channel.is_some();
         let items = driving_channel.unwrap_or_default();
-        let driving_keys: Vec<String> = items.iter().map(crate::instance::item_key).collect();
+        let driving_keys: Vec<String> = items
+            .iter()
+            .map(crate::workflow::instance::item_key)
+            .collect();
         let instances = if !driven {
             vec![Instance::singleton(process)?]
         } else {
@@ -413,7 +416,7 @@ fn item_fingerprint(item: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ErrorStrategy, FlowGraphBuilder, Process, Source, Wire};
+    use crate::workflow::model::{ErrorStrategy, FlowGraphBuilder, Process, Source, Wire};
 
     fn items_flow() -> FlowGraph {
         FlowGraphBuilder::default()
@@ -438,7 +441,7 @@ mod tests {
     fn resolve(graph: &FlowGraph) -> SourceResolution {
         let mut resolution = SourceResolution::new();
         for source in graph.sources() {
-            if let crate::model::SourceSpec::Items { values } = &source.spec {
+            if let crate::workflow::model::SourceSpec::Items { values } = &source.spec {
                 resolution.resolve(source.id.clone(), values.clone());
             }
         }

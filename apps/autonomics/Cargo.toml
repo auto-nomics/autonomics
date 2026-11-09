@@ -14,6 +14,8 @@ autonomics-tui = { path = "../../crates/autonomics-tui" }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 ratatui = "0.30.0"
 gateway = { path = "../../crates/gateway" }
+runtime = { path = "../../crates/runtime" }
+rpassword.workspace = true
 agentik-core = { path = "../../crates/agentik-core" }
 agentik-types = { path = "../../crates/agentik-types" }
 container-plugin = { path = "../../crates/container-plugin" }

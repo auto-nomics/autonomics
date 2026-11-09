@@ -14,7 +14,7 @@ use super::traits::{TaskArtifactStore, TaskExecutor, TaskTransport};
 use super::workspace::LocalTaskWorkspace;
 use crate::ChannelValue;
 use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::node_event::JobResult;
 use crate::registry::NodeCtx;
 use crate::value::{FileRef, NodeValue};

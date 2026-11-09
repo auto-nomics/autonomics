@@ -60,3 +60,14 @@ impl std::ops::Index<&u8> for PortOutputs {
         &self.values[index]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PortOutputs;
+
+    #[test]
+    fn legacy_graph_path_refers_to_the_same_output_type() {
+        let output: crate::dag::graph::PortOutputs = PortOutputs::new();
+        assert!(output.is_empty());
+    }
+}

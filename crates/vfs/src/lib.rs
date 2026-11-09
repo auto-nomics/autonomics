@@ -16,7 +16,7 @@ pub mod vbash;
 pub use mount::{
     BackendConfig, BackendDefinition, MountDefinition, MountHandle, MountedObjectStore, VfsManifest,
 };
-pub use ssh::SshLocation;
+pub use ssh::{SshLocation, build_ssh_operator};
 pub use ssh_endpoint::SshEndpoint;
 pub use storage::OpendalFileStorage;
 pub use vbash::vbash_registrations;

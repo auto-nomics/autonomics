@@ -234,30 +234,93 @@ impl SharedInfra {
 
         // Sealed SSH credential vault for password/OTP-only clusters: unlock
         // once and serve askpass answers over a same-user unix socket. The
-        // passphrase is deliberately never persisted; missing or wrong
-        // passphrases fail startup loudly.
-        if let Some(vault_path) = &config.ssh_credential_vault {
-            let passphrase = std::env::var("AUTONOMICS_SSH_PASSPHRASE").map_err(|_| {
-                Error::Other(
-                    "ssh_credential_vault is configured but AUTONOMICS_SSH_PASSPHRASE is unset;                      the vault stays sealed and credentials cannot be injected"
-                        .into(),
-                )
-            })?;
-            let sealed = std::fs::read(vault_path)
-                .map_err(|error| Error::Other(format!("ssh vault read: {error}")))?;
-            let vault = vfs::credential::CredentialVault::open(&sealed, &passphrase)
-                .map_err(|error| Error::Other(format!("ssh vault unlock: {error}")))?;
-            let control = config.state_dir.join("ssh-control");
-            std::fs::create_dir_all(&control)
-                .map_err(|error| Error::Other(format!("ssh control dir: {error}")))?;
-            let socket = control.join("vault.sock");
-            let serving = socket.clone();
-            tokio::spawn(async move {
-                if let Err(error) = vfs::credential::serve_vault(vault, serving).await {
-                    tracing::warn!(%error, "ssh credential vault agent stopped");
+        // passphrase is deliberately never persisted. A configured vault
+        // that exists but cannot be unlocked fails startup loudly; a vault
+        // that does not exist yet is created automatically (empty) when a
+        // passphrase is available, so initialization needs no manual file
+        // ceremony — `autonomics vault set` fills it afterwards.
+        // The vault location is either an explicit configuration or the
+        // system-fixed state-dir path: when a vault simply exists there,
+        // the daemon claims it with zero configuration (`autonomics
+        // vault set` wrote it). A fixed path that does not exist stays
+        // silent — no vault, no noise.
+        let fixed_vault = config.state_dir.join(crate::config::SSH_VAULT_FILE);
+        let vault_path = config
+            .ssh_credential_vault
+            .clone()
+            .unwrap_or_else(|| fixed_vault.clone());
+        let vault_explicit = config.ssh_credential_vault.is_some() || fixed_vault.is_file();
+        if vault_explicit {
+            let vault_path = &vault_path;
+            let unlocked = match std::fs::read(vault_path) {
+                Ok(sealed) => {
+                    // The passphrase arrives via the environment — the
+                    // interactive `serve` launcher prompts for it and hands
+                    // it over; unattended launches must export it.
+                    let passphrase = std::env::var("AUTONOMICS_SSH_PASSPHRASE").map_err(|_| {
+                        Error::Other(
+                            "ssh_credential_vault exists but AUTONOMICS_SSH_PASSPHRASE is unset; \
+                             run `autonomics serve` interactively to unlock, or export the \
+                             variable for unattended launches"
+                                .into(),
+                        )
+                    })?;
+                    Some(
+                        vfs::credential::CredentialVault::open(&sealed, &passphrase)
+                            .map_err(|error| Error::Other(format!("ssh vault unlock: {error}")))?,
+                    )
                 }
-            });
-            vfs::ssh_channel::configure_vault_agent(&socket);
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match std::env::var("AUTONOMICS_SSH_PASSPHRASE") {
+                        Ok(passphrase) if !passphrase.is_empty() => {
+                            let empty = vfs::credential::CredentialVault::default();
+                            let bytes = empty.seal(&passphrase).map_err(|error| {
+                                Error::Other(format!("ssh vault creation: {error}"))
+                            })?;
+                            std::fs::write(vault_path, &bytes).map_err(|error| {
+                                Error::Other(format!("ssh vault creation: {error}"))
+                            })?;
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(
+                                    vault_path,
+                                    std::fs::Permissions::from_mode(0o600),
+                                );
+                            }
+                            tracing::info!(
+                                "created an empty ssh credential vault at {}",
+                                vault_path.display()
+                            );
+                            Some(empty)
+                        }
+                        _ => {
+                            tracing::warn!(
+                                "ssh_credential_vault is configured but the file is missing and \
+                                 AUTONOMICS_SSH_PASSPHRASE is unset; create it with \
+                                 `autonomics vault set` — credential injection stays off"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(error) => {
+                    return Err(Error::Other(format!("ssh vault read: {error}")));
+                }
+            };
+            if let Some(vault) = unlocked {
+                let control = config.state_dir.join("ssh-control");
+                std::fs::create_dir_all(&control)
+                    .map_err(|error| Error::Other(format!("ssh control dir: {error}")))?;
+                let socket = control.join("vault.sock");
+                let serving = socket.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = vfs::credential::serve_vault(vault, serving).await {
+                        tracing::warn!(%error, "ssh credential vault agent stopped");
+                    }
+                });
+                vfs::ssh_channel::configure_vault_agent(&socket);
+            }
         }
 
         // The skill manager is the process-wide singleton: every

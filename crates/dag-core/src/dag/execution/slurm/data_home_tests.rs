@@ -1,6 +1,26 @@
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::sync::{Arc, Mutex};
+use std::os::unix::fs::{symlink, PermissionsExt};
+use super::ssh::queue_stdout_text;
+use super::transport::{render_bootstrap_script, render_sbatch_script};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::super::contract::{TaskAttemptReceipt, TaskDispatch, TaskExecution};
+use super::super::process::{
+    ProcessTaskSpec, parse_process_task, process_task_environment, render_process_script,
+    sanitize_path_component,
+};
+use super::super::traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
+use crate::dag::DagError;
+use crate::dag::node_event::JobResult;
+use crate::value::{DomainId, FileFingerprint, FileRef};
 use super::*;
-use std::os::unix::fs::{PermissionsExt, symlink};
-use std::sync::Arc;
 
 fn store(root: &Path) -> SshArtifactStore {
     let ssh = root.join("fixture-ssh");
@@ -25,7 +45,6 @@ fn store(root: &Path) -> SshArtifactStore {
     })
     .unwrap()
 }
-
 #[tokio::test]
 async fn retained_files_are_measured_and_referenced_without_downloads() {
     let directory = tempfile::tempdir().unwrap();
@@ -50,7 +69,6 @@ async fn retained_files_are_measured_and_referenced_without_downloads() {
     assert!(!identity.immutable_remote);
     assert!(!root.join("unused-downloads").exists());
 }
-
 #[tokio::test]
 async fn remote_inputs_use_authorized_shared_paths_and_reject_changed_content() {
     let directory = tempfile::tempdir().unwrap();
@@ -81,7 +99,6 @@ async fn remote_inputs_use_authorized_shared_paths_and_reject_changed_content() 
     assert!(store.remote_input(input, Some(&storage)).await.is_err());
     assert!(!root.join("unused-downloads").exists());
 }
-
 #[tokio::test]
 async fn retained_data_rejects_symlinks_and_paths_outside_its_root() {
     let directory = tempfile::tempdir().unwrap();
@@ -103,7 +120,6 @@ async fn retained_data_rejects_symlinks_and_paths_outside_its_root() {
             .is_err()
     );
 }
-
 #[tokio::test]
 async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
     let directory = tempfile::tempdir().unwrap();
@@ -160,7 +176,6 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
             .is_none()
     );
 }
-
 #[test]
 fn retained_vfs_mapping_checks_root_host_and_nested_overrides() {
     let root = tempfile::tempdir().unwrap();
@@ -196,7 +211,6 @@ fn retained_vfs_mapping_checks_root_host_and_nested_overrides() {
     manifest.mount[0].source = "shifted".into();
     assert!(validate(&manifest).is_err());
 }
-
 #[tokio::test]
 async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
     let directory = tempfile::tempdir().unwrap();
@@ -258,7 +272,6 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
             .is_err()
     );
 }
-
 #[test]
 fn dedicated_retained_fields_are_paired_and_confined() {
     let legacy = serde_json::json!({"ssh_aliases":["fixture"],"remote_root":"/cluster/data","vfs_prefix":"/cluster"});
@@ -273,7 +286,6 @@ fn dedicated_retained_fields_are_paired_and_confined() {
     home.retained_vfs_prefix = Some("/cluster".into());
     assert!(home.validate().is_err());
 }
-
 #[test]
 fn exact_completed_job_queue_absence_never_accepts_unknown_errors() {
     use std::os::unix::process::ExitStatusExt;
@@ -324,7 +336,6 @@ fn exact_completed_job_queue_absence_never_accepts_unknown_errors() {
     };
     assert!(!slurm_queue_absent(&signal));
 }
-
 #[test]
 fn bootstrap_heredocs_keep_task_content_out_of_the_login_shell() {
     use std::io::Write;
@@ -385,7 +396,6 @@ fn bootstrap_heredocs_keep_task_content_out_of_the_login_shell() {
     );
     assert_eq!(heredoc_delimiter("MARKER", "some MARKER text\n"), "MARKER");
 }
-
 #[test]
 fn bootstrap_rejects_nul_before_bash_can_normalize_a_delimiter() {
     for payload in [
@@ -402,7 +412,6 @@ fn bootstrap_rejects_nul_before_bash_can_normalize_a_delimiter() {
     assert!(render_bootstrap_script("/synthetic/ta\0sk", "{}", "echo safe\n").is_err());
     assert!(render_bootstrap_script("/synthetic/task", "{\0}", "echo safe\n").is_err());
 }
-
 #[test]
 fn batch_payload_does_not_run_when_task_directory_is_gone() {
     let fixture = tempfile::tempdir().unwrap();
@@ -453,7 +462,6 @@ fn batch_payload_does_not_run_when_task_directory_is_gone() {
         "missing workspace executed its payload in the fallback cwd"
     );
 }
-
 #[test]
 fn writable_retained_mount_is_rejected() {
     let root = tempfile::tempdir().unwrap();
@@ -474,7 +482,6 @@ fn writable_retained_mount_is_rejected() {
     let error = home.validate_vfs(&storage).unwrap_err().to_string();
     assert!(error.contains("read_only"), "{error}");
 }
-
 #[test]
 fn named_domain_must_match_its_mount_partition() {
     let root = tempfile::tempdir().unwrap();

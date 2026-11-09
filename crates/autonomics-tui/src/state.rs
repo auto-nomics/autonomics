@@ -438,7 +438,8 @@ impl AgentTabState {
     pub fn push_line(&mut self, line: ChatLine) {
         self.msg_version_counter = self.msg_version_counter.wrapping_add(1);
         self.messages.push(line);
-        self.message_times.push(Some(chrono::Utc::now().timestamp_millis()));
+        self.message_times
+            .push(Some(chrono::Utc::now().timestamp_millis()));
         self.msg_versions.push(self.msg_version_counter);
         self.cached_msg_row_counts.push(0);
     }
@@ -522,21 +523,36 @@ impl AgentTabState {
     }
 
     pub fn scroll_by(&mut self, delta: i32) {
-        let max = self.content_line_count.saturating_sub(self.chat_viewport_height as usize);
+        let max = self
+            .content_line_count
+            .saturating_sub(self.chat_viewport_height as usize);
         let target = self.scroll_target.unwrap_or(self.scroll_offset);
         self.scroll_target = Some(target.saturating_add_signed(delta as isize).min(max));
         self.auto_scroll = false;
     }
 
     pub fn advance_scroll(&mut self) -> bool {
-        let Some(target) = self.scroll_target else { return false };
-        let max = self.content_line_count.saturating_sub(self.chat_viewport_height as usize);
+        let Some(target) = self.scroll_target else {
+            return false;
+        };
+        let max = self
+            .content_line_count
+            .saturating_sub(self.chat_viewport_height as usize);
         let target = target.min(max);
         let distance = self.scroll_offset.abs_diff(target);
-        if distance == 0 { self.scroll_target = None; return false; }
+        if distance == 0 {
+            self.scroll_target = None;
+            return false;
+        }
         let step = distance.div_ceil(4);
-        if self.scroll_offset < target { self.scroll_offset += step; } else { self.scroll_offset -= step; }
-        if self.scroll_offset == target { self.scroll_target = None; }
+        if self.scroll_offset < target {
+            self.scroll_offset += step;
+        } else {
+            self.scroll_offset -= step;
+        }
+        if self.scroll_offset == target {
+            self.scroll_target = None;
+        }
         true
     }
 

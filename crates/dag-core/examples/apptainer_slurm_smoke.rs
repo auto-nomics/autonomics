@@ -134,6 +134,20 @@ async fn stop_proof(ssh: &SshTarget, job: &str) -> Result<Value> {
     Ok(last)
 }
 
+// Record the complete split backend as one deterministic source artifact.
+const SLURM_SOURCE: &str = concat!(
+    include_str!("../src/dag/execution/slurm/mod.rs"),
+    include_str!("../src/dag/execution/slurm/artifact.rs"),
+    include_str!("../src/dag/execution/slurm/routing.rs"),
+    include_str!("../src/dag/execution/slurm/settings.rs"),
+    include_str!("../src/dag/execution/slurm/ssh.rs"),
+    include_str!("../src/dag/execution/slurm/transport.rs"),
+    include_str!("../src/dag/execution/slurm/slurm_submission.rs"),
+    include_str!("../src/dag/execution/slurm/read_heartbeat.py"),
+    include_str!("../src/dag/execution/slurm/slurm_logs.py"),
+    include_str!("../src/dag/execution/slurm/slurm_submission_observer.py"),
+);
+
 pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
     let settings = ApptainerSettings::load(manifest)?;
     if !settings.images.contains_key(image) {
@@ -154,7 +168,7 @@ pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
         "renderer_sha256": format!("{:x}", Sha256::digest(include_bytes!("../src/dag/execution/apptainer.rs"))),
         "process_sha256": format!("{:x}", Sha256::digest(include_bytes!("../src/dag/execution/process.rs"))),
         "smoke_sha256": format!("{:x}", Sha256::digest(include_bytes!("apptainer_slurm_smoke.rs"))),
-        "transport_sha256": format!("{:x}", Sha256::digest(include_bytes!("../src/dag/execution/slurm.rs")))}),
+        "transport_sha256": format!("{:x}", Sha256::digest(SLURM_SOURCE.as_bytes()))}),
     )?;
     // Preserve exact new source bytes independently of the mutable checkout.
     std::fs::write(
@@ -163,7 +177,7 @@ pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
     )?;
     std::fs::write(
         root.join("slurm.rs"),
-        include_bytes!("../src/dag/execution/slurm.rs"),
+        SLURM_SOURCE.as_bytes(),
     )?;
     std::fs::write(
         root.join("process.rs"),

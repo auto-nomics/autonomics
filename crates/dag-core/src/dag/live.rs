@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use super::runtime::RuntimeStatus;
+use super::status::RuntimeStatus;
 use super::view::DagTuiSnapshot;
 
 pub fn observation_time_ms() -> u64 {

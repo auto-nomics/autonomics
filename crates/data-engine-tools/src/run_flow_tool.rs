@@ -52,7 +52,7 @@ impl RunFlowTool {
 /// Slim, process-grouped result index. Per-instance detail beyond failures
 /// is intentionally not carried — the shape mirrors `run_dag`'s progressive
 /// disclosure posture.
-fn build_flow_report_json(report: &dag_engine::FlowRunReport) -> Value {
+fn build_flow_report_json(report: &data_engine::workflow::FlowRunReport) -> Value {
     let mut processes = serde_json::Map::new();
     for (name, summary) in &report.processes {
         processes.insert(
@@ -129,7 +129,7 @@ impl ToolFunction for RunFlowTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let flow = match input.flow {
             Some(value) => Some(
-                serde_json::from_value::<dag_engine::FlowGraph>(value).map_err(|error| {
+                serde_json::from_value::<data_engine::workflow::FlowGraph>(value).map_err(|error| {
                     ToolError::ValidationFailed {
                         message: format!("invalid flow graph: {error}"),
                     }

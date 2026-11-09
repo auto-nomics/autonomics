@@ -39,15 +39,15 @@ impl ComputeRegistry {
             }
         }
         self.healthy()?;
-        let catalog = self.catalog();
-        let policy = &catalog.policy;
+        let state = self.state();
+        let policy = &state.policy;
         let target = self.target(&policy.target_id, Some(policy.target_revision))?;
         let mut blockers = Vec::new();
         let mut checks = Vec::new();
         if let Err(error) = target.ensure_source_compatible() {
             blockers.push(json!({"code":"WORKER_SOURCE_MISMATCH","detail":error}));
         }
-        if !catalog
+        if !state
             .targets
             .iter()
             .rev()
@@ -122,7 +122,7 @@ impl ComputeRegistry {
             }
         }
         // Reject a mixed report when policy changes while requirements are inspected.
-        if self.catalog().revision != catalog.revision {
+        if self.state().revision != state.revision {
             return Err(
                 "compute configuration changed during readiness inspection; read again".into(),
             );
@@ -132,7 +132,7 @@ impl ComputeRegistry {
             "scope":"REQUESTED_RESIDENT_NODES_AND_IMAGE_MAPPINGS",
             "verification_gaps": ["Runtime history persistence and artifact access are outside this configuration check", "No execution is performed; empty image/identity requirements verify no images/identities"],
             "requested_images":request.images.len(), "requested_identities":request.expected_identities.len(), "gateway_pid":std::process::id(),
-            "catalog_revision":catalog.revision,"policy":policy,"deployment":target.deployment(),
+            "registry_revision":state.revision,"policy":policy,"deployment":target.deployment(),
             "target_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&target.target).map_err(|e|e.to_string())?)),
             "capsule_sha256":target.target.capsule_sha256,"checks":checks,"blockers":blockers,
             "remote_sif_bytes_verified":false,"end_to_end_acceptance":"NOT_VERIFIED",

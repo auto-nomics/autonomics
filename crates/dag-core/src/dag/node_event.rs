@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::dag::DagError;
 use crate::dag::NodeId;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::runtime::{NodeRunDetails, RuntimeStatus};
 
 // NOTE: `NodeEvent`/`NodeEventKind` deliberately do NOT derive `Serialize` —

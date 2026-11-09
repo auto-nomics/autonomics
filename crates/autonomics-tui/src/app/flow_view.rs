@@ -117,7 +117,7 @@ impl App {
 
 /// Build the overlay's lines: run banner, per-process rows, wires.
 fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut Vec<Line>) {
-    use dag_engine::ErrorMode;
+    use data_engine::workflow::ErrorMode;
 
     if view.flow.is_empty() {
         lines.push(Line::from(Span::styled(
@@ -132,7 +132,13 @@ fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut 
         lines.push(Line::from(vec![
             Span::styled("last run: ", Style::default().fg(theme.text_dim)),
             Span::styled(
-                if run.cancelled { "cancelled" } else if run.ok { "ok" } else { "failed" },
+                if run.cancelled {
+                    "cancelled"
+                } else if run.ok {
+                    "ok"
+                } else {
+                    "failed"
+                },
                 Style::default().fg(tone).add_modifier(Modifier::BOLD),
             ),
         ]));

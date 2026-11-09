@@ -184,12 +184,20 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                     chat_inner_area,
                     self.display,
                 );
-                if matches!(msg, crate::state::ChatLine::User { .. } | crate::state::ChatLine::Assistant { .. })
-                    && let Some(Some(time)) = ts.message_times.get(i)
+                if matches!(
+                    msg,
+                    crate::state::ChatLine::User { .. } | crate::state::ChatLine::Assistant { .. }
+                ) && let Some(Some(time)) = ts.message_times.get(i)
                     && let Some(date) = chrono::DateTime::from_timestamp_millis(*time)
                 {
-                    let stamp = date.with_timezone(&chrono::Local).format("%H:%M").to_string();
-                    let index = rendered.iter().position(|line| !line.spans.is_empty()).unwrap_or(0);
+                    let stamp = date
+                        .with_timezone(&chrono::Local)
+                        .format("%H:%M")
+                        .to_string();
+                    let index = rendered
+                        .iter()
+                        .position(|line| !line.spans.is_empty())
+                        .unwrap_or(0);
                     if let Some(line) = rendered.get_mut(index) {
                         line.spans.push(ratatui::text::Span::styled(
                             format!("  {stamp}"),

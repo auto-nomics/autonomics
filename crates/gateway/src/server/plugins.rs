@@ -530,14 +530,12 @@ fn rsi_error(error: plugin_rsi::Error) -> super::error::GatewayError {
 }
 
 fn sessions(state: &GatewayState) -> super::error::GatewayResult<plugin_rsi::DevSessionManager> {
-    state
-        .infra
-        .rsi
-        .dev_sessions()
-        .map_err(|error| super::error::GatewayError::Status(
+    state.infra.rsi.dev_sessions().map_err(|error| {
+        super::error::GatewayError::Status(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             error.to_string(),
-        ))
+        )
+    })
 }
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -586,7 +584,7 @@ pub(crate) async fn dev_session_action(
         other => {
             return Err(super::error::GatewayError::Message(format!(
                 "unknown dev-session action `{other}` (start|stop|restart)"
-            )))
+            )));
         }
     }
     .map_err(rsi_error)?;
@@ -733,10 +731,7 @@ pub(crate) async fn test_run_node(
     request.kind = kind;
     // A container run is genuinely long; keep the request off the
     // async executor's sync paths.
-    let result = manager
-        .test_run(&name, &request)
-        .await
-        .map_err(rsi_error)?;
+    let result = manager.test_run(&name, &request).await.map_err(rsi_error)?;
     Ok(Json(result))
 }
 
@@ -793,7 +788,9 @@ pub(crate) async fn uninstall_plugin(
         .map_err(rsi_error)?
         .commit()
         .to_string();
-    Ok(Json(serde_json::json!({ "name": name, "uninstalled": true, "commit": commit })))
+    Ok(Json(
+        serde_json::json!({ "name": name, "uninstalled": true, "commit": commit }),
+    ))
 }
 
 /// `POST /plugins/{name}/rollback` — restore the previous immutable
@@ -812,7 +809,9 @@ pub(crate) async fn rollback_plugin(
         .map_err(rsi_error)?
         .commit()
         .to_string();
-    Ok(Json(serde_json::json!({ "name": name, "rolled_back": true, "commit": commit })))
+    Ok(Json(
+        serde_json::json!({ "name": name, "rolled_back": true, "commit": commit }),
+    ))
 }
 
 /// `GET /plugin-projects/{name}/nodes` — the manifest's node
@@ -826,15 +825,16 @@ pub(crate) async fn list_project_nodes(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> super::error::GatewayResult<Json<serde_json::Value>> {
     let workspace = project_workspace(&state, &name)?;
-    let manifest: container_plugin::manifest::PluginManifest = toml::from_str(
-        &workspace
-            .read_text("manifest.toml")
-            .map_err(|error| super::error::GatewayError::Status(
+    let manifest: container_plugin::manifest::PluginManifest =
+        toml::from_str(&workspace.read_text("manifest.toml").map_err(|error| {
+            super::error::GatewayError::Status(
                 axum::http::StatusCode::NOT_FOUND,
                 format!("cannot read manifest of `{name}`: {error}"),
-            ))?,
-    )
-    .map_err(|error| super::error::GatewayError::Message(format!("invalid manifest: {error}")))?;
+            )
+        })?)
+        .map_err(|error| {
+            super::error::GatewayError::Message(format!("invalid manifest: {error}"))
+        })?;
     let nodes: Vec<serde_json::Value> = manifest
         .nodes
         .iter()
@@ -855,7 +855,9 @@ pub(crate) async fn list_project_nodes(
             })
         })
         .collect();
-    Ok(Json(serde_json::json!({ "nodes": nodes, "count": nodes.len() })))
+    Ok(Json(
+        serde_json::json!({ "nodes": nodes, "count": nodes.len() }),
+    ))
 }
 
 pub(crate) async fn dev_project_files(

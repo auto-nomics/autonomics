@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::contract::{TaskAttemptReceipt, TaskSubmission};
 use crate::dag::DagError;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::dag::node_event::{EventLevel, ReportedLog};
 use crate::dag::runtime::NodeRunDetails;
 use crate::value::{DomainId, FileRef, NodeValue};

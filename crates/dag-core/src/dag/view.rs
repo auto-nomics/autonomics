@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::runtime::RuntimeStatus;
+use super::status::RuntimeStatus;
 use super::{DagNode, NodeId};
 
 /// One declared input or output socket.

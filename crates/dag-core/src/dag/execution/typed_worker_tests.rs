@@ -1,5 +1,5 @@
 use super::*;
-use crate::dag::graph::PortOutputs;
+use crate::dag::PortOutputs;
 use crate::registry::error::Result as RegistryResult;
 use crate::{
     NodeCtx, NodeFactory, NodePorts, PortType, TaskInputBinding, TaskInputSource,

@@ -132,6 +132,26 @@ fn main() -> color_eyre::Result<()> {
                 .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
             runtime.block_on(commands::bib::run_bib(bib))
         }
+        Some(Command::Vault { args }) => {
+            // The vault lives at the system-fixed location; the CLI never
+            // accepts an arbitrary path.
+            let Some(vault) = runtime::config::fixed_ssh_vault_path() else {
+                eprintln!("cannot resolve the state directory; set HOME or AUTONOMICS_STATE_DIR");
+                std::process::exit(1);
+            };
+            std::process::exit(vfs::cli::vault_main(&vault, &args))
+        }
+        Some(Command::Compute { args }) => {
+            if args.first().map(String::as_str) != Some("enroll") {
+                eprintln!("usage: autonomics compute enroll <id> --login <alias> …");
+                std::process::exit(2);
+            }
+            let rest: Vec<String> = args[1..].to_vec();
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
+            std::process::exit(runtime.block_on(gateway::cli::compute_enroll_main(&rest)));
+        }
+        Some(Command::Askpass { .. }) => std::process::exit(vfs::cli::askpass_main()),
         Some(Command::Run(args)) => commands::run::run_headless(args),
         Some(Command::ExportRun(args)) => {
             let runtime = tokio::runtime::Runtime::new()

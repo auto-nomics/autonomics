@@ -6,15 +6,20 @@
 //! its choosing:
 //!
 //! ```text
-//! autonomics vault set <file> <alias> [--password] [--otp] [--digits N] [--period S]
-//! autonomics vault list <file>
-//! autonomics vault check <file>
+//! autonomics vault set <alias> [--password] [--otp] [--digits N] [--period S]
+//! autonomics vault list
+//! autonomics vault check
 //! autonomics askpass <prompt>        # invoked by OpenSSH via SSH_ASKPASS
 //! ```
 //!
+//! The vault file itself lives at a system-fixed location (the daemon's
+//! state directory); the caller injects that path — the CLI never
+//! accepts an arbitrary vault path, so a misdirected write cannot
+//! silently fork the credential store.
+//!
 //! No standalone credential binaries exist on purpose.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::credential::{CredentialVault, SshCredential};
 
@@ -53,24 +58,25 @@ pub fn askpass_main() -> i32 {
     1
 }
 
-/// The `autonomics vault …` subcommand. `args` are the words after
-/// `vault` (for example `["set", "/path", "hpc-otp", "--otp"]`).
-pub fn vault_main(args: &[String]) -> i32 {
+/// The `autonomics vault …` subcommand. `vault_path` is the system-fixed
+/// vault location; `args` are the words after `vault` (for example
+/// `["set", "hpc-otp", "--otp"]`). The CLI never accepts an arbitrary
+/// vault path — a misdirected write cannot silently fork the store.
+pub fn vault_main(vault_path: &Path, args: &[String]) -> i32 {
     let Some(command) = args.first() else {
         vault_usage();
         return 2;
     };
-    let path: PathBuf = match args.get(1) {
-        Some(path) => path.into(),
-        None => {
-            vault_usage();
-            return 2;
-        }
-    };
     match command.as_str() {
-        "set" => vault_set(path, &args[2..]),
-        "list" => vault_list(path),
-        "check" => vault_check(path),
+        "set" => match args.get(1) {
+            Some(alias) => vault_set(vault_path, alias, &args[2..]),
+            None => {
+                vault_usage();
+                2
+            }
+        },
+        "list" => vault_list(vault_path),
+        "check" => vault_check(vault_path),
         _ => {
             vault_usage();
             2
@@ -79,11 +85,9 @@ pub fn vault_main(args: &[String]) -> i32 {
 }
 
 fn vault_usage() {
-    eprintln!(
-        "usage: autonomics vault set <file> <alias> [--password] [--otp] [--digits N] [--period S]"
-    );
-    eprintln!("       autonomics vault list <file>");
-    eprintln!("       autonomics vault check <file>");
+    eprintln!("usage: autonomics vault set <alias> [--password] [--otp] [--digits N] [--period S]");
+    eprintln!("       autonomics vault list");
+    eprintln!("       autonomics vault check");
 }
 
 fn prompt_secret(label: &str) -> String {
@@ -95,16 +99,12 @@ fn prompt_secret(label: &str) -> String {
     value
 }
 
-fn vault_set(path: PathBuf, args: &[String]) -> i32 {
-    let Some(alias) = args.first() else {
-        vault_usage();
-        return 2;
-    };
+fn vault_set(path: &Path, alias: &str, args: &[String]) -> i32 {
     let mut want_password = false;
     let mut want_otp = false;
     let mut digits = 6u32;
     let mut period = 30u64;
-    let mut index = 1;
+    let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--password" => want_password = true,
@@ -145,11 +145,22 @@ fn vault_set(path: PathBuf, args: &[String]) -> i32 {
         totp_period: period,
         ..Default::default()
     };
+    println!("Adding credentials for `{alias}`:");
     if want_password {
-        entry.password = Some(prompt_secret("password"));
+        entry.password = Some(prompt_secret(&format!("  cluster password for `{alias}`")));
     }
     if want_otp {
-        let secret = prompt_secret("OTP shared secret (base32)");
+        eprintln!(
+            "  (the base32 string from the cluster's OTP enrollment page / QR manual-entry code)"
+        );
+        let secret = prompt_secret("  OTP shared secret (base32)");
+        // Double entry: the prompts are echo-free, so a silent typo would
+        // otherwise surface only as permanently wrong codes at login.
+        let confirm = prompt_secret("  confirm OTP secret");
+        if secret != confirm {
+            eprintln!("OTP secrets do not match");
+            return 1;
+        }
         // Refuse to store a secret that cannot produce codes.
         if let Err(error) =
             crate::credential::totp_code(&secret, digits, period, std::time::SystemTime::now())
@@ -159,14 +170,43 @@ fn vault_set(path: PathBuf, args: &[String]) -> i32 {
         }
         entry.totp_secret = Some(secret);
     }
-    let mut vault = vault_load_or_empty(&path);
-    vault.entries.insert(alias.clone(), entry);
-    let passphrase = prompt_secret("vault master passphrase");
-    let confirm = prompt_secret("confirm passphrase");
-    if passphrase != confirm {
-        eprintln!("passphrases do not match");
-        return 1;
-    }
+    // Open the existing vault with its own passphrase, or create the vault
+    // and set its passphrase once — an existing vault keeps its passphrase;
+    // `set` never silently changes it.
+    let (mut vault, passphrase) = match std::fs::read(path) {
+        Ok(sealed) => {
+            println!("Opening the existing vault at {}:", path.display());
+            let passphrase = prompt_secret("  vault passphrase (unlocks the file)");
+            match CredentialVault::open(&sealed, &passphrase) {
+                Ok(vault) => (vault, passphrase),
+                Err(error) => {
+                    eprintln!("unlock failed: {error}");
+                    return 1;
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "Creating a new vault at {} — choose a passphrase to encrypt it:",
+                path.display()
+            );
+            eprintln!(
+                "  (the passphrase protects the file at rest; a lost passphrase cannot be recovered)"
+            );
+            let passphrase = prompt_secret("  new vault passphrase");
+            let confirm = prompt_secret("  confirm vault passphrase");
+            if passphrase != confirm {
+                eprintln!("passphrases do not match");
+                return 1;
+            }
+            (CredentialVault::default(), passphrase)
+        }
+        Err(error) => {
+            eprintln!("cannot read the vault: {error}");
+            return 1;
+        }
+    };
+    vault.entries.insert(alias.to_string(), entry);
     let sealed = match vault.seal(&passphrase) {
         Ok(sealed) => sealed,
         Err(error) => {
@@ -174,16 +214,26 @@ fn vault_set(path: PathBuf, args: &[String]) -> i32 {
             return 1;
         }
     };
-    if let Err(error) = vault_write_private(&path, &sealed) {
+    if let Err(error) = vault_write_private(path, &sealed) {
         eprintln!("cannot write vault: {error}");
         return 1;
     }
-    println!("vault updated: {} entries", vault.entries.len());
+    println!(
+        "vault updated: {} entries ({})",
+        vault.entries.len(),
+        path.display()
+    );
     0
 }
 
-fn vault_list(path: PathBuf) -> i32 {
-    let vault = vault_load_or_empty(&path);
+fn vault_list(path: &Path) -> i32 {
+    if path.is_file() {
+        println!(
+            "Listing {} requires its passphrase (entry names are encrypted):",
+            path.display()
+        );
+    }
+    let vault = vault_load_or_empty(path);
     if vault.entries.is_empty() {
         println!("(empty vault)");
         return 0;
@@ -199,15 +249,15 @@ fn vault_list(path: PathBuf) -> i32 {
     0
 }
 
-fn vault_check(path: PathBuf) -> i32 {
-    let sealed = match std::fs::read(&path) {
+fn vault_check(path: &Path) -> i32 {
+    let sealed = match std::fs::read(path) {
         Ok(sealed) => sealed,
         Err(error) => {
             eprintln!("cannot read vault: {error}");
             return 1;
         }
     };
-    let passphrase = prompt_secret("vault master passphrase");
+    let passphrase = prompt_secret("vault passphrase (unlocks the file)");
     match CredentialVault::open(&sealed, &passphrase) {
         Ok(vault) => {
             println!("unlocked: {} entries", vault.entries.len());
@@ -220,10 +270,10 @@ fn vault_check(path: PathBuf) -> i32 {
     }
 }
 
-fn vault_load_or_empty(path: &PathBuf) -> CredentialVault {
+fn vault_load_or_empty(path: &Path) -> CredentialVault {
     match std::fs::read(path) {
         Ok(sealed) => {
-            let passphrase = prompt_secret("vault master passphrase (existing)");
+            let passphrase = prompt_secret("  vault passphrase (unlocks the file)");
             CredentialVault::open(&sealed, &passphrase).unwrap_or_else(|error| {
                 eprintln!("unlock failed: {error}");
                 std::process::exit(1);
@@ -233,7 +283,7 @@ fn vault_load_or_empty(path: &PathBuf) -> CredentialVault {
     }
 }
 
-fn vault_write_private(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
+fn vault_write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

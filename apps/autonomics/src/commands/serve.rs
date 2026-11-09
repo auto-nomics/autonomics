@@ -159,6 +159,48 @@ fn format_uptime(total_secs: u64) -> String {
 /// explain itself below. The daemon still survives the launcher, the
 /// terminal, and Ctrl+C; only `autonomics serve stop`
 /// (POST /gateway-shutdown) stops it.
+/// Interactively unlock the SSH credential vault on behalf of the daemon.
+///
+/// The daemon child runs in its own process group with stdin closed, so it
+/// can never prompt (a background read on the terminal would stop it with
+/// SIGTTIN). The launcher owns the terminal: when a sealed vault exists,
+/// the passphrase is unset, and this is an interactive launch, ask here —
+/// verified against the sealed bytes — and hand it to the child through
+/// the environment. Unattended launches keep today's loud daemon error.
+fn vault_unlock_env() -> color_eyre::Result<Vec<(&'static str, String)>> {
+    use std::io::IsTerminal;
+
+    if std::env::var_os("AUTONOMICS_SSH_PASSPHRASE").is_some() {
+        return Ok(Vec::new());
+    }
+    let Some(vault) = runtime::config::fixed_ssh_vault_path() else {
+        return Ok(Vec::new());
+    };
+    let sealed = match std::fs::read(&vault) {
+        Ok(sealed) => sealed,
+        Err(_) => return Ok(Vec::new()), // no vault yet: nothing to unlock
+    };
+    if !std::io::stdin().is_terminal() {
+        return Ok(Vec::new()); // unattended: the daemon explains loudly
+    }
+    eprintln!(
+        "The SSH credential vault at {} is sealed; the daemon needs its passphrase.",
+        vault.display()
+    );
+    for _ in 0..3 {
+        let Ok(passphrase) = rpassword::prompt_password("vault passphrase: ") else {
+            return Ok(Vec::new());
+        };
+        if vfs::credential::CredentialVault::open(&sealed, &passphrase).is_ok() {
+            return Ok(vec![("AUTONOMICS_SSH_PASSPHRASE", passphrase)]);
+        }
+        eprintln!("unlock failed; try again");
+    }
+    Err(color_eyre::eyre::eyre!(
+        "vault passphrase attempts exhausted; export AUTONOMICS_SSH_PASSPHRASE for unattended runs"
+    ))
+}
+
 fn spawn_detached_and_wait() -> color_eyre::Result<()> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -166,9 +208,13 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
     let exe = std::env::current_exe()
         .map_err(|e| color_eyre::eyre::eyre!("cannot resolve current executable: {e}"))?;
 
-    let mut child = Command::new(exe)
-        .arg("serve")
-        .env(DAEMON_CHILD_ENV, "1")
+    let vault_env = vault_unlock_env()?;
+    let mut command = Command::new(exe);
+    command.arg("serve").env(DAEMON_CHILD_ENV, "1");
+    for (key, value) in vault_env {
+        command.env(key, value);
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

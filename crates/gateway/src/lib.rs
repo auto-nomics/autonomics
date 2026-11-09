@@ -11,6 +11,7 @@
 //! - [`client`]: the Rust frontend SDK (REST + SSE pump);
 //! - [`manager`]: probe / stop for frontends (they never spawn the daemon);
 
+pub mod cli;
 pub mod client;
 pub mod daemon;
 pub mod driver;

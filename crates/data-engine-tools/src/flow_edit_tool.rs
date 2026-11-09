@@ -11,7 +11,7 @@ use crate::ExecError;
 
 /// Shared summary of an authored flow — small by construction (one entry
 /// per process), so the whole graph fits any context comfortably.
-fn flow_summary(flow: &dag_engine::FlowGraph) -> Value {
+fn flow_summary(flow: &data_engine::workflow::FlowGraph) -> Value {
     serde_json::json!({
         "sources": flow
             .sources()
@@ -47,7 +47,7 @@ fn flow_summary(flow: &dag_engine::FlowGraph) -> Value {
     })
 }
 
-fn parse_flow(value: Value) -> Result<dag_engine::FlowGraph, ToolError> {
+fn parse_flow(value: Value) -> Result<data_engine::workflow::FlowGraph, ToolError> {
     serde_json::from_value(value).map_err(|error| ToolError::ValidationFailed {
         message: format!("invalid flow graph: {error}"),
     })
@@ -239,12 +239,12 @@ mod tests {
         let (client, _handle) = data_engine::runtime::spawn_with_engine(
             data_engine::data_engine::DataEngine::builder().build(),
         );
-        let valid: dag_engine::FlowGraph = serde_json::from_value(serde_json::json!({
+        let valid: data_engine::workflow::FlowGraph = serde_json::from_value(serde_json::json!({
             "processes":[{"id":"saved","kind":"echo","spec":{}}], "wires":[]
         }))
         .unwrap();
         client.set_flow(valid).await.unwrap();
-        let invalid: dag_engine::FlowGraph = serde_json::from_value(serde_json::json!({
+        let invalid: data_engine::workflow::FlowGraph = serde_json::from_value(serde_json::json!({
             "sources":[{"id":"a","spec":{"type":"items","values":[1]}}, {"id":"b","spec":{"type":"items","values":[2]}}],
             "processes":[{"id":"join","kind":"channel","spec":{"operator":"join"}}],
             "wires":[{"from":"a","from_port":0,"to":"join","to_port":0,"op":"direct"}, {"from":"b","from_port":0,"to":"join","to_port":0,"op":"direct"}]

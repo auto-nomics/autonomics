@@ -8,7 +8,7 @@ use dag_core::{
     },
     registry::NodeCtx,
 };
-use dag_engine::{FlowGraph, FlowRunConfig, FlowScheduler, Process, SourceResolution};
+use data_engine::workflow::{FlowGraph, FlowRunConfig, FlowScheduler, Process, SourceResolution};
 use futures::StreamExt;
 use std::{
     any::Any,
@@ -68,7 +68,7 @@ fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
     registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: registry.catalog().revision,
+            expected_revision: registry.state().revision,
             id: id.into(),
             name: id.into(),
             enabled,
@@ -79,7 +79,7 @@ fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
 fn select(registry: &ComputeRegistry, id: &str) {
     registry
         .select(SelectTarget {
-            expected_revision: registry.catalog().revision,
+            expected_revision: registry.state().revision,
             target_id: id.into(),
         })
         .unwrap();
@@ -110,7 +110,7 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.catalog().revision,
+                expected_revision: f.registry.state().revision,
                 id: "evidence".into(),
                 name: "evidence".into(),
                 enabled: true,
@@ -181,7 +181,7 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.catalog().revision,
+                expected_revision: f.registry.state().revision,
                 id: "mapping".into(),
                 name: "mapping".into(),
                 enabled: true,
@@ -273,7 +273,7 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
@@ -325,7 +325,7 @@ async fn durable_policy_uses_compare_and_swap_and_keeps_old_revisions() {
     assert!(
         f.registry
             .select(SelectTarget {
-                expected_revision: f.registry.catalog().revision,
+                expected_revision: f.registry.state().revision,
                 target_id: "second".into()
             })
             .is_err()
@@ -347,7 +347,7 @@ async fn durable_policy_uses_compare_and_swap_and_keeps_old_revisions() {
         crate::hpc_monitor::MonitorHub::empty(),
     )
     .unwrap();
-    assert_eq!(restored.catalog().policy.target_id, "second");
+    assert_eq!(restored.state().policy.target_id, "second");
     assert!(restored.bind().is_err());
     assert_eq!(restored.status().unwrap().runs.len(), 2);
 }
@@ -403,7 +403,7 @@ async fn sources_survive_switches_and_restart_and_reach_existing_agent_views() {
     assert!(
         f.registry
             .add_source(SaveDataSource {
-                expected_revision: f.registry.catalog().revision,
+                expected_revision: f.registry.state().revision,
                 source
             })
             .await
@@ -426,7 +426,7 @@ async fn sources_survive_switches_and_restart_and_reach_existing_agent_views() {
             .unwrap(),
         22
     );
-    assert_eq!(restored.catalog().policy.target_id, "server-b");
+    assert_eq!(restored.state().policy.target_id, "server-b");
 }
 
 #[tokio::test]
@@ -460,8 +460,8 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
             .await
             .unwrap_err();
         assert!(error.contains("shadow existing VFS data"), "{error}");
-        assert_eq!(f.registry.catalog().revision, 1);
-        assert!(f.registry.catalog().data_sources.is_empty());
+        assert_eq!(f.registry.state().revision, 1);
+        assert!(f.registry.state().data_sources.is_empty());
     }
     assert_eq!(
         f.registry
@@ -479,8 +479,8 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
             .unwrap(),
         14
     );
-    let persisted: ComputeCatalog =
-        serde_json::from_slice(&read_private(&f.registry.root.join("catalog.json")).unwrap())
+    let persisted: ComputeRegistryState =
+        serde_json::from_slice(&read_private(&f.registry.root.join("registry.json")).unwrap())
             .unwrap();
     assert!(persisted.data_sources.is_empty());
 }
@@ -715,8 +715,8 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
                 .is_err()
         );
     }
-    let original = f.registry.root.join("catalog.json");
-    let saved = f.registry.root.join("catalog.saved");
+    let original = f.registry.root.join("registry.json");
+    let saved = f.registry.root.join("registry.saved");
     fs::rename(&original, &saved).unwrap();
     fs::create_dir(&original).unwrap();
     assert!(
@@ -727,7 +727,7 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
             })
             .is_err()
     );
-    assert_eq!(f.registry.catalog().revision, 1);
+    assert_eq!(f.registry.state().revision, 1);
     assert!(f.registry.bind().is_err());
 }
 
@@ -740,7 +740,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.catalog().revision,
+                expected_revision: f.registry.state().revision,
                 id: id.into(),
                 name: id.into(),
                 enabled: true,
@@ -794,7 +794,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "a".into(),
             name: "disabled a".into(),
             enabled: false,
@@ -966,7 +966,7 @@ else:
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "a".into(),
             name: "a".into(),
             enabled: false,
@@ -1246,7 +1246,7 @@ async fn background_image_builds_cannot_bypass_remote_compute_policy() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
@@ -1280,7 +1280,7 @@ async fn first_enrollment_preserves_explicit_legacy_container_placement() {
         crate::hpc_monitor::MonitorHub::empty(),
     )
     .unwrap();
-    assert_eq!(registry.catalog().policy.target_id, "legacy-slurm");
+    assert_eq!(registry.state().policy.target_id, "legacy-slurm");
     assert_eq!(
         registry
             .target("legacy-slurm", Some(1))
@@ -1289,7 +1289,7 @@ async fn first_enrollment_preserves_explicit_legacy_container_placement() {
             .name(),
         containers.runtime.name()
     );
-    assert_eq!(f.registry.catalog().policy.target_id, "local");
+    assert_eq!(f.registry.state().policy.target_id, "local");
 }
 
 #[tokio::test]
@@ -1317,7 +1317,7 @@ async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_rev
         )
     };
     let registry = open().unwrap();
-    let mut retained = registry.catalog();
+    let mut retained = registry.state();
     assert_eq!(
         retained
             .targets
@@ -1358,7 +1358,7 @@ async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_rev
     }
     retained.policy.target_revision = 2;
     let root = config.state_dir.join("compute");
-    let catalog_path = root.join("catalog.json");
+    let catalog_path = root.join("registry.json");
     let pending = root.join(".legacy-fixture");
     write_new(&pending, &retained).unwrap();
     fs::rename(&pending, &catalog_path).unwrap();
@@ -1366,7 +1366,7 @@ async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_rev
     for _ in 0..2 {
         let reopened = open().unwrap();
         assert_eq!(
-            serde_json::to_value(reopened.catalog()).unwrap(),
+            serde_json::to_value(reopened.state()).unwrap(),
             serde_json::to_value(&retained).unwrap()
         );
         assert_eq!(
@@ -1389,7 +1389,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
         .registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "old-worker".into(),
             name: "Old worker".into(),
             enabled: true,
@@ -1404,15 +1404,15 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
         })
         .unwrap_err();
     assert!(error.contains("previous-release") && error.contains(dag_core::source_revision()));
-    assert_eq!(f.registry.catalog().revision, catalog.revision);
-    assert_eq!(f.registry.catalog().policy.target_id, "local");
+    assert_eq!(f.registry.state().revision, catalog.revision);
+    assert_eq!(f.registry.state().policy.target_id, "local");
     // The SSH fixture always fails: an incompatible profile must stop before SSH.
     let check = f.registry.check_target("old-worker").await.unwrap();
     assert_eq!(check["configuration_valid"], false);
     assert_eq!(check["deployment"]["source_compatible"], false);
     assert!(check["connection_observation"].is_null());
     // Simulate an enrolled policy retained across a coordinator upgrade.
-    let mut retained = f.registry.catalog();
+    let mut retained = f.registry.state();
     retained.policy.target_id = "old-worker".into();
     retained.policy.target_revision = 1;
     f.registry.persist(&retained).unwrap();
@@ -1455,7 +1455,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     reopened
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: reopened.catalog().revision,
+            expected_revision: reopened.state().revision,
             id: "old-worker".into(),
             name: "Matching replacement".into(),
             enabled: true,
@@ -1536,7 +1536,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "readiness".into(),
             name: "readiness".into(),
             enabled: true,
@@ -1642,7 +1642,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
 #[tokio::test]
 async fn readiness_reports_unregistered_candidate_and_local_unknown_without_mutation() {
     let f = fixture();
-    let before = f.registry.catalog().revision;
+    let before = f.registry.state().revision;
     let report = f
         .registry
         .readiness(
@@ -1663,7 +1663,7 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
     assert_eq!(empty["requested_images"], 0);
     assert_eq!(empty["requested_identities"], 0);
     assert!(!empty["verification_gaps"].as_array().unwrap().is_empty());
-    assert_eq!(f.registry.catalog().revision, before);
+    assert_eq!(f.registry.state().revision, before);
     assert!(f.registry.status().unwrap().runs.is_empty());
 }
 
@@ -1674,7 +1674,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "network".into(),
             name: "network".into(),
             enabled: true,
@@ -1716,7 +1716,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "network".into(),
             name: "network".into(),
             enabled: true,
@@ -1757,7 +1757,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.catalog().revision,
+            expected_revision: f.registry.state().revision,
             id: "ht-direct".into(),
             name: "Direct SSH host".into(),
             enabled: true,
@@ -1987,4 +1987,98 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
         })
         .unwrap_err();
     assert!(err.contains("at most one data domain"), "{err}");
+}
+
+#[tokio::test]
+async fn enroll_from_minimal_input_derives_everything() {
+    let f = fixture();
+    // Fake ssh: answer endpoint probes, run payloads through the local sh.
+    let ssh = f.config.state_dir.join("enroll-ssh");
+    fs::write(
+        &ssh,
+        b"#!/bin/sh\nif [ \"$1\" = -G ]; then printf 'hostname toy.example\\nuser toy\\nport 22\\n'; exit 0; fi\nwhile [ \"$1\" = -o ]; do shift 2; done\nshift\nexec /bin/sh -c \"$*\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    let cluster = f.config.state_dir.join("cluster-root");
+    fs::create_dir_all(&cluster).unwrap();
+    let worker = cluster.join("autonomics-worker");
+    fs::write(&worker, b"worker bytes").unwrap();
+    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let catalog = f
+        .registry
+        .enroll(super::EnrollRequest {
+            expected_revision: 1,
+            id: "hpc-b".into(),
+            name: None,
+            login_alias: "hpc-b-login".into(),
+            data_alias: Some("hpc-b-data".into()),
+            data_root: Some(cluster.display().to_string()),
+            worker_executable: worker.display().to_string(),
+            deploy_worker: None,
+            python: None,
+            partition: Some("test-part".into()),
+            account: None,
+            ssh_command: Some(ssh.display().to_string()),
+            scratch_dir: None,
+            select: true,
+        })
+        .await
+        .unwrap();
+
+    // Selected, pinned, and fully derived.
+    assert_eq!(catalog.policy.target_id, "hpc-b");
+    let target = catalog.targets.iter().find(|t| t.id == "hpc-b").unwrap();
+    assert!(target.endpoints.contains_key("hpc-b-login"));
+    assert!(target.endpoints.contains_key("hpc-b-data"));
+    let domain = &target.data_domains[0];
+    assert_eq!(domain.vfs_prefix, "/data/hpc-b");
+    assert_eq!(domain.remote_root, cluster.display().to_string());
+    let backend = match &target.backend {
+        ComputeBackend::Slurm { settings } => settings.clone(),
+        _ => panic!("enroll defaults to a Slurm backend"),
+    };
+    assert_eq!(backend.partition, "test-part");
+    assert_eq!(
+        backend.scratch_remote_dir,
+        format!("{}/scratch", cluster.display())
+    );
+    assert!(backend.typed_worker_config.is_some());
+
+    // The domain mount: read-only, domain-tagged, at the derived prefix.
+    let source = catalog
+        .data_sources
+        .iter()
+        .find(|s| s.id == "hpc-b")
+        .unwrap();
+    assert!(source.read_only);
+    assert_eq!(source.domain.as_deref(), Some("hpc-b"));
+    assert_eq!(source.mount_path(), "/data/hpc-b");
+}
+
+#[tokio::test]
+async fn enroll_rejects_partial_data_home_inputs() {
+    let f = fixture();
+    let error = f
+        .registry
+        .enroll(super::EnrollRequest {
+            expected_revision: 1,
+            id: "broken".into(),
+            name: None,
+            login_alias: "alias".into(),
+            data_alias: Some("data-alias".into()),
+            data_root: None,
+            worker_executable: "/worker".into(),
+            deploy_worker: None,
+            python: None,
+            partition: None,
+            account: None,
+            ssh_command: None,
+            scratch_dir: None,
+            select: false,
+        })
+        .await
+        .unwrap_err();
+    assert!(error.contains("together"), "{error}");
 }

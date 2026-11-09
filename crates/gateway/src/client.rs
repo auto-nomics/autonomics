@@ -643,9 +643,20 @@ impl GatewayClient {
 
     // ── compute targets and HPC jobs ─────────────────────────────
 
-    /// Operator compute catalog status: targets, data sources, selection.
+    /// Operator compute-registry status: targets, data sources, selection.
     pub async fn compute_status(&self) -> Result<runtime::compute::ComputeStatus> {
         self.get("/compute").await
+    }
+
+    /// One-shot composite enrollment from minimal operator input: probes
+    /// the worker binary, generates and pins its profile, creates the
+    /// data-domain mount, saves the target and optionally selects it.
+    pub async fn compute_enroll(
+        &self,
+        request: &runtime::compute::EnrollRequest,
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.request(reqwest::Method::POST, "/compute/enroll", Some(request))
+            .await
     }
 
     /// Read-only readiness blockers for an explicit workflow requirement set.
@@ -676,7 +687,7 @@ impl GatewayClient {
     pub async fn save_compute_target(
         &self,
         request: &runtime::compute::SaveTarget,
-    ) -> Result<runtime::compute::ComputeCatalog> {
+    ) -> Result<runtime::compute::ComputeRegistryState> {
         self.request(reqwest::Method::PUT, "/compute/targets", Some(request))
             .await
     }
@@ -685,7 +696,7 @@ impl GatewayClient {
     pub async fn select_compute_target(
         &self,
         request: &runtime::compute::SelectTarget,
-    ) -> Result<runtime::compute::ComputeCatalog> {
+    ) -> Result<runtime::compute::ComputeRegistryState> {
         self.request(reqwest::Method::PUT, "/compute/policy", Some(request))
             .await
     }
@@ -694,7 +705,7 @@ impl GatewayClient {
     pub async fn add_data_source(
         &self,
         request: &runtime::compute::SaveDataSource,
-    ) -> Result<runtime::compute::ComputeCatalog> {
+    ) -> Result<runtime::compute::ComputeRegistryState> {
         self.request(
             reqwest::Method::POST,
             "/compute/data-sources",
@@ -743,8 +754,11 @@ impl GatewayClient {
     ) -> Result<vfs::browse::VfsListing> {
         let limit = limit.to_string();
         let offset = offset.to_string();
-        self.get_with_query("/vfs/list", &[("path", path), ("limit", &limit), ("offset", &offset)])
-            .await
+        self.get_with_query(
+            "/vfs/list",
+            &[("path", path), ("limit", &limit), ("offset", &offset)],
+        )
+        .await
     }
 
     /// Declarative mount table.
@@ -803,11 +817,7 @@ impl GatewayClient {
     }
 
     /// Create/overwrite a text file (`original: null` overwrites).
-    pub async fn vfs_write_text(
-        &self,
-        path: &str,
-        contents: &str,
-    ) -> Result<serde_json::Value> {
+    pub async fn vfs_write_text(&self, path: &str, contents: &str) -> Result<serde_json::Value> {
         self.request(
             reqwest::Method::PUT,
             "/vfs/text",
@@ -815,7 +825,6 @@ impl GatewayClient {
         )
         .await
     }
-
 }
 
 /// Percent-encode a path segment so agent paths containing `/` survive

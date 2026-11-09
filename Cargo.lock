@@ -995,6 +995,8 @@ dependencies = [
  "opengwas",
  "plugin-rsi",
  "ratatui",
+ "rpassword",
+ "runtime",
  "serde_json",
  "text-embedding",
  "time",
@@ -1047,7 +1049,6 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "dag-core",
- "dag-engine",
  "data-engine",
  "fuzzy-matcher",
  "gateway",
@@ -3176,26 +3177,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dag-engine"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "dag-core",
- "datafusion",
- "futures",
- "glob",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "vfs",
-]
-
-[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3329,10 +3310,10 @@ dependencies = [
  "container-runtime",
  "csv",
  "dag-core",
- "dag-engine",
  "datafusion",
  "evalue",
  "futures",
+ "glob",
  "nodes-causal",
  "nodes-dl",
  "nodes-epi",
@@ -3353,6 +3334,7 @@ dependencies = [
  "num-traits",
  "parking_lot 0.12.5",
  "parquet",
+ "regex",
  "rustpython-ast",
  "rustpython-parser",
  "schemars 1.2.2",
@@ -3382,7 +3364,6 @@ dependencies = [
  "bib-base",
  "bib-types",
  "container-runtime",
- "dag-engine",
  "data-engine",
  "datafusion",
  "nodes-sql",
@@ -12289,7 +12270,6 @@ dependencies = [
  "container-plugin",
  "container-runtime",
  "dag-core",
- "dag-engine",
  "data-catalog",
  "data-engine",
  "data-engine-tools",
@@ -12301,12 +12281,14 @@ dependencies = [
  "kms",
  "kms-tools",
  "libc",
+ "opendal",
  "opengwas",
  "opentargets",
  "plugin-rsi",
  "ppt-base",
  "rcsb",
  "resource-downloader",
+ "rpassword",
  "rusqlite",
  "schemars 1.2.2",
  "serde",

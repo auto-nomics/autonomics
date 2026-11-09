@@ -47,7 +47,10 @@ pub(crate) enum AppEvent {
         plan: agentik_types::AgentPlan,
     },
     /// An effort override finished applying (async cycle path).
-    EffortApplied { agent: String, label: String },
+    EffortApplied {
+        agent: String,
+        label: String,
+    },
     /// A fresh model catalogue snapshot arrived from the daemon (hydration,
     /// `ReloadCatalog`, or after a provider/catalog change). The handler
     /// rebuilds the config widget's catalog state.
@@ -109,7 +112,10 @@ pub(crate) enum AppEvent {
     /// A hot model swap was rejected by the daemon (unresolvable spec,
     /// network error, …). The optimistically lit marker cannot speak for
     /// itself without a failure toast, so the user must be told.
-    ModelSwapFailed { agent: String, error: String },
+    ModelSwapFailed {
+        agent: String,
+        error: String,
+    },
     /// A provider row save finished (PUT /model-config/provider).
     ProviderSaved {
         provider_name: String,
@@ -160,6 +166,7 @@ pub(crate) enum AppEvent {
     HpcConfigLoaded(std::result::Result<serde_json::Value, String>),
     /// HPC monitor inventory from `GET /hpc/jobs`.
     HpcJobsLoaded(serde_json::Value),
+    HpcTargetsLoaded(std::result::Result<serde_json::Value, String>),
     /// Site profile persisted via `PUT /hpc/config`.
     HpcProfileSaved(std::result::Result<serde_json::Value, String>),
     /// Directory listing from `GET /vfs/list` (cwd + entries).

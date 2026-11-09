@@ -129,7 +129,6 @@ fn base_spec(
         logical_node: Some(kind.into()),
         kind: kind.into(),
         spec,
-        axis: None,
         item_key: None,
         item: None,
         inputs: Vec::new(),
@@ -193,6 +192,7 @@ fn echo_process() -> ProcessTaskSpec {
         outputs: vec![ProcessTaskOutput {
             port: 0,
             pattern: "out-*.json".into(),
+            optional: false,
         }],
     }
 }

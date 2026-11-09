@@ -4,7 +4,7 @@
  */
 import { gatewayRequest } from "@/gateway";
 import type {
-  ComputeCatalog,
+  ComputeRegistryState,
   ComputeStatus,
   HpcJobsResponse,
   ReadinessReport,
@@ -17,7 +17,7 @@ export async function fetchComputeStatus(): Promise<ComputeStatus> {
 export async function selectComputeTarget(
   expectedRevision: number,
   targetId: string,
-): Promise<ComputeCatalog> {
+): Promise<ComputeRegistryState> {
   return gatewayRequest("PUT", "/compute/policy", {
     expected_revision: expectedRevision,
     target_id: targetId,
@@ -32,7 +32,7 @@ export async function saveComputeTarget(
     enabled: boolean;
     backend: Record<string, unknown>;
   },
-): Promise<ComputeCatalog> {
+): Promise<ComputeRegistryState> {
   return gatewayRequest("PUT", "/compute/targets", {
     expected_revision: expectedRevision,
     ...target,
@@ -42,7 +42,7 @@ export async function saveComputeTarget(
 export async function addComputeDataSource(
   expectedRevision: number,
   source: Record<string, unknown>,
-): Promise<ComputeCatalog> {
+): Promise<ComputeRegistryState> {
   return gatewayRequest("POST", "/compute/data-sources", {
     expected_revision: expectedRevision,
     source,

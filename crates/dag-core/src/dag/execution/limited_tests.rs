@@ -1,5 +1,5 @@
 use super::*;
-use crate::dag::{graph::PortOutputs, node_event::NodeReporter};
+use crate::dag::{PortOutputs, node_event::NodeReporter};
 use crate::{DagNode, NodeCtx, NodePorts, TaskResources, TaskSpec, TaskSubmission};
 use datafusion::prelude::SessionContext;
 use std::sync::atomic::{AtomicUsize, Ordering};

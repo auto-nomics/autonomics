@@ -1,10 +1,13 @@
 //! Operator-owned compute selection. Storage namespaces have an independent lifetime.
+mod enroll;
 mod readiness;
 mod routing;
 pub use readiness::ReadinessRequest;
 #[cfg(test)]
 mod tests;
 pub mod tools;
+
+pub use enroll::EnrollRequest;
 
 use crate::{RuntimeConfig, config::SlurmConfig};
 use container_runtime::{ContainerExecutionInfra, PodmanConnection};
@@ -56,7 +59,7 @@ pub struct ComputeTarget {
     /// Filesystem domains this target references in place. Phase 1 of
     /// the placement model: the domain declaration moves from the
     /// typed-worker profile's free-form `data_home` field into the
-    /// immutable target record, where the catalog pins endpoint
+    /// immutable target record, where registry state pins endpoint
     /// identity alongside the other target aliases. Empty for local
     /// targets and pre-existing enrollments (the profile field remains
     /// the legacy fallback).
@@ -92,7 +95,7 @@ pub struct DataDomain {
 
 impl DataDomain {
     /// Admission rules mirroring the transport-side `SshDataHome`
-    /// validation so an invalid domain fails the catalog save, not the
+    /// validation so an invalid domain fails the registry save, not the
     /// first scheduled task.
     pub fn validate(&self) -> Result<(), String> {
         identifier(&self.id)?;
@@ -127,7 +130,7 @@ impl DataDomain {
         Ok(())
     }
 
-    /// The transport-side placement record for this domain. The catalog id
+    /// The transport-side placement record for this domain. The registry id
     /// flows through so every placement the store publishes carries the
     /// domain identity downstream consumers compare against.
     pub fn data_home(&self) -> dag_core::SshDataHome {
@@ -197,8 +200,8 @@ fn yes() -> bool {
 
 /// Resolve durable placement before opening any legacy backend. The
 /// operator's site profile seeds the base config (file > env > default);
-/// an enrolled compute catalog then overrides placement for enrolled
-/// deployments. Environment variables seed the first catalog; they do not
+/// persisted compute-registry state then overrides placement for enrolled
+/// deployments. Environment variables seed the initial state; they do not
 /// retarget an enrolled revision.
 pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, String> {
     let mut config = config.clone();
@@ -206,21 +209,27 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
         profile.apply_to(&mut config.slurm);
     }
     let config = &config;
-    let path = config.state_dir.join("compute/catalog.json");
+    let registry_path = config.state_dir.join("compute/registry.json");
+    let legacy_path = config.state_dir.join("compute/catalog.json");
+    let path = if fs::symlink_metadata(&registry_path).is_ok() {
+        registry_path
+    } else {
+        legacy_path
+    };
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(config.clone()),
         Err(error) => return Err(error.to_string()),
         Ok(_) => (),
     }
-    let catalog: ComputeCatalog =
+    let state: ComputeRegistryState =
         serde_json::from_slice(&read_private(&path)?).map_err(|e| e.to_string())?;
-    if catalog.version != 1 {
-        return Err("unsupported compute catalog".into());
+    if state.version != 1 {
+        return Err("unsupported compute registry state".into());
     }
-    let target = catalog
+    let target = state
         .targets
         .iter()
-        .find(|t| t.id == catalog.policy.target_id && t.revision == catalog.policy.target_revision)
+        .find(|t| t.id == state.policy.target_id && t.revision == state.policy.target_revision)
         .ok_or("selected target revision is missing")?;
     let mut resolved = config.clone();
     match &target.backend {
@@ -309,7 +318,10 @@ pub struct ComputePolicy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ComputeCatalog {
+/// Durable, serializable state owned by the single [`ComputeRegistry`].
+///
+/// This is a storage/transport record, not a second compute-domain object.
+pub struct ComputeRegistryState {
     pub version: u32,
     pub revision: u64,
     pub policy: ComputePolicy,
@@ -321,7 +333,7 @@ pub struct ComputeCatalog {
 pub struct ComputeStatus {
     #[serde(default)]
     pub deployment: serde_json::Value,
-    pub catalog: ComputeCatalog,
+    pub state: ComputeRegistryState,
     pub mounts: Vec<vfs::MountDefinition>,
     pub runs: Vec<ExecutionBinding>,
 }
@@ -356,7 +368,7 @@ pub struct SaveTarget {
     pub enabled: bool,
     pub backend: ComputeBackend,
     /// Declared placement domains. The transport currently admits at
-    /// most one; the vec keeps the catalog schema forward-compatible.
+    /// most one; the vec keeps the registry-state schema forward-compatible.
     #[serde(default)]
     pub data_domains: Vec<DataDomain>,
 }
@@ -428,7 +440,7 @@ pub struct ComputeRegistry {
     vfs: Arc<vfs::MountedObjectStore>,
     local: Arc<dyn PodmanConnection>,
     local_executor: Arc<dyn TaskExecutor>,
-    state: RwLock<ComputeCatalog>,
+    state: RwLock<ComputeRegistryState>,
     built: RwLock<BTreeMap<String, Arc<BuiltTarget>>>,
     mutation: Mutex<()>,
     poisoned: std::sync::atomic::AtomicBool,
@@ -542,11 +554,11 @@ fn write_bytes_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .and_then(|f| f.sync_all())
         .map_err(|e| e.to_string())
 }
-/// Atomically publish a catalog so readers never observe a partial file.
-fn write_catalog(root: &Path, catalog: &ComputeCatalog) -> Result<(), String> {
+/// Atomically publish registry state so readers never observe a partial file.
+fn write_state(root: &Path, state: &ComputeRegistryState) -> Result<(), String> {
     let pending = root.join(format!(".pending-{}", uuid::Uuid::new_v4()));
-    write_new(&pending, catalog)?;
-    fs::rename(&pending, root.join("catalog.json")).map_err(|e| e.to_string())?;
+    write_new(&pending, state)?;
+    fs::rename(&pending, root.join("registry.json")).map_err(|e| e.to_string())?;
     fs::File::open(root)
         .and_then(|f| f.sync_all())
         .map_err(|e| e.to_string())
@@ -618,14 +630,27 @@ impl ComputeRegistry {
         private_dir(&root)?;
         private_dir(&root.join("runs"))?;
         private_dir(&root.join("targets"))?;
-        let catalog_path = root.join("catalog.json");
-        let is_new = match fs::symlink_metadata(&catalog_path) {
+        let registry_path = root.join("registry.json");
+        let legacy_catalog_path = root.join("catalog.json");
+        let loaded_legacy = match fs::symlink_metadata(&registry_path) {
+            Ok(_) => false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::symlink_metadata(&legacy_catalog_path).is_ok()
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let state_path = if !loaded_legacy {
+            registry_path
+        } else {
+            legacy_catalog_path
+        };
+        let is_new = match fs::symlink_metadata(&state_path) {
             Ok(_) => false,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
             Err(error) => return Err(error.to_string()),
         };
-        let mut catalog: ComputeCatalog = if !is_new {
-            serde_json::from_slice(&read_private(&catalog_path)?).map_err(|e| e.to_string())?
+        let mut state: ComputeRegistryState = if !is_new {
+            serde_json::from_slice(&read_private(&state_path)?).map_err(|e| e.to_string())?
         } else {
             let mut targets = vec![ComputeTarget {
                 id: "local".into(),
@@ -656,7 +681,7 @@ impl ComputeRegistry {
             } else {
                 "local"
             };
-            ComputeCatalog {
+            ComputeRegistryState {
                 version: 1,
                 revision: 1,
                 policy: ComputePolicy {
@@ -668,12 +693,12 @@ impl ComputeRegistry {
                 data_sources: vec![],
             }
         };
-        if catalog.version != 1 || catalog.revision == 0 {
-            return Err("unsupported compute catalog".into());
+        if state.version != 1 || state.revision == 0 {
+            return Err("unsupported compute registry state".into());
         }
         // Names are part of saved target revisions. Presentation changes must
         // not rewrite historical capsules or invalidate a prepared deployment
-        // catalog merely by opening the registry.
+        // registry state merely by opening the registry.
         // A single gateway already owns state_dir; mutations additionally serialize here.
         let local = Arc::new(container_runtime::PodmanRuntime::new(
             containers.config.clone(),
@@ -693,19 +718,19 @@ impl ComputeRegistry {
                 )
                 .map_err(|e| e.to_string())?,
             ),
-            state: RwLock::new(catalog.clone()),
+            state: RwLock::new(state.clone()),
             built: RwLock::new(BTreeMap::new()),
             mutation: Mutex::new(()),
             poisoned: std::sync::atomic::AtomicBool::new(false),
             monitors,
         });
-        for source in &catalog.data_sources {
+        for source in &state.data_sources {
             registry
                 .vfs
                 .add_data_mount(&source.manifest()?)
                 .map_err(|e| e.to_string())?;
         }
-        for target in &mut catalog.targets {
+        for target in &mut state.targets {
             if is_new {
                 registry.freeze_profile(target)?;
             }
@@ -724,13 +749,10 @@ impl ComputeRegistry {
                 return Err("duplicate compute target revision".into());
             }
         }
-        *registry.state.write().unwrap() = catalog.clone();
-        registry.target(
-            &catalog.policy.target_id,
-            Some(catalog.policy.target_revision),
-        )?;
-        if is_new {
-            registry.persist(&catalog)?;
+        *registry.state.write().unwrap() = state.clone();
+        registry.target(&state.policy.target_id, Some(state.policy.target_revision))?;
+        if is_new || loaded_legacy {
+            registry.persist(&state)?;
         }
         Ok(registry)
     }
@@ -741,11 +763,11 @@ impl ComputeRegistry {
         }
         Ok(())
     }
-    fn persist(&self, catalog: &ComputeCatalog) -> Result<(), String> {
-        let result = write_catalog(&self.root, catalog);
+    fn persist(&self, state: &ComputeRegistryState) -> Result<(), String> {
+        let result = write_state(&self.root, state);
         if result.is_err() {
             // A storage failure must not let new work outlive a damaged or
-            // non-durable catalog. Already-bound work retains its own backend.
+            // non-durable registry state. Already-bound work retains its own backend.
             self.poisoned
                 .store(true, std::sync::atomic::Ordering::Release);
         }
@@ -764,21 +786,18 @@ impl ComputeRegistry {
             }
         }
         runs.sort_by(|a, b| a.id.cmp(&b.id));
-        let catalog = self.catalog();
+        let state = self.state();
         let deployment = self
-            .target(
-                &catalog.policy.target_id,
-                Some(catalog.policy.target_revision),
-            )?
+            .target(&state.policy.target_id, Some(state.policy.target_revision))?
             .deployment();
         Ok(ComputeStatus {
             deployment,
-            catalog,
+            state,
             mounts: self.vfs.mount_definitions(),
             runs,
         })
     }
-    pub fn catalog(&self) -> ComputeCatalog {
+    pub fn state(&self) -> ComputeRegistryState {
         self.state.read().unwrap().clone()
     }
 
@@ -863,10 +882,10 @@ impl ComputeRegistry {
             .cloned()
             .ok_or("target unavailable".into())
     }
-    pub fn select(&self, request: SelectTarget) -> Result<ComputeCatalog, String> {
+    pub fn select(&self, request: SelectTarget) -> Result<ComputeRegistryState, String> {
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
-        let mut next = self.catalog();
+        let mut next = self.state();
         if next.revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
@@ -899,19 +918,19 @@ impl ComputeRegistry {
         next.revision = next
             .revision
             .checked_add(1)
-            .ok_or("catalog revision overflow")?;
+            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         *self.state.write().unwrap() = next.clone();
         Ok(next)
     }
-    pub fn save_target(&self, request: SaveTarget) -> Result<ComputeCatalog, String> {
+    pub fn save_target(&self, request: SaveTarget) -> Result<ComputeRegistryState, String> {
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
         identifier(&request.id)?;
         if request.name.trim().is_empty() {
             return Err("target name is required".into());
         }
-        let mut next = self.catalog();
+        let mut next = self.state();
         if next.revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
@@ -951,15 +970,18 @@ impl ComputeRegistry {
         next.revision = next
             .revision
             .checked_add(1)
-            .ok_or("catalog revision overflow")?;
+            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         *self.state.write().unwrap() = next.clone();
         Ok(next)
     }
-    pub async fn add_source(&self, mut request: SaveDataSource) -> Result<ComputeCatalog, String> {
+    pub async fn add_source(
+        &self,
+        mut request: SaveDataSource,
+    ) -> Result<ComputeRegistryState, String> {
         self.healthy()?;
         identifier(&request.source.id)?;
-        if self.catalog().revision != request.expected_revision {
+        if self.state().revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
         // Probe before taking the synchronous mutation lock. Recheck the
@@ -970,7 +992,7 @@ impl ComputeRegistry {
             .map_err(|e| e.to_string())?;
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
-        let mut next = self.catalog();
+        let mut next = self.state();
         if next.revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
@@ -995,7 +1017,7 @@ impl ComputeRegistry {
         next.revision = next
             .revision
             .checked_add(1)
-            .ok_or("catalog revision overflow")?;
+            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         if let Err(e) = self.vfs.add_data_mount(&manifest) {
             self.poisoned

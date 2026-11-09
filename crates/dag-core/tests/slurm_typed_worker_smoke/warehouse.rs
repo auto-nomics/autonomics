@@ -193,6 +193,7 @@ print(json.dumps({{'fixture_root':root,'uid':s.st_uid,'device':s.st_dev,'inode':
 
 fn data_home(profile: &Profile, fixture: &str) -> SshDataHome {
     SshDataHome {
+        domain_id: None,
         ssh_aliases: vec![profile.ssh_host.clone()],
         remote_root: fixture.into(),
         vfs_prefix: "/warehouse-account".into(),

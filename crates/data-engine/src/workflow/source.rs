@@ -17,9 +17,9 @@ use std::{collections::BTreeMap, sync::Arc};
 use tokio::{sync::mpsc, task::JoinSet};
 use vfs::OpendalFileStorage;
 
-use crate::error::Error;
-use crate::model::{FlowGraph, PathType, SourceSpec};
-use crate::plan::SourceResolution;
+use crate::workflow::error::Error;
+use crate::workflow::model::{FlowGraph, PathType, SourceSpec};
+use crate::workflow::plan::SourceResolution;
 
 /// Bounded source readers. Dropping this value cancels outstanding enumerations.
 pub struct SourceStreams {
@@ -94,7 +94,7 @@ pub fn stream_sources(
 pub fn stream_sources_with_functions(
     graph: &FlowGraph,
     storage: Option<Arc<OpendalFileStorage>>,
-    channel_function: Option<crate::ChannelFunction>,
+    channel_function: Option<crate::workflow::ChannelFunction>,
 ) -> Result<SourceStreams, Error> {
     let mut readers = BTreeMap::new();
     let mut tasks = JoinSet::new();
@@ -290,7 +290,7 @@ struct FilePairOptions {
     size: Option<i64>,
     flat: bool,
     grouping: Option<serde_json::Value>,
-    evaluator: Option<crate::ChannelFunction>,
+    evaluator: Option<crate::workflow::ChannelFunction>,
 }
 
 async fn stream_file_pairs(
@@ -345,14 +345,14 @@ async fn stream_file_pairs(
                         .await
                         .map_err(|e| Error::Execution(format!("file pair grouping failed: {e}")))?
                         .map_err(Error::Execution)?;
-                crate::reactive::node_transport_value(result)?
+                crate::workflow::reactive::node_transport_value(result)?
             } else {
                 let Some(prefix) = pair_prefix(&path, pattern)? else {
                     continue;
                 };
                 T::Json(serde_json::Value::String(prefix))
             };
-            let identity = serde_json::to_string(&crate::reactive::group_key(&key))
+            let identity = serde_json::to_string(&crate::workflow::reactive::group_key(&key))
                 .map_err(|e| Error::Execution(e.to_string()))?;
             if size < 0 && !groups.contains_key(&identity) {
                 group_order.push(identity.clone());
@@ -577,7 +577,7 @@ async fn stream_glob(
 }
 
 /// Resolve every fanout source of the graph into a [`SourceResolution`],
-/// ready for [`crate::plan::build_plan`]. `Items` sources pass through
+/// ready for [`crate::workflow::plan::build_plan`]. `Items` sources pass through
 /// untouched; `Glob` sources are enumerated through `storage`.
 ///
 /// Fails when a glob source exists but no storage is configured, or when
@@ -682,7 +682,7 @@ pub async fn resolve_sources(
 
 /// Enumerate one glob pattern into item values. Each item is the matched
 /// file's virtual path as a JSON string (`vfs://…`), which `{{item}}`
-/// templates render directly and [`crate::instance::item_key`] turns into a
+/// templates render directly and [`crate::workflow::instance::item_key`] turns into a
 /// stable per-file key. Results are sorted by path so plans and reports are
 /// deterministic across runs.
 pub async fn enumerate_glob(
@@ -798,7 +798,7 @@ mod tests {
         );
     }
     use super::*;
-    use crate::model::{FlowGraphBuilder, Process, Source, Wire};
+    use crate::workflow::model::{FlowGraphBuilder, Process, Source, Wire};
 
     async fn storage_with_files() -> OpendalFileStorage {
         let storage = OpendalFileStorage::new_temp();
@@ -1207,7 +1207,7 @@ mod tests {
             .unwrap();
         let resolution = resolve_sources(&graph, Some(&storage)).await.unwrap();
         // Glob enumerated through the VFS; items passed through as declared.
-        let plan = crate::plan::build_plan(&graph, &resolution).unwrap();
+        let plan = crate::workflow::plan::build_plan(&graph, &resolution).unwrap();
         assert_eq!(plan.processes["qc"].instances.len(), 3);
         assert_eq!(plan.processes["manual"].instances.len(), 1);
     }

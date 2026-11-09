@@ -1,5 +1,5 @@
 //! Executor adapter for the run-local dataflow coordinator.
-use crate::{
+use crate::workflow::{
     cache::InstanceCache,
     dataflow::{Dataflow, Delivery},
     error::Error,
@@ -29,7 +29,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 struct SourceState<'a> {
-    source: &'a crate::model::Source,
+    source: &'a crate::workflow::model::Source,
     reader: mpsc::Receiver<Result<serde_json::Value, Error>>,
     pending: Option<Option<Result<serde_json::Value, Error>>>,
     closed: bool,
@@ -273,7 +273,7 @@ fn sort_channel_transport_values(
 fn sort_channel_values_by_function(
     values: Vec<dag_core::dag::execution::ChannelTransportValue>,
     function: &serde_json::Value,
-    evaluator: &crate::ChannelFunction,
+    evaluator: &crate::workflow::ChannelFunction,
 ) -> Result<NodeValue, String> {
     use dag_core::dag::execution::ChannelTransportValue as T;
     let mut keyed = Vec::with_capacity(values.len());
@@ -1202,7 +1202,7 @@ fn event_can_deliver(flow: &Dataflow<NodeValue>, event: &NodeEvent) -> bool {
     match &event.kind {
         NodeEventKind::ChannelItem { port, .. } => {
             event.node_id.split_once('#').is_none_or(|(process, _)| {
-                flow.output_kind(process) == Some(crate::channel::ChannelKind::Value)
+                flow.output_kind(process) == Some(crate::workflow::channel::ChannelKind::Value)
                     || flow.can_emit(process, *port, 128)
             })
         }
@@ -1213,7 +1213,7 @@ fn event_can_deliver(flow: &Dataflow<NodeValue>, event: &NodeEvent) -> bool {
 // Return no cache identity when a value cannot be validated safely.
 #[cfg(test)]
 fn input_fingerprint(
-    process: &crate::model::Process,
+    process: &crate::workflow::model::Process,
     inputs: &[NodeInput],
     node: &dyn dag_core::node::DagNode,
     dependency_state: Option<serde_json::Value>,
@@ -1230,7 +1230,7 @@ fn input_fingerprint(
 }
 
 fn input_fingerprint_with_files(
-    process: &crate::model::Process,
+    process: &crate::workflow::model::Process,
     inputs: &[NodeInput],
     node: &dyn dag_core::node::DagNode,
     dependency_state: Option<serde_json::Value>,
@@ -1386,7 +1386,7 @@ fn input_fingerprint_with_files(
     Some(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn cacheable_outputs(outputs: &dag_core::dag::graph::PortOutputs) -> bool {
+fn cacheable_outputs(outputs: &dag_core::dag::PortOutputs) -> bool {
     fn reusable(file: &FileRef) -> bool {
         file.fingerprint.as_ref().is_some_and(|fp| {
             if file.path.starts_with("vfs://") {
@@ -1404,7 +1404,7 @@ fn cacheable_outputs(outputs: &dag_core::dag::graph::PortOutputs) -> bool {
         })
 }
 
-fn outputs_unchanged(outputs: &dag_core::dag::graph::PortOutputs) -> bool {
+fn outputs_unchanged(outputs: &dag_core::dag::PortOutputs) -> bool {
     fn unchanged(file: &FileRef) -> bool {
         let Some(expected) = &file.fingerprint else {
             return false;
@@ -1681,11 +1681,11 @@ impl FlowScheduler {
                     if let Some(value) = message {
                         let value = value?;
                         let payload = match &state.source.spec {
-                            crate::model::SourceSpec::Glob { .. } => value
+                            crate::workflow::model::SourceSpec::Glob { .. } => value
                                 .as_str()
                                 .map(file_value)
                                 .unwrap_or_else(|| source_value(&value)),
-                            crate::model::SourceSpec::FilePairs { flat, .. } => {
+                            crate::workflow::model::SourceSpec::FilePairs { flat, .. } => {
                                 use dag_core::dag::execution::ChannelTransportValue as T;
                                 let items = value.as_array().ok_or_else(|| Error::Execution("file pair source produced an invalid tuple".into()))?;
                                 let key = items.first().ok_or_else(|| Error::Execution("file pair source produced an invalid key".into()))?;
@@ -1827,12 +1827,12 @@ impl FlowScheduler {
                     let operator = process.spec["operator"].as_str().expect("matched operator");
                     let (_, delivery) = activation.inputs.into_iter().next().expect("first/take has one input");
                     let value = match delivery { Delivery::Value(value) => value, Delivery::Collected(values) => collect(values) };
-                    if operator == "first" {
-                        if let Some(criteria) = process.spec.get("criteria") {
+                    if operator == "first"
+                        && let Some(criteria) = process.spec.get("criteria")
+                    {
                             let matched = matches_literal_criteria(&value, criteria);
                             if !matched { flow.finish(&process.id).map_err(Error::Execution)?; continue; }
                         }
-                    }
                     flow.emit(&process.id, 0, value).map_err(Error::Execution)?;
                     flow.finish(&process.id).map_err(Error::Execution)?;
                     let seen = take_state.entry(process.id.clone()).or_default();
@@ -2623,40 +2623,44 @@ impl FlowScheduler {
                 } else {
                     None
                 };
-                if cfg.resume {
-                    if let (Some(key), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut()) {
-                        if let Some(cached) = cache.lookup(&process.id, Some(key)) {
-                            if cached.still_valid(self.engine_ctx.opendal.as_deref()).await
-                                && match cached.to_port_outputs() { Some(outputs) => tokio::select! { _ = token.cancelled() => false, valid = outputs_unchanged_with_storage(&outputs, self.engine_ctx.opendal.as_deref()) => valid }, None => false } {
-                                if let Some(outputs) =
-                                    cached.to_port_outputs()
-                                {
-                                    for (port, value) in outputs.iter() {
-                                        flow.emit(&process.id, *port, value.clone())
-                                            .map_err(Error::Execution)?;
-                                    }
-                                    flow.finish(&process.id).map_err(Error::Execution)?;
-                                    records.push(InstanceRecord {
-                                        execution: None,
-                                        id,
-                                        process: process.id.clone(),
-                                        item_key: Some(key.clone()),
-                                        status: RuntimeStatus::Success,
-                                        reused: true,
-                                        ignored: false,
-                                        attempts: 0,
-                                        outputs: outputs
-                                            .iter()
-                                            .map(|(p, v)| (*p, v.clone()))
-                                            .collect(),
-                                        error: None,
-                                        elapsed_ms: 0,
-                                    });
-                                    continue;
-                                }
-                            }
-                        }
+                if cfg.resume
+                    && let (Some(key), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut())
+                    && let Some(cached) = cache.lookup(&process.id, Some(key))
+                    && cached.still_valid(self.engine_ctx.opendal.as_deref()).await
+                    && match cached.to_port_outputs() {
+                        Some(outputs) => tokio::select! {
+                            _ = token.cancelled() => false,
+                            valid = outputs_unchanged_with_storage(
+                                &outputs,
+                                self.engine_ctx.opendal.as_deref(),
+                            ) => valid,
+                        },
+                        None => false,
                     }
+                    && let Some(outputs) = cached.to_port_outputs()
+                {
+                    for (port, value) in outputs.iter() {
+                        flow.emit(&process.id, *port, value.clone())
+                            .map_err(Error::Execution)?;
+                    }
+                    flow.finish(&process.id).map_err(Error::Execution)?;
+                    records.push(InstanceRecord {
+                        execution: None,
+                        id,
+                        process: process.id.clone(),
+                        item_key: Some(key.clone()),
+                        status: RuntimeStatus::Success,
+                        reused: true,
+                        ignored: false,
+                        attempts: 0,
+                        outputs: outputs
+                            .iter()
+                            .map(|(p, v)| (*p, v.clone()))
+                            .collect(),
+                        error: None,
+                        elapsed_ms: 0,
+                    });
+                    continue;
                 }
                 executor
                     .preflight(&[(id.as_str(), node.as_ref())])
@@ -2678,7 +2682,7 @@ impl FlowScheduler {
                             TaskInputSource::Channel {
                                 from: wire.from.clone(),
                                 from_port: wire.from_port,
-                                collected: wire.op == crate::model::WireOp::Collect,
+                                collected: wire.op == crate::workflow::model::WireOp::Collect,
                             }
                         },
                         payload: i.data.data_type().to_string(),
@@ -2709,7 +2713,7 @@ impl FlowScheduler {
                     })
                     .collect();
                 let resources =
-                    crate::scheduler::declared_resources(node.as_ref(), &spec);
+                    crate::workflow::scheduler::declared_resources(node.as_ref(), &spec);
                 let submission = TaskSubmission {
                     spec: TaskSpec {
                         id: id.as_str().into(),
@@ -2913,15 +2917,16 @@ impl FlowScheduler {
                                     _ = fingerprint_cache_outputs(&mut outputs, self.engine_ctx.opendal.as_deref()) => {},
                                 }
                             }
-                            if !has_stream && !token.is_cancelled() && cacheable_outputs(&outputs) {
-                                if let (Some(fingerprint), Some(cache)) = (fingerprint.as_ref(), cache.as_deref_mut()) {
-                                    cache.record(&process, Some(fingerprint), fingerprint.clone(), &outputs);
-                                }
+                            if !has_stream && !token.is_cancelled() && cacheable_outputs(&outputs)
+                                && let (Some(fingerprint), Some(cache)) =
+                                    (fingerprint.as_ref(), cache.as_deref_mut())
+                            {
+                                cache.record(&process, Some(fingerprint), fingerprint.clone(), &outputs);
                             }
                             for (port, value) in outputs.iter() {
                                 if streamed.contains(&(id.as_str().to_owned(), *port)) { continue; }
                                 match value {
-                                    NodeValue::Channel(channel) if flow.output_kind(&process) == Some(crate::channel::ChannelKind::Queue) => {
+                                    NodeValue::Channel(channel) if flow.output_kind(&process) == Some(crate::workflow::channel::ChannelKind::Queue) => {
                                         for item in &channel.items {
                                             flow.emit(&process, *port, source_value(item)).map_err(Error::Execution)?;
                                         }
@@ -3101,7 +3106,7 @@ async fn validated_vfs_inputs(
 }
 
 async fn fingerprint_cache_outputs(
-    outputs: &mut dag_core::dag::graph::PortOutputs,
+    outputs: &mut dag_core::dag::PortOutputs,
     storage: Option<&vfs::OpendalFileStorage>,
 ) {
     let ports = outputs
@@ -3151,7 +3156,7 @@ async fn fingerprint_cache_outputs(
 }
 
 async fn outputs_unchanged_with_storage(
-    outputs: &dag_core::dag::graph::PortOutputs,
+    outputs: &dag_core::dag::PortOutputs,
     storage: Option<&vfs::OpendalFileStorage>,
 ) -> bool {
     for (_, value) in outputs.iter() {
@@ -3181,7 +3186,7 @@ async fn outputs_unchanged_with_storage(
                 {
                     return false;
                 }
-                let mut single = dag_core::dag::graph::PortOutputs::new();
+                let mut single = dag_core::dag::PortOutputs::new();
                 single.insert(0, NodeValue::File(file.clone()));
                 if !outputs_unchanged(&single) {
                     return false;
@@ -3210,22 +3215,22 @@ mod tests {
     #[test]
     fn join_remainder_respects_downstream_capacity_and_order() {
         use serde_json::json;
-        let graph = crate::model::FlowGraphBuilder::default()
-            .source(crate::model::Source::items("a", vec![]))
-            .source(crate::model::Source::items("b", vec![]))
-            .process(crate::model::Process::new(
+        let graph = crate::workflow::model::FlowGraphBuilder::default()
+            .source(crate::workflow::model::Source::items("a", vec![]))
+            .source(crate::workflow::model::Source::items("b", vec![]))
+            .process(crate::workflow::model::Process::new(
                 "join",
                 "channel",
                 json!({"operator":"join", "remainder":true}),
             ))
-            .process(crate::model::Process::new(
+            .process(crate::workflow::model::Process::new(
                 "sink",
                 "channel",
                 json!({"operator":"take", "count":10}),
             ))
-            .wire(crate::model::Wire::direct("a", 0, "join", 0))
-            .wire(crate::model::Wire::direct("b", 0, "join", 1))
-            .wire(crate::model::Wire::direct("join", 0, "sink", 0))
+            .wire(crate::workflow::model::Wire::direct("a", 0, "join", 0))
+            .wire(crate::workflow::model::Wire::direct("b", 0, "join", 1))
+            .wire(crate::workflow::model::Wire::direct("join", 0, "sink", 0))
             .build()
             .unwrap();
         let mut flow = Dataflow::<NodeValue>::new(&graph).unwrap();
@@ -3261,22 +3266,24 @@ mod tests {
     #[test]
     fn combine_fanout_respects_downstream_capacity_and_order() {
         use serde_json::json;
-        let graph = crate::model::FlowGraphBuilder::default()
-            .source(crate::model::Source::items("a", vec![]))
-            .source(crate::model::Source::items("b", vec![]))
-            .process(crate::model::Process::new(
+        let graph = crate::workflow::model::FlowGraphBuilder::default()
+            .source(crate::workflow::model::Source::items("a", vec![]))
+            .source(crate::workflow::model::Source::items("b", vec![]))
+            .process(crate::workflow::model::Process::new(
                 "combine",
                 "channel",
                 json!({"operator":"combine"}),
             ))
-            .process(crate::model::Process::new(
+            .process(crate::workflow::model::Process::new(
                 "sink",
                 "channel",
                 json!({"operator":"take", "count":10}),
             ))
-            .wire(crate::model::Wire::direct("a", 0, "combine", 0))
-            .wire(crate::model::Wire::direct("b", 0, "combine", 1))
-            .wire(crate::model::Wire::direct("combine", 0, "sink", 0))
+            .wire(crate::workflow::model::Wire::direct("a", 0, "combine", 0))
+            .wire(crate::workflow::model::Wire::direct("b", 0, "combine", 1))
+            .wire(crate::workflow::model::Wire::direct(
+                "combine", 0, "sink", 0,
+            ))
             .build()
             .unwrap();
         let mut flow = Dataflow::<NodeValue>::new(&graph).unwrap();
@@ -3318,20 +3325,20 @@ mod tests {
     #[test]
     fn group_finalization_respects_downstream_capacity_and_order() {
         use serde_json::json;
-        let graph = crate::model::FlowGraphBuilder::default()
-            .source(crate::model::Source::items("s", vec![]))
-            .process(crate::model::Process::new(
+        let graph = crate::workflow::model::FlowGraphBuilder::default()
+            .source(crate::workflow::model::Source::items("s", vec![]))
+            .process(crate::workflow::model::Process::new(
                 "group",
                 "channel",
                 json!({"operator":"group_tuple"}),
             ))
-            .process(crate::model::Process::new(
+            .process(crate::workflow::model::Process::new(
                 "sink",
                 "channel",
                 json!({"operator":"take", "count":10}),
             ))
-            .wire(crate::model::Wire::direct("s", 0, "group", 0))
-            .wire(crate::model::Wire::direct("group", 0, "sink", 0))
+            .wire(crate::workflow::model::Wire::direct("s", 0, "group", 0))
+            .wire(crate::workflow::model::Wire::direct("group", 0, "sink", 0))
             .build()
             .unwrap();
         let mut flow = Dataflow::<NodeValue>::new(&graph).unwrap();
@@ -3431,6 +3438,7 @@ mod tests {
             immutable_remote: false,
         };
         let file = FileRef {
+            domain: Default::default(),
             path: "/tmp/reads.fastq".into(),
             format: Some("fastq".into()),
             fingerprint: Some(fingerprint.clone()),
@@ -3457,6 +3465,7 @@ mod tests {
     fn collected_file_values_are_a_file_set_with_original_metadata() {
         use dag_core::dag::execution::ChannelTransportValue as T;
         let file = FileRef {
+            domain: Default::default(),
             path: "/tmp/sample.fastq".into(),
             format: Some("fastq".into()),
             fingerprint: Some(dag_core::value::FileFingerprint {
@@ -3486,6 +3495,7 @@ mod tests {
             immutable_remote: false,
         };
         let file = FileRef {
+            domain: Default::default(),
             path: "/tmp/a.fastq".into(),
             format: Some("fastq".into()),
             fingerprint: Some(fingerprint.clone()),
@@ -3731,14 +3741,14 @@ mod tests {
         std::fs::write(&path, "payload").unwrap();
         let mut reference = FileRef::local(&path, None).unwrap();
         reference.fingerprint.as_mut().unwrap().immutable_remote = true;
-        let mut outputs = dag_core::dag::graph::PortOutputs::new();
+        let mut outputs = dag_core::dag::PortOutputs::new();
         outputs.insert(0, NodeValue::File(reference));
         assert!(!cacheable_outputs(&outputs));
     }
 
     #[test]
     fn bare_channel_strings_with_vfs_are_not_assumed_to_be_local() {
-        let process = crate::model::Process::new(
+        let process = crate::workflow::model::Process::new(
             "test",
             "channel",
             serde_json::json!({"operator":"flatten"}),
@@ -3763,7 +3773,7 @@ mod vfs_cache_regression_tests {
         let path = directory.path().join("result.txt");
         std::fs::write(&path, b"first").unwrap();
         let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
-        let mut outputs = dag_core::dag::graph::PortOutputs::new();
+        let mut outputs = dag_core::dag::PortOutputs::new();
         outputs.insert(0, NodeValue::File(FileRef::local(&path, None).unwrap()));
         assert!(!outputs_unchanged_with_storage(&outputs, None).await);
         fingerprint_cache_outputs(&mut outputs, None).await;
@@ -3798,10 +3808,11 @@ mod vfs_cache_regression_tests {
             .write_bytes("data/result.txt", b"first".to_vec())
             .await
             .unwrap();
-        let mut outputs = dag_core::dag::graph::PortOutputs::new();
+        let mut outputs = dag_core::dag::PortOutputs::new();
         outputs.insert(
             0,
             NodeValue::File(FileRef {
+                domain: Default::default(),
                 path: "vfs://data/result.txt".into(),
                 format: None,
                 fingerprint: None,

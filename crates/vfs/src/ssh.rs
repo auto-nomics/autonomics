@@ -63,7 +63,7 @@ fn build(alias: &str, root: &str, python: &str) -> Result<Operator> {
     Ok(opendal::OperatorBuilder::new(build_access(alias, root, python)?).finish())
 }
 
-pub(crate) fn build_pinned(
+pub fn build_ssh_operator(
     alias: &str,
     root: &str,
     python: &str,
@@ -183,7 +183,10 @@ impl SshAccess {
         self.command(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Keep stderr: helper crashes are tiny, and the writer surfaces
+            // them so a dead remote python explains itself instead of
+            // showing as an opaque broken stream.
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .map_err(|_| failure(ErrorKind::Unexpected, "SSH helper failed to start"))
@@ -542,14 +545,12 @@ impl oio::Write for SshWriter {
         while !view.is_empty() {
             let frame = &view[..view.len().min(MAX_FRAME)];
             let header = format!("{:08x}\n", frame.len());
-            stdin
-                .write_all(header.as_bytes())
-                .await
-                .map_err(|_| failure(ErrorKind::Unexpected, "SSH upload stream failed"))?;
-            stdin
-                .write_all(frame)
-                .await
-                .map_err(|_| failure(ErrorKind::Unexpected, "SSH upload stream failed"))?;
+            if let Err(error) = stdin.write_all(header.as_bytes()).await {
+                return Err(self.stream_failure(error).await);
+            }
+            if let Err(error) = stdin.write_all(frame).await {
+                return Err(self.stream_failure(error).await);
+            }
             view = &view[frame.len()..];
         }
         Ok(())
@@ -587,6 +588,46 @@ impl oio::Write for SshWriter {
 }
 
 impl SshWriter {
+    /// Turn a broken stdin write into an error that carries the remote
+    /// helper's last words (stderr) — a missing/too-old python or a
+    /// syntax failure then names itself instead of "stream failed".
+    async fn stream_failure(&mut self, _error: std::io::Error) -> Error {
+        let mut detail = String::new();
+        if let Some(child) = self.child.as_mut() {
+            // Give a just-crashed helper a moment to flush its stderr.
+            if let Ok(Some(stderr)) =
+                tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                    match child.stderr.take() {
+                        Some(mut stderr) => {
+                            use tokio::io::AsyncReadExt;
+                            let mut buffer = vec![0u8; 4096];
+                            match stderr.read(&mut buffer).await {
+                                Ok(n) if n > 0 => Some(stderr),
+                                _ => None,
+                            }
+                        }
+                        None => None,
+                    }
+                })
+                .await
+            {
+                let mut buffer = String::new();
+                use tokio::io::AsyncReadExt;
+                let mut stderr = stderr;
+                let _ = stderr.read_to_string(&mut buffer).await;
+                detail = buffer.trim_ascii().to_string();
+            }
+        }
+        if detail.is_empty() {
+            failure(ErrorKind::Unexpected, "SSH upload stream failed (remote helper exited)")
+        } else {
+            Error::new(
+                ErrorKind::Unexpected,
+                format!("SSH upload stream failed; remote helper stderr: {detail}"),
+            )
+        }
+    }
+
     async fn collect_status_of(child: &mut Child, stdout: Option<ChildStdout>) -> Result<Value> {
         let Some(stdout) = stdout else {
             return Err(failure(ErrorKind::Unexpected, "SSH response unavailable"));

@@ -115,7 +115,7 @@ impl CredentialVault {
         let plaintext = serde_json::to_vec(self).map_err(std::io::Error::other)?;
         let sealed = cipher
             .encrypt(
-                &Nonce::from_slice(&nonce_bytes),
+                Nonce::from_slice(&nonce_bytes),
                 Payload {
                     msg: &plaintext,
                     aad: MAGIC,

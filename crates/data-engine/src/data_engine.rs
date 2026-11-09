@@ -44,6 +44,7 @@ pub struct DataEngine {
     /// mutable `SessionContext` state can never accumulate across runs.
     pub(crate) engine_ctx: crate::node_registry::registry::NodeCtx,
     pub(crate) dag: DAG,
+    pub(crate) task_executor: Arc<dyn dag_core::TaskExecutor>,
     /// Shared, immutable after construction. Wrapped in `Arc` so that
     /// [`DataEngine::new_isolated_engine`] can share it across per-agent engines
     /// without rebuilding the ~70 factories.
@@ -53,12 +54,12 @@ pub struct DataEngine {
     container_execution: Arc<ContainerExecutionInfra>,
     config: SchedulerConfig,
     /// Cross-run instance results shared by runners of this session only.
-    pub(crate) flow_cache: std::sync::Arc<tokio::sync::Mutex<dag_engine::InstanceCache>>,
+    pub(crate) flow_cache: std::sync::Arc<tokio::sync::Mutex<crate::workflow::InstanceCache>>,
     /// The session's authored flow (`run_flow`). Interior mutability so flow
     /// execution — which never needs the engine lock — can read the current
     /// graph while other commands edit it. Isolated engines start with their
     /// own empty flow and deliberately do NOT inherit this state.
-    pub(crate) flow: std::sync::Arc<std::sync::RwLock<dag_engine::FlowGraph>>,
+    pub(crate) flow: std::sync::Arc<std::sync::RwLock<crate::workflow::FlowGraph>>,
     /// The most recent flow run's grouped report, for view surfaces (TUI /
     /// GUI / gateway). `None` until the session runs a flow.
     pub(crate) flow_report:
@@ -94,7 +95,7 @@ pub(crate) fn channel_info() -> crate::node_registry::NodeInfo {
     }
 }
 pub(crate) fn channel_schema() -> Result<schemars::Schema> {
-    serde_json::from_value(dag_engine::dataflow::channel_operator_schema())
+    serde_json::from_value(crate::workflow::dataflow::channel_operator_schema())
         .map_err(|e| Error::Custom(e.to_string()))
 }
 pub(crate) fn channel_ports(
@@ -106,7 +107,7 @@ pub(crate) fn channel_ports(
         .and_then(|value| value.as_str());
     if let Some(value) = spec {
         let valid = op.is_some_and(|op| {
-            dag_engine::dataflow::channel_operator_schema()["oneOf"]
+            crate::workflow::dataflow::channel_operator_schema()["oneOf"]
                 .as_array()
                 .is_some_and(|variants| {
                     variants
@@ -156,7 +157,7 @@ impl DataEngine {
     const DEFAULT_MEMORY_GUARD_RATIO: f64 = 0.90;
     const DEFAULT_MEMORY_GUARD_INTERVAL_MS: u64 = 250;
 
-    fn ensure_node_kind_allowed(kind: &str) -> Result<()> {
+    pub(crate) fn ensure_node_kind_allowed(kind: &str) -> Result<()> {
         let local_kind = kind.rsplit_once('/').map_or(kind, |(_, local)| local);
         if local_kind == Self::DISABLED_NODE_KIND {
             return Err(Error::Custom(format!(
@@ -179,7 +180,8 @@ impl DataEngine {
 
     /// Replace the execution backend used for physical tasks.
     pub fn set_task_executor(&mut self, executor: std::sync::Arc<dyn dag_core::TaskExecutor>) {
-        self.dag.set_task_executor(executor);
+        self.dag.set_task_executor(Arc::clone(&executor));
+        self.task_executor = executor;
     }
 
     /// Configure an explicit ordinary coordinator concurrency limit.
@@ -235,7 +237,7 @@ impl DataEngine {
                 memory_limit_bytes,
             )?
         };
-        self.dag.set_task_executor(std::sync::Arc::new(executor));
+        self.set_task_executor(Arc::new(executor));
         Ok(())
     }
 
@@ -306,6 +308,7 @@ impl DataEngine {
         Self {
             ctx,
             engine_ctx,
+            task_executor: dag.task_executor(),
             dag,
             node_registry,
             container_execution,
@@ -314,7 +317,7 @@ impl DataEngine {
                 ..SchedulerConfig::default()
             },
             flow_cache: std::default::Default::default(),
-            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(crate::workflow::FlowGraph::empty())),
             flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: None,
             history_ref: "main".to_string(),
@@ -611,7 +614,7 @@ impl DataEngine {
             Err(e) => return shell_failure(dry_run, e),
         };
         let traces = operation_traces(&execution.operations);
-        let summary = |g: &dag_engine::FlowGraph| serde_json::json!({"process_count":g.processes().len(), "source_count":g.sources().len(), "wire_count":g.wires().len()});
+        let summary = |g: &crate::workflow::FlowGraph| serde_json::json!({"process_count":g.processes().len(), "source_count":g.sources().len(), "wire_count":g.wires().len()});
         if !execution.committed {
             return DagShellOutcome {
                 ok: true,
@@ -624,112 +627,7 @@ impl DataEngine {
                 error: None,
             };
         }
-        let result = (|| -> Result<dag_engine::FlowGraph> {
-            let mut json = serde_json::to_value(&old).map_err(|e| Error::Custom(e.to_string()))?;
-            for (index, op) in execution.operations.iter().enumerate() {
-                let edit = (|| -> Result<()> {
-                    match op {
-                        GraphEditOp::AddNode { id, kind, spec } => {
-                            if kind == "__channel_source" {
-                                json["sources"]
-                                    .as_array_mut()
-                                    .expect("source array")
-                                    .push(serde_json::json!({"id":id,"spec":spec}));
-                            } else {
-                                Self::ensure_node_kind_allowed(kind)?;
-                                json["processes"]
-                                    .as_array_mut()
-                                    .expect("process array")
-                                    .push(serde_json::json!({"id":id,"kind":kind,"spec":spec}));
-                            }
-                        }
-                        GraphEditOp::UpdateNode { id, spec } => {
-                            let process = json["processes"]
-                                .as_array_mut()
-                                .expect("process array")
-                                .iter_mut()
-                                .find(|p| p["id"] == *id)
-                                .ok_or_else(|| Error::Custom(format!("unknown process `{id}`")))?;
-                            process["spec"] = spec.clone();
-                        }
-                        GraphEditOp::RemoveNode { id, cascade } => {
-                            let connected = json["wires"]
-                                .as_array()
-                                .expect("wires")
-                                .iter()
-                                .any(|w| w["from"] == *id || w["to"] == *id);
-                            if connected && !cascade {
-                                return Err(Error::Custom(format!(
-                                    "node `{id}` has connected wires"
-                                )));
-                            }
-                            let mut removed = false;
-                            for field in ["processes", "sources"] {
-                                let list = json[field].as_array_mut().expect("graph array");
-                                let before = list.len();
-                                list.retain(|v| v["id"] != *id);
-                                removed |= before != list.len();
-                            }
-                            if !removed {
-                                return Err(Error::Custom(format!("unknown node `{id}`")));
-                            }
-                            if *cascade {
-                                json["wires"]
-                                    .as_array_mut()
-                                    .expect("wires")
-                                    .retain(|w| w["from"] != *id && w["to"] != *id);
-                            }
-                        }
-                        GraphEditOp::AddEdge {
-                            from,
-                            from_port,
-                            to,
-                            to_port,
-                        }
-                        | GraphEditOp::AddCollectEdge {
-                            from,
-                            from_port,
-                            to,
-                            to_port,
-                        } => {
-                            let mode = if matches!(op, GraphEditOp::AddCollectEdge { .. }) {
-                                "collect"
-                            } else {
-                                "direct"
-                            };
-                            json["wires"].as_array_mut().expect("wires").push(serde_json::json!({"from":from,"from_port":from_port,"to":to,"to_port":to_port,"op":mode}));
-                        }
-                        GraphEditOp::RemoveEdge {
-                            from,
-                            from_port,
-                            to,
-                            to_port,
-                        } => {
-                            let wires = json["wires"].as_array_mut().expect("wires");
-                            let before = wires.len();
-                            wires.retain(|w| {
-                                !(w["from"] == *from
-                                    && w["from_port"] == *from_port
-                                    && w["to"] == *to
-                                    && w["to_port"] == *to_port)
-                            });
-                            if before == wires.len() {
-                                return Err(Error::Custom("unknown wire".into()));
-                            }
-                        }
-                    }
-                    Ok(())
-                })();
-                edit.map_err(|e| {
-                    Error::Custom(format!("operation {index} ({}) failed: {e}", op.kind()))
-                })?;
-            }
-            let graph: dag_engine::FlowGraph =
-                serde_json::from_value(json).map_err(|e| Error::Custom(e.to_string()))?;
-            graph.validate().map_err(|e| Error::Custom(e.to_string()))?;
-            dag_engine::dataflow::Dataflow::<()>::new(&graph).map_err(Error::Custom)?;
-            Ok(graph)
-        })();
+        let result = self.preview_flow_edits(&execution.operations);
         match result {
             Ok(candidate) => {
                 let graph = summary(&candidate);
@@ -761,6 +659,115 @@ impl DataEngine {
     }
 
     /// Query the JSON Schema of a registered node kind.
+    pub(crate) fn preview_flow_edits(
+        &self,
+        operations: &[GraphEditOp],
+    ) -> Result<crate::workflow::FlowGraph> {
+        let old = self.flow.read().expect("flow lock").clone();
+        let mut json = serde_json::to_value(&old).map_err(|e| Error::Custom(e.to_string()))?;
+        for (index, op) in operations.iter().enumerate() {
+            let edit = (|| -> Result<()> {
+                match op {
+                    GraphEditOp::AddNode { id, kind, spec } => {
+                        if kind == "__channel_source" {
+                            json["sources"]
+                                .as_array_mut()
+                                .expect("source array")
+                                .push(serde_json::json!({"id":id,"spec":spec}));
+                        } else {
+                            Self::ensure_node_kind_allowed(kind)?;
+                            json["processes"]
+                                .as_array_mut()
+                                .expect("process array")
+                                .push(serde_json::json!({"id":id,"kind":kind,"spec":spec}));
+                        }
+                    }
+                    GraphEditOp::UpdateNode { id, spec } => {
+                        let process = json["processes"]
+                            .as_array_mut()
+                            .expect("process array")
+                            .iter_mut()
+                            .find(|p| p["id"] == *id)
+                            .ok_or_else(|| Error::Custom(format!("unknown process `{id}`")))?;
+                        process["spec"] = spec.clone();
+                    }
+                    GraphEditOp::RemoveNode { id, cascade } => {
+                        let connected = json["wires"]
+                            .as_array()
+                            .expect("wires")
+                            .iter()
+                            .any(|w| w["from"] == *id || w["to"] == *id);
+                        if connected && !cascade {
+                            return Err(Error::Custom(format!("node `{id}` has connected wires")));
+                        }
+                        let mut removed = false;
+                        for field in ["processes", "sources"] {
+                            let list = json[field].as_array_mut().expect("graph array");
+                            let before = list.len();
+                            list.retain(|v| v["id"] != *id);
+                            removed |= before != list.len();
+                        }
+                        if !removed {
+                            return Err(Error::Custom(format!("unknown node `{id}`")));
+                        }
+                        if *cascade {
+                            json["wires"]
+                                .as_array_mut()
+                                .expect("wires")
+                                .retain(|w| w["from"] != *id && w["to"] != *id);
+                        }
+                    }
+                    GraphEditOp::AddEdge {
+                        from,
+                        from_port,
+                        to,
+                        to_port,
+                    }
+                    | GraphEditOp::AddCollectEdge {
+                        from,
+                        from_port,
+                        to,
+                        to_port,
+                    } => {
+                        let mode = if matches!(op, GraphEditOp::AddCollectEdge { .. }) {
+                            "collect"
+                        } else {
+                            "direct"
+                        };
+                        json["wires"].as_array_mut().expect("wires").push(serde_json::json!({"from":from,"from_port":from_port,"to":to,"to_port":to_port,"op":mode}));
+                    }
+                    GraphEditOp::RemoveEdge {
+                        from,
+                        from_port,
+                        to,
+                        to_port,
+                    } => {
+                        let wires = json["wires"].as_array_mut().expect("wires");
+                        let before = wires.len();
+                        wires.retain(|w| {
+                            !(w["from"] == *from
+                                && w["from_port"] == *from_port
+                                && w["to"] == *to
+                                && w["to_port"] == *to_port)
+                        });
+                        if before == wires.len() {
+                            return Err(Error::Custom("unknown wire".into()));
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            edit.map_err(|e| {
+                Error::Custom(format!("operation {index} ({}) failed: {e}", op.kind()))
+            })?;
+        }
+        let graph: crate::workflow::FlowGraph =
+            serde_json::from_value(json).map_err(|e| Error::Custom(e.to_string()))?;
+        graph.validate().map_err(|e| Error::Custom(e.to_string()))?;
+        crate::workflow::dataflow::Dataflow::<()>::new(&graph).map_err(Error::Custom)?;
+        Ok(graph)
+    }
+
     pub fn get_node_spec(&self, kind: &str) -> Result<schemars::Schema> {
         if kind == "channel" {
             return channel_schema();
@@ -1017,13 +1024,21 @@ impl DataEngine {
             .as_ref()
             .ok_or_else(|| Error::Custom("no history store attached".into()))?;
         let run_id = run_id.trim();
-        if let Some(run) = history.get_run(run_id).await.map_err(Error::Dag)? { return Ok(Some(run)); }
-        if run_id.is_empty() { return Ok(None); }
+        if let Some(run) = history.get_run(run_id).await.map_err(Error::Dag)? {
+            return Ok(Some(run));
+        }
+        if run_id.is_empty() {
+            return Ok(None);
+        }
         let candidates = history.list_runs(1000, None).await.map_err(Error::Dag)?;
-        let mut matches = candidates.into_iter().filter(|run| run.id.starts_with(run_id));
+        let mut matches = candidates
+            .into_iter()
+            .filter(|run| run.id.starts_with(run_id));
         let first = matches.next();
         if matches.next().is_some() {
-            return Err(Error::Custom(format!("ambiguous run id prefix `{run_id}`; use a longer prefix or the full id")));
+            return Err(Error::Custom(format!(
+                "ambiguous run id prefix `{run_id}`; use a longer prefix or the full id"
+            )));
         }
         Ok(first)
     }
@@ -1424,16 +1439,17 @@ impl DataEngine {
         // Per-agent sessions answer to the same operator compute policy as
         // the main engine: without the executor, every session DAG silently
         // falls back to local execution and remote targets are never bound.
-        dag.set_task_executor(self.dag.task_executor());
+        dag.set_task_executor(Arc::clone(&self.task_executor));
         Self {
             ctx: self.ctx.clone(),
             engine_ctx: self.engine_ctx.clone(),
+            task_executor: Arc::clone(&self.task_executor),
             dag,
             node_registry: Arc::clone(&self.node_registry),
             container_execution: Arc::clone(&self.container_execution),
             config: self.config.clone(),
             flow_cache: std::default::Default::default(),
-            flow: std::sync::Arc::new(std::sync::RwLock::new(dag_engine::FlowGraph::empty())),
+            flow: std::sync::Arc::new(std::sync::RwLock::new(crate::workflow::FlowGraph::empty())),
             flow_report: std::sync::Arc::new(std::sync::RwLock::new(None)),
             history: self.history.clone(),
             history_ref: "main".to_string(),
@@ -2443,21 +2459,53 @@ mod tests {
     #[tokio::test]
     async fn run_lookup_accepts_unique_prefix_and_rejects_ambiguous_prefix() {
         let directory = tempfile::tempdir().unwrap();
-        let history = DagHistory::open(&directory.path().join("history.db")).await.unwrap();
-        for id in ["aaaabbbb-1111-2222-3333-444444444444", "aaaabbbb-2222-2222-3333-444444444444"] {
-            history.record_run(&crate::dag::RunRecord {
-                id: id.into(), ref_name: "flow".into(), snapshot_id: None,
-                manifest_hash: "definition".into(), trigger: None,
-                started_at: "2026-11-06T00:00:00Z".into(), finished_at: "2026-11-06T00:00:01Z".into(),
-                ok: true, cancelled: false, error: None, message: None,
-                engine_version: "test".into(), source_revision: "test".into(), run_report_json: None,
-            }).await.unwrap();
+        let history = DagHistory::open(&directory.path().join("history.db"))
+            .await
+            .unwrap();
+        for id in [
+            "aaaabbbb-1111-2222-3333-444444444444",
+            "aaaabbbb-2222-2222-3333-444444444444",
+        ] {
+            history
+                .record_run(&crate::dag::RunRecord {
+                    id: id.into(),
+                    ref_name: "flow".into(),
+                    snapshot_id: None,
+                    manifest_hash: "definition".into(),
+                    trigger: None,
+                    started_at: "2026-11-06T00:00:00Z".into(),
+                    finished_at: "2026-11-06T00:00:01Z".into(),
+                    ok: true,
+                    cancelled: false,
+                    error: None,
+                    message: None,
+                    engine_version: "test".into(),
+                    source_revision: "test".into(),
+                    run_report_json: None,
+                })
+                .await
+                .unwrap();
         }
         let engine = DataEngine::builder().build().with_history(history);
-        assert!(engine.get_run("aaaabbbb").await.unwrap_err().to_string().contains("ambiguous"));
-        assert_eq!(engine.get_run("aaaabbbb-111").await.unwrap().unwrap().id, "aaaabbbb-1111-2222-3333-444444444444");
+        assert!(
+            engine
+                .get_run("aaaabbbb")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+        assert_eq!(
+            engine.get_run("aaaabbbb-111").await.unwrap().unwrap().id,
+            "aaaabbbb-1111-2222-3333-444444444444"
+        );
         assert!(engine.get_run("unknown").await.unwrap().is_none());
-        assert!(engine.get_run("aaaabbbb-2222-2222-3333-444444444444").await.unwrap().is_some());
+        assert!(
+            engine
+                .get_run("aaaabbbb-2222-2222-3333-444444444444")
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
-
 }

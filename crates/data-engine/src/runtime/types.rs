@@ -22,11 +22,11 @@ pub enum DataEngineCmd {
     SetFlow {
         /// Replace the session's authored flow wholesale. Validated first;
         /// an invalid graph leaves the previous flow untouched.
-        flow: dag_engine::FlowGraph,
+        flow: crate::workflow::FlowGraph,
         reply: oneshot::Sender<EngineResult<()>>,
     },
     GetFlow {
-        reply: oneshot::Sender<EngineResult<dag_engine::FlowGraph>>,
+        reply: oneshot::Sender<EngineResult<crate::workflow::FlowGraph>>,
     },
     GetFlowView {
         reply: oneshot::Sender<EngineResult<crate::flow::FlowView>>,
@@ -35,9 +35,9 @@ pub enum DataEngineCmd {
         /// Authored stage-model graph. `Some` replaces the session's flow
         /// before running (set-and-run in one step); `None` runs the flow
         /// already stored for this session.
-        flow: Option<dag_engine::FlowGraph>,
+        flow: Option<crate::workflow::FlowGraph>,
         options: crate::flow::FlowOptions,
-        reply: oneshot::Sender<EngineResult<dag_engine::FlowRunReport>>,
+        reply: oneshot::Sender<EngineResult<crate::workflow::FlowRunReport>>,
         /// Fires when the caller drops the reply receiver; aborts the flow
         /// run instead of leaving instances executing unowned.
         cancel_token: CancellationToken,

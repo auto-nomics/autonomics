@@ -1,6 +1,6 @@
 //! Run-scoped item instances: identity, spec rendering, and fingerprints.
 //!
-//! An [`Instance`] is one materialized copy of a [`Process`](crate::model::Process)
+//! An [`Instance`] is one materialized copy of a [`Process`](crate::workflow::model::Process)
 //! for one item (or the single copy of a singleton). Instances never enter
 //! authored state; they are created at run start and die with the run. Only
 //! their fingerprints and outputs survive, keyed by the stable
@@ -29,11 +29,11 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{Error, Process};
+use crate::workflow::model::{Error, Process};
 
 /// Separator between process name and item key inside an instance id.
 /// Reserved: process names containing it are rejected at validation
-/// ([`crate::model::FlowGraph::validate`]).
+/// ([`crate::workflow::model::FlowGraph::validate`]).
 pub const INSTANCE_ID_SEPARATOR: char = '#';
 
 /// Stable identity of one instance: `"{process}#{item_key}"`, or
@@ -152,7 +152,7 @@ pub struct Instance {
 
 impl Instance {
     /// Materialize the single instance of a process with no driving input
-    /// (derived singleton — see [`crate::plan`]).
+    /// (derived singleton — see [`crate::workflow::plan`]).
     pub fn singleton(process: &Process) -> Result<Self, Error> {
         Ok(Self {
             id: InstanceId::new(&process.id, None),
@@ -389,7 +389,7 @@ pub fn instance_fingerprint_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Source;
+    use crate::workflow::model::Source;
 
     fn item_process() -> Process {
         Process::new(

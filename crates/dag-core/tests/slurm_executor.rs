@@ -1930,6 +1930,7 @@ async fn interrupted_or_corrupt_download_preserves_destination() {
         std::fs::write(fixture.path().join("ssh"), shim).unwrap();
         let store = SshArtifactStore::new(fixture.ssh_target(), "/synthetic", root.path());
         let artifact = FileRef {
+            domain: Default::default(),
             path: "/synthetic/file".into(),
             format: None,
             fingerprint: None,
@@ -2036,6 +2037,7 @@ fn successful_download_fixture(fixture: &Fixture) {
 #[cfg(target_os = "linux")]
 fn synthetic_remote_file() -> FileRef {
     FileRef {
+        domain: Default::default(),
         path: "/synthetic/file".into(),
         format: None,
         fingerprint: None,
@@ -2209,6 +2211,7 @@ async fn fifo_file_admission_subprocess() {
     assert!(!root.join("ssh-started").exists());
     let store = SshArtifactStore::new(target, "~/forbidden-remote-preparation", &root);
     let artifact = FileRef {
+        domain: Default::default(),
         path: root.join("fifo").to_string_lossy().into_owned(),
         format: None,
         fingerprint: None,
@@ -2303,6 +2306,7 @@ async fn file_upload_special_sources_rejected_before_ssh() {
             "accepted {name}"
         );
         let artifact = FileRef {
+            domain: Default::default(),
             path: root.join(name).to_string_lossy().into_owned(),
             format: None,
             fingerprint: None,
@@ -2358,6 +2362,7 @@ async fn artifact_upload_pins_source_before_first_remote_preparation() {
         fixture.path().join("local"),
     );
     let artifact = FileRef {
+        domain: Default::default(),
         path: source.to_string_lossy().into_owned(),
         format: None,
         fingerprint: None,
@@ -3061,6 +3066,7 @@ async fn download_rejects_declared_fingerprint_mismatch() {
     // A receipt-borne fingerprint that disagrees with the actual bytes must
     // abort the download instead of trusting the declaration.
     let mismatching = FileRef {
+        domain: Default::default(),
         path: remote_path.clone(),
         format: None,
         fingerprint: Some(FileFingerprint {
@@ -3100,6 +3106,7 @@ async fn download_rejects_declared_fingerprint_mismatch() {
     let downloaded = store
         .download(
             FileRef {
+                domain: Default::default(),
                 path: remote_path,
                 format: None,
                 fingerprint: Some(verified.clone()),
@@ -3641,6 +3648,7 @@ fn private_profile_file(path: &Path, raw: &[u8]) -> FileRef {
     std::fs::write(path, raw).unwrap();
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     FileRef {
+        domain: Default::default(),
         path: path.to_string_lossy().into_owned(),
         format: None,
         fingerprint: Some(FileFingerprint {

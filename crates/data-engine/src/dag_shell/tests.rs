@@ -29,14 +29,14 @@ fn file_channel_type_option_survives_shell_translation() {
             panic!("expected source");
         };
         assert_eq!(spec["pathType"], "dir");
-        let parsed: dag_engine::SourceSpec = serde_json::from_value(spec.clone()).unwrap();
+        let parsed: crate::workflow::SourceSpec = serde_json::from_value(spec.clone()).unwrap();
         assert!(matches!(
             parsed,
-            dag_engine::SourceSpec::Glob {
-                path_type: dag_engine::model::PathType::Dir,
+            crate::workflow::SourceSpec::Glob {
+                path_type: crate::workflow::model::PathType::Dir,
                 ..
-            } | dag_engine::SourceSpec::FilePairs {
-                path_type: dag_engine::model::PathType::Dir,
+            } | crate::workflow::SourceSpec::FilePairs {
+                path_type: crate::workflow::model::PathType::Dir,
                 ..
             }
         ));
@@ -77,6 +77,7 @@ fn channel_function_preserves_file_metadata_when_returned() {
     use dag_core::value::{FileFingerprint, FileRef, NodeValue};
     let (registry, snapshot) = sandbox();
     let input = NodeValue::File(FileRef {
+        domain: Default::default(),
         path: "/tmp/sample.fastq".into(),
         format: Some("fastq".into()),
         fingerprint: Some(FileFingerprint {
@@ -118,6 +119,7 @@ fn channel_function_preserves_file_sets_and_their_fingerprints() {
         immutable_remote: false,
     };
     let input = NodeValue::FileSet(vec![FileRef {
+        domain: Default::default(),
         path: "/tmp/sample.fastq".into(),
         format: Some("fastq".into()),
         fingerprint: Some(fingerprint.clone()),

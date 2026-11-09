@@ -541,7 +541,11 @@ pub(crate) fn render_line_with_settings(
 
 fn tool_output_summary(content: &str) -> String {
     let lines = content.lines().count().max(1);
-    format!("{lines} line{} · {} chars", if lines == 1 { "" } else { "s" }, content.chars().count())
+    format!(
+        "{lines} line{} · {} chars",
+        if lines == 1 { "" } else { "s" },
+        content.chars().count()
+    )
 }
 
 #[cfg(test)]
