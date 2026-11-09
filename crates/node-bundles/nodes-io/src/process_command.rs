@@ -191,8 +191,8 @@ impl NodeFactory for ProcessCommandNodeFactory {
         _node_ctx: NodeCtx,
     ) -> dag_core::registry::error::Result<Box<dyn DagNode>> {
         let spec: ProcessCommandSpec = serde_json::from_value(spec)?;
-        let node = ProcessCommandNode::new(&spec)
-            .map_err(dag_core::registry::error::Error::Unknown)?;
+        let node =
+            ProcessCommandNode::new(&spec).map_err(dag_core::registry::error::Error::Unknown)?;
         Ok(Box::new(node))
     }
 

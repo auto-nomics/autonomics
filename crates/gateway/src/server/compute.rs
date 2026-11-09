@@ -79,11 +79,31 @@ pub(crate) async fn target(
     State(gateway): State<GatewayState>,
     Json(request): Json<SaveTarget>,
 ) -> GatewayResult<Json<ComputeRegistryState>> {
-    registry(&state)?
+    registry(&gateway)?
         .save_target(request)
         .map(|registry_state| {
             changed(&gateway, &registry_state);
             Json(registry_state)
+        })
+        .map_err(compute_error)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DeleteTarget {
+    expected_revision: u64,
+}
+
+pub(crate) async fn delete_target(
+    State(gateway): State<GatewayState>,
+    Path(id): Path<String>,
+    Json(request): Json<DeleteTarget>,
+) -> GatewayResult<Json<ComputeRegistryState>> {
+    registry(&gateway)?
+        .delete_target(&id, request.expected_revision)
+        .map(|snapshot| {
+            changed(&gateway, &snapshot);
+            Json(snapshot)
         })
         .map_err(compute_error)
 }
@@ -92,7 +112,7 @@ pub(crate) async fn select(
     State(gateway): State<GatewayState>,
     Json(request): Json<SelectTarget>,
 ) -> GatewayResult<Json<ComputeRegistryState>> {
-    registry(&state)?
+    registry(&gateway)?
         .select(request)
         .map(|registry_state| {
             changed(&gateway, &registry_state);
@@ -105,7 +125,7 @@ pub(crate) async fn source(
     State(gateway): State<GatewayState>,
     Json(request): Json<SaveDataSource>,
 ) -> GatewayResult<Json<ComputeRegistryState>> {
-    registry(&state)?
+    registry(&gateway)?
         .add_source(request)
         .await
         .map(|registry_state| {
@@ -126,7 +146,7 @@ pub(crate) async fn check(
         .map_err(compute_error)
 }
 
-fn changed(gateway: &GatewayState, state: &ComputeRegistryState) {
+pub(super) fn changed(gateway: &GatewayState, state: &ComputeRegistryState) {
     gateway.hub.publish(crate::hub::EventKind::Notice(
         crate::proto::GatewayNotice::ComputeChanged {
             registry_revision: state.revision,

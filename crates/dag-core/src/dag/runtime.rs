@@ -138,9 +138,8 @@ pub type CompletionPublisher = std::sync::Arc<
 /// Trusted host validation immediately before a cached output is released.
 /// This is a byte/provenance check, not research authorization. A false result
 /// recomputes the node; an error aborts rather than consuming altered evidence.
-pub type CheckpointReuseValidator = std::sync::Arc<
-    dyn Fn(&str, &str, &super::PortOutputs) -> Result<bool, DagError> + Send + Sync,
->;
+pub type CheckpointReuseValidator =
+    std::sync::Arc<dyn Fn(&str, &str, &super::PortOutputs) -> Result<bool, DagError> + Send + Sync>;
 
 /// Scheduler tuning knobs.
 #[derive(Clone)]

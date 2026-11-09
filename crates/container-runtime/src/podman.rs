@@ -443,12 +443,9 @@ impl PodmanConnection for PodmanRuntime {
             create_container(&self.config, args, None).await?;
         }
         self.dev_start_detached(&spec.name).await?;
-        let (id, state) =
-            self.dev_ps_row(&spec.name)
-                .await?
-                .ok_or_else(|| ContainerRuntimeError::Invalid(
-                    "dev container vanished immediately after start".into(),
-                ))?;
+        let (id, state) = self.dev_ps_row(&spec.name).await?.ok_or_else(|| {
+            ContainerRuntimeError::Invalid("dev container vanished immediately after start".into())
+        })?;
         Ok(crate::dev_container::DevContainerStatus {
             state,
             container_id: Some(id),
@@ -648,12 +645,12 @@ impl PodmanRuntime {
             Ok(Err(error)) => {
                 return Err(ContainerRuntimeError::Invalid(format!(
                     "cannot spawn `{program} ps`: {error}"
-                )))
+                )));
             }
             Err(_) => {
                 return Err(ContainerRuntimeError::Timeout {
                     timeout_secs: CLEANUP_TIMEOUT_SECS,
-                })
+                });
             }
         };
         if !output.status.success() {
@@ -690,12 +687,12 @@ impl PodmanRuntime {
             Ok(Err(error)) => {
                 return Err(ContainerRuntimeError::Invalid(format!(
                     "cannot spawn `{program} start`: {error}"
-                )))
+                )));
             }
             Err(_) => {
                 return Err(ContainerRuntimeError::Timeout {
                     timeout_secs: CLEANUP_TIMEOUT_SECS,
-                })
+                });
             }
         };
         if !output.status.success() {

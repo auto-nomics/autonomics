@@ -101,7 +101,8 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
         } else {
             ts.input.display_height(text_width).max(2)
         };
-        let input_constraint = Constraint::Length(input_text_rows);
+        let show_composer = ts.input_mode == InputMode::Input;
+        let input_constraint = Constraint::Length(if show_composer { input_text_rows } else { 0 });
         let pending_texts = ts.pending_queue_preview_texts();
         let pending_constraint = Constraint::Length(pending_queue_height(
             pending_texts.len(),
@@ -119,7 +120,7 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 pending_constraint,    // Runtime-bound input awaiting commit
                 compact_constraint,    // Live compaction preview
                 Constraint::Length(1), // StatusBar (sits on the shared band)
-                Constraint::Length(1),
+                Constraint::Length(u16::from(show_composer)),
                 input_constraint, // Composer (same band; borderless)
             ])
             .split(area);
@@ -255,6 +256,10 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
             frame: ts.frame,
         };
         status_bar.render(layout[3], buf);
+
+        if !show_composer {
+            return;
+        }
 
         let queued = ts.pending_queue_len();
         let placeholder: &str = if running {

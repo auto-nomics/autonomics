@@ -619,7 +619,10 @@ impl SshWriter {
             }
         }
         if detail.is_empty() {
-            failure(ErrorKind::Unexpected, "SSH upload stream failed (remote helper exited)")
+            failure(
+                ErrorKind::Unexpected,
+                "SSH upload stream failed (remote helper exited)",
+            )
         } else {
             Error::new(
                 ErrorKind::Unexpected,

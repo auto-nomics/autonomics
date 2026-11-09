@@ -8,11 +8,11 @@
 //! workspace-root-stripped name (bold on the active leaf), and trailing
 //! model / effort columns (live rows only). A status-tab strip (glyph +
 //! count, including a `Dormant` pseudo-status) filters by lifecycle
-//! state; `/` focuses the search input (local filter over the loaded
-//! page plus a debounced server-side identity search); the `h`/`l` column
+//! state; typing filters the loaded page and searches stored identities;
+//! the `Alt+h`/`Alt+l` column
 //! cursor picks what Enter does on the selected row — open/switch the
 //! leaf (or resume a dormant identity), open the model quick-picker, or
-//! cycle the effort override. `m`/`M`/`e`/`E` are the direct shortcuts.
+//! cycle the effort override. `Alt+m`/`Alt+M`/`Alt+e`/`Alt+E` are the direct shortcuts.
 //! `Ctrl+R` renames and `Ctrl+D` deletes the selected identity (inline
 //! confirmation), `Ctrl+W` closes its leaf.
 
@@ -139,6 +139,12 @@ impl PickerItem for AgentsPopupItem {
     fn keywords(&self) -> &str {
         &self.search
     }
+    fn matches_query(&self, needle: &str) -> bool {
+        let mut chars = self.search.chars().flat_map(char::to_lowercase);
+        needle
+            .chars()
+            .all(|c| chars.any(|candidate| candidate == c))
+    }
     fn category(&self) -> Option<&str> {
         match &self.row {
             PopupRow::NewAgent(kind) => Some(kind.name()),
@@ -262,7 +268,6 @@ pub enum AgentsPopupKeyOutcome {
 enum InputMode {
     #[default]
     None,
-    Search,
     Rename,
     DeleteConfirm,
 }
@@ -520,16 +525,14 @@ impl AgentsPopupState {
     }
 
     /// Esc closes (clearing an active search first via the caller's flow),
-    /// `/` focuses search, Tab/←→ switch status tabs, ↑↓/j/k move the
-    /// cursor, h/l move the column cursor, Enter dispatches per column,
+    /// typing searches, Tab/←→ switch status tabs, ↑↓ move the
+    /// cursor, Alt+h/l move the column cursor, Enter dispatches per column,
     /// Ctrl+R/Ctrl+D rename/delete the selected identity, and m/M/e/E are
-    /// the quick-switch shortcuts. Plain characters go to the active
-    /// input mode only.
+    /// the Alt-modified quick-switch shortcuts.
     pub fn handle_key(&mut self, key: KeyEvent) -> AgentsPopupKeyOutcome {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self.input_mode {
-            InputMode::Search => return self.handle_search_key(key, ctrl),
             InputMode::Rename => return self.handle_rename_key(key, ctrl),
             InputMode::DeleteConfirm => return self.handle_delete_key(key, ctrl),
             InputMode::None => {}
@@ -537,6 +540,11 @@ impl AgentsPopupState {
 
         if ctrl {
             return match key.code {
+                KeyCode::Char('u') => {
+                    self.textarea.set_text("");
+                    self.picker.set_query("");
+                    AgentsPopupKeyOutcome::Consumed
+                }
                 KeyCode::Char('p') => {
                     self.picker.move_up();
                     AgentsPopupKeyOutcome::Consumed
@@ -558,11 +566,12 @@ impl AgentsPopupState {
         }
 
         match key.code {
-            KeyCode::Esc => AgentsPopupKeyOutcome::Close,
-            KeyCode::Char('/') => {
-                self.input_mode = InputMode::Search;
+            KeyCode::Esc if !self.textarea.is_empty() => {
+                self.textarea.set_text("");
+                self.picker.set_query("");
                 AgentsPopupKeyOutcome::Consumed
             }
+            KeyCode::Esc => AgentsPopupKeyOutcome::Close,
             KeyCode::Tab | KeyCode::Right => {
                 self.status_tab = self.step_tab(true);
                 self.apply_tab();
@@ -573,15 +582,15 @@ impl AgentsPopupState {
                 self.apply_tab();
                 AgentsPopupKeyOutcome::Consumed
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.picker.move_up();
                 AgentsPopupKeyOutcome::Consumed
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.picker.move_down();
                 AgentsPopupKeyOutcome::Consumed
             }
-            KeyCode::Char('h') => {
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.column = match self.column {
                     AgentColumn::Name => AgentColumn::Name,
                     AgentColumn::Model => AgentColumn::Name,
@@ -589,7 +598,7 @@ impl AgentsPopupState {
                 };
                 AgentsPopupKeyOutcome::Consumed
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::ALT) => {
                 self.column = match self.column {
                     AgentColumn::Name => AgentColumn::Model,
                     AgentColumn::Model => AgentColumn::Effort,
@@ -629,64 +638,51 @@ impl AgentsPopupState {
                     }
                 }
             }
-            KeyCode::Char('m') => match self.selected_agent() {
-                None | Some(AgentRow { live: false, .. }) => AgentsPopupKeyOutcome::Consumed,
-                Some(agent) => AgentsPopupKeyOutcome::OpenModelPicker {
-                    agent: agent.name.clone(),
-                },
-            },
-            KeyCode::Char('M') => AgentsPopupKeyOutcome::OpenModelPickerBulk {
-                agents: self
-                    .filtered_agents()
-                    .into_iter()
-                    .map(|agent| agent.name)
-                    .collect(),
-            },
-            KeyCode::Char('e') => match self.selected_agent() {
-                None | Some(AgentRow { live: false, .. }) => AgentsPopupKeyOutcome::Consumed,
-                Some(agent) => AgentsPopupKeyOutcome::CycleEffort {
-                    agent: agent.name.clone(),
-                },
-            },
-            KeyCode::Char('E') => AgentsPopupKeyOutcome::OpenEffortPicker {
-                agents: self
-                    .filtered_agents()
-                    .into_iter()
-                    .map(|agent| (agent.name, agent.effort.is_some()))
-                    .collect(),
-            },
-            _ => AgentsPopupKeyOutcome::Consumed,
-        }
-    }
-
-    fn handle_search_key(&mut self, key: KeyEvent, ctrl: bool) -> AgentsPopupKeyOutcome {
-        if ctrl {
-            if let KeyCode::Char('u') = key.code {
-                self.textarea.set_text("");
-                self.picker.set_query("");
-            }
-            return AgentsPopupKeyOutcome::Consumed;
-        }
-        match key.code {
-            KeyCode::Esc => {
-                if !self.textarea.is_empty() {
-                    self.textarea.set_text("");
-                    self.picker.set_query("");
-                } else {
-                    self.input_mode = InputMode::None;
+            KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::ALT) => {
+                match self.selected_agent() {
+                    None | Some(AgentRow { live: false, .. }) => AgentsPopupKeyOutcome::Consumed,
+                    Some(agent) => AgentsPopupKeyOutcome::OpenModelPicker {
+                        agent: agent.name.clone(),
+                    },
                 }
             }
-            KeyCode::Enter | KeyCode::Tab => {
-                self.input_mode = InputMode::None;
+            KeyCode::Char('M') if key.modifiers.contains(KeyModifiers::ALT) => {
+                AgentsPopupKeyOutcome::OpenModelPickerBulk {
+                    agents: self
+                        .filtered_agents()
+                        .into_iter()
+                        .map(|agent| agent.name)
+                        .collect(),
+                }
             }
-            KeyCode::Up => self.picker.move_up(),
-            KeyCode::Down => self.picker.move_down(),
-            _ => {
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
+                match self.selected_agent() {
+                    None | Some(AgentRow { live: false, .. }) => AgentsPopupKeyOutcome::Consumed,
+                    Some(agent) => AgentsPopupKeyOutcome::CycleEffort {
+                        agent: agent.name.clone(),
+                    },
+                }
+            }
+            KeyCode::Char('E') if key.modifiers.contains(KeyModifiers::ALT) => {
+                AgentsPopupKeyOutcome::OpenEffortPicker {
+                    agents: self
+                        .filtered_agents()
+                        .into_iter()
+                        .map(|agent| (agent.name, agent.effort.is_some()))
+                        .collect(),
+                }
+            }
+            KeyCode::Char(_)
+            | KeyCode::Backspace
+            | KeyCode::Delete
+            | KeyCode::Home
+            | KeyCode::End => {
                 self.textarea.input(key);
                 self.picker.set_query(self.textarea.text());
+                AgentsPopupKeyOutcome::Consumed
             }
+            _ => AgentsPopupKeyOutcome::Consumed,
         }
-        AgentsPopupKeyOutcome::Consumed
     }
 
     fn handle_rename_key(&mut self, key: KeyEvent, ctrl: bool) -> AgentsPopupKeyOutcome {
@@ -836,7 +832,7 @@ fn render_input_line(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState)
 
 fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupState) {
     let theme = crate::theme::current();
-    let searching = state.input_mode == InputMode::Search;
+    let searching = true;
     let prompt_style = if searching || !state.textarea.is_empty() {
         Style::default()
             .fg(theme.accent)
@@ -858,11 +854,11 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentsPopupStat
     };
 
     if state.textarea.is_empty() {
-        if !searching {
+        {
             buf.set_string(
                 ta_area.x,
                 ta_area.y,
-                " / search agents (names, model specs)",
+                " Search agents (names, model specs)",
                 Style::default().fg(theme.text_faint),
             );
         }
@@ -914,6 +910,7 @@ fn render_status_tabs(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
         };
         let glyph_style = match tab_glyph(filter) {
             Some((_, Some(status))) if !selected => Style::default().fg(status_color(&status)),
+            _ if !selected => Style::default().fg(theme.text_dim),
             _ => selected_style,
         };
         let mut pieces: Vec<(String, Style)> = Vec::new();
@@ -1184,9 +1181,8 @@ fn render_footer(area: Rect, buf: &mut Buffer, state: &AgentsPopupState) {
         InputMode::DeleteConfirm => vec![("yes+Enter", " 确认删除  "), ("Esc", " 取消")],
         _ => vec![
             ("Enter", " 打开/恢复  "),
-            ("m/M", " 模型  "),
-            ("e/E", " 力度  "),
-            ("/", " 搜索  "),
+            ("Alt+m/M", " 模型  "),
+            ("Alt+e/E", " 力度  "),
             ("Tab", " 过滤  "),
             ("^R", " 改名  "),
             ("^D", " 删除  "),
@@ -1240,6 +1236,10 @@ mod tests {
         state.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
     }
 
+    fn alt_key(state: &mut AgentsPopupState, c: char) -> AgentsPopupKeyOutcome {
+        state.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT))
+    }
+
     #[test]
     fn search_matches_names_and_model_specs() {
         let mut state = AgentsPopupState::default();
@@ -1250,7 +1250,6 @@ mod tests {
             live_row("/root/other", AgentStatus::Idle),
         ]);
 
-        key(&mut state, KeyCode::Char('/'));
         for c in "glm".chars() {
             key(&mut state, KeyCode::Char(c));
         }
@@ -1261,6 +1260,16 @@ mod tests {
         // Ctrl+U clears the query.
         ctrl_key(&mut state, 'u');
         assert_eq!(state.filtered_agents().len(), 2);
+        for c in "mrn".chars() {
+            key(&mut state, KeyCode::Char(c));
+        }
+        assert_eq!(state.filtered_agents()[0].name, "/root/mrine");
+        assert_eq!(state.filtered_agents().len(), 1);
+        ctrl_key(&mut state, 'u');
+        for c in "enirm".chars() {
+            key(&mut state, KeyCode::Char(c));
+        }
+        assert!(state.filtered_agents().is_empty());
     }
 
     #[test]
@@ -1407,18 +1416,18 @@ mod tests {
             AgentsPopupKeyOutcome::OpenOrSwitch { name, agent_id }
                 if name == "/root/a" && agent_id == active.agent_id
         ));
-        key(&mut state, KeyCode::Char('l'));
+        alt_key(&mut state, 'l');
         assert!(matches!(
             key(&mut state, KeyCode::Enter),
             AgentsPopupKeyOutcome::OpenModelPicker { agent } if agent == "/root/a"
         ));
-        key(&mut state, KeyCode::Char('l'));
+        alt_key(&mut state, 'l');
         assert!(matches!(
             key(&mut state, KeyCode::Enter),
             AgentsPopupKeyOutcome::CycleEffort { agent } if agent == "/root/a"
         ));
         // Sticky at the last column.
-        key(&mut state, KeyCode::Char('l'));
+        alt_key(&mut state, 'l');
         assert_eq!(state.column, AgentColumn::Effort);
     }
 
@@ -1430,11 +1439,11 @@ mod tests {
             key(&mut state, KeyCode::Down);
         }
         assert!(matches!(
-            key(&mut state, KeyCode::Char('m')),
+            alt_key(&mut state, 'm'),
             AgentsPopupKeyOutcome::Consumed
         ));
         assert!(matches!(
-            key(&mut state, KeyCode::Char('e')),
+            alt_key(&mut state, 'e'),
             AgentsPopupKeyOutcome::Consumed
         ));
     }
@@ -1455,7 +1464,7 @@ mod tests {
             key(&mut state, KeyCode::Right);
         }
         assert!(matches!(
-            key(&mut state, KeyCode::Char('M')),
+            alt_key(&mut state, 'M'),
             AgentsPopupKeyOutcome::OpenModelPickerBulk { agents } if agents == vec!["/root/b".to_string()]
         ));
     }
@@ -1464,13 +1473,10 @@ mod tests {
     fn refresh_keeps_query_and_tab() {
         let mut state = AgentsPopupState::default();
         state.open_with(vec![live_row("/root/a", AgentStatus::Streaming)]);
-        key(&mut state, KeyCode::Char('/'));
         for c in "root".chars() {
             key(&mut state, KeyCode::Char(c));
         }
-        // Leave search mode first (arrows edit the textarea while
-        // searching), then step to the Dormant tab.
-        key(&mut state, KeyCode::Enter);
+        // Step to the Dormant tab while preserving the query.
         key(&mut state, KeyCode::Right); // Dormant tab
         state.refresh_with(vec![
             live_row("/root/a", AgentStatus::Streaming),

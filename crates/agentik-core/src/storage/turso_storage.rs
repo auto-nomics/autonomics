@@ -997,12 +997,20 @@ impl AgentStorage for TursoAgentStorage {
         // the index-free scan anyway.
         let rows = match query {
             Some(needle) => {
-                let pattern = Value::Text(format!("%{}%", needle));
+                let mut pattern = String::from("%");
+                for c in needle.chars() {
+                    if matches!(c, '%' | '_' | '\\') {
+                        pattern.push('\\');
+                    }
+                    pattern.push(c);
+                    pattern.push('%');
+                }
+                let pattern = Value::Text(pattern);
                 let mut rows = self
                     .conn
                     .query(
                         "SELECT id, name, config_json, created_at, last_active
-                         FROM agents WHERE name LIKE ?1
+                         FROM agents WHERE name LIKE ?1 ESCAPE '\'
                          ORDER BY last_active DESC LIMIT ?2",
                         params_from_iter([pattern, Value::Integer(limit as i64)]),
                     )

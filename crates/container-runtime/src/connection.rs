@@ -14,7 +14,9 @@ use async_trait::async_trait;
 use crate::error::ContainerRuntimeError;
 use crate::types::{ContainerRunRequest, ContainerRunResult, PrivateEnvironment, WorkspaceRef};
 
-pub use crate::dev_container::{DevContainerSpec, DevContainerState, DevContainerStatus, DevExecStream};
+pub use crate::dev_container::{
+    DevContainerSpec, DevContainerState, DevContainerStatus, DevExecStream,
+};
 
 pub const DEFAULT_CONTAINER_WORKDIR: &str = "/work";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 3600 * 24;

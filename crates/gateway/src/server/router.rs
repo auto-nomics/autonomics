@@ -26,6 +26,7 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/compute/readiness", post(compute::readiness))
         .route("/compute/enroll", post(compute::enroll))
         .route("/compute/targets", put(compute::target))
+        .route("/compute/targets/{id}", delete(compute::delete_target))
         .route("/compute/targets/{id}/check", post(compute::check))
         .route("/compute/policy", put(compute::select))
         .route("/compute/data-sources", post(compute::source))

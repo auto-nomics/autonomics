@@ -29,7 +29,7 @@ import { PluginManager } from "@/features/projects/plugin-manager";
 import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
 import { VfsFileEditorBody } from "@/features/vfs";
 import { ConfigView, DagView, FlowView } from "@/features/system";
-import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
+import { HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
 import { registerEditorKind, editorKind, type EditorContext } from "./editor-registry";
 import { registerReaderEditorKind } from "./editors/reader-editor";
@@ -95,11 +95,11 @@ function DeckEditorBodyWrapper({ editor }: EditorContext) {
   );
 }
 
-function ConfigEditorBody() {
+function ConfigEditorBody({ initialTab }: { initialTab?: string }) {
   const runtime = useWorkbenchRuntime();
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
-      <ConfigView activeAgent={runtime.activeAgent} />
+      <ConfigView activeAgent={runtime.activeAgent} initialTab={initialTab} />
     </div>
   );
 }
@@ -413,7 +413,7 @@ export function registerWorkbenchEditorKinds(): void {
     title: () => "设置",
     name: () => "Settings",
     icon: () => Settings,
-    body: ConfigEditorBody,
+    body: () => <ConfigEditorBody />,
     mount: "keep-alive",
   });
   registerEditorKind({
@@ -421,11 +421,7 @@ export function registerWorkbenchEditorKinds(): void {
     title: () => "计算目标",
     name: () => "Compute targets",
     icon: () => Server,
-    body: () => (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <ComputeEditorView />
-      </div>
-    ),
+    body: () => <ConfigEditorBody initialTab="compute" />,
     mount: "keep-alive",
   });
   registerEditorKind({

@@ -205,10 +205,6 @@ fn yes() -> bool {
 /// retarget an enrolled revision.
 pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, String> {
     let mut config = config.clone();
-    if let Some(profile) = crate::config::slurm::SlurmSiteProfile::load(&config.state_dir)? {
-        profile.apply_to(&mut config.slurm);
-    }
-    let config = &config;
     let registry_path = config.state_dir.join("compute/registry.json");
     let legacy_path = config.state_dir.join("compute/catalog.json");
     let path = if fs::symlink_metadata(&registry_path).is_ok() {
@@ -217,7 +213,14 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
         legacy_path
     };
     match fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(config.clone()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Legacy site settings are used only to seed the first registry.
+            if let Some(profile) = crate::config::slurm::SlurmSiteProfile::load(&config.state_dir)?
+            {
+                profile.apply_to(&mut config.slurm);
+            }
+            return Ok(config);
+        }
         Err(error) => return Err(error.to_string()),
         Ok(_) => (),
     }
@@ -327,6 +330,8 @@ pub struct ComputeRegistryState {
     pub policy: ComputePolicy,
     pub targets: Vec<ComputeTarget>,
     pub data_sources: Vec<DataSource>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub deleted_target_ids: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -662,7 +667,10 @@ impl ComputeRegistry {
                 capsule_sha256: BTreeMap::new(),
                 endpoints: BTreeMap::new(),
             }];
-            if config.slurm.enabled || config.slurm.tools_enabled {
+            if config.slurm.enabled
+                || config.slurm.tools_enabled
+                || crate::config::slurm::SlurmSiteProfile::path(&config.state_dir).exists()
+            {
                 targets.push(ComputeTarget {
                     id: "legacy-slurm".into(),
                     revision: 1,
@@ -691,6 +699,7 @@ impl ComputeRegistry {
                 },
                 targets,
                 data_sources: vec![],
+                deleted_target_ids: Default::default(),
             }
         };
         if state.version != 1 || state.revision == 0 {
@@ -889,6 +898,9 @@ impl ComputeRegistry {
         if next.revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
+        if next.deleted_target_ids.contains(&request.target_id) {
+            return Err("target is deleted".into());
+        }
         let t = next
             .targets
             .iter()
@@ -934,6 +946,9 @@ impl ComputeRegistry {
         if next.revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
+        if next.deleted_target_ids.contains(&request.id) {
+            return Err("target id is reserved by deleted history".into());
+        }
         let revision = next
             .targets
             .iter()
@@ -967,6 +982,39 @@ impl ComputeRegistry {
             .unwrap()
             .insert(built.monitor_key.clone(), built);
         next.targets.push(target);
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or("registry revision overflow")?;
+        self.persist(&next)?;
+        *self.state.write().unwrap() = next.clone();
+        Ok(next)
+    }
+
+    /// Remove a target from future selection while retaining revisions used by runs.
+    pub fn delete_target(
+        &self,
+        id: &str,
+        expected_revision: u64,
+    ) -> Result<ComputeRegistryState, String> {
+        let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
+        self.healthy()?;
+        let mut next = self.state();
+        if next.revision != expected_revision {
+            return Err("stale compute revision; reload settings".into());
+        }
+        if id == "local" {
+            return Err("the local target cannot be deleted".into());
+        }
+        if next.policy.target_id == id {
+            return Err("select another target before deleting the active target".into());
+        }
+        if next.deleted_target_ids.contains(id)
+            || !next.targets.iter().any(|target| target.id == id)
+        {
+            return Err("unknown target".into());
+        }
+        next.deleted_target_ids.insert(id.to_string());
         next.revision = next
             .revision
             .checked_add(1)

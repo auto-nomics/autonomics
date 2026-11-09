@@ -28,6 +28,11 @@ pub trait PickerItem: Clone {
     fn title(&self) -> &str;
     /// Secondary filter text (not displayed).
     fn keywords(&self) -> &str;
+    /// Whether this item matches a lowercase query.
+    fn matches_query(&self, needle: &str) -> bool {
+        self.title().to_lowercase().contains(needle)
+            || self.keywords().to_lowercase().contains(needle)
+    }
     /// Optional description shown for the selected item only.
     fn description(&self) -> Option<&str> {
         None
@@ -144,10 +149,7 @@ impl<T: PickerItem> PickerState<T> {
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| {
-                    item.title().to_lowercase().contains(&needle)
-                        || item.keywords().to_lowercase().contains(&needle)
-                })
+                .filter(|(_, item)| item.matches_query(&needle))
                 .map(|(i, _)| i)
                 .collect();
         }

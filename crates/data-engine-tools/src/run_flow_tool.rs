@@ -129,11 +129,11 @@ impl ToolFunction for RunFlowTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let flow = match input.flow {
             Some(value) => Some(
-                serde_json::from_value::<data_engine::workflow::FlowGraph>(value).map_err(|error| {
-                    ToolError::ValidationFailed {
+                serde_json::from_value::<data_engine::workflow::FlowGraph>(value).map_err(
+                    |error| ToolError::ValidationFailed {
                         message: format!("invalid flow graph: {error}"),
-                    }
-                })?,
+                    },
+                )?,
             ),
             None => None,
         };

@@ -53,7 +53,6 @@ registerCommands("shell", [
     setContainerView("agents", "overview");
   } },
   { id: "workbench.open-config", title: "Open settings", category: "go", keywords: "config model provider preferences", run: () => openEditor({ kind: "config" }) },
-  { id: "workbench.open-hpc-compute", title: "Open compute targets", category: "go", keywords: "hpc slurm cluster compute targets 计算 目标", run: () => openEditor({ kind: "hpc-compute" }) },
   { id: "workbench.open-hpc-jobs", title: "Open HPC jobs", category: "go", keywords: "hpc slurm jobs monitors queue 任务", run: () => openEditor({ kind: "hpc-jobs" }) },
   { id: "workbench.open-vfs", title: "Open VFS browser", category: "go", keywords: "vfs files browse mounts upload downloads 文件 浏览", run: () => {
     setContainer("vfs");

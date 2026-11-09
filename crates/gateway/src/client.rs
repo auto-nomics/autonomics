@@ -692,6 +692,27 @@ impl GatewayClient {
             .await
     }
 
+    pub async fn save_compute_target_json(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.request(reqwest::Method::PUT, "/compute/targets", Some(request))
+            .await
+    }
+
+    pub async fn delete_compute_target(
+        &self,
+        id: &str,
+        revision: u64,
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.request(
+            reqwest::Method::DELETE,
+            &format!("/compute/targets/{}", encode_segment(id)),
+            Some(&serde_json::json!({"expected_revision":revision})),
+        )
+        .await
+    }
+
     /// Select a target revision for subsequent runs.
     pub async fn select_compute_target(
         &self,
@@ -699,6 +720,19 @@ impl GatewayClient {
     ) -> Result<runtime::compute::ComputeRegistryState> {
         self.request(reqwest::Method::PUT, "/compute/policy", Some(request))
             .await
+    }
+
+    /// Select a target using its registry revision and id.
+    pub async fn select_compute_target_by_id(
+        &self,
+        expected_revision: u64,
+        target_id: String,
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.select_compute_target(&runtime::compute::SelectTarget {
+            expected_revision,
+            target_id,
+        })
+        .await
     }
 
     /// Enroll a data source mount.

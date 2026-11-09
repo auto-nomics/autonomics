@@ -84,6 +84,63 @@ fn select(registry: &ComputeRegistry, id: &str) {
         })
         .unwrap();
 }
+
+#[tokio::test]
+async fn deleting_target_retains_bound_revision_and_prevents_reuse() {
+    let f = fixture();
+    save_local(&f.registry, "other", true);
+    select(&f.registry, "other");
+    let (_, binding) = f.registry.bind().unwrap();
+    assert!(
+        f.registry
+            .delete_target("other", f.registry.state().revision)
+            .is_err()
+    );
+    select(&f.registry, "local");
+    let before = f.registry.state().revision;
+    assert!(f.registry.delete_target("other", before - 1).is_err());
+    f.registry.delete_target("other", before).unwrap();
+    assert!(
+        f.registry
+            .target(&binding.target_id, Some(binding.target_revision))
+            .is_ok()
+    );
+    assert!(
+        f.registry
+            .select(SelectTarget {
+                expected_revision: f.registry.state().revision,
+                target_id: "other".into()
+            })
+            .is_err()
+    );
+    assert!(
+        f.registry
+            .save_target(SaveTarget {
+                expected_revision: f.registry.state().revision,
+                id: "other".into(),
+                name: "reused".into(),
+                enabled: true,
+                backend: ComputeBackend::Local,
+                data_domains: vec![]
+            })
+            .is_err()
+    );
+    let (vfs, storage) = mounts(&f.config);
+    let reopened = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    assert!(reopened.state().deleted_target_ids.contains("other"));
+    assert!(
+        reopened
+            .target("other", Some(binding.target_revision))
+            .is_ok()
+    );
+}
 fn remote_settings(root: &Path, host: &str) -> SlurmConfig {
     let profile = root.join(format!("{host}-worker.json"));
     write_new(&profile,&serde_json::json!({"worker":{"executable":"/cluster/autonomics","executable_sha256":"a".repeat(64),"expected_source_revision":dag_core::source_revision()},"local_kinds":["channel","dynamic_fanout"]})).unwrap();
@@ -1201,6 +1258,14 @@ async fn restart_uses_enrolled_profiles_instead_of_mutable_legacy_paths() {
     let resolved = startup_config(&obsolete).unwrap();
     assert!(!resolved.slurm.enabled);
     assert!(resolved.slurm.typed_worker_config.is_none());
+}
+
+#[test]
+fn existing_registry_ignores_obsolete_site_profile() {
+    let f = fixture();
+    fs::write(f.config.state_dir.join("slurm-site.json"), b"not json").unwrap();
+    let resolved = startup_config(&f.config).unwrap();
+    assert!(!resolved.slurm.enabled);
 }
 
 struct ProbeImageBuilder(Arc<std::sync::atomic::AtomicUsize>);

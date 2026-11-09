@@ -1623,7 +1623,7 @@ mod tests {
                 config: BackendConfig::local(backend.path().to_string_lossy().to_string()),
             }],
             mount: vec![MountDefinition {
-            domain: None,
+                domain: None,
                 path: "/datasets".into(),
                 backend: "default".into(),
                 source: backend.path().to_string_lossy().to_string(),

@@ -142,11 +142,22 @@ async fn variant_associations_bmi_locus() {
     assert!(a.count > 0);
     assert_eq!(a.rows.len() as i64, a.count);
     assert!(a.rows.iter().any(|r| r.study_id.starts_with("GCST")));
-    assert!(a.rows.iter().any(|r| r.p_value() > 0.0 && r.p_value() < 1e-8));
-    // BMI/weight associations are known at this locus.
-    let traits: Vec<&str> = a.rows.iter().map(|r| r.study.trait_from_source.as_str()).collect();
     assert!(
-        traits.iter().any(|t| t.to_lowercase().contains("body mass index") || t.to_lowercase().contains("weight")),
+        a.rows
+            .iter()
+            .any(|r| r.p_value() > 0.0 && r.p_value() < 1e-8)
+    );
+    // BMI/weight associations are known at this locus.
+    let traits: Vec<&str> = a
+        .rows
+        .iter()
+        .map(|r| r.study.trait_from_source.as_str())
+        .collect();
+    assert!(
+        traits
+            .iter()
+            .any(|t| t.to_lowercase().contains("body mass index")
+                || t.to_lowercase().contains("weight")),
         "expected BMI/weight trait in {traits:?}"
     );
 }
@@ -154,6 +165,9 @@ async fn variant_associations_bmi_locus() {
 #[tokio::test]
 #[ignore = "hits the live Open Targets API"]
 async fn variant_associations_unknown_id_is_none() {
-    let a = client().variant_associations("22_0_IG_NO_RE").await.unwrap();
+    let a = client()
+        .variant_associations("22_0_IG_NO_RE")
+        .await
+        .unwrap();
     assert!(a.is_none());
 }

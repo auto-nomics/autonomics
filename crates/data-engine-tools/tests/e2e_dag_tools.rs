@@ -50,7 +50,6 @@ async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
     dag_shell(toolset, id, &script).await;
 }
 
-
 fn result_json(result: &ToolResult) -> serde_json::Value {
     match &result.content {
         ToolResultContent::Json(value) => value.clone(),
@@ -993,10 +992,7 @@ async fn test_dag_export_run_produces_evidence_crate() {
     check_ok(&results[0], "dag_export_run prov");
     let prov_summary = result_json(&results[0]);
     let prov_uri = prov_summary["out"].as_str().unwrap();
-    assert!(
-        vfs::uri::is_uri(prov_uri),
-        "prov upload is vfs-addressed"
-    );
+    assert!(vfs::uri::is_uri(prov_uri), "prov upload is vfs-addressed");
     let vpath = vfs::uri::virtual_path(prov_uri).unwrap();
     let length = file_storage.content_length(vpath).await.unwrap();
     let prov_bytes = file_storage.read_range(vpath, 0..length).await.unwrap();

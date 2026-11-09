@@ -17,11 +17,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use container_runtime::connection::PodmanConnection;
 use container_runtime::dev_container::{
-    DEV_CONTAINER_PREFIX, DEV_SESSION_LABEL, DevContainerState, DevContainerStatus,
-    DevContainerSpec, DevExecStream,
+    DEV_CONTAINER_PREFIX, DEV_SESSION_LABEL, DevContainerSpec, DevContainerState,
+    DevContainerStatus, DevExecStream,
 };
-use container_runtime::types::{ContainerNetwork, ContainerRunRequest, GpuRequest, PullPolicy, WorkspaceRef};
-use container_runtime::{ContainerExecutionInfra, DEFAULT_CONTAINER_WORKDIR, trusted_workspace_ref, unique_container_name};
+use container_runtime::types::{
+    ContainerNetwork, ContainerRunRequest, GpuRequest, PullPolicy, WorkspaceRef,
+};
+use container_runtime::{
+    ContainerExecutionInfra, DEFAULT_CONTAINER_WORKDIR, trusted_workspace_ref,
+    unique_container_name,
+};
 
 use crate::{Error, PluginStore, Result};
 
@@ -134,11 +139,7 @@ impl DevSessionManager {
     }
 
     /// Idempotently ensure the session's container exists and runs.
-    pub async fn start(
-        &self,
-        plugin: &str,
-        network: ContainerNetwork,
-    ) -> Result<DevSessionView> {
+    pub async fn start(&self, plugin: &str, network: ContainerNetwork) -> Result<DevSessionView> {
         let name = Self::container_name(plugin)?;
         let (image, workspace) = self.project(plugin)?;
         let spec = self.spec(&name, plugin, image.clone(), &workspace, network)?;
@@ -171,11 +172,7 @@ impl DevSessionManager {
 
     /// Remove + start: the recreate step of the devcontainer loop. The
     /// bind-mounted workspace is untouched by construction.
-    pub async fn restart(
-        &self,
-        plugin: &str,
-        network: ContainerNetwork,
-    ) -> Result<DevSessionView> {
+    pub async fn restart(&self, plugin: &str, network: ContainerNetwork) -> Result<DevSessionView> {
         let name = Self::container_name(plugin)?;
         self.project(plugin)?;
         let runtime = self.execution.runtime.as_ref();
@@ -296,8 +293,7 @@ impl DevSessionManager {
         // Bound the wait; on timeout abort the exec task so the child
         // (kill-on-drop) is terminated and never leaks.
         let mut exit = stream.exit;
-        let code = match tokio::time::timeout(Duration::from_secs(timeout_secs), &mut exit).await
-        {
+        let code = match tokio::time::timeout(Duration::from_secs(timeout_secs), &mut exit).await {
             Ok(joined) => joined
                 .map_err(|error| Error::Container(error.to_string()))?
                 .map_err(|error| Error::Container(error.to_string()))?,
@@ -336,10 +332,7 @@ impl DevSessionManager {
             cpus: Some(DEV_SESSION_CPUS),
             memory: Some(DEV_SESSION_MEMORY.into()),
             pids_limit: Some(DEV_SESSION_PIDS_LIMIT),
-            env: vec![(
-                "AUTONOMICS_PLUGIN_NAME".to_string(),
-                plugin.to_string(),
-            )],
+            env: vec![("AUTONOMICS_PLUGIN_NAME".to_string(), plugin.to_string())],
             labels: vec![(DEV_SESSION_LABEL.to_string(), plugin.to_string())],
         })
     }
@@ -365,7 +358,11 @@ mod tests {
 
     impl FakeRuntime {
         fn next_state(&self) -> DevContainerState {
-            self.states.lock().unwrap().pop_front().unwrap_or(DevContainerState::NotFound)
+            self.states
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(DevContainerState::NotFound)
         }
     }
 
@@ -376,7 +373,11 @@ mod tests {
             _request: ContainerRunRequest,
         ) -> std::result::Result<ContainerRunResult, ContainerRuntimeError> {
             self.calls.lock().unwrap().push("run".into());
-            Ok(ContainerRunResult { exit_code: 0, stdout: "one-shot".into(), stderr: String::new() })
+            Ok(ContainerRunResult {
+                exit_code: 0,
+                stdout: "one-shot".into(),
+                stderr: String::new(),
+            })
         }
 
         fn workspace_root(&self) -> &std::path::Path {
@@ -387,19 +388,34 @@ mod tests {
             &self,
             spec: &DevContainerSpec,
         ) -> std::result::Result<DevContainerStatus, ContainerRuntimeError> {
-            self.calls.lock().unwrap().push(format!("start:{}", spec.name));
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("start:{}", spec.name));
             self.specs.lock().unwrap().push(spec.clone());
             // start always yields Running for the fake.
-            self.states.lock().unwrap().push_front(DevContainerState::Running);
-            Ok(DevContainerStatus { state: DevContainerState::Running, container_id: Some("abc".into()) })
+            self.states
+                .lock()
+                .unwrap()
+                .push_front(DevContainerState::Running);
+            Ok(DevContainerStatus {
+                state: DevContainerState::Running,
+                container_id: Some("abc".into()),
+            })
         }
 
-        async fn dev_container_stop(&self, name: &str) -> std::result::Result<(), ContainerRuntimeError> {
+        async fn dev_container_stop(
+            &self,
+            name: &str,
+        ) -> std::result::Result<(), ContainerRuntimeError> {
             self.calls.lock().unwrap().push(format!("stop:{name}"));
             Ok(())
         }
 
-        async fn dev_container_remove(&self, name: &str) -> std::result::Result<(), ContainerRuntimeError> {
+        async fn dev_container_remove(
+            &self,
+            name: &str,
+        ) -> std::result::Result<(), ContainerRuntimeError> {
             self.calls.lock().unwrap().push(format!("remove:{name}"));
             Ok(())
         }
@@ -409,7 +425,10 @@ mod tests {
             name: &str,
         ) -> std::result::Result<DevContainerStatus, ContainerRuntimeError> {
             self.calls.lock().unwrap().push(format!("status:{name}"));
-            Ok(DevContainerStatus { state: self.next_state(), container_id: Some("abc".into()) })
+            Ok(DevContainerStatus {
+                state: self.next_state(),
+                container_id: Some("abc".into()),
+            })
         }
     }
 
@@ -434,7 +453,12 @@ mod tests {
             )
             .unwrap();
         let mut operator = store
-            .create("my-plugin", "r-base", "test purpose", &Arc::new(environments.snapshot()))
+            .create(
+                "my-plugin",
+                "r-base",
+                "test purpose",
+                &Arc::new(environments.snapshot()),
+            )
             .unwrap();
         operator.refresh().unwrap();
         drop(operator);
@@ -466,11 +490,7 @@ mod tests {
                 worker_oci_runtime: None,
             },
         });
-        (
-            DevSessionManager::new(infra, store),
-            fake,
-            root,
-        )
+        (DevSessionManager::new(infra, store), fake, root)
     }
 
     #[tokio::test]
@@ -488,18 +508,18 @@ mod tests {
         let spec = &specs[0];
         assert_eq!(spec.name, "autonomics-dev-my-plugin");
         assert!(
-            spec.image.starts_with("ghcr.io/")
-                && spec.image.contains("@sha256:"),
+            spec.image.starts_with("ghcr.io/") && spec.image.contains("@sha256:"),
             "image must be the manifest's digest-pinned reference"
         );
         assert_eq!(
             spec.workspace.container_workdir, "/work",
             "the workspace is the single rw mount at /work"
         );
-        assert!(spec
-            .labels
-            .iter()
-            .any(|(key, value)| key == DEV_SESSION_LABEL && value == "my-plugin"));
+        assert!(
+            spec.labels
+                .iter()
+                .any(|(key, value)| key == DEV_SESSION_LABEL && value == "my-plugin")
+        );
         assert_eq!(spec.cpus, Some(DEV_SESSION_CPUS));
     }
 
@@ -515,14 +535,25 @@ mod tests {
         assert!(calls.iter().any(|c| c == "start:autonomics-dev-my-plugin"));
         // The workspace path in the new spec is the plugin dev dir.
         let specs = fake.specs.lock().unwrap();
-        let workspace = specs.last().unwrap().workspace.host_path.display().to_string();
+        let workspace = specs
+            .last()
+            .unwrap()
+            .workspace
+            .host_path
+            .display()
+            .to_string();
         assert!(workspace.contains("plugins/dev/my-plugin"), "{workspace}");
     }
 
     #[tokio::test]
     async fn unknown_project_is_rejected() {
         let (manager, _fake, _root) = manager_with_plugin();
-        assert!(manager.start("missing-plugin", ContainerNetwork::Isolated).await.is_err());
+        assert!(
+            manager
+                .start("missing-plugin", ContainerNetwork::Isolated)
+                .await
+                .is_err()
+        );
         assert!(DevSessionManager::container_name("Bad Name").is_err());
     }
 

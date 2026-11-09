@@ -511,7 +511,14 @@ mod tests {
         assert_eq!(AgentKind::from_name("browser"), Some(AgentKind::Browser));
         assert_eq!(AgentKind::from_name("curator"), Some(AgentKind::Curator));
         assert_eq!(AgentKind::from_name("hpc-ops"), Some(AgentKind::HpcOps));
-        for rejected in ["Researcher", "researcher/genomics", "", "default", "hpcops", "hpc_ops"] {
+        for rejected in [
+            "Researcher",
+            "researcher/genomics",
+            "",
+            "default",
+            "hpcops",
+            "hpc_ops",
+        ] {
             assert_eq!(AgentKind::from_name(rejected), None, "{rejected}");
         }
         let err = "wizard".parse::<AgentKind>().unwrap_err();

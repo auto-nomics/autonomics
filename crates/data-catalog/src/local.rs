@@ -478,7 +478,7 @@ impl LocalCatalog {
         let mut mounts = Vec::new();
         if agent_visible {
             mounts.push(MountDefinition {
-            domain: None,
+                domain: None,
                 path: "/catalog".into(),
                 backend: backend_id.into(),
                 source: "/".into(),
@@ -490,7 +490,7 @@ impl LocalCatalog {
             // Cache directory layout is `<owner>/<name>@sha256:<digest>`.
             let source = entry.cache_dir_name();
             mounts.push(MountDefinition {
-            domain: None,
+                domain: None,
                 path: entry.vfs_immutable(),
                 backend: backend_id.into(),
                 source: source.clone(),
@@ -498,7 +498,7 @@ impl LocalCatalog {
                 permissions: Default::default(),
             });
             mounts.push(MountDefinition {
-            domain: None,
+                domain: None,
                 path: entry.vfs_alias(),
                 backend: backend_id.into(),
                 source,

@@ -21,8 +21,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use dag_core::dag::execution::{TaskExecution, TaskExecutor, TaskSubmission};
 use dag_core::dag::PortOutputs;
+use dag_core::dag::execution::{TaskExecution, TaskExecutor, TaskSubmission};
 use dag_core::dag::node_event::{JobResult, NodeEvent, NodeReporter};
 use dag_core::dag::{DagError, NodeInput, RuntimeStatus};
 use dag_core::node::DagNode;

@@ -368,15 +368,12 @@ impl App {
                     self.state.flow_view_error = Some(error);
                 }
             },
-            crate::app_event::AppEvent::HpcConfigLoaded(result) => match result {
-                Ok(reply) => self.apply_hpc_config_reply(reply),
-                Err(error) => self.apply_hpc_config_failed(error),
-            },
             crate::app_event::AppEvent::HpcTargetsLoaded(result) => {
                 let panel = &mut self.state.hpc_panel;
                 panel.loading = false;
                 match result {
                     Ok(status) => {
+                        panel.load_dashboard(&status);
                         let selected = status["state"]["policy"]["target_id"]
                             .as_str()
                             .unwrap_or_default()
@@ -448,7 +445,11 @@ impl App {
                 }
             }
             crate::app_event::AppEvent::HpcJobsLoaded(reply) => {
-                self.apply_hpc_jobs_reply(reply);
+                self.state.hpc_panel.load_jobs(&reply);
+                if let Some(error) = reply.get("error").and_then(serde_json::Value::as_str) {
+                    self.state.hpc_panel.status = Some(error.to_string());
+                }
+                self.dirty = true;
             }
             crate::app_event::AppEvent::HpcProfileSaved(result) => match result {
                 Ok(reply) => self.apply_hpc_save_reply(reply),

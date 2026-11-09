@@ -822,8 +822,7 @@ mod tests {
         // （如 vfs grep 的 "glob":"null"）。按字面处理时单文件 grep 走进
         // glob 过滤分支，静默返回 files_scanned=0 的假阴性。可空字段上的
         // 字符串 "null" 必须还原为 JSON null（即 Option::None）。
-        let out = run_null_echo(json!({"reason": "keep", "note": "null", "count": "null"}))
-            .await;
+        let out = run_null_echo(json!({"reason": "keep", "note": "null", "count": "null"})).await;
         assert_eq!(out, "note=None count=None reason=keep");
     }
 

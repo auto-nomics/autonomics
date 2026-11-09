@@ -160,7 +160,7 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
     },
     LeaderNode::Leaf {
         key: 'P',
-        label: "HPC site config",
+        label: "Compute Dashboard",
         action: CommandAction::HpcPanel,
     },
     LeaderNode::Leaf {

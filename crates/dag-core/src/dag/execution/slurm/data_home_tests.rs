@@ -1,11 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
-use std::sync::{Arc, Mutex};
-use std::os::unix::fs::{symlink, PermissionsExt};
 use super::ssh::queue_stdout_text;
 use super::transport::{render_bootstrap_script, render_sbatch_script};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
@@ -17,10 +17,10 @@ use super::super::process::{
     sanitize_path_component,
 };
 use super::super::traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
+use super::*;
 use crate::dag::DagError;
 use crate::dag::node_event::JobResult;
 use crate::value::{DomainId, FileFingerprint, FileRef};
-use super::*;
 
 fn store(root: &Path) -> SshArtifactStore {
     let ssh = root.join("fixture-ssh");

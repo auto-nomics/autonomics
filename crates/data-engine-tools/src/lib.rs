@@ -1,10 +1,10 @@
 mod dag_runs_log_tool;
 mod dag_shell_tool;
+mod flow_edit_tool;
 mod get_node_doc_tool;
 mod get_node_ports_tool;
 mod get_node_spec_tool;
 mod list_node_factories_tool;
-mod flow_edit_tool;
 mod run_flow_tool;
 
 use std::sync::Arc;
@@ -75,7 +75,7 @@ pub fn registrations(client: Arc<DataEngineClient>) -> Vec<ToolRegistration> {
         ToolRegistration::from(dag_shell_tool::DagShellTool::new(client.clone())),
         // ── DAG building ──────────────────────────────────────────────────
         // ── DAG execution & inspection ────────────────────────────────────
-                ToolRegistration::from(run_flow_tool::RunFlowTool::new(client.clone())),
+        ToolRegistration::from(run_flow_tool::RunFlowTool::new(client.clone())),
         ToolRegistration::from(flow_edit_tool::SetFlowTool::new(client.clone())),
         ToolRegistration::from(flow_edit_tool::ViewFlowTool::new(client.clone())),
         // ── history / ref management ──────────────────────────────────────
@@ -100,7 +100,6 @@ mod tests {
         /// arbitrary json
         pub spec: serde_json::Value,
     }
-
 
     #[test]
     fn serde_json_value_field_is_not_typed_as_string() {

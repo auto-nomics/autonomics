@@ -75,7 +75,11 @@ async fn disease_tool_runs() {
 #[tokio::test]
 #[ignore = "hits the live Open Targets API"]
 async fn variant_tool_runs() {
-    let text = run_tool("opentargets_variant", json!({ "variant_id": "2_655222_G_A" })).await;
+    let text = run_tool(
+        "opentargets_variant",
+        json!({ "variant_id": "2_655222_G_A" }),
+    )
+    .await;
     assert!(text.contains("2_655222_G_A"));
     assert!(text.contains("rs13029479"));
 }
@@ -108,5 +112,8 @@ async fn variant_tool_unknown_id_is_error_result() {
         .execute(json!({ "variant_id": "22_0_IG_NO_RE" }))
         .await
         .expect("tool call failed");
-    assert!(res.is_error.unwrap_or(false), "unknown ID must be an error result");
+    assert!(
+        res.is_error.unwrap_or(false),
+        "unknown ID must be an error result"
+    );
 }

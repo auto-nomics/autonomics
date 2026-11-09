@@ -231,7 +231,7 @@ pub trait AgentStorage: Send + Sync {
     async fn get_agent(&self, agent_id: Uuid) -> Result<Option<AgentRecord>, StorageError>;
     async fn get_agent_by_name(&self, name: &str) -> Result<Option<AgentRecord>, StorageError>;
     async fn list_agents(&self) -> Result<Vec<AgentRecord>, StorageError>;
-    /// Search persisted identities by path substring (case-insensitive
+    /// Search persisted identities by ordered path characters (case-insensitive
     /// SQL `LIKE`), newest activity first, capped to `limit`. Backs the
     /// frontend agent picker: identities are searched and paged, never
     /// listed in full — the record count is unbounded under virtual-actor

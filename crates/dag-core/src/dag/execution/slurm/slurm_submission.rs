@@ -520,8 +520,8 @@ impl SlurmTaskTransport {
 }
 #[cfg(all(test, unix))]
 mod tests {
-    use super::*;
     use super::super::SshTarget;
+    use super::*;
     use std::os::unix::fs::PermissionsExt;
     #[test]
     fn dropped_observation_scope_marks_unknown_but_transferred_scope_does_not() {

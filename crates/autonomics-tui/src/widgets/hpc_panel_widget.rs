@@ -1,11 +1,8 @@
-//! HPC site panel — operator view/edit of the Slurm site profile plus the
-//! durable job monitor inventory. Thin-client: state mirrors the gateway's
-//! `GET /hpc/config` and `GET /hpc/jobs` replies; edits `PUT` the site
-//! profile and take effect on daemon restart (surfaced as a banner).
+//! Compute panel — edit the selected Slurm target and inspect jobs and targets.
 
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidgetRef, Widget},
@@ -37,11 +34,6 @@ pub struct FieldDef {
 /// Operator-editable fields, in panel display order. Read-only derived
 /// state (effective snapshot, manifest contents) renders below this list.
 pub const FIELD_DEFS: &[FieldDef] = &[
-    FieldDef {
-        key: "enabled",
-        label: "Route process tasks",
-        kind: FieldKind::Bool,
-    },
     FieldDef {
         key: "tools_enabled",
         label: "HPC account tools",
@@ -211,16 +203,243 @@ pub struct HpcPanelState {
     pub edit_buffer: Option<String>,
     /// One-line operator feedback (save result, refresh errors).
     pub status: Option<String>,
-    pub pending_restart: bool,
-    pub site_profile_path: Option<String>,
-    pub apptainer_manifest_path: Option<String>,
-    pub apptainer_manifest_exists: bool,
     pub loading: bool,
+    pub target_id: Option<String>,
+    pub target_revision: u64,
+    pub registry_revision: u64,
+    pub target_editable: bool,
+    pub dashboard_ready: bool,
+    pub dashboard_targets: Vec<serde_json::Value>,
+    pub dashboard_focus_form: bool,
+    pub dashboard_editing: bool,
+    pub dashboard_new: bool,
+    pub dashboard_confirm_delete: bool,
+    pub dashboard_draft: serde_json::Value,
+    pub dashboard_fields: Vec<String>,
+    pub dashboard_field: usize,
+    pub dashboard_pending_id: Option<String>,
+    pub dashboard_show_jobs: bool,
 }
 
 impl HpcPanelState {
-    /// Fill profile values from a `GET /hpc/config` reply.
+    fn dashboard_visible_fields(&self) -> Vec<usize> {
+        if self
+            .dashboard_fields
+            .get(2)
+            .is_some_and(|kind| kind == "local")
+        {
+            vec![0, 1, 2, 3, 4 + FIELD_DEFS.len()]
+        } else {
+            (0..self.dashboard_fields.len()).collect()
+        }
+    }
+
+    fn dashboard_move_field(&mut self, down: bool) {
+        let visible = self.dashboard_visible_fields();
+        let index = visible
+            .iter()
+            .position(|field| *field == self.dashboard_field)
+            .unwrap_or(0);
+        let next = if down {
+            (index + 1).min(visible.len().saturating_sub(1))
+        } else {
+            index.saturating_sub(1)
+        };
+        if let Some(field) = visible.get(next) {
+            self.dashboard_field = *field;
+        }
+    }
+    pub fn load_dashboard(&mut self, status: &serde_json::Value) {
+        let registry = &status["state"];
+        let old_id = self.dashboard_pending_id.take().or_else(|| {
+            self.dashboard_targets
+                .get(self.selected_target)
+                .and_then(|t| t["id"].as_str())
+                .map(str::to_owned)
+        });
+        let mut latest = std::collections::BTreeMap::<String, serde_json::Value>::new();
+        if let Some(targets) = registry["targets"].as_array() {
+            for target in targets {
+                if let Some(id) = target["id"].as_str() {
+                    if latest
+                        .get(id)
+                        .and_then(|t| t["revision"].as_u64())
+                        .unwrap_or(0)
+                        < target["revision"].as_u64().unwrap_or(0)
+                    {
+                        latest.insert(id.to_string(), target.clone());
+                    }
+                }
+            }
+        }
+        if let Some(deleted) = registry["deleted_target_ids"].as_array() {
+            for id in deleted.iter().filter_map(|v| v.as_str()) {
+                latest.remove(id);
+            }
+        }
+        self.dashboard_targets = latest.into_values().collect();
+        self.registry_revision = registry["revision"].as_u64().unwrap_or(0);
+        self.target_id = registry["policy"]["target_id"].as_str().map(str::to_owned);
+        self.target_revision = registry["policy"]["target_revision"].as_u64().unwrap_or(0);
+        self.selected_target = old_id
+            .as_deref()
+            .and_then(|id| {
+                self.dashboard_targets
+                    .iter()
+                    .position(|target| target["id"] == id)
+            })
+            .or_else(|| {
+                self.target_id.as_deref().and_then(|id| {
+                    self.dashboard_targets
+                        .iter()
+                        .position(|target| target["id"] == id)
+                })
+            })
+            .unwrap_or(0);
+        self.dashboard_ready = true;
+        self.dashboard_editing = false;
+        self.dashboard_new = false;
+        self.dashboard_confirm_delete = false;
+        self.load_dashboard_draft();
+    }
+
+    fn load_dashboard_draft(&mut self) {
+        self.dashboard_draft = self
+            .dashboard_targets
+            .get(self.selected_target)
+            .cloned()
+            .unwrap_or_default();
+        self.dashboard_fields = vec![
+            self.dashboard_draft["id"].as_str().unwrap_or("").into(),
+            self.dashboard_draft["name"].as_str().unwrap_or("").into(),
+            self.dashboard_draft["backend"]["type"]
+                .as_str()
+                .unwrap_or("local")
+                .into(),
+            self.dashboard_draft["enabled"]
+                .as_bool()
+                .unwrap_or(true)
+                .to_string(),
+        ];
+        let settings = &self.dashboard_draft["backend"]["settings"];
+        self.dashboard_fields
+            .extend(FIELD_DEFS.iter().map(|field| match &settings[field.key] {
+                serde_json::Value::String(v) => v.clone(),
+                serde_json::Value::Bool(v) => v.to_string(),
+                serde_json::Value::Number(v) => v.to_string(),
+                _ => String::new(),
+            }));
+        self.dashboard_fields.push(
+            self.dashboard_draft
+                .get("data_domains")
+                .map(serde_json::Value::to_string)
+                .unwrap_or_else(|| "[]".into()),
+        );
+        self.dashboard_field = 0;
+    }
+
+    fn dashboard_save(&self) -> Result<serde_json::Value, String> {
+        let id = self.dashboard_fields[0].trim();
+        let name = self.dashboard_fields[1].trim();
+        let kind = self.dashboard_fields[2].trim();
+        let enabled = self.dashboard_fields[3]
+            .parse::<bool>()
+            .map_err(|_| "Enabled must be true or false")?;
+        if id.is_empty() || name.is_empty() {
+            return Err("ID and name are required".into());
+        }
+        if self.dashboard_new
+            && self
+                .dashboard_targets
+                .iter()
+                .any(|target| target["id"] == id)
+        {
+            return Err("Target ID already exists".into());
+        }
+        if !matches!(kind, "local" | "slurm" | "ssh") {
+            return Err("Backend must be local, slurm or ssh".into());
+        }
+        if !self.dashboard_new && !enabled && self.target_id.as_deref() == Some(id) {
+            return Err("Select another target before disabling this one".into());
+        }
+        let mut settings = self.dashboard_draft["backend"]["settings"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for (index, field) in FIELD_DEFS.iter().enumerate() {
+            let value = self.dashboard_fields[index + 4].trim();
+            if value.is_empty() {
+                if matches!(
+                    field.key,
+                    "account"
+                        | "gpu_qos"
+                        | "apptainer_manifest"
+                        | "typed_worker_config"
+                        | "data_ssh_host"
+                        | "pi_ssh_host"
+                ) {
+                    settings.insert(field.key.into(), serde_json::Value::Null);
+                } else {
+                    settings.remove(field.key);
+                }
+                continue;
+            }
+            let value = match field.kind {
+                FieldKind::Bool => serde_json::Value::Bool(
+                    value
+                        .parse()
+                        .map_err(|_| format!("{} must be true or false", field.label))?,
+                ),
+                FieldKind::Number => serde_json::json!(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("{} must be a number", field.label))?
+                ),
+                FieldKind::Text => serde_json::json!(value),
+            };
+            settings.insert(field.key.into(), value);
+        }
+        if kind != "local"
+            && settings
+                .get("ssh_host")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|v| v.trim().is_empty())
+        {
+            return Err("SSH host is required".into());
+        }
+        let backend = if kind == "local" {
+            serde_json::json!({"type":"local"})
+        } else {
+            serde_json::json!({"type":kind,"settings":settings})
+        };
+        let domains: serde_json::Value =
+            serde_json::from_str(&self.dashboard_fields[4 + FIELD_DEFS.len()])
+                .map_err(|_| "Data domains must be a JSON array")?;
+        if !domains.is_array() {
+            return Err("Data domains must be a JSON array".into());
+        }
+        Ok(
+            serde_json::json!({"expected_revision":self.registry_revision,"id":id,"name":name,"enabled":enabled,"backend":backend,"data_domains":domains}),
+        )
+    }
+    /// Fill selected target settings from a `GET /hpc/config` reply.
     pub fn load_config(&mut self, reply: &serde_json::Value) {
+        self.target_id = reply
+            .get("target_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        self.target_revision = reply
+            .get("target_revision")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        self.registry_revision = reply
+            .get("registry_revision")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        self.target_editable = reply
+            .get("editable")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let config = reply.get("config").cloned().unwrap_or_default();
         self.values = FIELD_DEFS
             .iter()
@@ -237,34 +456,26 @@ impl HpcPanelState {
                 _ => String::new(),
             })
             .collect();
-        self.pending_restart = reply
-            .get("pending_restart")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        self.site_profile_path = reply
-            .get("site_profile")
-            .and_then(|p| p.get("path"))
-            .and_then(serde_json::Value::as_str)
-            .map(String::from);
-        let manifest = reply.get("apptainer_manifest");
-        self.apptainer_manifest_path = manifest
-            .and_then(|m| m.get("path"))
-            .and_then(serde_json::Value::as_str)
-            .map(String::from);
-        self.apptainer_manifest_exists = manifest
-            .and_then(|m| m.get("exists"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
     }
 
-    /// Assemble the `PUT /hpc/config` profile body. Empty values are
-    /// omitted (clearing an entry falls back to env/default). Returns the
+    /// Assemble the selected-target settings update. Returns the
     /// field key on a malformed number instead of sending a bad profile.
     pub fn build_profile(&self) -> Result<serde_json::Value, &'static str> {
         let mut profile = serde_json::Map::new();
         for (def, value) in FIELD_DEFS.iter().zip(&self.values) {
             let value = value.trim();
             if value.is_empty() {
+                if matches!(
+                    def.key,
+                    "account"
+                        | "gpu_qos"
+                        | "apptainer_manifest"
+                        | "typed_worker_config"
+                        | "data_ssh_host"
+                        | "pi_ssh_host"
+                ) {
+                    profile.insert(def.key.into(), serde_json::Value::Null);
+                }
                 continue;
             }
             match def.kind {
@@ -287,7 +498,9 @@ impl HpcPanelState {
                 }
             }
         }
-        Ok(serde_json::Value::Object(profile))
+        Ok(
+            serde_json::json!({"target_id":self.target_id,"target_revision":self.target_revision,"expected_revision":self.registry_revision,"config":profile}),
+        )
     }
 
     /// Fill job rows from a `GET /hpc/jobs` reply (newest first).
@@ -353,6 +566,9 @@ pub enum HpcPanelCommand {
     Close,
     /// Persist the profile as assembled by [`HpcPanelState::build_profile`].
     SaveProfile(serde_json::Value),
+    SelectTarget(String, u64),
+    SaveTarget(serde_json::Value),
+    DeleteTarget(String, u64),
     /// Re-fetch the monitor inventory.
     RefreshJobs,
 }
@@ -361,6 +577,10 @@ impl HpcPanelState {
     /// Route a key. Returns `None` when the key was consumed internally.
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> Option<HpcPanelCommand> {
         use crossterm::event::KeyCode;
+
+        if self.dashboard_ready {
+            return self.handle_dashboard_key(key);
+        }
 
         // Inline editing captures everything until Enter/Esc.
         if let Some(buffer) = &mut self.edit_buffer {
@@ -433,6 +653,11 @@ impl HpcPanelState {
             }
             KeyCode::Enter => match self.tab {
                 HpcTab::Config => {
+                    if !self.target_editable {
+                        self.status =
+                            Some("Select a Slurm compute target to edit its settings.".into());
+                        return None;
+                    }
                     let def = &FIELD_DEFS[self.selected_field];
                     match def.kind {
                         FieldKind::Bool => {
@@ -456,19 +681,173 @@ impl HpcPanelState {
                         }
                     }
                 }
-                HpcTab::Jobs | HpcTab::Targets => None,
+                HpcTab::Targets => self.targets.get(self.selected_target).map(|target| {
+                    HpcPanelCommand::SelectTarget(target.id.clone(), self.registry_revision)
+                }),
+                HpcTab::Jobs => None,
             },
-            KeyCode::Char('s') if self.tab == HpcTab::Config => match self.build_profile() {
-                Ok(profile) => Some(HpcPanelCommand::SaveProfile(profile)),
-                Err(key) => {
-                    self.status = Some(format!(
-                        "invalid value for '{key}' — expected a number or boolean flag"
-                    ));
-                    None
+            KeyCode::Char('s') if self.tab == HpcTab::Config && self.target_editable => {
+                match self.build_profile() {
+                    Ok(profile) => Some(HpcPanelCommand::SaveProfile(profile)),
+                    Err(key) => {
+                        self.status = Some(format!(
+                            "invalid value for '{key}' — expected a number or boolean flag"
+                        ));
+                        None
+                    }
                 }
-            },
+            }
             _ => None,
         }
+    }
+
+    fn handle_dashboard_key(&mut self, key: crossterm::event::KeyEvent) -> Option<HpcPanelCommand> {
+        use crossterm::event::KeyCode;
+        if self.loading {
+            return None;
+        }
+        if let Some(buffer) = &mut self.edit_buffer {
+            match key.code {
+                KeyCode::Enter => {
+                    self.dashboard_fields[self.dashboard_field] = std::mem::take(buffer);
+                    self.edit_buffer = None;
+                }
+                KeyCode::Esc => self.edit_buffer = None,
+                KeyCode::Backspace => {
+                    buffer.pop();
+                }
+                KeyCode::Char(ch) => buffer.push(ch),
+                _ => {}
+            }
+            return None;
+        }
+        if self.dashboard_confirm_delete {
+            self.dashboard_confirm_delete = false;
+            if key.code == KeyCode::Char('y') {
+                return self
+                    .dashboard_targets
+                    .get(self.selected_target)
+                    .and_then(|target| target["id"].as_str())
+                    .map(|id| {
+                        HpcPanelCommand::DeleteTarget(id.to_string(), self.registry_revision)
+                    });
+            }
+            self.status = Some("Delete cancelled".into());
+            return None;
+        }
+        match key.code {
+            KeyCode::Esc if self.dashboard_editing => {
+                self.dashboard_editing = false;
+                self.dashboard_new = false;
+                self.load_dashboard_draft();
+            }
+            KeyCode::Esc => return Some(HpcPanelCommand::Close),
+            KeyCode::Tab if !self.dashboard_editing => {
+                self.dashboard_focus_form = !self.dashboard_focus_form
+            }
+            KeyCode::Char('r') if !self.dashboard_editing => {
+                return Some(HpcPanelCommand::RefreshJobs);
+            }
+            KeyCode::Char('J') if !self.dashboard_editing => {
+                self.dashboard_show_jobs = !self.dashboard_show_jobs;
+                self.dashboard_focus_form = self.dashboard_show_jobs;
+            }
+            KeyCode::Char('n') if !self.dashboard_editing => {
+                self.dashboard_show_jobs = false;
+                self.dashboard_new = true;
+                self.dashboard_editing = true;
+                self.dashboard_focus_form = true;
+                self.dashboard_draft = serde_json::json!({"id":"", "name":"", "enabled":true,"backend":{"type":"slurm","settings":{}},"data_domains":[]});
+                self.dashboard_fields = vec!["".into(), "".into(), "slurm".into(), "true".into()];
+                self.dashboard_fields.extend(FIELD_DEFS.iter().map(|f| {
+                    if f.kind == FieldKind::Bool {
+                        "false".into()
+                    } else {
+                        String::new()
+                    }
+                }));
+                self.dashboard_fields.push("[]".into());
+                self.dashboard_field = 0;
+            }
+            KeyCode::Char('e') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
+                self.dashboard_show_jobs = false;
+                self.dashboard_editing = true;
+                self.dashboard_focus_form = true;
+                self.dashboard_field = 1;
+            }
+            KeyCode::Char('d') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
+                self.dashboard_confirm_delete = true;
+                self.status = Some(format!(
+                    "Delete {}? y confirm, any other key cancels",
+                    self.dashboard_targets[self.selected_target]["id"]
+                        .as_str()
+                        .unwrap_or("?")
+                ));
+            }
+            KeyCode::Char('x') if !self.dashboard_editing => {
+                return self
+                    .dashboard_targets
+                    .get(self.selected_target)
+                    .and_then(|target| target["id"].as_str())
+                    .map(|id| {
+                        HpcPanelCommand::SelectTarget(id.to_string(), self.registry_revision)
+                    });
+            }
+            KeyCode::Char('s') if self.dashboard_editing => match self.dashboard_save() {
+                Ok(request) => return Some(HpcPanelCommand::SaveTarget(request)),
+                Err(error) => self.status = Some(error),
+            },
+            KeyCode::Up | KeyCode::Char('k')
+                if !self.dashboard_focus_form && !self.dashboard_editing =>
+            {
+                self.selected_target = self.selected_target.saturating_sub(1);
+                self.load_dashboard_draft();
+            }
+            KeyCode::Down | KeyCode::Char('j')
+                if !self.dashboard_focus_form && !self.dashboard_editing =>
+            {
+                if self.selected_target + 1 < self.dashboard_targets.len() {
+                    self.selected_target += 1;
+                }
+                self.load_dashboard_draft();
+            }
+            KeyCode::Up | KeyCode::Char('k') if self.dashboard_editing => {
+                self.dashboard_move_field(false)
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.dashboard_editing => {
+                self.dashboard_move_field(true)
+            }
+            KeyCode::Up | KeyCode::Char('k') if self.dashboard_show_jobs => {
+                self.selected_job = self.selected_job.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.dashboard_show_jobs => {
+                self.selected_job = (self.selected_job + 1).min(self.jobs.len().saturating_sub(1));
+            }
+            KeyCode::Up | KeyCode::Char('k') if self.dashboard_focus_form => {
+                self.dashboard_move_field(false)
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.dashboard_focus_form => {
+                self.dashboard_move_field(true)
+            }
+            KeyCode::Enter if self.dashboard_editing => {
+                if (!self.dashboard_new && self.dashboard_field == 0)
+                    || (!self.dashboard_new && self.dashboard_field == 2)
+                {
+                    self.status = Some("ID and backend are fixed for existing targets".into());
+                } else if self.dashboard_field == 3
+                    || (self.dashboard_field >= 4
+                        && self.dashboard_field < 4 + FIELD_DEFS.len()
+                        && FIELD_DEFS[self.dashboard_field - 4].kind == FieldKind::Bool)
+                {
+                    self.dashboard_fields[self.dashboard_field] =
+                        (self.dashboard_fields[self.dashboard_field] != "true").to_string();
+                } else {
+                    self.edit_buffer = Some(self.dashboard_fields[self.dashboard_field].clone());
+                }
+            }
+            _ => {}
+        }
+        None
     }
 }
 
@@ -497,6 +876,10 @@ impl StatefulWidgetRef for HpcPanelWidget {
     type State = HpcPanelState;
 
     fn render_ref(&self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        if state.dashboard_ready {
+            self.render_dashboard(area, buf, state);
+            return;
+        }
         let theme = theme::current();
         let mut lines: Vec<Line> = Vec::new();
 
@@ -512,10 +895,14 @@ impl StatefulWidgetRef for HpcPanelWidget {
             Span::styled(format!(" {label} "), style)
         };
         lines.push(Line::from(vec![
-            tab("Site config", state.tab == HpcTab::Config),
+            tab("Compute settings", state.tab == HpcTab::Config),
             tab("Jobs", state.tab == HpcTab::Jobs),
+            tab("Targets", state.tab == HpcTab::Targets),
         ]));
-        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─".repeat(usize::from(area.width)),
+            Style::default().fg(theme.text_faint),
+        )));
 
         if state.loading {
             lines.push(Line::from(Span::styled(
@@ -530,39 +917,228 @@ impl StatefulWidgetRef for HpcPanelWidget {
             }
         }
 
-        // Status / pending-restart footer.
-        if state.pending_restart {
-            lines.push(Line::from(Span::styled(
-                "! saved profile differs from the running daemon — restart to apply",
-                Style::default().fg(theme.warning),
+        let mut footer: Vec<Line<'static>> = Vec::new();
+        if !state.loading && state.tab == HpcTab::Config && state.target_editable {
+            footer.push(Line::from(Span::styled(
+                "s save target",
+                Style::default().fg(theme.text_faint),
             )));
         }
         if let Some(status) = &state.status {
-            lines.push(Line::from(Span::styled(
+            footer.push(Line::from(Span::styled(
                 status.clone(),
                 Style::default().fg(theme.text_faint),
             )));
         }
         // Keymap hint — the panel's persistent footer.
-        lines.push(Line::from(Span::styled(
-            "Tab switch · r refresh · Esc close",
+        footer.push(Line::from(Span::styled(
+            if state.tab == HpcTab::Targets {
+                "Enter select target · Tab switch · r refresh · Esc close"
+            } else {
+                "Tab switch · r refresh · Esc close"
+            },
             Style::default().fg(theme.text_faint),
         )));
 
+        let width = usize::from(area.width.max(1));
+        let footer_height = footer
+            .iter()
+            .map(|line| line.width().max(1).div_ceil(width))
+            .sum::<usize>()
+            .min(usize::from(area.height)) as u16;
+        let content = Rect {
+            height: area.height.saturating_sub(footer_height),
+            ..area
+        };
+        let footer_area = Rect {
+            y: area.y + content.height,
+            height: footer_height,
+            ..area
+        };
         Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
             .wrap(ratatui::widgets::Wrap { trim: false })
-            .render(area, buf);
+            .render(content, buf);
+        Paragraph::new(footer)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .render(footer_area, buf);
     }
 }
 
 impl HpcPanelWidget {
+    fn render_dashboard(&self, area: Rect, buf: &mut Buffer, state: &HpcPanelState) {
+        let theme = theme::current();
+        let hint = if state.dashboard_editing {
+            "↑↓ field · Enter edit · s save · Esc cancel"
+        } else {
+            "Tab focus · ↑↓ move · n new · e edit · x select · d delete · J jobs · r refresh · Esc close"
+        };
+        let mut footer = Vec::new();
+        if let Some(status) = &state.status {
+            footer.push(Line::from(status.clone()));
+        }
+        footer.push(Line::from(hint));
+        let width = usize::from(area.width.max(1));
+        let footer_height = footer
+            .iter()
+            .map(|line| line.width().max(1).div_ceil(width))
+            .sum::<usize>()
+            .min(usize::from(area.height)) as u16;
+        let rows =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(footer_height)]).split(area);
+        let columns = Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
+            .split(rows[0]);
+        let left = Block::default()
+            .title(" Compute targets ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if !state.dashboard_focus_form {
+                theme.accent_alt
+            } else {
+                theme.text_faint
+            }));
+        let list: Vec<Line> = state
+            .dashboard_targets
+            .iter()
+            .enumerate()
+            .map(|(i, target)| {
+                let id = target["id"].as_str().unwrap_or("?");
+                let active = state.target_id.as_deref() == Some(id);
+                Line::from(Span::styled(
+                    format!(
+                        "{}{}{}",
+                        if i == state.selected_target {
+                            "> "
+                        } else {
+                            "  "
+                        },
+                        id,
+                        if active && target["revision"].as_u64() != Some(state.target_revision) {
+                            " (active: older revision)"
+                        } else if active {
+                            " *"
+                        } else if target["enabled"] == false {
+                            " (disabled)"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Style::default().fg(if i == state.selected_target {
+                        theme.accent_alt
+                    } else {
+                        theme.text
+                    }),
+                ))
+            })
+            .collect();
+        let list_area = left.inner(columns[0]);
+        left.render(columns[0], buf);
+        let list_scroll = state
+            .selected_target
+            .saturating_sub(usize::from(list_area.height.saturating_sub(1)))
+            as u16;
+        Paragraph::new(list)
+            .scroll((list_scroll, 0))
+            .render(list_area, buf);
+
+        let right = Block::default()
+            .title(if state.dashboard_show_jobs {
+                " Jobs "
+            } else if state.dashboard_new {
+                " New target "
+            } else if state.dashboard_editing {
+                " Edit target "
+            } else {
+                " Target details "
+            })
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(if state.dashboard_focus_form {
+                theme.accent_alt
+            } else {
+                theme.text_faint
+            }));
+        let form_area = right.inner(columns[1]);
+        right.render(columns[1], buf);
+        let mut form: Vec<Line> = Vec::new();
+        if state.dashboard_show_jobs {
+            self.render_jobs(&mut form, state, &theme);
+        } else if state.dashboard_fields.is_empty() {
+            form.push(Line::from("Press n to add a target"));
+        } else {
+            let labels = ["ID", "Name", "Backend (local/slurm/ssh)", "Enabled"];
+            for i in state.dashboard_visible_fields() {
+                let value = &state.dashboard_fields[i];
+                let label = if i < 4 {
+                    labels[i]
+                } else if i == 4 + FIELD_DEFS.len() {
+                    "Data domains (JSON)"
+                } else {
+                    FIELD_DEFS[i - 4].label
+                };
+                let display = if i == state.dashboard_field && state.edit_buffer.is_some() {
+                    format!("{}_", state.edit_buffer.as_deref().unwrap_or(""))
+                } else if value.is_empty() {
+                    "(default)".into()
+                } else {
+                    value.clone()
+                };
+                form.push(Line::from(Span::styled(
+                    format!(
+                        "{}{}: {}",
+                        if state.dashboard_editing && i == state.dashboard_field {
+                            "> "
+                        } else {
+                            "  "
+                        },
+                        label,
+                        display
+                    ),
+                    Style::default().fg(if state.dashboard_editing && i == state.dashboard_field {
+                        theme.accent_alt
+                    } else {
+                        theme.text
+                    }),
+                )));
+            }
+        }
+        let scroll = if state.dashboard_show_jobs {
+            state
+                .selected_job
+                .saturating_sub(usize::from(form_area.height.saturating_sub(1))) as u16
+        } else if state.dashboard_focus_form {
+            state
+                .dashboard_visible_fields()
+                .iter()
+                .position(|field| *field == state.dashboard_field)
+                .unwrap_or(0)
+                .saturating_sub(usize::from(form_area.height.saturating_sub(1))) as u16
+        } else {
+            0
+        };
+        Paragraph::new(form)
+            .scroll((scroll, 0))
+            .render(form_area, buf);
+        Paragraph::new(footer)
+            .style(Style::default().fg(theme.text_faint))
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .render(rows[1], buf);
+    }
     fn render_config(
         &self,
         lines: &mut Vec<Line<'static>>,
         state: &HpcPanelState,
         theme: &crate::theme::Theme,
     ) {
+        if !state.target_editable {
+            lines.push(Line::from(
+                "Select a Slurm compute target to edit its settings.",
+            ));
+            return;
+        }
+        lines.push(Line::from(format!(
+            "Target: {} r{}",
+            state.target_id.as_deref().unwrap_or("?"),
+            state.target_revision
+        )));
         for (index, def) in FIELD_DEFS.iter().enumerate() {
             let value = state
                 .values
@@ -603,28 +1179,6 @@ impl HpcPanelWidget {
                     )));
                 }
             }
-        }
-
-        lines.push(Line::from(""));
-        let manifest = state
-            .apptainer_manifest_path
-            .clone()
-            .unwrap_or_else(|| "(unset)".into());
-        let manifest_flag =
-            if state.apptainer_manifest_path.is_some() && !state.apptainer_manifest_exists {
-                "  ! file missing"
-            } else {
-                ""
-            };
-        lines.push(Line::from(Span::styled(
-            format!("manifest: {manifest}{manifest_flag}"),
-            Style::default().fg(theme.text_faint),
-        )));
-        if let Some(path) = &state.site_profile_path {
-            lines.push(Line::from(Span::styled(
-                format!("profile: {path}   s save"),
-                Style::default().fg(theme.text_faint),
-            )));
         }
     }
 
@@ -762,9 +1316,102 @@ impl HpcPanelWidget {
 mod tests {
     use super::*;
 
+    #[test]
+    fn dashboard_edits_highlighted_target_without_changing_selection() {
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":7,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}, {"id":"remote","name":"Remote","revision":1,"enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}, {"id":"remote","name":"Remote 2","revision":2,"enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}]}}));
+        assert_eq!(panel.dashboard_targets.len(), 2);
+        panel.selected_target = 1;
+        panel.load_dashboard_draft();
+        panel.dashboard_fields[1] = "Changed".into();
+        let request = panel.dashboard_save().unwrap();
+        assert_eq!(request["id"], "remote");
+        assert_eq!(request["name"], "Changed");
+        assert_eq!(request["expected_revision"], 7);
+        assert_eq!(panel.target_id.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn dashboard_hides_deleted_and_confirms_delete() {
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":4,"policy":{"target_id":"local"},"deleted_target_ids":["deleted"],"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}},{"id":"deleted","name":"Deleted","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        assert_eq!(panel.dashboard_targets.len(), 1);
+        let key = |c| {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::empty(),
+            )
+        };
+        assert_eq!(panel.handle_key(key('d')), None);
+        assert_eq!(panel.handle_key(key('n')), None);
+        assert!(!panel.dashboard_confirm_delete);
+        panel.handle_key(key('d'));
+        assert_eq!(
+            panel.handle_key(key('y')),
+            Some(HpcPanelCommand::DeleteTarget("local".into(), 4))
+        );
+    }
+
+    #[test]
+    fn dashboard_renders_columns_and_bottom_hints() {
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let area = Rect::new(0, 0, 80, 20);
+        let mut buffer = Buffer::empty(area);
+        HpcPanelWidget.render_ref(area, &mut buffer, &mut panel);
+        let row = |y| {
+            (0..80)
+                .map(|x| buffer[(x, y)].symbol().to_owned())
+                .collect::<String>()
+        };
+        assert!(row(0).contains("Compute targets"));
+        assert!(row(0).contains("Target details"));
+        assert!(row(1).contains("local"));
+        assert!(row(19).contains("Esc close"));
+    }
+
+    #[test]
+    fn local_form_skips_inapplicable_remote_settings() {
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.dashboard_field = 3;
+        panel.dashboard_move_field(true);
+        assert_eq!(panel.dashboard_field, 4 + FIELD_DEFS.len());
+        panel.dashboard_move_field(false);
+        assert_eq!(panel.dashboard_field, 3);
+    }
+
+    #[test]
+    fn dashboard_creates_local_target_from_form() {
+        let mut panel = HpcPanelState::default();
+        panel.load_dashboard(&serde_json::json!({"state":{"revision":2,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        let key = |c| {
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::empty(),
+            )
+        };
+        panel.handle_key(key('n'));
+        panel.dashboard_fields[0] = "new-host".into();
+        panel.dashboard_fields[1] = "New host".into();
+        panel.dashboard_fields[2] = "local".into();
+        match panel.handle_key(key('s')) {
+            Some(HpcPanelCommand::SaveTarget(request)) => {
+                assert_eq!(request["id"], "new-host");
+                assert_eq!(request["backend"]["type"], "local");
+                assert_eq!(request["expected_revision"], 2);
+            }
+            other => panic!("expected target save, got {other:?}"),
+        }
+    }
+
     fn state_with_values() -> HpcPanelState {
         let mut state = HpcPanelState::default();
         state.values = FIELD_DEFS.iter().map(|_| String::new()).collect();
+        state.target_editable = true;
+        state.target_id = Some("test".into());
+        state.target_revision = 1;
+        state.registry_revision = 1;
         state
     }
 
@@ -777,23 +1424,20 @@ mod tests {
     fn load_config_reads_json_fields() {
         let reply = serde_json::json!({
             "config": {
-                "enabled": true,
+                "tools_enabled": true,
                 "ssh_host": "sjtu",
                 "poll_interval_secs": 15,
                 "account": null
             },
-            "pending_restart": true,
-            "site_profile": {"path": "/s/slurm-site.json", "exists": false},
-            "apptainer_manifest": {"path": "/m.json", "exists": false}
+            "target_id": "sjtu", "target_revision": 2, "registry_revision": 3, "editable": true
         });
         let mut state = state_with_values();
         state.load_config(&reply);
-        assert!(state.pending_restart);
-        assert_eq!(
-            state.site_profile_path.as_deref(),
-            Some("/s/slurm-site.json")
-        );
-        let enabled = FIELD_DEFS.iter().position(|d| d.key == "enabled").unwrap();
+        assert_eq!(state.target_id.as_deref(), Some("sjtu"));
+        let enabled = FIELD_DEFS
+            .iter()
+            .position(|d| d.key == "tools_enabled")
+            .unwrap();
         assert_eq!(state.values[enabled], "true");
         let host = FIELD_DEFS.iter().position(|d| d.key == "ssh_host").unwrap();
         assert_eq!(state.values[host], "sjtu");
@@ -802,15 +1446,18 @@ mod tests {
     #[test]
     fn build_profile_skips_empty_and_rejects_bad_numbers() {
         let mut state = state_with_values();
-        set_value(&mut state, "enabled", "true");
+        set_value(&mut state, "tools_enabled", "true");
         set_value(&mut state, "ssh_host", "sjtu");
         set_value(&mut state, "account", "");
         set_value(&mut state, "poll_interval_secs", "15");
         let profile = state.build_profile().unwrap();
-        assert_eq!(profile["enabled"], serde_json::json!(true));
-        assert_eq!(profile["ssh_host"], serde_json::json!("sjtu"));
-        assert_eq!(profile["poll_interval_secs"], serde_json::json!(15));
-        assert!(profile.get("account").is_none());
+        assert_eq!(profile["config"]["tools_enabled"], serde_json::json!(true));
+        assert_eq!(profile["config"]["ssh_host"], serde_json::json!("sjtu"));
+        assert_eq!(
+            profile["config"]["poll_interval_secs"],
+            serde_json::json!(15)
+        );
+        assert!(profile["config"]["account"].is_null());
 
         set_value(&mut state, "gpu_cpus_per_gpu", "sixteen");
         assert_eq!(state.build_profile().err(), Some("gpu_cpus_per_gpu"));
@@ -819,8 +1466,11 @@ mod tests {
     #[test]
     fn bool_toggle_and_text_edit_via_enter() {
         let mut state = state_with_values();
-        set_value(&mut state, "enabled", "false");
-        state.selected_field = FIELD_DEFS.iter().position(|d| d.key == "enabled").unwrap();
+        set_value(&mut state, "tools_enabled", "false");
+        state.selected_field = FIELD_DEFS
+            .iter()
+            .position(|d| d.key == "tools_enabled")
+            .unwrap();
         // Enter on a bool toggles in place.
         let _ = state.handle_key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Enter,
@@ -851,14 +1501,14 @@ mod tests {
     #[test]
     fn save_command_carries_profile() {
         let mut state = state_with_values();
-        set_value(&mut state, "enabled", "true");
+        set_value(&mut state, "tools_enabled", "true");
         let cmd = state.handle_key(crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('s'),
             crossterm::event::KeyModifiers::empty(),
         ));
         match cmd {
             Some(HpcPanelCommand::SaveProfile(profile)) => {
-                assert_eq!(profile["enabled"], serde_json::json!(true));
+                assert_eq!(profile["config"]["tools_enabled"], serde_json::json!(true));
             }
             other => panic!("expected SaveProfile, got {other:?}"),
         }

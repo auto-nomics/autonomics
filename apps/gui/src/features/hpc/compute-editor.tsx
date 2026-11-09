@@ -8,6 +8,7 @@ import { GatewayHttpError } from "@/gateway";
 import {
   addComputeDataSource,
   checkComputeTarget,
+  enrollComputeTarget,
   fetchComputeReadiness,
   fetchComputeStatus,
   saveComputeTarget,
@@ -16,12 +17,12 @@ import {
 import type {
   ComputeStatus,
   ComputeTarget,
+  DataDomain,
   ReadinessReport,
   SlurmSettings,
 } from "./types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ type TargetDraft = {
   enabled: boolean;
   /** null = local 后端 */
   remote: { kind: "slurm" | "ssh"; settings: SlurmSettings } | null;
+  dataDomains: DataDomain[];
 };
 
 function backendLabel(target: ComputeTarget): string {
@@ -62,6 +64,7 @@ function draftFromTarget(target: ComputeTarget): TargetDraft {
     id: target.id,
     name: target.name,
     enabled: target.enabled,
+    dataDomains: target.data_domains ?? [],
     remote:
       target.backend.type === "local"
         ? null
@@ -91,7 +94,7 @@ function Field({
   );
 }
 
-export function ComputeEditorView() {
+export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) {
   const [status, setStatus] = useState<ComputeStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,6 +104,8 @@ export function ComputeEditorView() {
   >({});
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [draft, setDraft] = useState<TargetDraft | null>(null);
+  const [enroll, setEnroll] = useState({ id: "", name: "", login: "", worker: "", dataAlias: "", dataRoot: "", partition: "", account: "", scratch: "", select: true });
+  const [showEnroll, setShowEnroll] = useState(false);
   const [sourceDraft, setSourceDraft] = useState({
     id: "",
     name: "",
@@ -161,7 +166,7 @@ export function ComputeEditorView() {
     [reload],
   );
 
-  const targets = useMemo(() => state?.targets ?? [], [state]);
+  const targets = useMemo(() => (state?.targets ?? []).filter((target) => !state?.deleted_target_ids?.includes(target.id)), [state]);
   const sources = useMemo(() => state?.data_sources ?? [], [state]);
   const runs = useMemo(() => status?.runs ?? [], [status]);
 
@@ -180,7 +185,7 @@ export function ComputeEditorView() {
   }
 
   return (
-    <ScrollArea className="min-h-0 flex-1">
+    <div className={embedded ? "" : "min-h-0 flex-1 overflow-auto"}>
       <div className="mx-auto grid max-w-4xl gap-4 p-4 pb-12">
         <header className="flex items-center justify-between gap-2">
           <div>
@@ -263,6 +268,9 @@ export function ComputeEditorView() {
         <section className="rounded-lg border">
           <div className="flex items-center justify-between border-b px-3 py-2">
             <span className="text-sm font-medium">目标</span>
+            <Button size="sm" variant="outline" onClick={() => setShowEnroll((value) => !value)}>
+              注册 Slurm 集群
+            </Button>
             <Button
               size="sm"
               variant="outline"
@@ -271,6 +279,7 @@ export function ComputeEditorView() {
                   id: "",
                   name: "",
                   enabled: true,
+                  dataDomains: [],
                   remote: { kind: "slurm", settings: emptySlurmDraft() },
                 })
               }
@@ -285,6 +294,7 @@ export function ComputeEditorView() {
                   id: "",
                   name: "",
                   enabled: true,
+                  dataDomains: [],
                   remote: { kind: "ssh", settings: emptySlurmDraft() },
                 })
               }
@@ -365,9 +375,9 @@ export function ComputeEditorView() {
               检查 {id}:
               <Badge
                 className="ml-2"
-                variant={report.state === "ok" ? "default" : "outline"}
+                variant={report.configuration_valid === true ? "default" : "outline"}
               >
-                {report.state}
+                {report.configuration_valid === true ? "连接检查通过" : "检查未通过"}
               </Badge>
               {report.error ? (
                 <span className="ml-2">{String(report.error)}</span>
@@ -375,6 +385,38 @@ export function ComputeEditorView() {
             </div>
           ))}
         </section>
+
+        {showEnroll ? (
+          <section className="rounded-lg border p-3">
+            <h3 className="mb-2 text-sm font-medium">注册 Slurm 集群</h3>
+            <p className="mb-3 text-xs text-muted-foreground">通过登录节点检查 worker；填写数据主机和共享目录可同时建立数据挂载。注册分步执行，失败时已完成的步骤会保留。</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {([
+                ["id", "标识", true], ["name", "名称", false],
+                ["login", "登录节点 SSH 别名", true], ["worker", "远端 worker 可执行文件绝对路径", true],
+                ["dataAlias", "数据节点 SSH 别名（与共享目录同时填写）", false], ["dataRoot", "共享目录绝对路径", false],
+                ["partition", "分区（可选）", false], ["account", "账户（可选）", false], ["scratch", "Scratch 绝对路径（可选）", false],
+              ] as const).map(([key, label, required]) => (
+                <Field key={key} label={label}>
+                  <input className={inputClass} required={required} value={enroll[key]} onChange={(event) => setEnroll({ ...enroll, [key]: event.target.value })} />
+                </Field>
+              ))}
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enroll.select} onChange={(event) => setEnroll({ ...enroll, select: event.target.checked })} />注册后选择此目标</label>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Button size="sm" disabled={busy !== null || !enroll.id.trim() || !enroll.login.trim() || !enroll.worker.trim() || Boolean(enroll.dataAlias.trim()) !== Boolean(enroll.dataRoot.trim())} onClick={() => void run("enroll", async () => {
+                try {
+                  await enrollComputeTarget({ expected_revision: revision, id: enroll.id.trim(), login_alias: enroll.login.trim(), worker_executable: enroll.worker.trim(), name: enroll.name.trim() || undefined, data_alias: enroll.dataAlias.trim() || undefined, data_root: enroll.dataRoot.trim() || undefined, partition: enroll.partition.trim() || undefined, account: enroll.account.trim() || undefined, scratch_dir: enroll.scratch.trim() || undefined, select: enroll.select });
+                  setShowEnroll(false);
+                  setNotice({ kind: "ok", text: "集群已注册。" });
+                } finally {
+                  await reload();
+                }
+              })}>注册</Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowEnroll(false)}>取消</Button>
+            </div>
+          </section>
+        ) : null}
 
         {draft ? (
           <TargetForm
@@ -394,6 +436,7 @@ export function ComputeEditorView() {
                   name: next.name,
                   enabled: next.enabled,
                   backend,
+                  data_domains: next.dataDomains,
                 });
                 setDraft(null);
                 setNotice({ kind: "ok", text: "目标已保存为新的不可变修订。" });
@@ -551,7 +594,7 @@ export function ComputeEditorView() {
           )}
         </section>
       </div>
-    </ScrollArea>
+    </div>
   );
 }
 

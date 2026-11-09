@@ -355,7 +355,7 @@ fn default_commands() -> Vec<Command> {
             action: CommandAction::ModelConfig,
         },
         Command {
-            title: "HPC site".into(),
+            title: "Compute Dashboard".into(),
             keywords: "hpc slurm cluster site config jobs monitor ssh partition apptainer sbatch"
                 .into(),
             category: "system".into(),

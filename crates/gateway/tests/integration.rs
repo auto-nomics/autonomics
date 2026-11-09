@@ -669,6 +669,41 @@ async fn model_config_catalog_serves_builtin_presets() {
     gateway_daemon.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_compute_target_keeps_history_and_requires_another_active_target() {
+    let daemon = start_mock_gateway("ok").await;
+    let client = daemon.client();
+    let initial = client.compute_status().await.unwrap();
+    let saved = client.save_compute_target_json(&serde_json::json!({"expected_revision":initial.state.revision,"id":"other","name":"Other","enabled":true,"backend":{"type":"local"}})).await.unwrap();
+    let selected = client
+        .select_compute_target_by_id(saved.revision, "other".into())
+        .await
+        .unwrap();
+    assert!(
+        client
+            .delete_compute_target("other", selected.revision)
+            .await
+            .is_err()
+    );
+    let selected = client
+        .select_compute_target_by_id(selected.revision, "local".into())
+        .await
+        .unwrap();
+    let deleted = client
+        .delete_compute_target("other", selected.revision)
+        .await
+        .unwrap();
+    assert!(deleted.deleted_target_ids.contains("other"));
+    assert!(deleted.targets.iter().any(|target| target.id == "other"));
+    assert!(
+        client
+            .select_compute_target_by_id(deleted.revision, "other".into())
+            .await
+            .is_err()
+    );
+    daemon.stop().await;
+}
+
 // ── HPC site config ─────────────────────────────────────────────────────
 
 /// GET serves the effective snapshot; PUT persists the profile atomically,
@@ -678,37 +713,11 @@ async fn model_config_catalog_serves_builtin_presets() {
 async fn hpc_config_round_trip_marks_pending_restart() {
     let gateway_daemon = start_mock_gateway("ok").await;
     let client = gateway_daemon.client();
-
     let before = client.hpc_config().await.unwrap();
-    assert_eq!(before["pending_restart"], serde_json::json!(false));
-    assert_eq!(before["site_profile"]["exists"], serde_json::json!(false));
-    let live_host = before["config"]["ssh_host"].as_str().unwrap().to_string();
-
-    let profile = serde_json::json!({"ssh_host": "hpc-login-test", "poll_interval_secs": 30});
-    let saved = client.update_hpc_config(&profile).await.unwrap();
-    assert_eq!(saved["pending_restart"], serde_json::json!(true));
-
-    let after = client.hpc_config().await.unwrap();
-    assert_eq!(after["site_profile"]["exists"], serde_json::json!(true));
-    assert_eq!(after["pending_restart"], serde_json::json!(true));
-    // The running executor keeps its boot-time values.
-    assert_eq!(after["config"]["ssh_host"], serde_json::json!(live_host));
-
-    // Zero poll interval is rejected and must not land on disk.
-    let bad = client
-        .update_hpc_config(&serde_json::json!({"poll_interval_secs": 0}))
-        .await;
-    assert!(bad.is_err(), "zero poll interval must be rejected");
-    let unchanged = client.hpc_config().await.unwrap();
-    assert_eq!(
-        unchanged["config"]["ssh_host"],
-        serde_json::json!(live_host)
-    );
-    assert_eq!(
-        unchanged["config"]["poll_interval_secs"],
-        before["config"]["poll_interval_secs"]
-    );
-
+    assert_eq!(before["target_id"], "local");
+    assert_eq!(before["editable"], false);
+    let bad = client.update_hpc_config(&serde_json::json!({"target_id":"local","target_revision":before["target_revision"],"expected_revision":before["registry_revision"],"config":{"ssh_host":"example"}})).await;
+    assert!(bad.is_err(), "a local target cannot be edited as Slurm");
     gateway_daemon.stop().await;
 }
 

@@ -26,6 +26,9 @@ mod tests {
     fn legacy_path_and_serialization_remain_compatible() {
         let legacy: crate::dag::runtime::RuntimeStatus = RuntimeStatus::Running;
         assert_eq!(serde_json::to_string(&legacy).unwrap(), "\"running\"");
-        assert_eq!(serde_json::from_str::<RuntimeStatus>("\"running\"").unwrap(), legacy);
+        assert_eq!(
+            serde_json::from_str::<RuntimeStatus>("\"running\"").unwrap(),
+            legacy
+        );
     }
 }

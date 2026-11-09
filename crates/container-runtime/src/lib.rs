@@ -8,8 +8,8 @@
 pub mod apptainer;
 pub mod config;
 pub mod connection;
-pub mod dev_container;
 mod container_intent;
+pub mod dev_container;
 pub mod error;
 pub mod execution;
 pub mod gc;

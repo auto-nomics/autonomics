@@ -1127,7 +1127,7 @@ mod tests {
                 config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![vfs::MountDefinition {
-            domain: None,
+                domain: None,
                 path: "/".into(),
                 backend: "workspace".into(),
                 source: root.to_string_lossy().into_owned(),

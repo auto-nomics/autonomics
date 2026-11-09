@@ -51,7 +51,7 @@ pub fn configure_environment_vfs(state_dir: &Path) {
         ],
         mount: vec![
             vfs::MountDefinition {
-            domain: None,
+                domain: None,
                 path: plugin_rsi::PLUGIN_DEVELOPMENT_VFS_ROOT.into(),
                 backend: "plugin-development".into(),
                 source: "/".into(),
@@ -67,7 +67,7 @@ pub fn configure_environment_vfs(state_dir: &Path) {
                 ]),
             },
             vfs::MountDefinition {
-            domain: None,
+                domain: None,
                 path: plugin_rsi::ENVIRONMENT_DEVELOPMENT_VFS_ROOT.into(),
                 backend: "environment-development".into(),
                 source: "/".into(),

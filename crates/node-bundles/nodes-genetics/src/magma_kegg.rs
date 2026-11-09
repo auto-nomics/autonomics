@@ -105,7 +105,8 @@ pub const KEGG_PATHWAYS_BUNDLE: &str = "kegg-pathways";
 pub const KEGG_GENOME_PATHWAYS_BUNDLE: &str = "kegg-genome-pathways";
 
 fn storage_url(bundle: &DataBundle) -> String {
-    vfs::uri::uri(&bundle.vpath)}
+    vfs::uri::uri(&bundle.vpath)
+}
 
 impl NodeFactory for MagmaKeggAlignNodeFactory {
     fn kind(&self) -> &'static str {
@@ -500,7 +501,7 @@ mod tests {
                 config: vfs::BackendConfig::local("/"),
             }],
             mount: vec![vfs::MountDefinition {
-            domain: None,
+                domain: None,
                 path: "/data/kegg-test".into(),
                 backend: "test".into(),
                 source: root.path().to_string_lossy().to_string(),

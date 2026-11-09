@@ -377,7 +377,7 @@ impl App {
                 let popup_width = frame.area().width * 8 / 10;
                 let popup_height = frame.area().height * 9 / 10;
                 let popup = crate::widgets::popup::Popup::new(
-                    " HPC Site ",
+                    " Compute Dashboard ",
                     crate::widgets::popup::PopupControls::default(),
                 )
                 .width(popup_width)

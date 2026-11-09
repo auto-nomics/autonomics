@@ -401,10 +401,11 @@ impl RoutedTool {
                 .targets
                 .iter()
                 .filter(|t| {
-                    matches!(
-                        t.backend,
-                        super::ComputeBackend::Slurm { .. } | super::ComputeBackend::Ssh { .. }
-                    )
+                    !state.deleted_target_ids.contains(&t.id)
+                        && matches!(
+                            t.backend,
+                            super::ComputeBackend::Slurm { .. } | super::ComputeBackend::Ssh { .. }
+                        )
                 })
                 .collect();
             if remote.len() != 1 || revision.is_some() {

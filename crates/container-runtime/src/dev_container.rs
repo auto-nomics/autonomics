@@ -108,7 +108,9 @@ pub struct DevExecStream {
 
 /// Build the `podman create` argv for a dev container. Pure and
 /// unit-tested, mirroring `build_create_args_for_policies`.
-pub(crate) fn build_dev_create_args(spec: &DevContainerSpec) -> Result<Vec<String>, ContainerRuntimeError> {
+pub(crate) fn build_dev_create_args(
+    spec: &DevContainerSpec,
+) -> Result<Vec<String>, ContainerRuntimeError> {
     validate_dev_spec(spec)?;
     let mut args = vec![
         "--name".into(),
@@ -235,7 +237,10 @@ fn current_user_value() -> String {
 /// Parse `podman ps -a --format {{.ID}}\t{{.State}}\t{{.Names}}` output
 /// and return the row whose name equals `name` exactly. Podman's
 /// `--filter name=` matches substrings, so the exact match happens here.
-pub(crate) fn exact_container_row(ps_output: &str, name: &str) -> Option<(String, DevContainerState)> {
+pub(crate) fn exact_container_row(
+    ps_output: &str,
+    name: &str,
+) -> Option<(String, DevContainerState)> {
     ps_output.lines().find_map(|line| {
         let mut columns = line.split('\t');
         let id = columns.next()?.trim();
@@ -380,8 +385,7 @@ mod e2e_tests {
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(workspace.join("project.txt"), "plugin project").unwrap();
         let runtime = PodmanRuntime::new(PodmanConfig {
-            program: std::env::var("AUTONOMICS_PODMAN_PROGRAM")
-                .unwrap_or_else(|_| "podman".into()),
+            program: std::env::var("AUTONOMICS_PODMAN_PROGRAM").unwrap_or_else(|_| "podman".into()),
             workspace_root: root.path().join("runs"),
             panel_cache_root: root.path().join("panels"),
             storage_root: None,

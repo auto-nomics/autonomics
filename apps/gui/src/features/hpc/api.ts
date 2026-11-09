@@ -5,6 +5,7 @@
 import { gatewayRequest } from "@/gateway";
 import type {
   ComputeRegistryState,
+  DataDomain,
   ComputeStatus,
   HpcJobsResponse,
   ReadinessReport,
@@ -31,12 +32,29 @@ export async function saveComputeTarget(
     name: string;
     enabled: boolean;
     backend: Record<string, unknown>;
+    data_domains?: DataDomain[];
   },
 ): Promise<ComputeRegistryState> {
   return gatewayRequest("PUT", "/compute/targets", {
     expected_revision: expectedRevision,
     ...target,
   });
+}
+
+export async function enrollComputeTarget(request: {
+  expected_revision: number;
+  id: string;
+  name?: string;
+  login_alias: string;
+  worker_executable: string;
+  data_alias?: string;
+  data_root?: string;
+  partition?: string;
+  account?: string;
+  scratch_dir?: string;
+  select: boolean;
+}): Promise<ComputeRegistryState> {
+  return gatewayRequest("POST", "/compute/enroll", request);
 }
 
 export async function addComputeDataSource(

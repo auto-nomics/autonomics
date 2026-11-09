@@ -15,7 +15,7 @@ use crate::proto::*;
 // ── storage ──────────────────────────────────────────────────────────
 
 /// Search persisted identities for the frontend agent picker. Optional
-/// `q` (path substring) and `limit` (default 100, max 500) — identities
+/// `q` (ordered path characters) and `limit` (default 100, max 500) — identities
 /// are never listed in full; the picker pages and searches server-side.
 #[utoipa::path(get, path = "/api/v1/storage/agents", tag = "storage", responses((status = 200, body = Object), (status = 500, description = "Storage query failed")))]
 pub(crate) async fn list_storage_agents(

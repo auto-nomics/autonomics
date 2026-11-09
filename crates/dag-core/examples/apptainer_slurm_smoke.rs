@@ -175,10 +175,7 @@ pub async fn run(manifest: &Path, image: &str, permanent: &Path) -> Result<()> {
         root.join("apptainer.rs"),
         include_bytes!("../src/dag/execution/apptainer.rs"),
     )?;
-    std::fs::write(
-        root.join("slurm.rs"),
-        SLURM_SOURCE.as_bytes(),
-    )?;
+    std::fs::write(root.join("slurm.rs"), SLURM_SOURCE.as_bytes())?;
     std::fs::write(
         root.join("process.rs"),
         include_bytes!("../src/dag/execution/process.rs"),

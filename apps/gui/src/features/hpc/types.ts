@@ -48,8 +48,18 @@ export type ComputeTarget = {
   name: string;
   enabled: boolean;
   backend: ComputeBackend;
+  data_domains?: DataDomain[];
   capsule_sha256?: Record<string, string>;
   endpoints?: Record<string, SshEndpoint>;
+};
+
+export type DataDomain = {
+  id: string;
+  ssh_aliases: string[];
+  remote_root: string;
+  vfs_prefix: string;
+  retained_vfs_prefix?: string | null;
+  retained_remote_root?: string | null;
 };
 
 export type DataBackend =
@@ -72,6 +82,7 @@ export type ComputePolicy = {
 };
 
 export type ComputeRegistryState = {
+  deleted_target_ids?: string[];
   version: number;
   revision: number;
   policy: ComputePolicy;

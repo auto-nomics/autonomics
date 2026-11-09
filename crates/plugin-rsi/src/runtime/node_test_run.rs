@@ -14,9 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use container_runtime::types::{ContainerRunRequest, GpuRequest};
-use container_runtime::{
-    ContainerNetwork, DEFAULT_CONTAINER_WORKDIR, MAX_CAPTURED_OUTPUT_BYTES,
-};
+use container_runtime::{ContainerNetwork, DEFAULT_CONTAINER_WORKDIR, MAX_CAPTURED_OUTPUT_BYTES};
 
 use super::dev_session::DevSessionManager;
 use crate::{Error, Result};
@@ -108,9 +106,7 @@ impl DevSessionManager {
                 .workspace()
                 .read_text(&script_file)
                 .map_err(|error| {
-                    Error::Validation(format!(
-                        "cannot read script_file `{script_file}`: {error}"
-                    ))
+                    Error::Validation(format!("cannot read script_file `{script_file}`: {error}"))
                 })?;
             node.command.script = Some(script);
             node.command.script_file = None;
@@ -193,9 +189,8 @@ impl DevSessionManager {
         let mut command = spec.command.clone();
         if let Some(script) = &spec.script {
             let script_path = workdir.join(".autonomics/script");
-            std::fs::write(&script_path, script).map_err(|error| {
-                Error::Container(format!("cannot stage script: {error}"))
-            })?;
+            std::fs::write(&script_path, script)
+                .map_err(|error| Error::Container(format!("cannot stage script: {error}")))?;
             for (relative, content) in &spec.files {
                 write_within(&workdir.join(".autonomics/files"), relative, content)?;
             }
@@ -213,10 +208,14 @@ impl DevSessionManager {
                 )
             })
             .collect();
-        let count = input_container_paths.len().max(output_container_paths.len());
+        let count = input_container_paths
+            .len()
+            .max(output_container_paths.len());
         for item in &mut command {
             for index in (0..count).rev() {
-                if let Some(path) = &input_container_paths[index.min(input_container_paths.len() - 1)] {
+                if let Some(path) =
+                    &input_container_paths[index.min(input_container_paths.len() - 1)]
+                {
                     *item = item.replace(&format!("$input{index}"), path);
                 }
                 if index < output_container_paths.len() {
@@ -236,7 +235,10 @@ impl DevSessionManager {
         for (index, path) in output_container_paths.iter().enumerate() {
             env.push((format!("AUTONOMICS_OUTPUT{index}"), path.clone()));
         }
-        env.push(("AUTONOMICS_WORKDIR".into(), DEFAULT_CONTAINER_WORKDIR.into()));
+        env.push((
+            "AUTONOMICS_WORKDIR".into(),
+            DEFAULT_CONTAINER_WORKDIR.into(),
+        ));
         env.push((
             "AUTONOMICS_INPUT_COUNT".into(),
             input_container_paths.len().to_string(),
@@ -263,12 +265,9 @@ impl DevSessionManager {
             TEST_RUN_DEFAULT_TIMEOUT_SECS
         }
         .clamp(1, TEST_RUN_DEFAULT_TIMEOUT_SECS);
-        let workspace = container_runtime::workspace_ref(
-            &workspace_root,
-            &workdir,
-            DEFAULT_CONTAINER_WORKDIR,
-        )
-        .map_err(|error| Error::Container(error.to_string()))?;
+        let workspace =
+            container_runtime::workspace_ref(&workspace_root, &workdir, DEFAULT_CONTAINER_WORKDIR)
+                .map_err(|error| Error::Container(error.to_string()))?;
         let run = ContainerRunRequest {
             image: spec.image.clone(),
             command,
@@ -326,7 +325,10 @@ impl DevSessionManager {
     }
 }
 
-fn read_outputs(workdir: &Path, node: &container_plugin::node_definition::NodeDefinition) -> Vec<TestRunOutput> {
+fn read_outputs(
+    workdir: &Path,
+    node: &container_plugin::node_definition::NodeDefinition,
+) -> Vec<TestRunOutput> {
     node.ports
         .outputs
         .iter()
@@ -383,13 +385,12 @@ fn safe_name(label: &str) -> String {
 /// `root`, refusing traversal.
 fn write_within(root: &Path, relative: &str, content: &str) -> Result<()> {
     let target = root.join(relative.trim_start_matches('/'));
-    let canonical_parent =
-        target
-            .parent()
-            .and_then(|parent| parent.to_str())
-            .ok_or_else(|| Error::UnsafePath {
-                path: relative.to_string(),
-            })?;
+    let canonical_parent = target
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .ok_or_else(|| Error::UnsafePath {
+            path: relative.to_string(),
+        })?;
     if !PathBuf::from(canonical_parent).starts_with(root) {
         return Err(Error::UnsafePath {
             path: relative.to_string(),
@@ -413,11 +414,11 @@ mod tests {
     use crate::runtime::dev_session::DevSessionManager;
     use crate::{Environment, EnvironmentRegistry, PluginStore};
     use async_trait::async_trait;
+    use container_runtime::ContainerExecutionInfra;
     use container_runtime::connection::PodmanConnection;
     use container_runtime::dev_container::DevContainerStatus;
     use container_runtime::error::ContainerRuntimeError;
     use container_runtime::types::{ContainerRunRequest, ContainerRunResult};
-    use container_runtime::ContainerExecutionInfra;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -451,11 +452,7 @@ mod tests {
             let container_input = input.strip_prefix("/work/").unwrap_or(&input);
             let text = std::fs::read_to_string(workdir.join(container_input)).unwrap_or_default();
             let name = text.trim();
-            std::fs::write(
-                workdir.join("demo_out.txt"),
-                format!("Hello, {name}!\n"),
-            )
-            .unwrap();
+            std::fs::write(workdir.join("demo_out.txt"), format!("Hello, {name}!\n")).unwrap();
             Ok(ContainerRunResult {
                 exit_code: 0,
                 stdout: format!("demo run for {}", request.name),
@@ -497,7 +494,12 @@ mod tests {
             )
             .unwrap();
         let mut operator = store
-            .create_scaffolded("hello-plugin", "sh-base", "scaffold test", &Arc::new(environments.snapshot()))
+            .create_scaffolded(
+                "hello-plugin",
+                "sh-base",
+                "scaffold test",
+                &Arc::new(environments.snapshot()),
+            )
             .unwrap();
         operator.refresh().unwrap();
         drop(operator);
@@ -576,8 +578,16 @@ mod tests {
         assert!(env_names.contains(&"AUTONOMICS_TEST_RUN"));
         // Script staged at the contract path, and the scratch dir is
         // outside the plugin git workspace.
-        assert!(result.workdir.contains("plugin-test-run"), "{}", result.workdir);
-        assert!(PathBuf::from(&result.workdir).join(".autonomics/script").is_file());
+        assert!(
+            result.workdir.contains("plugin-test-run"),
+            "{}",
+            result.workdir
+        );
+        assert!(
+            PathBuf::from(&result.workdir)
+                .join(".autonomics/script")
+                .is_file()
+        );
     }
 
     #[tokio::test]
@@ -599,6 +609,11 @@ mod tests {
             inputs: Default::default(),
             params: serde_json::json!({}),
         };
-        assert!(manager.test_run("hello-plugin", &unknown_kind).await.is_err());
+        assert!(
+            manager
+                .test_run("hello-plugin", &unknown_kind)
+                .await
+                .is_err()
+        );
     }
 }

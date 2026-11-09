@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { ComputeEditorView } from "@/features/hpc";
 
 type Catalog = StateSnapshot["model_catalog"];
 type DisplaySettings = StateSnapshot["display_settings"];
@@ -74,7 +75,7 @@ function supportsRemoteCatalog(providerType: string) {
   return ["openai", "openrouter", "ollama"].includes(providerType);
 }
 
-export function ConfigView({ activeAgent }: { activeAgent: string }) {
+export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent: string; initialTab?: string }) {
   const [catalog, setCatalog] = useState<Catalog>({ providers: [], models: [], active_model: null });
   const [display, setDisplay] = useState<DisplaySettings>({
     collapse_thinking: false,
@@ -318,7 +319,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-1 pb-8 pt-2 sm:px-4 sm:pt-5">
         <header className="space-y-1">
           <h1 className="text-xl font-semibold tracking-tight">Configuration</h1>
-          <p className="text-sm text-muted-foreground">Manage models, agent behavior, and application preferences.</p>
+          <p className="text-sm text-muted-foreground">Manage models, compute targets, agent behavior, and application preferences.</p>
         </header>
         {loading && <Card className="p-4 text-sm text-muted-foreground" role="status">Loading configuration…</Card>}
         {error && <Card className="gap-3 p-4 text-sm text-destructive" role="alert"><span>Could not load configuration: {error}</span><Button className="w-fit" size="sm" variant="outline" onClick={() => void loadAll(activeAgent)}>Try again</Button></Card>}
@@ -332,10 +333,11 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
           </div>
         )}
 
-        {!loading && !error && <Tabs defaultValue="models" className="gap-5">
+        {!loading && !error && <Tabs defaultValue={initialTab} className="gap-5">
           <TabsList className="h-auto max-w-full flex-wrap justify-start gap-1 p-1">
             <TabsTrigger className="px-3 py-1.5" value="models"><Cpu /> Models</TabsTrigger>
             <TabsTrigger className="px-3 py-1.5" value="agent"><Bot /> Agent Runtime</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="compute"><Cpu /> 计算目标</TabsTrigger>
             <TabsTrigger className="px-3 py-1.5" value="settings"><Settings2 /> Settings</TabsTrigger>
           </TabsList>
 
@@ -493,6 +495,7 @@ export function ConfigView({ activeAgent }: { activeAgent: string }) {
             })}
           </TabsContent>
 
+          <TabsContent value="compute"><ComputeEditorView embedded /></TabsContent>
           <TabsContent value="agent" className="grid gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
