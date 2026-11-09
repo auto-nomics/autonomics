@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Add {
@@ -74,6 +74,18 @@ fn shift(element: &mut Value, dx: f64, dy: f64) {
     element["y"] = serde_json::json!(element["y"].as_f64().unwrap_or(0.0) + dy);
     touch(element);
 }
+fn path_label_center(points: &[[f64; 2]], x: f64, y: f64) -> [f64; 2] {
+    let middle = points.len() / 2;
+    let point = if points.len().is_multiple_of(2) {
+        [
+            (points[middle - 1][0] + points[middle][0]) / 2.,
+            (points[middle - 1][1] + points[middle][1]) / 2.,
+        ]
+    } else {
+        points[middle]
+    };
+    [x + point[0], y + point[1]]
+}
 fn translate_bindings(elements: &mut [Value], id: &str, dx: f64, dy: f64) {
     let mut labels = Vec::new();
     for arrow in elements
@@ -99,6 +111,11 @@ fn translate_bindings(elements: &mut [Value], id: &str, dx: f64, dy: f64) {
         if points.len() < 2 {
             continue;
         }
+        let before = path_label_center(
+            &points,
+            arrow["x"].as_f64().unwrap_or(0.),
+            arrow["y"].as_f64().unwrap_or(0.),
+        );
         if start && end {
             shift(arrow, dx, dy);
         } else {
@@ -132,14 +149,21 @@ fn translate_bindings(elements: &mut [Value], id: &str, dx: f64, dy: f64) {
             arrow["points"] = serde_json::json!(points);
         }
         if let Some(id) = arrow["id"].as_str() {
-            labels.push((id.to_owned(), if start && end { 1.0 } else { 0.5 }));
+            let after = path_label_center(
+                &points,
+                arrow["x"].as_f64().unwrap_or(0.),
+                arrow["y"].as_f64().unwrap_or(0.),
+            );
+            labels.push((id.to_owned(), after[0] - before[0], after[1] - before[1]));
         }
     }
-    for (id, factor) in labels {
+    for (id, dx, dy) in labels {
         for label in elements.iter_mut().filter(|element| {
             element["type"] == "text" && element["containerId"].as_str() == Some(&id)
         }) {
-            shift(label, dx * factor, dy * factor);
+            if dx != 0. || dy != 0. {
+                shift(label, dx, dy);
+            }
         }
     }
 }

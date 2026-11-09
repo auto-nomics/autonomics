@@ -9,26 +9,71 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use visualization::{Store, service::VisualizationService};
 
+// Machine-readable schemas mirror the actual domain types; the Rust adapter
+// retains Value to dispatch create, sketch and partial planning documents.
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ActionSchema {
+    Projects,
+    List,
+    Read,
+    ReadImage,
+    ReadPreview,
+    ReadMarkup,
+    ReadPlan,
+    SavePlan,
+    SketchPlan,
+    Create,
+    Sketch,
+    Propose,
+    Apply,
+}
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(untagged)]
+enum DocumentSchema {
+    Brief(visualization::planning::Brief),
+    Scene(SceneSchema),
+}
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+struct SceneSchema {
+    elements: Vec<Value>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    version: Option<u32>,
+    files: Option<std::collections::BTreeMap<String, Value>>,
+    #[serde(rename = "appState")]
+    app_state: Option<Value>,
+}
 #[tool(
     name = "visualization",
-    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, create, sketch, propose, apply. Plan the message, audience, scientific components and relationships with the user before creating a figure. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. Read returns object-linked review annotations as well as the scene; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
+    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries and object-linked review annotations as well as the scene; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
 )]
 pub struct FigureInput {
-    #[desc = "projects | list | read | read_image | read_preview | create | sketch | propose | apply"]
+    #[desc = "projects | list | read | read_image | read_preview | read_markup | read_plan | save_plan | sketch_plan | create | sketch | propose | apply"]
+    #[schemars(with = "ActionSchema")]
     pub action: String,
-    #[desc = "Project ID from active tab context or projects action"]
+    #[desc = "Opaque project ID: copy verbatim from the active tab context or projects. Never compose or guess IDs."]
     pub project_id: Option<String>,
-    #[desc = "Figure ID from tab context or list action"]
+    #[desc = "Opaque figure ID: copy verbatim from figure_id in the active tab context or list. Do not reuse any part of project_id."]
     pub figure_id: Option<String>,
     #[desc = "Image object ID from read; required for read_image"]
     pub element_id: Option<String>,
-    #[desc = "Required for create/sketch; proposal summary for propose"]
+    #[desc = "Review markup ID from read or the user handoff; required for read_markup"]
+    pub markup_id: Option<String>,
+    #[desc = "Expected planning version for save_plan/sketch_plan; use zero to create a brief, otherwise the version from read_plan"]
+    pub planning_version: Option<i64>,
+    #[desc = "Required for create/sketch; proposal summary required for propose and sketch_plan"]
     pub title: Option<String>,
-    #[desc = "For create: Excalidraw scene JSON. For sketch: plan {message,audience,nodes:[{id,label,column,row,shape:rectangle|ellipse,evidence:[]}],edges:[{from,to,label,inhibitory,evidence:[]}],assumptions:[]}. Grid positions must be unique. Sketch compiles to separate editable shapes, labels and arrows."]
+    #[desc = "For save_plan: partial scientific brief {message,audience,layout,nodes,edges,assumptions,relationship_note,questions:[{id,question,answer}]}; defaults allow missing facts to remain explicit issues. For create: Excalidraw scene JSON. For sketch: plan {message,audience,layout:grid|horizontal|vertical,nodes:[{id,label,column,row,shape:rectangle|ellipse,evidence:[]}],edges:[{from,to,label,inhibitory,evidence:[]}],assumptions:[]}. Choose layout grid (default), horizontal, or vertical. Grid requires unique column/row positions; automatic horizontal/vertical layouts require omitting column and row and derive layers from explicit relations, including feedback routes. Node input order resolves cycle layout ties. Long labels wrap and node heights adapt in automatic layouts. Sketch compiles to separate editable shapes, labels and arrows."]
+    #[schemars(with = "Option<DocumentSchema>")]
     pub document: Option<Value>,
-    #[desc = "Exact current revision returned by read; required for apply"]
+    #[desc = "Exact current revision returned by read; required for edits, save_plan and sketch_plan"]
     pub expected_revision: Option<i64>,
     #[desc = "Array of add/update/remove operations; required for apply. Updates are shallow merges and cannot change IDs."]
+    #[schemars(with = "Option<Vec<visualization::scene::Operation>>")]
     pub operations: Option<Value>,
 }
 struct FigureTool {
@@ -73,6 +118,16 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
         };
         visualization::scene::apply(&document, &[]).map_err(failure)?;
         if let Some(id) = input.figure_id {
+            if service
+                .store()
+                .planning(&project, &id)
+                .map_err(failure)?
+                .is_some()
+            {
+                return Err(invalid(
+                    "This figure has a saved scientific brief; use read_plan/save_plan/sketch_plan to preserve its clarification history",
+                ));
+            }
             if input.action != "sketch" {
                 return Err(invalid(
                     "create makes a separate figure; use sketch or propose for an existing figure",
@@ -100,6 +155,47 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
     }
     let id = required(input.figure_id, "figure_id is required")?;
     match input.action.as_str() {
+        "read_plan" => Ok(json!(
+            service.store().planning(&project, &id).map_err(failure)?
+        )),
+        "save_plan" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let version = input
+                .planning_version
+                .ok_or_else(|| invalid("planning_version is required (zero for a new brief)"))?;
+            let brief: visualization::planning::Brief = serde_json::from_value(
+                input
+                    .document
+                    .ok_or_else(|| invalid("document is required"))?,
+            )
+            .map_err(failure)?;
+            Ok(json!(
+                service
+                    .store_mut()
+                    .save_planning(&project, &id, revision, version, &brief)
+                    .map_err(failure)?
+            ))
+        }
+        "sketch_plan" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let version = input
+                .planning_version
+                .ok_or_else(|| invalid("planning_version is required"))?;
+            let summary = required(input.title, "title is required for the planning proposal")?;
+            let mut proposal = json!(
+                service
+                    .store_mut()
+                    .planned_proposal(&project, &id, revision, version, &summary)
+                    .map_err(failure)?
+            );
+            proposal.as_object_mut().unwrap().remove("document");
+            Ok(proposal)
+        }
+
         "read" => {
             let metadata = service.store().get(&project, &id).map_err(failure)?;
             let mut scene = service
@@ -117,9 +213,29 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                     }
                 }
             }
+            let planning=service.store().planning(&project,&id).map_err(failure)?.map(|p|json!({"version":p.version,"based_on_revision":p.based_on_revision,"status":p.status,"issue_count":p.issues.len(),"proposal_id":p.proposal_id}));
             Ok(
-                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"annotations":service.store().annotations(&project,&id).map_err(failure)?}),
+                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"annotations":service.store().annotations(&project,&id).map_err(failure)?,"markups":service.store().markups(&project,&id).map_err(failure)?,"planning":planning}),
             )
+        }
+        "read_markup" => {
+            let metadata = service.store().get(&project, &id).map_err(failure)?;
+            if input
+                .expected_revision
+                .is_some_and(|revision| revision != metadata.revision)
+            {
+                return Err(failure(visualization::Error::Conflict));
+            }
+            let markup_id = required(input.markup_id, "markup_id is required")?;
+            let mut markup = json!(
+                service
+                    .store()
+                    .markup(&project, &id, &markup_id)
+                    .map_err(failure)?
+            );
+            markup["current_revision"] = json!(metadata.revision);
+            markup["historical"] = json!(markup["at_revision"] != metadata.revision);
+            Ok(markup)
         }
         "read_preview" => {
             let metadata = service.store().get(&project, &id).map_err(failure)?;
@@ -204,7 +320,10 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
 impl ToolFunction for FigureTool {
     type Input = FigureInput;
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let image = input.action == "read_image" || input.action == "read_preview";
+        let image = matches!(
+            input.action.as_str(),
+            "read_image" | "read_preview" | "read_markup"
+        );
         let path = self.path.clone();
         let mut value = tokio::task::spawn_blocking(move || execute(path, input))
             .await
@@ -250,6 +369,149 @@ pub fn registrations(path: PathBuf) -> Vec<ToolRegistration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exported_schema_exposes_typed_briefs_and_edit_operations() {
+        fn property<'a>(value: &'a Value, name: &str) -> Option<&'a Value> {
+            if let Some(found) = value.get("properties").and_then(|p| p.get(name)) {
+                return Some(found);
+            }
+            match value {
+                Value::Object(o) => o.values().find_map(|v| property(v, name)),
+                Value::Array(a) => a.iter().find_map(|v| property(v, name)),
+                _ => None,
+            }
+        }
+        let tool = registrations("unused.sqlite".into()).remove(0);
+        let schema = serde_json::to_value(tool.definition.input_schema).unwrap();
+        assert!(
+            schema["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("sketch_plan"))
+        );
+        let document = &schema["properties"]["document"];
+        assert_eq!(property(document, "edges").unwrap()["type"], "array");
+        let question = property(document, "questions").unwrap();
+        assert_eq!(question["type"], "array");
+        assert_eq!(property(question, "answer").unwrap()["type"], "string");
+        assert_eq!(property(document, "from").unwrap()["type"], "string");
+        assert!(
+            schema["properties"]["title"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("sketch_plan")
+        );
+        assert!(!schema.to_string().contains("\"$ref\""));
+    }
+    #[tokio::test]
+    async fn planning_tools_preserve_answers_and_require_a_ready_version_for_sketches() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+            .unwrap();
+        let tool = registrations(path).remove(0);
+        let base = json!({"project_id":"p","figure_id":figure.id,"expected_revision":1});
+        let mut save = base.clone();
+        save["action"] = json!("save_plan");
+        save["planning_version"] = json!(0);
+        save["document"] = json!({"message":"A generic signaling example","audience":"Researchers","questions":[{"id":"q1","question":"Which components?"}]});
+        let saved =
+            serde_json::to_value(tool.implementation.execute(save.clone()).await.unwrap()).unwrap();
+        assert_eq!(saved["content"]["status"], "needs_clarification");
+        let mut generate = base.clone();
+        generate["action"] = json!("sketch_plan");
+        generate["planning_version"] = json!(1);
+        generate["title"] = json!("Planned sketch");
+        assert!(tool.implementation.execute(generate.clone()).await.is_err());
+        let mut read = base.clone();
+        read["action"] = json!("read_plan");
+        let read = serde_json::to_value(tool.implementation.execute(read).await.unwrap()).unwrap();
+        assert_eq!(
+            read["content"]["document"]["questions"][0]["question"],
+            "Which components?"
+        );
+        let mut brief = read["content"]["document"].clone();
+        brief["questions"][0]["answer"] = json!("A single generic cell");
+        brief["nodes"] = json!([{"id":"cell","label":"Generic cell"}]);
+        save["planning_version"] = json!(1);
+        save["document"] = brief;
+        tool.implementation.execute(save.clone()).await.unwrap();
+        assert!(tool.implementation.execute(save).await.is_err());
+        generate["planning_version"] = json!(2);
+        let proposal =
+            serde_json::to_value(tool.implementation.execute(generate).await.unwrap()).unwrap();
+        assert!(proposal["content"].get("document").is_none());
+        let mut bypass = base.clone();
+        bypass["action"] = json!("sketch");
+        bypass["title"] = json!("Bypass");
+        bypass["document"] = json!({"message":"Other","audience":"Researchers","layout":"horizontal","nodes":[{"id":"x","label":"Other cell"}]});
+        assert!(tool.implementation.execute(bypass).await.is_err());
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        store
+            .accept_proposal("p", &figure.id, proposal["content"]["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            store.revision("p", &figure.id, 2).unwrap().document["elements"][0]["customData"]["planningSource"]
+                ["document"]["questions"][0]["answer"],
+            "A single generic cell"
+        );
+    }
+    #[tokio::test]
+    async fn markup_vision_keeps_exact_review_revision_and_does_not_leak_bytes_into_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+            .unwrap();
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let review = store
+            .create_markup(
+                "p",
+                &figure.id,
+                1,
+                "Add a missing step",
+                &[visualization::markup::Stroke {
+                    kind: visualization::markup::Kind::Draw,
+                    points: vec![[1., 2.], [30., 40.]],
+                }],
+                png,
+            )
+            .unwrap();
+        store
+            .save("p", &figure.id, 1, "Changed", &json!({"elements":[]}))
+            .unwrap();
+        let tool = registrations(path).remove(0);
+        let read = tool
+            .implementation
+            .execute(json!({"action":"read","project_id":"p","figure_id":figure.id}))
+            .await
+            .unwrap();
+        let read = serde_json::to_value(read).unwrap();
+        assert_eq!(read["content"]["markups"][0]["id"], review.id);
+        assert!(!read.to_string().contains("iVBOR"));
+        let input = json!({"action":"read_markup","project_id":"p","figure_id":figure.id,"markup_id":review.id,"expected_revision":2});
+        let result =
+            serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+                .unwrap();
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["source"]["media_type"], "image/png");
+        let caption: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(caption["at_revision"], 1);
+        assert_eq!(caption["current_revision"], 2);
+        assert_eq!(caption["historical"], true);
+        let mut stale = input.clone();
+        stale["expected_revision"] = json!(1);
+        assert!(tool.implementation.execute(stale).await.is_err());
+        let mut other = input;
+        other["project_id"] = json!("other");
+        assert!(tool.implementation.execute(other).await.is_err());
+    }
     #[tokio::test]
     async fn sketch_in_an_existing_figure_proposes_without_creating_another_record() {
         let dir = tempfile::tempdir().unwrap();
@@ -265,7 +527,7 @@ mod tests {
             )
             .unwrap();
         let tool = registrations(path).remove(0);
-        let input = |revision| json!({"action":"sketch","project_id":"p","figure_id":figure.id,"expected_revision":revision,"title":"Cell overview","document":{"message":"Show a cell","audience":"researchers","nodes":[{"id":"cell","label":"Cell","row":0,"column":0}]}});
+        let input = |revision| json!({"action":"sketch","project_id":"p","figure_id":figure.id,"expected_revision":revision,"title":"Cell overview","document":{"message":"Show a cell","audience":"researchers","layout":"horizontal","nodes":[{"id":"cell","label":"Cell"}]}});
         assert!(tool.implementation.execute(input(0)).await.is_err());
         let proposal =
             serde_json::to_value(tool.implementation.execute(input(1)).await.unwrap()).unwrap();
@@ -380,6 +642,8 @@ mod tests {
             project_id: Some("p".into()),
             figure_id: Some(figure.id.clone()),
             element_id: None,
+            markup_id: None,
+            planning_version: None,
             title: None,
             document: None,
             expected_revision: Some(revision),

@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CanvasPreview } from "./canvas-preview";
 import type { ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
 import { gatewayRequest } from "@/gateway";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 type Proposal = { id: string; summary: string; base_revision: number; status: string; document: ExcalidrawInitialDataState };
-export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted }: { projectId: string; canvasId: string; isDirty: () => boolean; onAccepted: () => void }) {
+export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted, request }: { projectId: string; canvasId: string; isDirty: () => boolean; onAccepted: () => void; request?: { id: string } }) {
   const [items, setItems] = useState<Proposal[]>([]);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<Proposal | null>(null);
@@ -13,6 +13,24 @@ export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted }: { 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const path = `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/proposals`;
+  useEffect(() => {
+    if (!request) return;
+    let cancelled = false;
+    setOpen(true); setBusy(true); setError(""); setSelected(null); setOriginal(null);
+    void (async () => {
+      try {
+        const items = (await gatewayRequest("GET", path) as Proposal[]).filter(item => item.status === "pending");
+        if (cancelled) return; setItems(items);
+        const item = items.find(item => item.id === request.id);
+        if (!item) throw new Error("提案已不存在或已处理，请刷新列表。");
+        setSelected(item);
+        const revision = await gatewayRequest("GET", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/revisions/${item.base_revision}`) as { document: ExcalidrawInitialDataState };
+        if (!cancelled) setOriginal(revision.document);
+      } catch (cause) { if (!cancelled) { setSelected(null); setError(String(cause)); } }
+      finally { if (!cancelled) setBusy(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [request, path, projectId, canvasId]);
   const summary = useMemo(() => {
     if (!original || !selected) return "";
     const before = new Map((original.elements ?? []).filter(element => !element.isDeleted).map(element => [element.id, element]));

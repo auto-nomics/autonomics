@@ -61,6 +61,18 @@ pub fn router(store: Store) -> Router {
             "/projects/{project}/figures/{id}/revisions/{revision}",
             get(revision),
         )
+        .route(
+            "/projects/{project}/figures/{id}/planning",
+            get(planning).put(save_planning),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/planning/revisions/{version}",
+            get(planning_revision),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/planning/sketch",
+            post(planning_sketch),
+        )
         .route("/projects/{project}/figures/{id}/operations", post(apply))
         .route("/projects/{project}/figures/{id}/revisions", get(revisions))
         .route(
@@ -74,6 +86,18 @@ pub fn router(store: Store) -> Router {
         .route(
             "/projects/{project}/figures/{id}/annotations/{annotation}/resolve",
             post(resolve_annotation),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/markups",
+            get(markups).post(create_markup),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/markups/{markup}",
+            get(markup),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/markups/{markup}/resolve",
+            post(resolve_markup),
         )
         .route(
             "/projects/{project}/figures/{id}/proposals",
@@ -131,7 +155,11 @@ async fn create_figure(
     .await
 }
 async fn current(State(s): State<Shared>, Path((project, id)): Path<(String, String)>) -> Response {
-    work(s,move |service|Ok(json!({"metadata":service.store().get(&project,&id)?,"scene":service.current(&project,&id)?,"annotations":service.store().annotations(&project,&id)?}))).await
+    work(s, move |service| {
+        let metadata = service.store().get(&project, &id)?;
+        let scene = service.store().revision(&project, &id, metadata.revision)?;
+        Ok(json!({"metadata":metadata,"scene":scene,"annotations":service.store().annotations(&project,&id)?}))
+    }).await
 }
 #[derive(Deserialize)]
 struct SaveInput {
@@ -230,6 +258,210 @@ mod tests {
         let status = response.status().as_u16();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    #[tokio::test]
+    async fn scientific_planning_persists_clarification_before_a_reviewable_sketch() {
+        let app = router(Store::in_memory().unwrap());
+        request(
+            app.clone(),
+            "POST",
+            "/projects",
+            json!({"id":"p","title":"Study"}),
+        )
+        .await;
+        let (_, figure) = request(
+            app.clone(),
+            "POST",
+            "/projects/p/figures",
+            json!({"title":"Figure","format":"excalidraw/v2","document":{"elements":[]}}),
+        )
+        .await;
+        let path = format!("/projects/p/figures/{}", figure["id"].as_str().unwrap());
+        assert_eq!(
+            request(app.clone(), "GET", &format!("{path}/planning"), Value::Null)
+                .await
+                .1,
+            Value::Null
+        );
+        let input = json!({"expected_revision":1,"expected_plan_version":0,"document":{"message":"Conceptual cell","audience":"Researchers","nodes":[{"id":"cell","label":"Cell"}],"questions":[{"id":"q1","question":"Which cell?"}]}});
+        let (status, plan) = request(
+            app.clone(),
+            "PUT",
+            &format!("{path}/planning"),
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(plan["status"], "needs_clarification");
+        let generate =
+            json!({"expected_revision":1,"expected_plan_version":1,"summary":"Planned sketch"});
+        assert_eq!(
+            request(
+                app.clone(),
+                "POST",
+                &format!("{path}/planning/sketch"),
+                generate.clone()
+            )
+            .await
+            .0,
+            400
+        );
+        let mut edited = input.clone();
+        edited["expected_plan_version"] = json!(1);
+        edited["document"]["questions"][0]["answer"] = json!("Generic conceptual cell");
+        assert_eq!(
+            request(app.clone(), "PUT", &format!("{path}/planning"), edited)
+                .await
+                .1["status"],
+            "ready"
+        );
+        assert_eq!(
+            request(app.clone(), "PUT", &format!("{path}/planning"), input)
+                .await
+                .0,
+            409
+        );
+        let (_, historical) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/planning/revisions/1"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(historical["document"]["questions"][0]["answer"], "");
+        let mut generate = generate;
+        generate["expected_plan_version"] = json!(2);
+        let (status, proposal) = request(
+            app.clone(),
+            "POST",
+            &format!("{path}/planning/sketch"),
+            generate,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(proposal.get("document").is_none());
+        assert_eq!(
+            request(app.clone(), "GET", &path, Value::Null).await.1["metadata"]["revision"],
+            1
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!("{path}/planning").replace("/p/", "/other/"),
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "POST",
+                &format!(
+                    "{path}/proposals/{}/accept",
+                    proposal["id"].as_str().unwrap()
+                ),
+                Value::Null
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            request(app, "GET", &path, Value::Null).await.1["scene"]["document"]["elements"][0]["customData"]
+                ["planningSource"]["version"],
+            2
+        );
+    }
+    #[tokio::test]
+    async fn markups_are_separate_version_bound_review_records() {
+        let app = router(Store::in_memory().unwrap());
+        request(
+            app.clone(),
+            "POST",
+            "/projects",
+            json!({"id":"p","title":"Study"}),
+        )
+        .await;
+        let (_, figure) = request(app.clone(), "POST", "/projects/p/figures", json!({"title":"Figure","format":"excalidraw/v2","document":{"elements":[{"id":"cell"}]}})).await;
+        let path = format!("/projects/p/figures/{}", figure["id"].as_str().unwrap());
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let input = json!({"expected_revision":1,"note":"Remove crossed component","strokes":[{"kind":"cross","points":[[10,10],[40,40]]}],"dataURL":png});
+        let (status, review) = request(
+            app.clone(),
+            "POST",
+            &format!("{path}/markups"),
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(review.get("dataURL").is_none());
+        let review_path = format!("{path}/markups/{}", review["id"].as_str().unwrap());
+        assert_eq!(
+            request(app.clone(), "GET", &review_path, Value::Null)
+                .await
+                .1["dataURL"],
+            png
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &review_path.replace("/p/", "/other/"),
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+        assert_eq!(
+            request(app.clone(), "GET", &path, Value::Null).await.1["metadata"]["revision"],
+            1
+        );
+        request(
+            app.clone(),
+            "PUT",
+            &path,
+            json!({"expected_revision":1,"title":"Edited","document":{"elements":[]}}),
+        )
+        .await;
+        assert_eq!(
+            request(app.clone(), "POST", &format!("{path}/markups"), input)
+                .await
+                .0,
+            409
+        );
+        assert_eq!(
+            request(app.clone(), "GET", &review_path, Value::Null)
+                .await
+                .1["at_revision"],
+            1
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "POST",
+                &format!("{review_path}/resolve"),
+                Value::Null
+            )
+            .await
+            .0,
+            200
+        );
+        assert_eq!(
+            request(app.clone(), "GET", &format!("{path}/markups"), Value::Null)
+                .await
+                .1[0]["status"],
+            "resolved"
+        );
+        assert_eq!(
+            request(app, "GET", &format!("{path}/revisions/1"), Value::Null)
+                .await
+                .1["document"]["elements"][0]["id"],
+            "cell"
+        );
     }
     #[tokio::test]
     async fn history_lists_metadata_and_restores_as_a_new_revision() {
@@ -619,6 +851,127 @@ async fn revisions(
             query.before,
             query.limit.unwrap_or(20)
         )?))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkupInput {
+    expected_revision: i64,
+    note: String,
+    strokes: Vec<visualization::markup::Stroke>,
+    #[serde(rename = "dataURL")]
+    data_url: String,
+}
+async fn markups(State(s): State<Shared>, Path((project, id)): Path<(String, String)>) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().markups(&project, &id)?))
+    })
+    .await
+}
+async fn markup(
+    State(s): State<Shared>,
+    Path((project, id, markup)): Path<(String, String, String)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().markup(&project, &id, &markup)?))
+    })
+    .await
+}
+async fn create_markup(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<MarkupInput>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().create_markup(
+            &project,
+            &id,
+            input.expected_revision,
+            &input.note,
+            &input.strokes,
+            &input.data_url
+        )?))
+    })
+    .await
+}
+async fn resolve_markup(
+    State(s): State<Shared>,
+    Path((project, id, markup)): Path<(String, String, String)>,
+) -> Response {
+    work(s, move |service| {
+        service.store().resolve_markup(&project, &id, &markup)?;
+        Ok(json!({"resolved":true}))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanningInput {
+    expected_revision: i64,
+    expected_plan_version: i64,
+    document: visualization::planning::Brief,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanningSketchInput {
+    expected_revision: i64,
+    expected_plan_version: i64,
+    summary: String,
+}
+async fn planning(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().planning(&project, &id)?))
+    })
+    .await
+}
+async fn planning_revision(
+    State(s): State<Shared>,
+    Path((project, id, version)): Path<(String, String, i64)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(
+            service.store().planning_revision(&project, &id, version)?
+        ))
+    })
+    .await
+}
+async fn save_planning(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<PlanningInput>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store_mut().save_planning(
+            &project,
+            &id,
+            input.expected_revision,
+            input.expected_plan_version,
+            &input.document
+        )?))
+    })
+    .await
+}
+async fn planning_sketch(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<PlanningSketchInput>,
+) -> Response {
+    work(s, move |service| {
+        let mut proposal = json!(service.store_mut().planned_proposal(
+            &project,
+            &id,
+            input.expected_revision,
+            input.expected_plan_version,
+            &input.summary
+        )?);
+        proposal.as_object_mut().unwrap().remove("document");
+        Ok(proposal)
     })
     .await
 }

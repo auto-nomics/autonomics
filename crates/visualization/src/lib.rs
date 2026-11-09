@@ -2,6 +2,9 @@
 pub mod annotation;
 pub mod error;
 pub mod image;
+mod layout;
+pub mod markup;
+pub mod planning;
 pub mod preview;
 pub mod proposal;
 pub mod scene;

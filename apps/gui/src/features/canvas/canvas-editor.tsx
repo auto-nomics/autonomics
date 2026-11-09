@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 import { patchEditorState } from "@/app/workbench/workbench-store";
 import type { EditorContext } from "@/app/workbench/editor-registry";
+import { CanvasPlanning } from "./canvas-planning";
+import { CanvasMarkups } from "./canvas-markups";
 import { CanvasHistory } from "./canvas-history";
 import { CanvasCircleSelect } from "./canvas-circle-select";
 import { CanvasProposals } from "./canvas-proposals";
@@ -29,12 +31,14 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const revision = useRef<number | undefined>(undefined);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const baseline = useRef<string | null>(null);
+  const fitted = useRef(false);
   const titleRef = useRef("");
   const saving = useRef(false);
   const latestTitle = useRef("未命名画布");
   const [title, setTitle] = useState("未命名画布");
   const [error, setError] = useState("");
   const [circleSelect, setCircleSelect] = useState(false);
+  const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
   const [showAgent, setShowAgent] = useState(false);
   const [showBioArt, setShowBioArt] = useState(false);
   const [imagesReady, setImagesReady] = useState(true);
@@ -107,6 +111,12 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     const instance = api.current;
     return saving.current || !instance || serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current;
   };
+  async function ensureSaved() {
+    if (saving.current) return false;
+    if (!hasUnsavedChanges()) return true;
+    if (!await save()) return false;
+    return !hasUnsavedChanges();
+  }
   return <section aria-label="画布编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
     if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); void save(); }
@@ -116,7 +126,9 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <span className="text-xs text-muted-foreground">{projectId ? "保存在项目中" : "旧版本地画布"}</span>
       {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
       {projectId && <Button size="sm" variant={circleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setCircleSelect(value => !value)}>{circleSelect ? "取消圈选" : "圈选批注"}</Button>}
-      {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} />}
+      {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} />}
+      {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
       {projectId && <Button size="sm" variant="outline" onClick={() => setShowAgent(value => !value)}>Agent 绘图</Button>}
       <Button size="sm" variant="outline" onClick={() => setShowBioArt(value => !value)}>BioArt 素材</Button>
       {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
@@ -130,6 +142,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => { api.current = instance; }} langCode="zh-CN" handleKeyboardGlobally={false} autoFocus onChange={(elements, appState, files) => {
+        if (!fitted.current && initial?.elements?.length && elements.length && api.current) {
+          fitted.current = true;
+          api.current.scrollToContent(elements, { fitToViewport: true, maxZoom: 1, viewportZoomFactor: 0.8 });
+        }
         setImagesReady(elements.every(element => element.isDeleted || element.type !== "image" || Boolean(element.fileId && files[element.fileId])));
         const scene = serializeAsJSON(elements, appState, files, "local");
         if (baseline.current === null) { baseline.current = scene; dirty(false, elements.filter(element => !element.isDeleted).length, Object.keys(files).length); return; }
@@ -144,11 +160,6 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {circleSelect && <CanvasCircleSelect getApi={() => api.current} onDone={(count, message) => {
         setCircleSelect(false); if (message) setError(message); else setError(""); if (count) setShowAgent(true);
       }} />}
-    </div>{showAgent && projectId && <CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={async () => {
-      if (saving.current) return false;
-      if (!await save()) return false;
-      const instance = api.current;
-      return Boolean(instance && serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") === baseline.current && latestTitle.current === titleRef.current);
-    }} />}{showBioArt && <BioArtPanel getApi={() => api.current} />}</div>}
+    </div>{showAgent && projectId && <CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}{showBioArt && <BioArtPanel getApi={() => api.current} />}</div>}
   </section>;
 }

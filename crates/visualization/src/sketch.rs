@@ -1,39 +1,53 @@
 //! Structured scientific plans compiled into editable Excalidraw scenes.
+use crate::layout;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub message: String,
     pub audience: String,
+    #[serde(default)]
+    pub layout: Layout,
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub assumptions: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: String,
     pub label: String,
-    pub column: u16,
-    pub row: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub row: Option<u16>,
     #[serde(default)]
     pub shape: Shape,
     #[serde(default)]
     pub evidence: Vec<String>,
 }
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(
+    schemars::JsonSchema, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Layout {
+    #[default]
+    Grid,
+    Horizontal,
+    Vertical,
+}
+#[derive(schemars::JsonSchema, Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
     #[default]
     Rectangle,
     Ellipse,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
     pub from: String,
@@ -56,7 +70,7 @@ fn text(id: &str, label: &str, x: f64, y: f64, width: f64) -> Value {
     value.as_object_mut().unwrap().extend(json!({"text":label,"originalText":label,"fontSize":20,"fontFamily":2,"textAlign":"center","verticalAlign":"middle","containerId":null,"autoResize":false,"lineHeight":1.25}).as_object().unwrap().clone());
     value
 }
-/// Grid coordinates express author intent; no scientific relationship is inferred.
+/// Explicit grid or automatic layered layout; no scientific relationship is inferred.
 /// Output retains the plan so an agent can inspect assumptions and evidence later.
 pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
     let fail = |message: &str| InvalidPlan(message.into());
@@ -66,31 +80,11 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
     if plan.nodes.is_empty() || plan.nodes.len() > 100 || plan.edges.len() > 200 {
         return Err(fail("requires 1..100 nodes and at most 200 edges"));
     }
-    let mut positions = HashMap::new();
-    let mut cells = std::collections::HashSet::new();
-    for node in &plan.nodes {
-        if node.id.trim().is_empty()
-            || node.label.trim().is_empty()
-            || node.label.chars().count() > 120
-            || node.column > 30
-            || node.row > 30
-        {
-            return Err(fail("invalid node id, label or grid position"));
-        }
-        if positions
-            .insert(
-                node.id.clone(),
-                (f64::from(node.column) * 400.0, f64::from(node.row) * 200.0),
-            )
-            .is_some()
-            || !cells.insert((node.column, node.row))
-        {
-            return Err(fail("node IDs and grid positions must be unique"));
-        }
-    }
+    let drawing = layout::arrange(plan)?;
     let mut elements = Vec::new();
     for (index, node) in plan.nodes.iter().enumerate() {
-        let (x, y) = positions[&node.id];
+        let rect = &drawing.boxes[index];
+        let (x, y) = (rect.x, rect.y);
         let id = format!("node-{index}");
         let label_id = format!("label-{index}");
         let mut shape = base(
@@ -101,49 +95,46 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
             },
             x,
             y,
-            220.0,
-            100.0,
+            rect.width,
+            rect.height,
         );
         shape["backgroundColor"] = json!("#e0f2fe");
         shape["boundElements"] = json!([{"id":label_id,"type":"text"}]);
         shape["customData"] = json!({"scientificId":node.id,"evidence":node.evidence});
         if index == 0 {
             shape["customData"]["scientificPlan"] = json!(plan);
+            shape["customData"]["layoutInfo"] =
+                json!({"kind":plan.layout,"feedback_edges":drawing.feedback_edges});
         }
-        let mut label = text(&label_id, &node.label, x + 10.0, y + 25.0, 200.0);
+        let mut label = text(
+            &label_id,
+            &rect.label,
+            x + (rect.width - rect.label_width) / 2.,
+            y + (rect.height - rect.label_height) / 2.,
+            rect.label_width,
+        );
+        label["originalText"] = json!(node.label);
+        label["height"] = json!(rect.label_height);
         label["containerId"] = json!(id);
         elements.extend([shape, label]);
     }
     for (index, edge) in plan.edges.iter().enumerate() {
-        let &(x1, y1) = positions
-            .get(&edge.from)
-            .ok_or_else(|| fail("edge source does not exist"))?;
-        let &(x2, y2) = positions
-            .get(&edge.to)
-            .ok_or_else(|| fail("edge target does not exist"))?;
-        if edge.from == edge.to {
-            return Err(fail("self edges require explicit manual layout"));
-        }
-        let (sx, sy, ex, ey) = if (x2 - x1).abs() >= (y2 - y1).abs() {
-            if x2 > x1 {
-                (x1 + 230.0, y1 + 50.0, x2 - 10.0, y2 + 50.0)
-            } else {
-                (x1 - 10.0, y1 + 50.0, x2 + 230.0, y2 + 50.0)
-            }
-        } else if y2 > y1 {
-            (x1 + 110.0, y1 + 110.0, x2 + 110.0, y2 - 10.0)
-        } else {
-            (x1 + 110.0, y1 - 10.0, x2 + 110.0, y2 + 110.0)
-        };
+        let route = &drawing.routes[index];
+        let [sx, sy] = route[0];
+        let [ex, ey] = *route.last().unwrap();
+        let min_x = route.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let max_x = route.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = route.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let max_y = route.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
         let mut arrow = base(
             &format!("edge-{index}"),
             "arrow",
             sx,
             sy,
-            (ex - sx).abs(),
-            (ey - sy).abs(),
+            max_x - min_x,
+            max_y - min_y,
         );
-        arrow.as_object_mut().unwrap().extend(json!({"points":[[0,0],[ex-sx,ey-sy]],"startBinding":null,"endBinding":null,"startArrowhead":null,"endArrowhead":if edge.inhibitory{"bar"}else{"arrow"},"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence}}).as_object().unwrap().clone());
+        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-sx,p[1]-sy]).collect::<Vec<_>>(),"startBinding":null,"endBinding":null,"startArrowhead":null,"endArrowhead":if edge.inhibitory{"bar"}else{"arrow"},"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence}}).as_object().unwrap().clone());
         let from_index = plan
             .nodes
             .iter()
@@ -169,11 +160,16 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         }
         elements.push(arrow);
         if !edge.label.is_empty() {
+            let middle = route.len() / 2;
+            let [lx, ly] = [
+                (route[middle - 1][0] + route[middle][0]) / 2.,
+                (route[middle - 1][1] + route[middle][1]) / 2.,
+            ];
             let mut label = text(
                 &format!("edge-label-{index}"),
                 &edge.label,
-                (sx + ex) / 2.0 - 90.0,
-                (sy + ey) / 2.0 - 55.0,
+                lx - 90.0,
+                ly - 25.0,
                 180.0,
             );
             label["containerId"] = json!(arrow_id);
@@ -194,6 +190,9 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
                 wrapped.push(character);
                 line_width += char_width;
             }
+            if plan.layout != Layout::Grid {
+                wrapped = layout::wrap(&edge.label, available, 16.);
+            }
             label["fontSize"] = json!(16);
             label["text"] = json!(wrapped);
             label["width"] = json!(
@@ -204,7 +203,12 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
                         .sum::<f64>()
                 )
             );
+            if plan.layout != Layout::Grid {
+                label["width"] = json!(layout::text_width(&wrapped, 16.).min(available).max(1.));
+            }
             label["height"] = json!(wrapped.lines().count().max(1) as f64 * 20.0);
+            label["x"] = json!(lx - label["width"].as_f64().unwrap() / 2.);
+            label["y"] = json!(ly - label["height"].as_f64().unwrap() / 2.);
             elements.push(label);
         }
     }
@@ -215,6 +219,31 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn short_relation_labels_leave_a_visible_arrow_body() {
+        for direction in ["horizontal", "vertical"] {
+            let plan:Plan=serde_json::from_value(json!({"message":"Explicit binding","audience":"Researchers","layout":direction,"nodes":[{"id":"a","label":"Ligand"},{"id":"b","label":"Receptor"}],"edges":[{"from":"a","to":"b","label":"binds"}]})).unwrap();
+            let scene = compile(&plan).unwrap();
+            let arrow = &scene["elements"][4];
+            let label = &scene["elements"][5];
+            let length = arrow["width"]
+                .as_f64()
+                .unwrap()
+                .hypot(arrow["height"].as_f64().unwrap());
+            let occupied = label[if direction == "horizontal" {
+                "width"
+            } else {
+                "height"
+            }]
+            .as_f64()
+            .unwrap();
+            assert!(
+                occupied < length / 2.,
+                "short label must not mask most of the arrow"
+            );
+            assert_eq!(label["originalText"], "binds");
+        }
+    }
     #[test]
     fn plan_compiles_to_separate_editable_objects() {
         let plan:Plan=serde_json::from_value(json!({"message":"Signal activates response","audience":"researchers","nodes":[{"id":"a","label":"Ligand","column":0,"row":0},{"id":"b","label":"Receptor","column":1,"row":0,"shape":"ellipse"}],"edges":[{"from":"a","to":"b","label":"binds"}],"assumptions":["schematic, not to scale"]})).unwrap();
@@ -235,7 +264,7 @@ mod tests {
         invalid.nodes[1].id = "a".into();
         assert!(compile(&invalid).is_err());
         invalid = plan;
-        invalid.nodes[1].column = 0;
+        invalid.nodes[1].column = Some(0);
         assert!(compile(&invalid).is_err());
     }
 }

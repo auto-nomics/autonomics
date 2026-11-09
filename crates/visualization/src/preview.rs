@@ -10,6 +10,26 @@ pub struct Preview {
     #[serde(rename = "dataURL")]
     pub data_url: String,
 }
+pub(crate) fn validate_png_preview(data_url: &str) -> Result<()> {
+    let data = data_url
+        .strip_prefix("data:image/png;base64,")
+        .ok_or(Error::Invalid("preview must be a PNG data URL"))?;
+    if data.len() > 6 * 1024 * 1024 {
+        return Err(Error::Invalid("preview exceeds vision transfer limit"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|_| Error::Invalid("preview base64"))?;
+    if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR" {
+        return Err(Error::Invalid("preview PNG header"));
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    if width == 0 || height == 0 || width > 1280 || height > 1280 {
+        return Err(Error::Invalid("preview dimensions (1..1280)"));
+    }
+    Ok(())
+}
 impl Store {
     pub fn save_preview(
         &self,
@@ -19,24 +39,7 @@ impl Store {
         data_url: &str,
     ) -> Result<()> {
         self.get(project, id)?;
-        let data = data_url
-            .strip_prefix("data:image/png;base64,")
-            .ok_or(Error::Invalid("preview must be a PNG data URL"))?;
-        if data.len() > 6 * 1024 * 1024 {
-            return Err(Error::Invalid("preview exceeds vision transfer limit"));
-        }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|_| Error::Invalid("preview base64"))?;
-        if bytes.len() < 24 || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &bytes[12..16] != b"IHDR"
-        {
-            return Err(Error::Invalid("preview PNG header"));
-        }
-        let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
-        let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
-        if width == 0 || height == 0 || width > 1280 || height > 1280 {
-            return Err(Error::Invalid("preview dimensions (1..1280)"));
-        }
+        validate_png_preview(data_url)?;
         if self.connection.execute("INSERT INTO visualization_previews SELECT ?1,?2,?3 WHERE EXISTS(SELECT 1 FROM visualizations WHERE id=?1 AND project_id=?4 AND revision=?2) ON CONFLICT(visualization_id,revision) DO UPDATE SET data_url=excluded.data_url",params![id,revision,data_url,project])?==0 {return Err(Error::Conflict);}
         Ok(())
     }

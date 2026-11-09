@@ -28,6 +28,9 @@ ppt-base = { path = "../ppt-base", features = ["vfs"] }
 ppt-types = { path = "../ppt-types" }
 
 [dev-dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+rusqlite = "0.40.1"
 visualization-tools = { path = "../visualization-tools" }
 turso.workspace = true
 async-trait.workspace = true

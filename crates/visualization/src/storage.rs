@@ -54,10 +54,24 @@ impl Store {
               id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               base_revision INTEGER NOT NULL, summary TEXT NOT NULL, document TEXT NOT NULL,
               status TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS visualization_plans (
+              visualization_id TEXT PRIMARY KEY REFERENCES visualizations(id) ON DELETE CASCADE,
+              version INTEGER NOT NULL, based_on_revision INTEGER NOT NULL, document TEXT NOT NULL,
+              proposal_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS visualization_plan_history (
+              visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
+              version INTEGER NOT NULL, based_on_revision INTEGER NOT NULL, document TEXT NOT NULL, created_at TEXT NOT NULL,
+              PRIMARY KEY(visualization_id,version));
             CREATE TABLE IF NOT EXISTS visualization_annotations (
               id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               at_revision INTEGER NOT NULL, element_ids TEXT NOT NULL, note TEXT NOT NULL,
               status TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS visualization_markups (
+              id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL, at_revision INTEGER NOT NULL,
+              note TEXT NOT NULL, strokes TEXT NOT NULL, preview TEXT NOT NULL,
+              status TEXT NOT NULL, created_at TEXT NOT NULL,
+              FOREIGN KEY(visualization_id, at_revision) REFERENCES visualization_revisions(visualization_id, revision) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS visualization_markups_figure ON visualization_markups(visualization_id, created_at);
             CREATE TABLE IF NOT EXISTS visualization_previews (
               visualization_id TEXT NOT NULL, revision INTEGER NOT NULL, data_url TEXT NOT NULL,
               PRIMARY KEY(visualization_id, revision),

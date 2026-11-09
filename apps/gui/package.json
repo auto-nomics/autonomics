@@ -23,6 +23,7 @@
     "test:plugin-dev": "node tests/plugin-dev.mjs",
     "test:deck": "node tests/deck-viewer.mjs",
     "test:canvas": "node tests/canvas-editor.mjs",
+    "test:canvas:live": "cargo build -p api-server --example visualization_live && node tests/canvas-live.mjs",
     "test:canvas:native": "cargo build -p api-server --example visualization_native && node tests/canvas-native.mjs",
     "test:bib-menu": "node tests/bibliography-menu.mjs",
     "test:collections": "node tests/nested-collections.mjs",

@@ -6,7 +6,7 @@ pub enum Error {
     Database(#[from] rusqlite::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("{0} must not be blank")]
+    #[error("invalid {0}")]
     Invalid(&'static str),
     #[error("project or visualization not found")]
     NotFound,

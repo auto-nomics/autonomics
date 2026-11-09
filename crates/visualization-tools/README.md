@@ -2,7 +2,7 @@
 
 Agent 工具适配层，独立于 runtime 和 HTTP 服务。Runtime 使用 `registrations(database_path)` 与 `bioart_registrations(database_path)` 注册；二者使用与 Gateway 相同的项目画布数据库。
 
-- visualization：projects、list、read、read_image、read_preview、create、sketch、propose、apply。
+- visualization：projects、list、read、read_image、read_preview、read_markup、read_plan、save_plan、sketch_plan、create、sketch、propose、apply。
 - bioart：search、preview、insert、replace；图片数据和来源信息一同保存。
 
 优先使用 propose 供用户在 GUI 预览和采用；所有修改必须使用已读取的版本。GUI 未保存内容不会自动暴露给工具。
@@ -16,3 +16,9 @@ Agent 工具适配层，独立于 runtime 和 HTTP 服务。Runtime 使用 `regi
 `bioart preview` 在修改画布前返回素材图像及来源、作者、许可、校验值，支持视觉模型核对素材；不创建画布修订。GUI 素材面板也提供预览，并复用已加载图片进行插入。
 
 在活动画布上规划草图时，应传 figure_id 和 expected_revision；返回的是该记录的待审阅提案，正式图稿与其他记录保持不变。只有明确需要独立新图时才省略 figure_id。
+
+`read_markup` 按 markup_id 返回独立保存的草图审阅图与说明，明确原始 at_revision 和当前 current_revision。标记使用划除、补画和强调三类几何；不作为正式场景对象写入。读取旧标记时必须与当前文档核对，不能把历史图当作当前整图预览。`read` 附最近 50 组标记摘要，省略详细笔迹和图片字节。
+
+sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格模式要求唯一 column/row；自动模式省略坐标，按显式边分层，保留反馈和并行关系。图稿仍作为可审阅提案进入活动画布。自动布局不会补充科学关系；环内节点输入顺序影响前向/反馈通道。
+
+科研规划使用 read_plan / save_plan / sketch_plan。save_plan.document 保存科学图意、受众、组件、关系、假设及问题/答案，可在信息不完整时持久化；生成要求 issues 为空且计划与图稿版本一致。planning_version=0 创建，后续使用 read_plan 返回的 version。更新和生成均须 expected_revision；旧版写入返回冲突。已有计划的画布必须使用 sketch_plan 生成草图，不能用直接 sketch 跳过问题历史。普通 read 只附计划摘要。

@@ -42,6 +42,8 @@ try {
       assert.ok(bytes.readUInt32BE(20) > 0 && bytes.readUInt32BE(20) <= 1280);
       previews.set(revision, { revision, dataURL }); return route.fulfill({ json: { revision } });
     }
+    if (path === '/visualization/projects/study/figures/figure/planning') return route.fulfill({ json: null });
+    if (path === '/visualization/projects/study/figures/figure/markups') return route.fulfill({ json: [] });
     if (path === '/visualization/projects/study/figures/figure/annotations') {
       if (route.request().method() === 'GET') return route.fulfill({ json: annotations });
       const body = route.request().postDataJSON();
@@ -127,8 +129,13 @@ try {
     const arrowBefore = exported.elements.find(element => element.id === 'edge-0');
     assert.equal(arrowBefore.startBinding.elementId, 'node-0');
     assert.ok(exported.elements.find(element => element.id === 'edge-label-0').width < arrowBefore.width, 'connector label must not cover the entire arrow');
-    const centerX = bounds.x + bounds.width / 2 - 400;
-    const centerY = bounds.y + bounds.height / 2 - 35;
+    const zoom = Number.parseFloat(await surface.locator('.reset-zoom-button').innerText()) / 100;
+    const points = exported.elements.flatMap(element => element.type === 'arrow' ? element.points.map(point => [element.x + point[0], element.y + point[1]]) : [[element.x, element.y], [element.x + element.width, element.y + element.height]]);
+    const midX = (Math.min(...points.map(p => p[0])) + Math.max(...points.map(p => p[0]))) / 2;
+    const midY = (Math.min(...points.map(p => p[1])) + Math.max(...points.map(p => p[1]))) / 2;
+    const node = exported.elements.find(element => element.id === 'node-0');
+    const centerX = bounds.x + bounds.width / 2 + (node.x + node.width / 2 - midX) * zoom;
+    const centerY = bounds.y + bounds.height / 2 + (node.y + node.height * .15 - midY) * zoom;
     await page.mouse.move(centerX, centerY); await page.mouse.down();
     await page.mouse.move(centerX + 60, centerY + 50, { steps: 8 }); await page.mouse.up();
     const movedPromise = page.waitForEvent('download');
@@ -273,6 +280,7 @@ try {
   assert.ok(previews.has(figures.get('figure').metadata.revision));
   assert.ok((await draft.inputValue()).includes('"project_id": "study"'));
   assert.ok((await draft.inputValue()).includes('"observed_revision":'));
+  assert.deepEqual(await page.locator('.editor-body-occluded').evaluateAll(bodies => bodies.flatMap(body => [...body.querySelectorAll('*')].filter(element => getComputedStyle(element).visibility === 'visible' && element.getClientRects().length).map(element => element.tagName))), [], 'inactive canvas descendants must remain visually hidden');
   await page.screenshot({ path: '/tmp/autonomics-canvas-editor.png' });
   }
   assert.deepEqual(errors, []);

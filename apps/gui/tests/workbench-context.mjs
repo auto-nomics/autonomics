@@ -159,6 +159,8 @@ try {
   assert.ok(sends.at(-1).text.includes('followed document selection'), 'follow mode retains the document when chat gains focus');
   await targetPicker.selectOption('');
   await page.setViewportSize({ width: 390, height: 844 }); await composer.waitFor();
+  // Wait for the media-query render before dispatching the edge gesture.
+  await page.locator('[data-slot="workbench-sidebar"] > [data-tauri-drag-region]').waitFor({ state: 'attached' });
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.
   await page.evaluate(() => {
