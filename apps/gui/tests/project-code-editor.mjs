@@ -187,12 +187,17 @@ try {
   await side.getByRole('button', { name: /beta/ }).click();
   await page.getByRole('alert').filter({ hasText: 'container unavailable' }).waitFor();
   assert.equal(requests.includes('GET /plugin-projects/beta/files'), false);
-  await page.getByRole('button', { name: '终端', exact: true }).click();
+  await page.getByTestId('workbench-editors').getByRole('button', { name: '终端', exact: true }).click();
   const terminal = page.locator('.xterm-helper-textarea');
   await terminal.waitFor(); await terminal.focus(); await page.keyboard.type('echo test');
   await page.waitForFunction(() => document.querySelector('.xterm-screen')?.textContent?.includes('container shell ready'));
   await page.waitForTimeout(300);
   assert.equal(terminalInputs.join(''), 'echo test');
+  await terminal.evaluate(node => { node.dataset.retainedSession = 'yes'; });
+  const bottomPanel = page.getByRole('region', { name: '底部面板' });
+  await bottomPanel.getByRole('tab', { name: '事件流', exact: true }).click();
+  await bottomPanel.getByRole('tab', { name: '终端', exact: true }).click();
+  assert.equal(await terminal.getAttribute('data-retained-session'), 'yes', 'switching panel views retains the terminal instance');
   await side.getByRole('tab', { name: '文件' }).click();
   page.once('dialog', dialog => dialog.accept('empty-folder'));
   await side.getByRole('button', { name: '新建文件夹' }).click();

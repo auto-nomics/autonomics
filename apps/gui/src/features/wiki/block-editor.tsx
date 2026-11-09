@@ -105,6 +105,15 @@ export function BlockEditor({
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (joinMarkdownBlocks(blocks) === initialContent) return;
+    const next = splitMarkdownBlocks(initialContent).map((block, index) => ({ ...block, key: blocks[index]?.key ?? block.key }));
+    setBlocks(next);
+    if (editingKey && !next.some(block => block.key === editingKey)) setEditingKey(null);
+    // Local edits already update blocks before reporting content upward.
+    // Only externally changed document content needs reconciliation here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialContent]);
 
   const applyBlocks = useCallback(
     (next: MarkdownBlock[]) => {

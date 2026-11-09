@@ -375,6 +375,137 @@ try {
   // state, the config tab should still be in the strip.
   await page.getByRole('tab', { name: '设置' }).waitFor();
 
+  // Keyboard focus across split groups must update the shared editor
+  // context, while focusing a workbench view must retain that target.
+  const focusFixture = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const context = await import('/src/app/workbench/active-editor-context.ts');
+    const before = context.activeEditorContext(store.getWorkbenchState());
+    store.splitEditor();
+    return { previousGroup: before.groupId };
+  });
+  const otherGroup = page.locator(`[data-editor-group]:not([data-editor-group="${focusFixture.previousGroup}"])`).last();
+  await otherGroup.waitFor();
+  // Set focus without a pointer event, as Tab navigation does.
+  await page.locator(`[data-editor-group="${focusFixture.previousGroup}"] [role="tab"]`).first().focus();
+  const focusedContext = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const { activeEditorContext } = await import('/src/app/workbench/active-editor-context.ts');
+    return activeEditorContext(store.getWorkbenchState()).groupId;
+  });
+  assert.equal(focusedContext, focusFixture.previousGroup, 'keyboard focus activates editor group');
+  await page.keyboard.press('F6');
+  assert.equal(await page.evaluate(id => Boolean(document.activeElement?.closest(`[data-editor-group="${id}"]`)), focusFixture.previousGroup), false, 'F6 moves focus to another workbench region');
+  await page.keyboard.press('Shift+F6');
+  assert.equal(await page.evaluate(id => Boolean(document.activeElement?.closest(`[data-editor-group="${id}"]`)), focusFixture.previousGroup), true, 'Shift+F6 returns to the previous region');
+  await rail.getByRole('button', { name: 'CONFIG' }).focus();
+  assert.equal(await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    return store.getWorkbenchState().groups.active;
+  }), focusedContext, 'workbench view focus retains editor target');
+  await rail.getByRole('button', { name: 'Wiki', exact: true }).click();
+  await sidebar.getByRole('button', { name: '将视图移到底部面板', exact: true }).click();
+  const bottom = page.getByRole('region', { name: '底部面板' });
+  await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
+  assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).getAttribute('aria-selected'), 'true');
+  await page.reload();
+  await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
+  await bottom.getByRole('button', { name: '移回侧边栏', exact: true }).click();
+  assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).count(), 0);
+  await sidebar.getByRole('button', { name: '将视图移到辅助侧边栏', exact: true }).click();
+  const secondary = page.getByRole('complementary', { name: '辅助侧边栏', exact: true });
+  await secondary.getByRole('region', { name: '知识库', exact: true }).waitFor();
+  await secondary.getByRole('button', { name: '隐藏辅助侧边栏', exact: true }).click();
+  await secondary.waitFor({ state: 'hidden' });
+  await rail.getByRole('button', { name: '搜索或输入命令' }).click();
+  await page.getByRole('dialog').getByText('Toggle secondary side bar', { exact: true }).click();
+  await secondary.waitFor({ state: 'visible' });
+  const secondaryResize = secondary.getByRole('separator', { name: '调整辅助侧边栏宽度' });
+  const initialSecondaryWidth = (await secondary.boundingBox()).width;
+  await secondaryResize.focus();
+  await page.keyboard.press('ArrowLeft');
+  assert.equal((await secondary.boundingBox()).width, initialSecondaryWidth + 10);
+  await page.reload();
+  await secondary.getByRole('region', { name: '知识库', exact: true }).waitFor();
+  assert.equal((await secondary.boundingBox()).width, initialSecondaryWidth + 10, 'secondary sidebar width persists');
+  await secondary.getByRole('button', { name: '移回主侧边栏', exact: true }).click();
+  await secondary.waitFor({ state: 'detached' });
+  const guardedClose = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const registry = await import('/src/app/workbench/editor-registry.ts');
+    let veto = true;
+    registry.registerEditorKind({ kind: 'guard-fixture', title: () => 'Unsaved fixture', body: () => null, mount: 'keep-alive', confirmLeave: () => veto });
+    const id = store.openEditor({ kind: 'guard-fixture', params: {} });
+    const rejected = !store.closeEditor(id);
+    const kept = store.allGroups(store.getWorkbenchState().groups).some(([, group]) => group.editors.some(editor => editor.id === id));
+    veto = false;
+    const accepted = store.closeEditor(id);
+    return { rejected, kept, accepted };
+  });
+  assert.deepEqual(guardedClose, { rejected: true, kept: true, accepted: true }, 'all programmatic closes enforce the editor guard');
+  await rail.getByRole('button', { name: 'Agent', exact: true }).click();
+  await sidebar.getByRole('button', { name: '将视图移到底部面板', exact: true }).click();
+  await bottom.getByRole('button', { name: '创建 Agent', exact: true }).click();
+  await page.getByRole('dialog').waitFor();
+  await page.keyboard.press('Escape');
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.setPanelTab('events');
+  });
+  assert.equal(await bottom.getByRole('tab', { name: '事件流', exact: true }).getAttribute('aria-selected'), 'true', 'legacy panel commands select their registered view');
+  await bottom.getByRole('tab', { name: 'Agent', exact: true }).click();
+  await bottom.getByRole('button', { name: '移到辅助侧边栏', exact: true }).click();
+  await secondary.getByRole('button', { name: '创建 Agent', exact: true }).click();
+  await page.getByRole('dialog').waitFor();
+  await page.keyboard.press('Escape');
+  await rail.getByRole('button', { name: '搜索或输入命令' }).click();
+  await page.getByRole('dialog').getByText('Reset view locations', { exact: true }).click();
+  await secondary.waitFor({ state: 'detached' });
+  await sidebar.getByRole('button', { name: '创建 Agent', exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('autonomics.workbench.views.v1')), null, 'reset clears persisted view positions');
+  await page.evaluate(async () => {
+    const registry = await import('/src/app/workbench/view-registry.ts');
+    window.disposeDynamicView = registry.registerWorkbenchView({ id: 'dynamic-view-fixture', title: '动态辅助视图', defaultLocation: 'secondarySidebar', body: () => null });
+  });
+  await secondary.getByRole('region', { name: '动态辅助视图', exact: true }).waitFor();
+  await rail.getByRole('button', { name: '动态辅助视图', exact: true }).waitFor();
+  await secondary.getByRole('button', { name: '移回主侧边栏', exact: true }).click();
+  await sidebar.getByText('动态辅助视图', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('autonomics.workbench.v2')).sidebar.container), 'dynamic-view-fixture', 'custom view becomes the active primary container');
+  await page.evaluate(() => window.disposeDynamicView());
+  await rail.getByRole('button', { name: '动态辅助视图', exact: true }).waitFor({ state: 'detached' });
+  await secondary.waitFor({ state: 'detached' });
+  const safeReplacement = await page.evaluate(async () => {
+    const registry = await import('/src/app/workbench/view-registry.ts');
+    const disposeOld = registry.registerWorkbenchView({ id: 'replace-fixture', title: 'Old', defaultLocation: 'panel', body: () => null });
+    const disposeNew = registry.registerWorkbenchView({ id: 'replace-fixture', title: 'New', defaultLocation: 'panel', body: () => null });
+    disposeOld();
+    const kept = registry.workbenchView('replace-fixture')?.title === 'New';
+    disposeNew();
+    return kept && !registry.workbenchView('replace-fixture');
+  });
+  assert.equal(safeReplacement, true, 'disposing an old contribution preserves its replacement');
+  await rail.getByRole('button', { name: 'Agent', exact: true }).click();
+  await sidebar.getByRole('textbox', { name: '搜索 Agent', exact: true }).fill('retained view state');
+  await sidebar.getByLabel('拖动视图', { exact: true }).dragTo(bottom);
+  await bottom.getByRole('tab', { name: 'Agent', exact: true }).waitFor();
+  assert.equal(await bottom.getByRole('textbox', { name: '搜索 Agent', exact: true }).inputValue(), 'retained view state', 'moving a view preserves component state');
+  await bottom.getByRole('tab', { name: 'Agent', exact: true }).dragTo(sidebar);
+  await sidebar.getByRole('button', { name: '创建 Agent', exact: true }).waitFor();
+  assert.equal(await sidebar.getByRole('textbox', { name: '搜索 Agent', exact: true }).inputValue(), 'retained view state', 'moving back preserves component state');
+  await page.evaluate(async () => {
+    const layout = await import('/src/app/workbench/view-layout.ts');
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    layout.moveWorkbenchView('notices', 'primarySidebar');
+    store.bumpUnreadNotices(3);
+  });
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('autonomics.workbench.v2')).sidebar.container === 'notices');
+  assert.equal(await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    return store.getWorkbenchState().panel.unreadNotices;
+  }), 0, 'visible notices clear unread state after moving to the sidebar');
+  await sidebar.locator('[data-view-host="agents"]').waitFor({ state: 'detached' });
+  assert.equal(await sidebar.locator('[data-view-host]').count(), 1, 'switching views detaches the previous host without stacking content');
   await page.screenshot({ path: '/tmp/autonomics-workbench-shell.png' });
   assert.deepEqual(errors, []);
   console.log('workbench-shell: all assertions passed');

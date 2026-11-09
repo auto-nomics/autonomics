@@ -22,6 +22,8 @@ import {
   resolveTitleCached,
 } from "@/features/wiki/wiki-state";
 import { DeckEditorBody, registerDeckOpener } from "@/features/deck";
+import { getDeckDocument } from "@/features/deck/deck-document";
+import { findWikiDocument } from "@/features/wiki/wiki-document";
 import { ProjectEditor } from "@/features/projects/project-editor";
 import { PluginManager } from "@/features/projects/plugin-manager";
 import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
@@ -29,10 +31,11 @@ import { VfsFileEditorBody } from "@/features/vfs";
 import { ConfigView, DagView, FlowView } from "@/features/system";
 import { ComputeEditorView, HpcJobsEditorView } from "@/features/hpc";
 import { leafName } from "@/features/agent";
-import { registerEditorKind, type EditorContext } from "./editor-registry";
+import { registerEditorKind, editorKind, type EditorContext } from "./editor-registry";
 import { registerReaderEditorKind } from "./editors/reader-editor";
 import { setAgentSlot } from "./agent-slot-registry";
 import {
+  getWorkbenchState,
   activateEditorById,
   setContainer,
   setSidebarCollapsed,
@@ -174,6 +177,7 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
 
   const push = useCallback((nextId: string, title?: string) => {
     if (nextId === current.entryId) return;
+    if (editorKind(editor.kind)?.confirmLeave?.(editor)) return;
     const snapshot = stateOf(editor);
     const stack = [...snapshot.stack.slice(0, snapshot.cursor + 1), { kind: "entry" as const, entryId: nextId, title: title ?? "" }];
     patchEditorState(editor.id, { ...snapshot, stack, cursor: stack.length - 1, mode: "read" });
@@ -183,6 +187,7 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
     const snapshot = stateOf(editor);
     const next = snapshot.cursor + delta;
     if (next < 0 || next >= snapshot.stack.length) return;
+    if (editorKind(editor.kind)?.confirmLeave?.(editor)) return;
     patchEditorState(editor.id, { ...snapshot, cursor: next, mode: "read" });
   }, [editor]);
 
@@ -268,6 +273,8 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "wiki-entry",
+    resource: editor => { const state = stateOf(editor); return `wiki:${state.stack[state.cursor]?.entryId ?? editor.params.entryId}`; },
+    supportsMultipleViews: true,
     agentContext: (editor) => {
       const state = stateOf(editor);
       const current = state.stack[state.cursor];
@@ -287,7 +294,21 @@ export function registerWorkbenchEditorKinds(): void {
     confirmLeave: (editor) => {
       const state = editor.state as WikiEntryEditorState | null;
       if (state?.mode !== "edit") return false;
-      return !window.confirm("该标签页正在编辑中,关闭将丢弃未保存的修改。继续?");
+      const id = state.stack[state.cursor]?.entryId ?? String(editor.params.entryId ?? "");
+      const model = findWikiDocument(id);
+      if (!model) return false;
+      const otherViews = allGroups(getWorkbenchState().groups).flatMap(([, group]) => group.editors).some(item => {
+        if (item.id === editor.id || item.kind !== "wiki-entry") return false;
+        const other = item.state as WikiEntryEditorState | null;
+        return (other?.stack[other.cursor]?.entryId ?? String(item.params.entryId ?? "")) === id && other?.mode === "edit";
+      });
+      if (otherViews) return false;
+      if (model.state.saving) return true;
+      if (!model.dirty) return false;
+      if (!window.confirm("该标签页正在编辑中,关闭将丢弃未保存的修改。继续?")) return true;
+      const entry = model.state.entry;
+      model.update({ title: entry.title, alias: entry.alias.join(", "), tags: entry.tags.join(", "), content: entry.content });
+      return false;
     },
     commands: (editor) => [
       { id: "wiki-entry.close", title: "Close wiki entry", run: () => closeEditor(editor.id) },
@@ -295,6 +316,20 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "deck",
+    resource: editor => `deck:${editor.params.deckId}`,
+    supportsMultipleViews: true,
+    confirmLeave: (editor) => {
+      const id = String(editor.params.deckId ?? "");
+      const others = allGroups(getWorkbenchState().groups).flatMap(([, group]) => group.editors).some(item => item.id !== editor.id && item.kind === "deck" && item.params.deckId === id);
+      if (others) return false;
+      const document = getDeckDocument(id);
+      const snapshot = document.getSnapshot();
+      if (snapshot.saving) return true;
+      if (snapshot.source === null || snapshot.source === snapshot.savedSource) return false;
+      if (!window.confirm("该文稿有未保存的修改，关闭将丢弃修改。继续？")) return true;
+      document.discardSource();
+      return false;
+    },
     agentContext: (editor) => ({ deckId: String(editor.params.deckId ?? ""), title: (editor.state as DeckEditorState | null)?.title ?? "", slideNo: (editor.state as DeckEditorState | null)?.slideNo ?? null }),
     title: (editor) => {
       const state = editor.state as DeckEditorState | null;
@@ -330,6 +365,10 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "plugin-projects",
+    agentContext: (editor) => {
+      const state = editor.state as { project?: string; dirty?: boolean; containerVersion?: number } | null;
+      return { project: state?.project ?? null, dirty: state?.dirty ?? false, containerVersion: state?.containerVersion ?? null, scope: "项目标识与编辑状态，不含文件正文" };
+    },
     title: () => "插件项目",
     name: () => "Plugin projects",
     icon: () => FolderCode,

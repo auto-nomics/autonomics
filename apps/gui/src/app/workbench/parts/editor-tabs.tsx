@@ -12,9 +12,11 @@ import { SplitSquareHorizontal, Columns2 } from "lucide-react";
 import { useWorkbenchRuntime } from "../runtime-context";
 import { cn } from "@/lib/utils";
 import { editorKind } from "../editor-registry";
+import { useDirtyDocuments } from "../dirty-documents";
 import { activateEditor, moveEditor, closeEditor, closeSplit, splitEditor, getGroup, allGroups, mergeGroup, useWorkbenchState, type EditorGroup, type GroupId } from "../workbench-store";
 
 export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
+  const dirtyDocuments = useDirtyDocuments();
   const state = useWorkbenchState();
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [overflow, setOverflow] = useState(false);
@@ -59,10 +61,14 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
     const update = () => setOverflow(strip.scrollWidth > strip.clientWidth + 1);
     const observer = new ResizeObserver(update);
     observer.observe(strip);
-    const content = strip.firstElementChild;
-    if (content) observer.observe(content);
+    // Any tab may change width after its title resolves, independently of
+    // the viewport or first tab. Track the entire strip's content.
+    for (const child of strip.children) observer.observe(child);
+    const mutations = new MutationObserver(update);
+    mutations.observe(strip, { childList: true, characterData: true, subtree: true });
+    const frame = requestAnimationFrame(update);
     update();
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(frame); mutations.disconnect(); observer.disconnect(); };
   }, [props.group.editors]);
   useEffect(() => {
     const strip = stripRef.current;
@@ -120,6 +126,8 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
         const title = kind.title(editor);
         const longName = kind.name?.(editor) ?? title;
         const isAgent = editor.kind === "agent";
+        const resource = kind.resource?.(editor);
+        const dirty = resource ? dirtyDocuments.includes(resource) : Boolean((editor.state as { dirty?: boolean } | null)?.dirty);
         return (
           // VSCode-shaped tab: flat cells on the strip; the active tab
           // lifts to the background color with a 2px accent on top. The
@@ -127,6 +135,7 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
           <div
             key={editor.id}
             role="tab"
+            data-dirty={dirty || undefined}
             draggable
             onDragStart={(event) => { setEditorDrag({ groupId: props.groupId, id: editor.id }); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", editor.id); }}
             onDragEnd={() => { setEditorDrag(null); stopDragScroll(); setDropIndex(null); }}
@@ -162,6 +171,7 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
           >
             {Icon && <Icon className="size-3.5 shrink-0" aria-hidden />}
             <span className="min-w-0 truncate">{title}</span>
+            {dirty && <span aria-hidden="true" title="未保存修改" className="size-1.5 shrink-0 rounded-full bg-current" />}
             <button
               type="button"
               aria-label={`关闭 ${title}`}
@@ -169,7 +179,6 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
               disabled={editor.pinned}
               onClick={(event) => {
                 event.stopPropagation();
-                if (kind.confirmLeave?.(editor)) return; // vetoed (unsaved edits)
                 if (isAgent) runtime.closeTab(String(editor.params.path ?? ""));
                 else closeEditor(editor.id);
               }}

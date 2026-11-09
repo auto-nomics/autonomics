@@ -7,8 +7,10 @@ import { cn } from "@/lib/utils";
 import { AgentStatusIcon, leafName, statusLabel } from "@/features/agent";
 import { TokenUsageBadge } from "@/features/agent/token-usage";
 import type { AgentRuntime } from "../runtime-context";
+import { useActiveEditorContext } from "../active-editor-context";
 
 export function StatusBar({ runtime }: { runtime: AgentRuntime }) {
+  const { editor, kind } = useActiveEditorContext();
   const activeInfo = runtime.agents.find((agent) => agent.path === runtime.activeAgent);
   const usage = runtime.usage[runtime.activeAgent] ?? null;
   const running = statusLabel(runtime.statuses[runtime.activeAgent]);
@@ -32,6 +34,7 @@ export function StatusBar({ runtime }: { runtime: AgentRuntime }) {
       <span className="hidden min-w-0 items-center gap-1 truncate text-muted-foreground sm:flex" title="活动模型">
         {activeInfo?.model ?? "no model"}
       </span>
+      {editor && <span aria-label="活动编辑器" title={kind?.name?.(editor) ?? editor.id} className="min-w-0 truncate text-muted-foreground">{kind?.title(editor) ?? editor.kind}</span>}
       {usage ? <TokenUsageBadge usage={usage} className="ml-auto shrink-0 text-[10px]" /> : null}
     </footer>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -326,6 +326,7 @@ export type AgentWorkspaceProps = {
   /** The active agent editor tab's slot DOM node; null while no agent tab
    *  is active (the detached fallback keeps the subtree mounted). */
   dockedSlot: HTMLDivElement | null;
+  contextTarget?: ReactNode;
   agents: AgentInfo[];
   activeAgent: string;
   statuses: Record<string, string>;
@@ -736,6 +737,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           </div>
 
           <ContextBasket />
+          {props.contextTarget}
           <AgentComposer
             activeAgent={activeAgent}
             draft={draft}

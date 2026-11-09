@@ -228,7 +228,7 @@ try {
     await page.keyboard.insertText(value);
   }
   const errors = [];
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('pageerror', error => { errors.push(error.message); console.error(error.stack); });
 
   // Open the deck tab directly through the app: login → palette command.
   await page.goto(origin);
@@ -511,6 +511,130 @@ try {
   assert.equal(overflowFinding.severity, 'error');
   assert.ok(overflowFinding.message.includes('Slide 3'), `message names the page: ${overflowFinding.message}`);
 
+  // Independent resource consumers share the same draft and save state.
+  const sharedDocument = await page.evaluate(async () => {
+    const { getDeckDocument } = await import('/src/features/deck/deck-document.ts');
+    const first = getDeckDocument('deck-mock');
+    const second = getDeckDocument('deck-mock');
+    let firstChanges = 0, secondChanges = 0;
+    const releaseFirst = first.subscribe(() => firstChanges++);
+    const releaseSecond = second.subscribe(() => secondChanges++);
+    try {
+      await first.loadSource();
+      const original = first.getSnapshot().source;
+      first.setSource(`${original}\n\nShared document draft`);
+      const dirtyUnload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(dirtyUnload);
+      const shared = second.getSnapshot().source === first.getSnapshot().source;
+      releaseFirst();
+      second.setSource(`${original}\n\nEdited after first view closed`);
+      await second.saveSource();
+      const saved = second.getSnapshot();
+      const cleanUnload = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(cleanUnload);
+      return { unloadGuard: dirtyUnload.defaultPrevented && !cleanUnload.defaultPrevented, sameModel: first === second, shared, notifications: firstChanges > 0 && secondChanges > 0, saved: saved.source === saved.savedSource && !saved.saving && !saved.sourceError, remainingView: saved.source.includes('Edited after first view closed') };
+    } finally { releaseFirst(); releaseSecond(); }
+  });
+  assert.deepEqual(sharedDocument, { unloadGuard: true, sameModel: true, shared: true, notifications: true, saved: true, remainingView: true });
+  const splitDocument = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const id = store.openDeckEditor('deck-mock');
+    store.splitEditor();
+    const editors = store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors).filter(editor => editor.kind === 'deck' && editor.params.deckId === 'deck-mock');
+    const duplicate = editors.find(editor => editor.id !== id);
+    const distinct = Boolean(duplicate) && new Set(editors.map(editor => editor.id)).size === editors.length;
+    if (duplicate) store.patchEditorState(duplicate.id, { title: 'Second view', slideNo: 2 });
+    const independent = store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors).find(editor => editor.id === id)?.state?.title !== 'Second view';
+    if (duplicate) store.closeEditor(duplicate.id);
+    return { distinct, independent };
+  });
+  assert.deepEqual(splitDocument, { distinct: true, independent: true }, 'split creates another view with independent navigation state');
+  const forcedView = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const first = store.openDeckEditor('deck-mock');
+    const second = store.openDeckEditor('deck-mock', { forceNew: true, slideNo: 2 });
+    const distinct = first !== second;
+    store.closeEditor(second);
+    return distinct;
+  });
+  assert.equal(forcedView, true, 'forceNew creates a distinct editor for the same document');
+  const sharedViews = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.openDeckEditor('deck-mock');
+    store.splitEditor();
+    return store.allGroups(store.getWorkbenchState().groups).flatMap(([groupId, group]) => group.editors.filter(editor => editor.kind === 'deck' && editor.params.deckId === 'deck-mock').map(editor => ({ groupId, id: editor.id })));
+  });
+  const firstView = page.locator(`[data-editor-group="${sharedViews[0].groupId}"]`);
+  const secondView = page.locator(`[data-editor-group="${sharedViews[1].groupId}"]`);
+  await firstView.getByRole('tab', { name: 'Markdown 源码', exact: true }).click();
+  await secondView.getByRole('tab', { name: 'Markdown 源码', exact: true }).click();
+  const firstInput = firstView.locator('[data-code-editor="markdown"] .monaco-editor textarea.inputarea');
+  const secondInput = secondView.locator('[data-code-editor="markdown"] .monaco-editor textarea.inputarea');
+  await firstInput.focus();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText('# Shared split editor fixture');
+  await secondView.getByText('Shared split editor fixture', { exact: false }).first().waitFor();
+  await secondInput.focus();
+  await page.keyboard.press('ControlOrMeta+Z');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-code-editor="markdown"]')].every(editor => !editor.textContent.includes('Shared split editor fixture')));
+  await firstInput.focus();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.insertText('# Saved from first split view');
+  await firstView.getByRole('button', { name: '保存', exact: true }).click();
+  await secondView.getByRole('button', { name: '保存', exact: true }).waitFor();
+  await page.waitForFunction(() => [...document.querySelectorAll('.deck-save-btn')].every(button => button.disabled));
+  await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.closeEditor(id);
+  }, sharedViews[1].id);
+  await firstInput.waitFor({ state: 'visible' });
+  const restoreFixture = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const first = store.openDeckEditor('deck-mock');
+    const second = store.openDeckEditor('deck-mock', { forceNew: true, slideNo: 2 });
+    store.patchEditorState(first, { title: 'Restored first view', slideNo: 1 });
+    return { first, second };
+  });
+  await page.reload();
+  await page.getByRole('tab', { name: 'Restored first view', exact: true }).waitFor();
+  const restoredViews = await page.evaluate(async fixture => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const editors = store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors);
+    const first = editors.find(editor => editor.id === fixture.first);
+    const second = editors.find(editor => editor.id === fixture.second);
+    store.closeEditor(fixture.first);
+    const reopened = store.openDeckEditor('deck-mock');
+    return { restored: Boolean(first && second), independentSlides: first?.state?.slideNo === 1 && second?.state?.slideNo === 2, reusedRemaining: reopened === fixture.second };
+  }, restoreFixture);
+  assert.deepEqual(restoredViews, { restored: true, independentSlides: true, reusedRemaining: true }, 'reload restores distinct views and opening reuses the remaining instance');
+  await page.evaluate(async () => {
+    const { getDeckDocument } = await import('/src/features/deck/deck-document.ts');
+    const model = getDeckDocument('deck-mock');
+    await model.loadSource();
+    model.setSource('# Unsaved final view');
+  });
+  page.once('dialog', dialog => dialog.dismiss());
+  const cancelledClose = await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    return store.closeEditor(id);
+  }, restoreFixture.second);
+  assert.equal(cancelledClose, false, 'cancelling discard retains the final editor');
+  const retainedDraft = await page.evaluate(async () => {
+    const { getDeckDocument } = await import('/src/features/deck/deck-document.ts');
+    return getDeckDocument('deck-mock').getSnapshot().source;
+  });
+  assert.equal(retainedDraft, '# Unsaved final view');
+  page.once('dialog', dialog => dialog.accept());
+  const discardedClose = await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    return store.closeEditor(id);
+  }, restoreFixture.second);
+  assert.equal(discardedClose, true, 'confirming discard closes the final editor');
+  const remainingDirty = await page.evaluate(async () => {
+    const { dirtyDocumentResources } = await import('/src/app/workbench/dirty-documents.ts');
+    return dirtyDocumentResources();
+  });
+  assert.ok(!remainingDirty.includes('deck:deck-mock'), 'discard removes the resource unload guard');
   // no page errors
   assert.deepEqual(errors.filter(e => !e.includes('ResizeObserver')), [], 'no page errors');
   console.log('deck-viewer: all assertions passed');

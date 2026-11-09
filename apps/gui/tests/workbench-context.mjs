@@ -119,6 +119,45 @@ try {
   await agentTabOf('alpha').click();
   await ref('清空引用').click(); await composer.fill('No resources attached'); await go('发送'); await page.waitForTimeout(100);
   assert.equal(sends.at(-1).text, 'No resources attached');
+  const targetId = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const registry = await import('/src/app/workbench/editor-registry.ts');
+    registry.registerEditorKind({ kind: 'context-fixture', title: () => '目标文档', body: () => null, mount: 'keep-alive', agentContext: editor => ({ selection: editor.state?.selection ?? 'first' }) });
+    store.openEditor({ kind: 'context-fixture', params: {}, activate: false });
+    return store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors).find(editor => editor.kind === 'context-fixture').id;
+  });
+  const targetPicker = page.locator('[data-agent-workspace="/root/alpha"]').getByRole('combobox', { name: 'Agent 上下文目标' });
+  await targetPicker.selectOption(targetId);
+  await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.patchEditorState(id, { selection: 'latest selection' });
+  }, targetId);
+  await composer.fill('Use the pinned document'); await go('发送');
+  await page.waitForTimeout(100);
+  assert.ok(sends.at(-1).text.includes('latest selection'), 'pinned target sends its latest state');
+  await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.closeEditor(id);
+  }, targetId);
+  assert.equal(await targetPicker.inputValue(), '', 'closing the target clears its binding');
+  await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.openEditor({ kind: 'context-fixture', params: {}, activate: false });
+  });
+  assert.equal(await targetPicker.inputValue(), '', 'reopening a resource does not restore a closed binding');
+  await targetPicker.selectOption('$follow');
+  await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.activateEditorById(id);
+    store.patchEditorState(id, { selection: 'followed document selection' });
+  }, targetId);
+  await page.locator('[data-editor-group] [role="tab"]').filter({ hasText: '目标文档' }).waitFor();
+  await page.waitForTimeout(50);
+  await agentTabOf('alpha').click();
+  await composer.fill('Use the followed document'); await go('发送');
+  await page.waitForTimeout(100);
+  assert.ok(sends.at(-1).text.includes('followed document selection'), 'follow mode retains the document when chat gains focus');
+  await targetPicker.selectOption('');
   await page.setViewportSize({ width: 390, height: 844 }); await composer.waitFor();
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.

@@ -135,6 +135,10 @@ export function registerReaderEditorKind(): void {
 
   registerEditorKind({
     kind: "reader",
+    agentContext: (editor) => {
+      const params = editor.params as ReaderEditorParams;
+      return { articleId: params.articleId, title: params.title, attachmentKey: params.attachmentKey ?? null, expectedHash: params.expectedHash ?? null, scope: "阅读器文档标识，不含全文或当前选区" };
+    },
     title: (editor) => {
       const params = editor.params as ReaderEditorParams;
       return params.attachmentKey ? `${params.title} · ${params.attachmentKey}` : params.title;

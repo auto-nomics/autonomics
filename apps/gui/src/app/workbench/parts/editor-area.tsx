@@ -125,13 +125,13 @@ function EditorGroupPane(props: { groupId: GroupId; group: EditorGroup; registry
   }, [props.groupId, props.registry]);
   const activeId = props.group.activeId;
   const activeEditor = props.group.editors.find((editor) => editor.id === activeId) ?? null;
+  const activateGroup = () => {
+    if (getWorkbenchState().groups.active === props.groupId) return;
+    setActiveGroup(props.groupId);
+    if (activeEditor?.kind === "agent") runtime.selectAgent(String(activeEditor.params.path ?? ""));
+  };
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-editor-group={props.groupId} onPointerDownCapture={() => {
-      if (getWorkbenchState().groups.active === props.groupId) return;
-      setActiveGroup(props.groupId);
-      const active = props.group.editors.find(editor => editor.id === props.group.activeId);
-      if (active?.kind === "agent") runtime.selectAgent(String(active.params.path ?? ""));
-    }}>
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-editor-group={props.groupId} onPointerDownCapture={activateGroup} onFocusCapture={activateGroup}>
       <EditorTabs groupId={props.groupId} group={props.group} />
       <div
         className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"

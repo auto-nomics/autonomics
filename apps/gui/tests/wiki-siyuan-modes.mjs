@@ -419,6 +419,29 @@ try {
   assert.equal(await entryTab.getAttribute('aria-selected'), 'true', 'reused tab becomes active');
   await page.getByRole('tab', { name: '番茄栽培' }).getByRole('button', { name: '关闭 番茄栽培' }).click();
 
+  const splitViews = await page.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.openWikiEntryEditor('entry-1', { title: '番茄栽培', mode: 'edit' });
+    store.splitEditor();
+    return store.allGroups(store.getWorkbenchState().groups).flatMap(([groupId, group]) => group.editors.filter(editor => editor.kind === 'wiki-entry' && editor.params.entryId === 'entry-1').map(editor => ({ id: editor.id, groupId })));
+  });
+  assert.equal(splitViews.length, 2);
+  const firstTitle = page.locator(`[data-editor-group="${splitViews[0].groupId}"] input[placeholder="标题(唯一,自动 trim)"]`);
+  const secondTitle = page.locator(`[data-editor-group="${splitViews[1].groupId}"] input[placeholder="标题(唯一,自动 trim)"]`);
+  await firstTitle.fill('共享词条草稿');
+  await page.waitForFunction(() => [...document.querySelectorAll('input[placeholder="标题(唯一,自动 trim)"]')].filter(input => input.value === '共享词条草稿').length === 2);
+  assert.equal(await secondTitle.inputValue(), '共享词条草稿');
+  assert.equal(await page.locator('[data-editor-group] [role="tab"][data-dirty="true"]').count(), 2, 'both views show the shared document dirty state');
+  assert.equal(await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    return store.closeEditor(id);
+  }, splitViews[0].id), true, 'closing one editor retains the shared dirty document');
+  assert.equal(await secondTitle.inputValue(), '共享词条草稿');
+  page.once('dialog', dialog => dialog.accept());
+  await page.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.closeEditor(id);
+  }, splitViews[1].id);
   assert.deepEqual(errors, []);
   console.log('wiki siyuan modes: ok');
 } finally {

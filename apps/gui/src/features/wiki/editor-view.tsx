@@ -1,10 +1,11 @@
+import { useWikiDocument } from "./wiki-document";
 /**
  * SiYuan-style 编辑模式 shell: an inline document title (SiYuan edits the
  * doc title in place), a collapsible attributes row (alias / tags) and the
  * block editor — plus a dirty-guarded exit back to 阅读模式.
  */
 import { ChevronDown, Loader2 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +16,7 @@ import { ModeSwitch, type WikiMode } from "./reading-view";
 import { putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
 
 export function EditorView({
-  entry,
+  entry: initialEntry,
   navigation,
   onModeChange,
   onSaved,
@@ -25,12 +26,13 @@ export function EditorView({
   onModeChange: (mode: WikiMode) => void;
   onSaved: (entry: WikiEntry) => void;
 }) {
-  const [title, setTitle] = useState(entry.title);
-  const [alias, setAlias] = useState(entry.alias.join(", "));
-  const [tags, setTags] = useState(entry.tags.join(", "));
-  const [content, setContent] = useState(entry.content);
+  const { title, alias, tags, content, saving, entry, model } = useWikiDocument(initialEntry);
+  const setTitle = (title: string) => model.update({ title });
+  const setAlias = (alias: string) => model.update({ alias });
+  const setTags = (tags: string) => model.update({ tags });
+  const setContent = (content: string) => model.update({ content });
+  const setSaving = (saving: boolean) => model.update({ saving });
   const [attrsOpen, setAttrsOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
 
   const split = (value: string) =>
     value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -42,6 +44,7 @@ export function EditorView({
     content !== entry.content;
 
   async function save() {
+    if (model.state.saving) return;
     const trimmed = title.trim();
     if (!trimmed) {
       toast.error("标题不能为空");
@@ -66,7 +69,9 @@ export function EditorView({
       if (content !== entry.content) {
         await putEntryContent(entry.id, content);
       }
-      onSaved({ ...latest, title: trimmed, alias: aliasList, tags: tagList, content });
+      const saved = { ...latest, title: trimmed, alias: aliasList, tags: tagList, content };
+      model.accept(saved, { title, alias, tags, content });
+      onSaved(saved);
       toast.success("已保存(新版本快照已追加)");
     } catch (error) {
       toast.error((error as Error).message);
@@ -75,26 +80,19 @@ export function EditorView({
     }
   }
 
-  // Ctrl/Cmd+S anywhere in the editor saves (also swallows the browser's
-  // page-save default while the user is editing).
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        if (!saving) void save();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
   const requestDone = () => {
     if (dirty && !window.confirm("有未保存的修改,确定返回阅读模式?")) return;
+    if (dirty) model.update({ title: entry.title, alias: entry.alias.join(", "), tags: entry.tags.join(", "), content: entry.content });
     onModeChange("read");
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden" onKeyDown={event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault(); event.stopPropagation();
+        if (!saving) void save();
+      }
+    }}>
       <div className="shrink-0 border-b px-2 py-1.5">
         {/* min-w-0: 行是网格/flex 布局的子项,长标题 input 的固有宽度
             会把保存按钮挤出视口(移动端实测)。 */}

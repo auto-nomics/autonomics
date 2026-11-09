@@ -1,3 +1,5 @@
+import { WorkbenchViewSlot } from "../view-host";
+import type { LucideIcon } from "lucide-react";
 /**
  * Side bar: the container-scoped view switcher (desktop) / overlay drawer
  * (mobile, with the edge-swipe gesture moved verbatim from the old shell).
@@ -7,92 +9,32 @@
  */
 
 import { useEffect, useRef } from "react";
-import { setProjectSidebarSlot } from "@/features/projects/sidebar-slot";
-import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
-import { Camera, Compass, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Sun } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import type { BibliographyWorkspace } from "@/features/bibliography";
-import { AgentSidebar } from "./agent-sidebar";
-import { WikiSidebarView } from "@/features/wiki/wiki-sidebar-view";
-import { VfsSidebar } from "@/features/vfs";
-import { DeckSidebarView } from "@/features/deck/deck-sidebar-view";
+import { LogOut, Monitor, Moon, PanelBottom, PanelLeft, Search, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
 import { cycleThemeMode, type ThemeMode } from "@/lib/theme";
 import { Button } from "@/components/ui/button";
 import { openEditor, setContainer, useWorkbenchState, type ContainerId } from "../workbench-store";
-import { openBibliographyEditor } from "../static-commands";
 import { openPalette } from "../command-registry";
 import { togglePanel } from "../workbench-store";
 import { isTauri } from "@/lib/is-tauri";
 import { WindowControls } from "./window-controls";
+import "../builtin-views";
+import { workbenchView, useWorkbenchViews } from "../view-registry";
+import { moveWorkbenchView, useViewLayout, workbenchViewLocation } from "../view-layout";
+import { setPanelVisible } from "../workbench-store";
+import { startViewDrag, viewDropTarget } from "../view-drag";
 
 
 
-const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: string; icon: LucideIcon }[] = [
-  { id: "library", label: "文献库", name: "Bibliography library", icon: Library },
-  { id: "discover", label: "发现", name: "Discover", icon: Compass },
-  { id: "snapshots", label: "快照", name: "Snapshots", icon: Camera },
-  { id: "subscriptions", label: "订阅", name: "Subscriptions", icon: Rss },
-];
-
-const CONTAINER_TITLES: Record<ContainerId, string> = {
-  bibliography: "文献与证据",
-  wiki: "知识库",
-  agents: "Agent",
-  projects: "插件项目",
-  vfs: "文件",
-  decks: "幻灯片",
-};
-
-function ContainerBody({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
-  const state = useWorkbenchState();
-  if (container === "bibliography") {
-    const active = state.containerViews.bibliography ?? "library";
-    if (!mobile) return <div ref={setBibliographySidebarSlot} className="flex min-h-0 flex-1 flex-col" />;
-    return (
-      <div role="group" aria-label="文献工作区" className="flex flex-col gap-0.5 p-2">
-        {BIB_VIEWS.filter((view) => mobile || view.id === "library").map((view) => (
-          <Button
-            key={view.id}
-            size="sm"
-            variant={active === view.id ? "secondary" : "ghost"}
-            className="w-full shrink-0 justify-start gap-2 px-2"
-            aria-label={view.name}
-            aria-current={active === view.id ? "page" : undefined}
-            title={view.label}
-            onClick={() => openBibliographyEditor(view.id)}
-          >
-            <view.icon />
-            <span className="truncate text-xs">{view.label}</span>
-          </Button>
-        ))}
-      </div>
-    );
-  }
-  if (container === "projects") {
-    const group = state.groups.active === "main" ? state.groups.main : state.groups.active === "secondary" ? state.groups.secondary : state.groups.extra[state.groups.active];
-    const active = group?.editors.find(editor => editor.id === group.activeId);
-    return <><div ref={setProjectSidebarSlot} className="flex min-h-0 flex-1 flex-col" />{active?.kind !== "plugin-projects" && <Button variant="ghost" onClick={() => openEditor({ kind: "plugin-projects" })}>打开插件项目</Button>}</>;
-  }
-  if (container === "wiki") {
-    return (
-      <div role="group" aria-label="知识库工作区" className="flex min-h-0 flex-1 flex-col">
-        <WikiSidebarView onOpenGraph={() => openEditor({ kind: "wiki-graph" })} />
-      </div>
-    );
-  }
-  if (container === "vfs") {
-    return <VfsSidebar />;
-  }
-  if (container === "decks") {
-    return (
-      <div role="group" aria-label="幻灯片工作区" className="flex min-h-0 flex-1 flex-col">
-        <DeckSidebarView />
-      </div>
-    );
-  }
-  return <AgentSidebar onSpawn={onSpawn} />;
+function ContainerBody({ container }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
+  useWorkbenchViews();
+  const layout = useViewLayout();
+  const Body = workbenchView(container)?.body;
+  if (!Body) return null;
+  const movable = true;
+  if (workbenchViewLocation(container, layout) !== "primarySidebar") return <Button variant="ghost" onClick={() => moveWorkbenchView(container, "primarySidebar")}>将视图移回侧边栏</Button>;
+  return <>{movable && <div draggable onDragStart={event => startViewDrag(event, container)} aria-label="拖动视图" className="flex shrink-0 flex-wrap"><Button size="xs" variant="ghost" onClick={() => { moveWorkbenchView(container, "panel"); setPanelVisible(true); }}>将视图移到底部面板</Button><Button size="xs" variant="ghost" onClick={() => moveWorkbenchView(container, "secondarySidebar")}>将视图移到辅助侧边栏</Button></div>}<WorkbenchViewSlot id={container} /></>;
 }
 
 export function SideBar(props: {
@@ -188,7 +130,7 @@ export function SideBar(props: {
             drawerOpen ? "visible opacity-100" : "invisible opacity-0 pointer-events-none",
           )}
         />
-        <aside
+        <aside {...viewDropTarget("primarySidebar")}
           ref={drawerRef}
           aria-label="工作台侧栏"
           data-slot="workbench-sidebar"
@@ -214,7 +156,7 @@ export function SideBar(props: {
   }
 
   return (
-    <aside
+    <aside {...viewDropTarget("primarySidebar")}
       aria-label="工作台侧栏"
       data-slot="workbench-sidebar"
       className="flex h-full min-w-0 w-full flex-col border-r bg-sidebar text-sidebar-foreground"
@@ -230,7 +172,7 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
     <>
       {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-          {CONTAINER_TITLES[container]}
+          {workbenchView(container)?.title}
         </span>
         <span className="ml-auto text-[10px] text-muted-foreground/70" aria-hidden>
           {state.containerViews[container]}

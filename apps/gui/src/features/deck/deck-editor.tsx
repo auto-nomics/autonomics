@@ -12,12 +12,11 @@
  */
 import { useEffect, useId, useRef, useState } from "react";
 import { Braces, FileCode2, Loader2, Presentation, RefreshCw, Save } from "lucide-react";
-import { fetchDeck, fetchDeckSource, saveDeckSource, type DeckPayload } from "./deck-api";
 import { DeckRenderer } from "./render/deck-renderer";
 import { DeckCssEditor } from "./deck-css-editor";
 import { TextCodeEditor } from "@/components/editor/text-code-editor";
 
-const LIVE_POLL_MS = 4000;
+import { useDeckDocument } from "./deck-document";
 
 export interface DeckEditorBodyProps {
   deckId: string;
@@ -27,99 +26,10 @@ export interface DeckEditorBodyProps {
 
 export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBodyProps): React.ReactNode {
   const tabId = useId();
-  const [payload, setPayload] = useState<DeckPayload | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [reloadTick, setReloadTick] = useState(0);
-  const revisionRef = useRef<string | null>(null);
-  const payloadRef = useRef<DeckPayload | null>(null);
-  payloadRef.current = payload;
+  const { payload, error, loading, refresh: refreshPayload, source, savedSource, sourceError, sourceLoading, saving, setSource, loadSource, saveSource } = useDeckDocument(deckId);
   const [mode, setMode] = useState<"preview" | "source" | "css">("preview");
   const [currentSlide, setCurrentSlide] = useState(startSlide ?? 1);
-  const [source, setSource] = useState<string | null>(null);
-  const [savedSource, setSavedSource] = useState("");
-  const [sourceRevision, setSourceRevision] = useState("");
-  const [sourceError, setSourceError] = useState<string | null>(null);
-  const [sourceLoading, setSourceLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { setMode("preview"); setSource(null); setSavedSource(""); setSourceRevision(""); setSourceError(null); }, [deckId]);
-  async function loadSource() {
-    setSourceLoading(true); setSourceError(null);
-    try { const result = await fetchDeckSource(deckId); setSource(result.markdown); setSavedSource(result.markdown); setSourceRevision(result.revision); }
-    catch (e) { setSourceError(String(e instanceof Error ? e.message : e)); }
-    finally { setSourceLoading(false); }
-  }
-  async function saveSource() {
-    if (source === null) return;
-    setSaving(true); setSourceError(null);
-    try { await saveDeckSource(deckId, source, sourceRevision); const result = await fetchDeckSource(deckId); setSource(result.markdown); setSavedSource(result.markdown); setSourceRevision(result.revision); await refreshPayload(); }
-    catch (e) { setSourceError(`保存失败：${String(e instanceof Error ? e.message : e)}。如有版本冲突，请复制草稿后重新打开文稿。`); }
-    finally { setSaving(false); }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    revisionRef.current = null;
-    fetchDeck(deckId)
-      .then(p => {
-        if (!cancelled) {
-          revisionRef.current = p.deck.revision;
-          setPayload(p);
-          setLoading(false);
-        }
-      })
-      .catch(e => {
-        if (!cancelled) {
-          setError(String(e?.message ?? e));
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [deckId, reloadTick]);
-
-  // Live sync: poll while visible; swap on revision change. Poll errors
-  // are transient (daemon restart etc.) — keep the last good payload.
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight = false;
-    const tick = async () => {
-      if (cancelled || inFlight || document.visibilityState !== "visible") return;
-      inFlight = true;
-      try {
-        const next = await fetchDeck(deckId);
-        if (cancelled) return;
-        if (next.deck.revision !== revisionRef.current || next.themeRevision !== payloadRef.current?.themeRevision) {
-          revisionRef.current = next.deck.revision;
-          setPayload(next);
-        }
-      } catch {
-        // keep last good payload; retry next tick
-      } finally {
-        inFlight = false;
-      }
-    };
-    const timer = window.setInterval(tick, LIVE_POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") void tick();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [deckId]);
-
-  async function refreshPayload() {
-    const next = await fetchDeck(deckId);
-    revisionRef.current = next.deck.revision;
-    setPayload(next);
-    return next;
-  }
+  useEffect(() => { setMode("preview"); }, [deckId]);
 
   type EditorMode = "preview" | "source" | "css";
   const modes: { id: EditorMode; label: string; icon: typeof Presentation }[] = [
@@ -160,7 +70,7 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
     return (
       <div className="deck-editor deck-editor--error">
         <span>加载失败:{error ?? "未知错误"}</span>
-        <button type="button" className="deck-btn" onClick={() => setReloadTick(t => t + 1)}>
+        <button type="button" className="deck-btn" onClick={() => void refreshPayload().catch(() => {})}>
           <RefreshCw size={14} /> 重试
         </button>
       </div>

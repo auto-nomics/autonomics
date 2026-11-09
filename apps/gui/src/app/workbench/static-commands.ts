@@ -1,3 +1,4 @@
+import { resetWorkbenchViewLocations, toggleSecondarySidebar } from "./view-layout";
 /**
  * Static shell commands: depend only on the workbench store and the theme
  * module, so they register once at module load. Runtime-dependent commands
@@ -23,13 +24,15 @@ import {
 } from "./workbench-store";
 
 registerCommands("shell", [
+  { id: "workbench.toggle-secondary-sidebar", title: "Toggle secondary side bar", category: "view", keywords: "secondary sidebar visibility", run: toggleSecondarySidebar },
+  { id: "workbench.reset-view-locations", title: "Reset view locations", category: "view", keywords: "reset sidebar panel layout", run: () => resetWorkbenchViewLocations() },
   { id: "workbench.toggle-sidebar", title: "Toggle side bar", category: "view", keywords: "ctrl b sidebar visibility", run: toggleSidebar },
   { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", run: togglePanel },
   { id: "workbench.panel-events", title: "Show event stream panel", category: "view", keywords: "events log frames", run: () => { setPanelTab("events"); } },
   { id: "workbench.panel-notices", title: "Show notices panel", category: "view", keywords: "notifications notices", run: () => { setPanelTab("notices"); } },
   { id: "workbench.split-editor", title: "Split editor", category: "view", keywords: "split right group", run: () => splitEditor() },
   { id: "workbench.close-split", title: "Close editor split", category: "view", keywords: "close split group", run: () => closeSplit() },
-  // Palette close is a plain close; tab-strip close enforces confirmLeave.
+  // Every close path goes through the store's leave guard.
   { id: "workbench.close-editor", title: "Close editor", category: "view", keywords: "close tab", run: () => {
     const current = getWorkbenchState();
     const group = getGroup(current.groups, current.groups.active);

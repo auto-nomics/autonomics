@@ -30,6 +30,10 @@ export type EditorKind = {
    *  ephemeral: body mounts only while the tab is the group's active tab;
    *  a placeholder shows otherwise (readers persist their own state). */
   mount: "keep-alive" | "ephemeral";
+  /** Multiple editor instances may share one resource document. */
+  supportsMultipleViews?: boolean;
+  /** Shared document identity, independent of the editor instance ID. */
+  resource?(editor: EditorRef): string;
   /** How inactive keep-alive bodies hide. "display" (default) unmounts
    *  layout via the hidden attribute; "visibility" keeps layout alive so
    *  scroll positions / canvas state survive tab switches (readers). */

@@ -11,9 +11,11 @@
  */
 
 import { useSyncExternalStore } from "react";
+import { editorKind } from "./editor-registry";
+import { revealWorkbenchView } from "./view-layout";
 import { layoutGroups, removeLayoutGroup, resizeLayout, splitLayout, validLayout, type DropDirection, type EditorLayout } from "./editor-layout";
 
-export type ContainerId = "bibliography" | "wiki" | "agents" | "projects" | "vfs" | "decks";
+export type ContainerId = string;
 export type GroupId = string;
 export type EditorId = string;
 export type PanelTab = "events" | "notices" | "terminal";
@@ -58,7 +60,7 @@ function clampPercent(value: number, min: number, max: number, fallback: number)
 }
 
 function isContainerId(value: unknown): value is ContainerId {
-  return value === "bibliography" || value === "wiki" || value === "agents" || value === "projects" || value === "vfs" || value === "decks";
+  return typeof value === "string" && value.length > 0;
 }
 
 /** A wiki editor's per-instance state (history stack + cursor + mode). */
@@ -310,6 +312,8 @@ function putGroup(groups: WorkbenchState["groups"], id: GroupId, group: EditorGr
 
 export type OpenEditorOptions = {
   kind: string;
+  /** Create another view instead of focusing the existing resource tab. */
+  forceNew?: boolean;
   params?: Record<string, unknown>;
   state?: unknown;
   /** Defaults to the active group. */
@@ -322,7 +326,7 @@ const EMPTY_PARAMS: Record<string, unknown> = {};
 
 export function openEditor(options: OpenEditorOptions): EditorId {
   const params = options.params ?? EMPTY_PARAMS;
-  const id = `${options.kind}:${editorKey(params)}`;
+  const id = options.forceNew ? `${options.kind}:view-${crypto.randomUUID()}` : `${options.kind}:${editorKey(params)}`;
   for (const [groupId, group] of allGroups(state.groups)) {
     const existing = group.editors.find(editor => editor.id === id);
     if (!existing) continue;
@@ -366,8 +370,14 @@ export function openAgentEditor(path: string, activate = true): EditorId {
 }
 
 export function openWikiEntryEditor(entryId: string, options: { title?: string; mode?: "read" | "edit"; forceNew?: boolean } = {}): EditorId {
-  const id = wikiEntryEditorId(entryId);
-  const existing = findEditor(id);
+  const matches = (editor: EditorRef) => {
+    if (editor.kind !== "wiki-entry") return false;
+    const wiki = editor.state as WikiEntryEditorState | null;
+    return (wiki?.stack[wiki.cursor]?.entryId ?? String(editor.params.entryId ?? "")) === entryId;
+  };
+  const existing = getGroup(state.groups, state.groups.active)?.editors.find(matches)
+    ?? allGroups(state.groups).flatMap(([, group]) => group.editors).find(matches);
+  const id = existing?.id ?? wikiEntryEditorId(entryId);
   if (existing && !options.forceNew) {
     if (options.mode || options.title) {
       const state = (existing.state as WikiEntryEditorState | null) ?? { stack: [{ kind: "entry", entryId, title: options.title ?? "" }], cursor: 0, mode: "read", title: options.title ?? "" };
@@ -384,6 +394,7 @@ export function openWikiEntryEditor(entryId: string, options: { title?: string; 
   return openEditor({
     kind: "wiki-entry",
     params: { entryId },
+    forceNew: options.forceNew || Boolean(findEditor(wikiEntryEditorId(entryId)) && !existing),
     state: { stack, cursor: 0, mode: options.mode ?? "read", title: options.title ?? "" },
     activate: true,
   });
@@ -396,8 +407,12 @@ export function deckEditorId(deckId: string): EditorId {
 
 /** Open (or focus) a deck tab; per-tab state keeps the last slide. */
 export function openDeckEditor(deckId: string, options: { title?: string; slideNo?: number; forceNew?: boolean } = {}): EditorId {
-  const id = `deck:${editorKey({ deckId })}`;
-  const existing = findEditor(id);
+  const canonicalId = `deck:${editorKey({ deckId })}`;
+  const active = getGroup(state.groups, state.groups.active);
+  const existing = active?.editors.find(editor => editor.kind === "deck" && editor.params.deckId === deckId)
+    ?? findEditor(canonicalId)
+    ?? allGroups(state.groups).flatMap(([, group]) => group.editors).find(editor => editor.kind === "deck" && editor.params.deckId === deckId);
+  const id = existing?.id ?? canonicalId;
   if (existing && !options.forceNew) {
     if (options.title || options.slideNo) {
       const state = (existing.state as DeckEditorState | null) ?? { title: "" };
@@ -408,6 +423,7 @@ export function openDeckEditor(deckId: string, options: { title?: string; slideN
   }
   return openEditor({
     kind: "deck",
+    forceNew: options.forceNew,
     params: { deckId },
     state: { title: options.title ?? "", slideNo: options.slideNo } satisfies DeckEditorState,
   });
@@ -438,6 +454,7 @@ export function closeEditor(id: EditorId): boolean {
   const found = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
   if (!found) return false;
   const [groupId, group] = found, index = group.editors.findIndex(editor => editor.id === id);
+  if (editorKind(group.editors[index].kind)?.confirmLeave?.(group.editors[index])) return false;
   const editors = group.editors.filter(editor => editor.id !== id);
   const updated = { editors, activeId: group.activeId === id ? editors[Math.min(index, editors.length - 1)]?.id ?? null : group.activeId };
   const result = removeEmptyGroup(putGroup(state.groups, groupId, updated), state.editorLayout, groupId);
@@ -445,7 +462,9 @@ export function closeEditor(id: EditorId): boolean {
 }
 export function closeOthers(groupId: GroupId, id: EditorId): void {
   const group = getGroup(state.groups, groupId), kept = group?.editors.find(editor => editor.id === id);
-  if (kept) commit({ ...state, groups: putGroup(state.groups, groupId, { editors: [kept], activeId: id }) });
+  if (kept) for (const editor of group!.editors) {
+    if (editor.id !== id) closeEditor(editor.id);
+  }
 }
 function patchEditor(id: EditorId, update: (editor: EditorRef) => EditorRef): void {
   const found = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
@@ -505,6 +524,14 @@ export function mergeGroup(from: GroupId, target: GroupId, index: number): void 
 }
 export function splitEditor(groupId: GroupId = state.groups.active): void {
   const group = getGroup(state.groups, groupId);
+  const editor = group?.editors.find(item => item.id === group.activeId);
+  if (editor && editorKind(editor.kind)?.supportsMultipleViews) {
+    const newGroupId = !state.groups.secondary ? "secondary" : `group-${crypto.randomUUID()}`;
+    const copy: EditorRef = { ...editor, id: `${editor.kind}:view-${crypto.randomUUID()}`, params: { ...editor.params }, state: structuredClone(editor.state), pinned: false };
+    const groups = { ...putGroup(state.groups, newGroupId, { editors: [copy], activeId: copy.id }), active: newGroupId };
+    commit({ ...state, groups, editorLayout: splitLayout(state.editorLayout, groupId, newGroupId, "right") });
+    return;
+  }
   if (group?.activeId) splitEditorAt(groupId, group.activeId, groupId, "right");
 }
 export function closeSplit(groupId: GroupId = state.groups.active): void {
@@ -559,7 +586,7 @@ export function toggleSidebar(): void {
 
 export function setPanelVisible(visible: boolean): void {
   if (state.panel.visible === visible) return;
-  commit({ ...state, panel: { ...state.panel, visible, unreadNotices: visible && state.panel.tab === "notices" ? 0 : state.panel.unreadNotices } });
+  commit({ ...state, panel: { ...state.panel, visible } });
 }
 
 export function togglePanel(): void {
@@ -567,8 +594,8 @@ export function togglePanel(): void {
 }
 
 export function setPanelTab(tab: PanelTab): void {
-  const unreadNotices = tab === "notices" && state.panel.visible ? 0 : state.panel.unreadNotices;
-  commit({ ...state, panel: { ...state.panel, tab, unreadNotices } });
+  revealWorkbenchView(tab);
+  commit({ ...state, panel: { ...state.panel, tab } });
 }
 
 export function setPanelHeight(percent: number): void {
@@ -581,4 +608,7 @@ export function setPanelHeight(percent: number): void {
  *  front; the panel tab and activity bar surface the badge. */
 export function bumpUnreadNotices(count = 1): void {
   commit({ ...state, panel: { ...state.panel, unreadNotices: state.panel.unreadNotices + count } });
+}
+export function clearUnreadNotices(): void {
+  if (state.panel.unreadNotices) commit({ ...state, panel: { ...state.panel, unreadNotices: 0 } });
 }

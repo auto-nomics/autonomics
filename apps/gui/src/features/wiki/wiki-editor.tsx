@@ -38,6 +38,7 @@ import {
   cachedTitle,
   fetchEntryCached,
   resolveTitleCached,
+  useWikiRevision,
 } from "./wiki-state";
 
 export function WikiEntrySurface({
@@ -64,6 +65,13 @@ export function WikiEntrySurface({
   const [entry, setEntry] = useState<WikiEntry | undefined | null>(undefined);
   const [missingLink, setMissingLink] = useState<string | null>(null);
   const [creatingLink, setCreatingLink] = useState(false);
+  const revision = useWikiRevision();
+  useEffect(() => {
+    if (!revision) return;
+    let cancelled = false;
+    void fetchEntryCached(entryId).then(found => { if (!cancelled) setEntry(found); });
+    return () => { cancelled = true; };
+  }, [entryId, revision]);
 
   useEffect(() => {
     let cancelled = false;
