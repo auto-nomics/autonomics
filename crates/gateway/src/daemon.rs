@@ -89,12 +89,29 @@ pub fn token_path(config: &RuntimeConfig) -> std::path::PathBuf {
     config.state_dir.join(TOKEN_FILE)
 }
 
-/// Run the daemon until the shutdown token fires (POST `/gateway/shutdown`
-/// or, for foreground mode, the caller cancels it).
+/// Run the daemon until the shutdown token fires (SIGTERM — the
+/// `autonomics serve stop` path — or, for foreground mode, the caller
+/// cancels it).
 pub async fn run_daemon(
     opts: DaemonOptions,
     shutdown: CancellationToken,
 ) -> Result<(), DaemonError> {
+    // SIGTERM is the operator's stop channel: cancel the same token the
+    // removed HTTP shutdown endpoint used to fire, so the graceful path
+    // below (server drain, agent grace, pid-file removal) runs
+    // unchanged. Installed before anything slow, so a stop request
+    // during startup is never missed; a daemon too wedged to service
+    // the signal still dies via SIGTERM's default disposition.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|e| DaemonError::Message(format!("install SIGTERM handler: {e}")))?;
+    let shutdown_on_signal = shutdown.clone();
+    tokio::spawn(async move {
+        if sigterm.recv().await.is_some() {
+            tracing::info!("SIGTERM received; shutting down");
+            shutdown_on_signal.cancel();
+        }
+    });
+
     let DaemonOptions {
         mut config,
         addr,

@@ -18,7 +18,6 @@ use crate::proto::*;
     ),
     paths(
         lifecycle::gateway_status,
-        lifecycle::gateway_shutdown,
         hydration::get_state,
         hydration::get_profiles,
         events::get_events,

@@ -39,8 +39,9 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/hpc/jobs/watch", post(hpc_jobs::watch))
         .route("/hpc/jobs/{id}/stop-monitor", post(hpc_jobs::stop_monitor))
         // ── daemon lifecycle ──
+        // No shutdown route: stopping the daemon goes through SIGTERM
+        // (`autonomics serve stop`), never the API.
         .route("/gateway/status", get(lifecycle::gateway_status))
-        .route("/gateway/shutdown", post(lifecycle::gateway_shutdown))
         // ── hydration ──
         .route("/state", get(hydration::get_state))
         .route("/profiles", get(hydration::get_profiles))

@@ -2,7 +2,6 @@
 
 use axum::Json;
 use axum::extract::State;
-use axum::http::StatusCode;
 use serde_json::json;
 
 use super::state::GatewayState;
@@ -24,12 +23,6 @@ pub(crate) async fn gateway_status(State(state): State<GatewayState>) -> Json<Ga
         last_seq: state.hub.last_seq(),
         agent_count: state.contexts.snapshot().len(),
     })
-}
-
-#[utoipa::path(post, path = "/api/v1/gateway/shutdown", tag = "gateway", responses((status = 202, description = "Shutdown requested")))]
-pub(crate) async fn gateway_shutdown(State(state): State<GatewayState>) -> StatusCode {
-    state.shutdown.cancel();
-    StatusCode::ACCEPTED
 }
 
 pub(crate) async fn api_index() -> Json<serde_json::Value> {

@@ -68,7 +68,7 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
         } else if let Some(ServeAction::Stop) = args.action {
             match manager::stop().await {
                 Ok(()) => {
-                    println!("gateway shutdown requested");
+                    println!("gateway stopped");
                     Ok(())
                 }
                 Err(error) => {
@@ -389,8 +389,8 @@ async fn run_daemon_child(config: gateway::RuntimeConfig) -> color_eyre::Result<
     }
 
     // No Ctrl+C handler: the daemon child runs in its own process group
-    // with no controlling terminal — only `autonomics serve stop` (the
-    // shutdown token via the HTTP endpoint) stops it.
+    // with no controlling terminal — only `autonomics serve stop`
+    // (SIGTERM → the shutdown token) stops it.
     let shutdown = CancellationToken::new();
 
     let opts = DaemonOptions {

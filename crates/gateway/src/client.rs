@@ -247,15 +247,6 @@ impl GatewayClient {
         }
     }
 
-    pub async fn shutdown_gateway(&self) -> Result<()> {
-        self.fire(
-            reqwest::Method::POST,
-            "/gateway/shutdown",
-            None::<&serde_json::Value>,
-        )
-        .await
-    }
-
     // ── hydration ──
 
     pub async fn state(&self) -> Result<StateSnapshot> {

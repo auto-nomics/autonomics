@@ -157,6 +157,7 @@ tokio = { version = "1", features = [
   "net",
   "io-util",
   "time",
+  "signal",
 ] }
 chrono = { version = "0.4", features = ["serde"] }
 rpassword = "7"

@@ -24,6 +24,6 @@ pub struct ServeArgs {
 pub enum ServeAction {
     /// Print the running daemon's status (pid, uptime, agent count).
     Status,
-    /// Ask a running daemon to shut down gracefully.
+    /// Gracefully stop the running daemon (SIGTERM) and wait for exit.
     Stop,
 }

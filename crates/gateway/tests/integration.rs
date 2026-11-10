@@ -230,7 +230,6 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     assert!(saw_turn_completed);
 
     // Graceful shutdown over the wire.
-    client.shutdown_gateway().await.unwrap();
     gateway_daemon.stop().await;
 }
 
@@ -326,7 +325,6 @@ async fn rename_storage_agent_evicts_the_live_instance() {
         "storage lists the renamed path"
     );
 
-    client.shutdown_gateway().await.unwrap();
     gateway_daemon.stop().await;
 }
 
@@ -448,10 +446,9 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 55);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 54);
     let expected_paths = [
         "/api/v1/gateway/status",
-        "/api/v1/gateway/shutdown",
         "/api/v1/state",
         "/api/v1/profiles",
         "/api/v1/agents",
@@ -808,11 +805,12 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
         .unwrap();
     assert_eq!(hello["name"], "hello.txt");
     assert_eq!(hello["is_dir"], false);
+    assert_eq!(hello["uri"], "local://vfs-e2e/hello.txt");
 
     // stat reports size and the covering mount's read-only flag.
     let stat: serde_json::Value = http
         .get(format!("{base}/api/v1/vfs/stat"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .bearer_auth(token)
         .send()
         .await
@@ -821,6 +819,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
         .await
         .unwrap();
     assert_eq!(stat["size"], 17);
+    assert_eq!(stat["uri"], "local://vfs-e2e/hello.txt");
     assert_eq!(stat["read_only"], false);
     assert!(stat["mount"].is_object(), "root mount should cover it");
 
@@ -840,7 +839,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
     // text returns UTF-8 contents.
     let text: serde_json::Value = http
         .get(format!("{base}/api/v1/vfs/text"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .bearer_auth(token)
         .send()
         .await
@@ -879,7 +878,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
     // file streams the full body with a length header.
     let full = http
         .get(format!("{base}/api/v1/vfs/file"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .bearer_auth(token)
         .send()
         .await
@@ -894,7 +893,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
     // Range slice → 206 with the right bytes and Content-Range.
     let ranged = http
         .get(format!("{base}/api/v1/vfs/file"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .header(reqwest::header::RANGE, "bytes=6-8")
         .bearer_auth(token)
         .send()
@@ -913,7 +912,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
     // Suffix range form.
     let suffix = http
         .get(format!("{base}/api/v1/vfs/file"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .header(reqwest::header::RANGE, "bytes=-7")
         .bearer_auth(token)
         .send()
@@ -925,7 +924,7 @@ async fn vfs_read_endpoints_list_stat_stream_and_bound_text() {
     // Unsatisfiable range → 416.
     let unsatisfiable = http
         .get(format!("{base}/api/v1/vfs/file"))
-        .query(&[("path", "/vfs-e2e/hello.txt")])
+        .query(&[("path", "local://vfs-e2e/hello.txt")])
         .header(reqwest::header::RANGE, "bytes=100-200")
         .bearer_auth(token)
         .send()
