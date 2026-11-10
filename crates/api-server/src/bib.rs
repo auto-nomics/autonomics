@@ -26,7 +26,10 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+// Large journal PDFs (scanned back-catalog, theses) routinely exceed
+// 50 MiB; 256 MiB leaves headroom while still bounding handler memory
+// (the file is buffered in full before streaming to VFS).
+const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_FULLTEXT_CHARS: usize = 100_000;
 const MAX_FULLTEXT_CHARS: usize = 500_000;
 
@@ -201,6 +204,26 @@ async fn health(State(shared): State<Arc<BibShared>>) -> ApiResult {
         "article_count": count,
         "sources": shared.gateway.source_names(),
     })))
+}
+
+/// Multipart read failures carry a generic "Error parsing
+/// `multipart/form-data` request" message that hides the real cause —
+/// most often the router-level body limit cutting the stream mid-field.
+/// `MultipartError::status()` already classifies body-limit failures as
+/// 413, so route through it and give those a actionable message instead
+/// of a misleading 400.
+fn multipart_rejection(
+    multipart_error: axum::extract::multipart::MultipartError,
+) -> (StatusCode, Json<ApiError>) {
+    let status = multipart_error.status();
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        error(
+            status,
+            format!("upload exceeds {} byte limit", MAX_UPLOAD_BYTES),
+        )
+    } else {
+        error(status, multipart_error.to_string())
+    }
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> (StatusCode, Json<ApiError>) {
@@ -1102,7 +1125,7 @@ async fn upload_attachment(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|multipart_error| error(StatusCode::BAD_REQUEST, multipart_error.to_string()))?
+        .map_err(multipart_rejection)?
     {
         match field.name() {
             Some("file") => {
@@ -1111,9 +1134,7 @@ async fn upload_attachment(
                     .map(str::to_owned)
                     .or_else(|| field.content_type().map(str::to_owned));
                 upload.content_type = field.content_type().map(str::to_owned);
-                let bytes = field.bytes().await.map_err(|multipart_error| {
-                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
-                })?;
+                let bytes = field.bytes().await.map_err(multipart_rejection)?;
                 if bytes.len() > MAX_UPLOAD_BYTES {
                     return Err(error(
                         StatusCode::PAYLOAD_TOO_LARGE,
@@ -1127,18 +1148,14 @@ async fn upload_attachment(
                     field
                         .text()
                         .await
-                        .map_err(|multipart_error| {
-                            error(StatusCode::BAD_REQUEST, multipart_error.to_string())
-                        })?
+                        .map_err(multipart_rejection)?
                         .trim()
                         .to_owned(),
                 )
                 .filter(|title| !title.is_empty());
             }
             Some("preferred") => {
-                let value = field.text().await.map_err(|multipart_error| {
-                    error(StatusCode::BAD_REQUEST, multipart_error.to_string())
-                })?;
+                let value = field.text().await.map_err(multipart_rejection)?;
                 upload.preferred = Some(matches!(
                     value.trim().to_ascii_lowercase().as_str(),
                     "1" | "true" | "yes" | "on"
@@ -1600,7 +1617,7 @@ async fn upload_fulltext(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|multipart_error| error(StatusCode::BAD_REQUEST, multipart_error.to_string()))?
+        .map_err(multipart_rejection)?
     {
         if field.name() != Some("file") {
             continue;
